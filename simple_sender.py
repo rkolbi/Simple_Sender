@@ -24,6 +24,7 @@ import shlex
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import tkinter.font as tkfont
 
 import serial
 from serial.tools import list_ports
@@ -115,6 +116,47 @@ GRBL_SETTING_DESC = {
 }
 
 GRBL_SETTING_KEYS = sorted(GRBL_SETTING_DESC.keys())
+
+# Conservative numeric limits for basic validation. Values are broad to avoid blocking legitimate configs.
+GRBL_SETTING_LIMITS = {
+    0: (1, 1000),    # step pulse us
+    1: (0, 255),
+    2: (0, 255),
+    3: (0, 255),
+    4: (0, 1),
+    5: (0, 1),
+    6: (0, 1),
+    10: (0, 511),
+    11: (0, 5),
+    12: (0, 5),
+    13: (0, 1),
+    20: (0, 1),
+    21: (0, 1),
+    22: (0, 1),
+    23: (0, 255),
+    24: (0, 5000),
+    25: (0, 5000),
+    26: (0, 255),
+    27: (0, 50),
+    30: (0, 100000),
+    31: (0, 100000),
+    32: (0, 1),
+    100: (0, 2000),
+    101: (0, 2000),
+    102: (0, 2000),
+    110: (0, 200000),
+    111: (0, 200000),
+    112: (0, 200000),
+    120: (0, 20000),
+    121: (0, 20000),
+    122: (0, 20000),
+    130: (0, 2000),
+    131: (0, 2000),
+    132: (0, 2000),
+}
+
+# Settings that are allowed to be non-numeric (currently none; placeholder for future extensions)
+GRBL_NON_NUMERIC_SETTINGS: set[int] = set()
 
 def clean_gcode_line(line: str) -> str:
     """Strip comments and whitespace; keep simple + safe."""
@@ -891,7 +933,14 @@ class GrblWorker:
                 self._handle_rx_line(s)
 
     def _handle_rx_line(self, s: str):
-        self.ui_q.put(("log_rx", s))
+        is_status = s.startswith("<") and s.endswith(">")
+        state = ""
+        if is_status:
+            parts = s.strip("<>").split("|")
+            state = parts[0] if parts else ""
+        # Suppress repetitive idle status noise in the console log.
+        if not (is_status and state.lower().startswith("idle")):
+            self.ui_q.put(("log_rx", s))
 
         low = s.lower()
         if low.startswith("grbl"):
@@ -993,9 +1042,10 @@ class GcodeText(ttk.Frame):
         self.grid_columnconfigure(0, weight=1)
 
         # Tags
-        self.text.tag_configure("sent", background="#233044")
-        self.text.tag_configure("acked", background="#1f3a2a")
-        self.text.tag_configure("current", background="#3a2a1f")
+        # Lighter backgrounds for readability
+        self.text.tag_configure("sent", background="#c7d7f2")     # light blue
+        self.text.tag_configure("acked", background="#c8e6c9")    # light green
+        self.text.tag_configure("current", background="#ffe0b2")  # light orange
 
         self.lines_count = 0
         self._sent_upto = -1
@@ -1762,6 +1812,8 @@ class ToolTip:
         widget.bind("<Leave>", self._hide)
 
     def _schedule_show(self, _event=None):
+        # Always reset any existing tooltip so movement can update content/position.
+        self._hide()
         if self._after_id is not None:
             self.widget.after_cancel(self._after_id)
         self._after_id = self.widget.after(self.delay_ms, self._show)
@@ -1782,8 +1834,13 @@ class ToolTip:
             return
         if not self.text or self._tip is not None:
             return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        # Position near the current pointer location for consistent placement with other tooltips.
+        try:
+            x = self.widget.winfo_pointerx() + 16
+            y = self.widget.winfo_pointery() + 12
+        except Exception:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
         try:
             self._tip = tk.Toplevel(self.widget)
             self._tip.wm_overrideredirect(True)
@@ -1967,6 +2024,8 @@ class App(tk.Tk):
         self.gui_logging_enabled = tk.BooleanVar(value=self.settings.get("gui_logging_enabled", True))
         self.render3d_enabled = tk.BooleanVar(value=self.settings.get("render3d_enabled", True))
         self.all_stop_mode = tk.StringVar(value=self.settings.get("all_stop_mode", "stop_reset"))
+        self.training_wheels = tk.BooleanVar(value=self.settings.get("training_wheels", True))
+        self.reconnect_on_open = tk.BooleanVar(value=self.settings.get("reconnect_on_open", True))
         self.keyboard_bindings_enabled = tk.BooleanVar(
             value=self.settings.get("keyboard_bindings_enabled", True)
         )
@@ -2127,11 +2186,23 @@ class App(tk.Tk):
         self._settings_values = {}
         self._settings_edited = {}
         self._settings_edit_entry = None
+        self._settings_baseline = {}
+        self._settings_items = {}
         self._grbl_setting_info = {}
         self._grbl_setting_keys = []
         self._settings_raw_lines = []
         self._last_sent_index = -1
         self._last_acked_index = -1
+        self._confirm_last_time = {}
+        self._confirm_debounce_sec = 0.8
+        self._auto_reconnect_last_port = self.settings.get("last_port", "")
+        self._auto_reconnect_last_attempt = 0.0
+        self._auto_reconnect_pending = False
+        self._auto_reconnect_retry = 0
+        self._auto_reconnect_delay = 3.0
+        self._auto_reconnect_max_retry = 5
+        self._auto_reconnect_next_ts = 0.0
+        self._user_disconnect = False
         self._ui_throttle_ms = 100
         self._pending_sent_index = None
         self._pending_acked_index = None
@@ -2148,7 +2219,7 @@ class App(tk.Tk):
         self.after(50, self._drain_ui_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.refresh_ports()
+        self.refresh_ports(auto_connect=bool(self.reconnect_on_open.get()))
         geometry = self.settings.get("window_geometry", "")
         if isinstance(geometry, str) and geometry:
             try:
@@ -2172,7 +2243,7 @@ class App(tk.Tk):
         set_kb_id(self.btn_refresh, "port_refresh")
         self.btn_refresh.pack(side="left", padx=(0, 10))
         apply_tooltip(self.btn_refresh, "Refresh the list of serial ports.")
-        self.btn_conn = ttk.Button(bar, text="Connect", command=self.toggle_connect)
+        self.btn_conn = ttk.Button(bar, text="Connect", command=lambda: self._confirm_and_run("Connect/Disconnect", self.toggle_connect))
         set_kb_id(self.btn_conn, "port_connect")
         self.btn_conn.pack(side="left")
         apply_tooltip(self.btn_conn, "Connect or disconnect from the selected serial port.")
@@ -2180,53 +2251,58 @@ class App(tk.Tk):
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_open = ttk.Button(bar, text="Open G-code", command=self.open_gcode)
+        self.btn_open = ttk.Button(bar, text="Read G-code", command=self.open_gcode)
         set_kb_id(self.btn_open, "gcode_open")
         self.btn_open.pack(side="left")
         self._manual_controls.append(self.btn_open)
-        apply_tooltip(self.btn_open, "Load a G-code file for streaming.")
-        self.btn_run = ttk.Button(bar, text="Run", command=self.run_job, state="disabled")
+        apply_tooltip(self.btn_open, "Load a G-code file for streaming (read-only).")
+        self.btn_clear = ttk.Button(bar, text="Clear G-code", command=lambda: self._confirm_and_run("Clear G-code", self._clear_gcode))
+        set_kb_id(self.btn_clear, "gcode_clear")
+        self.btn_clear.pack(side="left", padx=(6, 0))
+        self._manual_controls.append(self.btn_clear)
+        apply_tooltip(self.btn_clear, "Unload the current G-code and reset the viewer.")
+        self.btn_run = ttk.Button(bar, text="Run", command=lambda: self._confirm_and_run("Run job", self.run_job), state="disabled")
         set_kb_id(self.btn_run, "job_run")
         self.btn_run.pack(side="left", padx=(8, 0))
         apply_tooltip(self.btn_run, "Start streaming the loaded G-code.")
         attach_log_gcode(self.btn_run, "Cycle Start")
-        self.btn_pause = ttk.Button(bar, text="Pause", command=self.pause_job, state="disabled")
+        self.btn_pause = ttk.Button(bar, text="Pause", command=lambda: self._confirm_and_run("Pause job", self.pause_job), state="disabled")
         set_kb_id(self.btn_pause, "job_pause")
         self.btn_pause.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_pause, "Feed hold the running job.")
         attach_log_gcode(self.btn_pause, "!")
-        self.btn_resume = ttk.Button(bar, text="Resume", command=self.resume_job, state="disabled")
+        self.btn_resume = ttk.Button(bar, text="Resume", command=lambda: self._confirm_and_run("Resume job", self.resume_job), state="disabled")
         set_kb_id(self.btn_resume, "job_resume")
         self.btn_resume.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_resume, "Resume a paused job.")
         attach_log_gcode(self.btn_resume, "~")
-        self.btn_stop = ttk.Button(bar, text="Stop/Reset", command=self.stop_job, state="disabled")
+        self.btn_stop = ttk.Button(bar, text="Stop/Reset", command=lambda: self._confirm_and_run("Stop/Reset", self.stop_job), state="disabled")
         set_kb_id(self.btn_stop, "job_stop_reset")
         self.btn_stop.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_stop, "Stop the job and soft reset GRBL.")
         attach_log_gcode(self.btn_stop, "Ctrl-X")
+        self.btn_unlock_top = ttk.Button(bar, text="Unlock", command=lambda: self._confirm_and_run("Unlock ($X)", self.grbl.unlock), state="disabled")
+        set_kb_id(self.btn_unlock_top, "unlock_top")
+        self.btn_unlock_top.pack(side="left", padx=(6, 0))
+        apply_tooltip(self.btn_unlock_top, "Send $X to clear alarm (top-bar).")
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_unit_mm = ttk.Button(bar, text="mm", command=lambda: self._set_unit_mode("mm"))
-        set_kb_id(self.btn_unit_mm, "unit_mm")
-        self.btn_unit_mm.pack(side="left")
-        self.btn_unit_inch = ttk.Button(bar, text="inch", command=lambda: self._set_unit_mode("inch"))
-        set_kb_id(self.btn_unit_inch, "unit_inch")
-        self.btn_unit_inch.pack(side="left", padx=(6, 0))
-        self._manual_controls.extend([self.btn_unit_mm, self.btn_unit_inch])
-        apply_tooltip(self.btn_unit_mm, "Use millimeters for jogging and display.")
-        apply_tooltip(self.btn_unit_inch, "Use inches for jogging and display.")
+        self.btn_unit_toggle = ttk.Button(bar, text="mm", command=self._toggle_unit_mode)
+        set_kb_id(self.btn_unit_toggle, "unit_toggle")
+        self.btn_unit_toggle.pack(side="left", padx=(0, 0))
+        self._manual_controls.append(self.btn_unit_toggle)
+        apply_tooltip(self.btn_unit_toggle, "Toggle units between mm and inch.")
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_spindle_on = ttk.Button(bar, text="Spindle ON", command=lambda: self.grbl.spindle_on(12000))
+        self.btn_spindle_on = ttk.Button(bar, text="Spindle ON", command=lambda: self._confirm_and_run("Spindle ON", lambda: self.grbl.spindle_on(12000)))
         set_kb_id(self.btn_spindle_on, "spindle_on")
         self.btn_spindle_on.pack(side="left")
         self._manual_controls.append(self.btn_spindle_on)
         apply_tooltip(self.btn_spindle_on, "Turn spindle on at default RPM.")
         attach_log_gcode(self.btn_spindle_on, "M3 S12000")
-        self.btn_spindle_off = ttk.Button(bar, text="Spindle OFF", command=self.grbl.spindle_off)
+        self.btn_spindle_off = ttk.Button(bar, text="Spindle OFF", command=lambda: self._confirm_and_run("Spindle OFF", self.grbl.spindle_off))
         set_kb_id(self.btn_spindle_off, "spindle_off")
         self.btn_spindle_off.pack(side="left", padx=(6, 0))
         self._manual_controls.append(self.btn_spindle_off)
@@ -2245,7 +2321,7 @@ class App(tk.Tk):
 
         # Left: DRO
         mpos = ttk.Labelframe(top, text="Machine Position (MPos)", padding=8)
-        mpos.pack(side="left", fill="y")
+        mpos.pack(side="left", fill="y", padx=(0, 10))
 
         self._dro_value_row(mpos, "X", self.mpos_x)
         self._dro_value_row(mpos, "Y", self.mpos_y)
@@ -2276,7 +2352,7 @@ class App(tk.Tk):
         attach_log_gcode(self.btn_resume_mpos, "~")
 
         dro = ttk.Labelframe(top, text="Work Position (WPos)", padding=8)
-        dro.pack(side="left", fill="y", padx=(10, 0))
+        dro.pack(side="left", fill="y", padx=(0, 10))
 
         self.btn_zero_x = self._dro_row(dro, "X", self.wpos_x, self.zero_x)
         self.btn_zero_y = self._dro_row(dro, "Y", self.wpos_y, self.zero_y)
@@ -2325,19 +2401,19 @@ class App(tk.Tk):
         # 3x3 pad for XY
         self.btn_jog_y_plus = ttk.Button(pad, text="Y+", width=6, command=lambda: j(0, self.step_xy.get(), 0))
         set_kb_id(self.btn_jog_y_plus, "jog_y_plus")
-        self.btn_jog_y_plus.grid(row=0, column=1, padx=2, pady=2)
+        self.btn_jog_y_plus.grid(row=0, column=1, padx=4, pady=2)
         attach_log_gcode(self.btn_jog_y_plus, lambda: jog_cmd(0, self.step_xy.get(), 0))
         self.btn_jog_x_minus = ttk.Button(pad, text="X-", width=6, command=lambda: j(-self.step_xy.get(), 0, 0))
         set_kb_id(self.btn_jog_x_minus, "jog_x_minus")
-        self.btn_jog_x_minus.grid(row=1, column=0, padx=2, pady=2)
+        self.btn_jog_x_minus.grid(row=1, column=0, padx=4, pady=2)
         attach_log_gcode(self.btn_jog_x_minus, lambda: jog_cmd(-self.step_xy.get(), 0, 0))
         self.btn_jog_x_plus = ttk.Button(pad, text="X+", width=6, command=lambda: j(self.step_xy.get(), 0, 0))
         set_kb_id(self.btn_jog_x_plus, "jog_x_plus")
-        self.btn_jog_x_plus.grid(row=1, column=2, padx=2, pady=2)
+        self.btn_jog_x_plus.grid(row=1, column=2, padx=4, pady=2)
         attach_log_gcode(self.btn_jog_x_plus, lambda: jog_cmd(self.step_xy.get(), 0, 0))
         self.btn_jog_y_minus = ttk.Button(pad, text="Y-", width=6, command=lambda: j(0, -self.step_xy.get(), 0))
         set_kb_id(self.btn_jog_y_minus, "jog_y_minus")
-        self.btn_jog_y_minus.grid(row=2, column=1, padx=2, pady=2)
+        self.btn_jog_y_minus.grid(row=2, column=1, padx=4, pady=2)
         attach_log_gcode(self.btn_jog_y_minus, lambda: jog_cmd(0, -self.step_xy.get(), 0))
         apply_tooltip(self.btn_jog_y_plus, "Jog +Y by the selected step.")
         apply_tooltip(self.btn_jog_y_minus, "Jog -Y by the selected step.")
@@ -2447,7 +2523,7 @@ class App(tk.Tk):
 
         # Right: Overrides
         ov = ttk.Labelframe(top, text="Feed Override", padding=8)
-        ov.pack(side="left", fill="y")
+        ov.pack(side="left", fill="y", padx=(10, 0))
         self.btn_fo_plus = ttk.Button(ov, text="+10%", command=lambda: self.grbl.send_realtime(RT_FO_PLUS_10))
         set_kb_id(self.btn_fo_plus, "feed_override_plus_10")
         self.btn_fo_plus.pack(fill="x")
@@ -2611,6 +2687,8 @@ class App(tk.Tk):
         self.settings_tree.bind("<Motion>", self._settings_tooltip_motion)
         self.settings_tree.bind("<Leave>", self._settings_tooltip_hide)
         self._settings_tip = ToolTip(self.settings_tree, "")
+        self.settings_tree.tag_configure("edited", background="#fff5c2")
+        self.settings_tree.tag_configure("edited", background="#fff5c2")
 
         # App Settings tab
         sstab = ttk.Frame(nb, padding=8)
@@ -2739,6 +2817,24 @@ class App(tk.Tk):
         )
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
+        tw_frame = ttk.LabelFrame(sstab, text="Safety Aids", padding=8)
+        tw_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self.training_wheels_check = ttk.Checkbutton(
+            tw_frame,
+            text="Training Wheels (confirm top-bar actions)",
+            variable=self.training_wheels,
+        )
+        self.training_wheels_check.grid(row=0, column=0, sticky="w")
+        apply_tooltip(self.training_wheels_check, "Show confirmation dialogs for top toolbar actions.")
+
+        self.reconnect_check = ttk.Checkbutton(
+            tw_frame,
+            text="Reconnect to last port on open",
+            variable=self.reconnect_on_open,
+        )
+        self.reconnect_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        apply_tooltip(self.reconnect_check, "Auto-connect to the last used port when the app starts.")
+
         # 3D tab
         ttab = ttk.Frame(nb, padding=6)
         nb.add(ttab, text="3D View")
@@ -2750,6 +2846,7 @@ class App(tk.Tk):
         self.toolpath_view.pack(fill="both", expand=True)
         self.toolpath_view.set_enabled(bool(self.render3d_enabled.get()))
         self._load_3d_view(show_status=False)
+
 
         # Status bar
         status_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
@@ -2844,19 +2941,28 @@ class App(tk.Tk):
         return btn
 
     # ---------- UI actions ----------
-    def refresh_ports(self):
+    def refresh_ports(self, auto_connect: bool = False):
         ports = self.grbl.list_ports()
         self.port_combo["values"] = ports
         if ports and self.current_port.get() not in ports:
             self.current_port.set(ports[0])
         if not ports:
             self.current_port.set("")
+        if auto_connect and (not self.connected):
+            last = self.settings.get("last_port", "").strip()
+            if last and last in ports:
+                self.current_port.set(last)
+                try:
+                    self.toggle_connect()
+                except Exception:
+                    pass
 
     def toggle_connect(self):
         if self.grbl.is_streaming():
             messagebox.showwarning("Busy", "Stop the stream before disconnecting.")
             return
         if self.connected:
+            self._user_disconnect = True
             self.grbl.disconnect()
         else:
             port = self.current_port.get().strip()
@@ -2865,6 +2971,7 @@ class App(tk.Tk):
                 return
             try:
                 self.grbl.connect(port, BAUD_DEFAULT)
+                self._auto_reconnect_last_port = port
             except Exception as e:
                 messagebox.showerror("Connect failed", str(e))
 
@@ -2982,6 +3089,22 @@ class App(tk.Tk):
             self.gview.set_lines(lines)
             self._set_gcode_loading_progress(len(lines), len(lines), os.path.basename(path))
             on_done()
+
+    def _clear_gcode(self):
+        if self.grbl.is_streaming():
+            messagebox.showwarning("Busy", "Stop the stream before clearing the G-code file.")
+            return
+        self._last_gcode_lines = []
+        self.grbl.load_gcode([])
+        self.gview.set_lines([])
+        self.gcode_stats_var.set("No file loaded")
+        self.progress_pct.set(0)
+        self.status.config(text="G-code cleared")
+        self.btn_run.config(state="disabled")
+        self.btn_pause.config(state="disabled")
+        self.btn_resume.config(state="disabled")
+        if hasattr(self, "toolpath_view"):
+            self.toolpath_view.set_gcode_async([])
 
     def _show_gcode_loading(self):
         if not hasattr(self, "gcode_load_bar"):
@@ -3393,6 +3516,7 @@ class App(tk.Tk):
             self._render_settings_raw()
 
     def _render_settings(self):
+        self._settings_items = {}
         for item in self.settings_tree.get_children():
             self.settings_tree.delete(item)
         items = []
@@ -3414,7 +3538,11 @@ class App(tk.Tk):
                 desc = info.get("desc", "")
                 items.append((idx, key, name, "", units, desc))
         for _, key, name, value, units, desc in sorted(items):
-            self.settings_tree.insert("", "end", values=(key, name, value, units, desc))
+            item_id = self.settings_tree.insert("", "end", values=(key, name, value, units, desc))
+            self._settings_items[key] = item_id
+        self._settings_baseline = dict(self._settings_values)
+        for key in self._settings_items:
+            self._update_setting_row_tags(key)
         self.status.config(text=f"Settings: {len(items)} values")
 
     def _update_rapid_rates(self):
@@ -3471,33 +3599,87 @@ class App(tk.Tk):
         key = values[0]
         current = values[2]
 
-        if self._settings_edit_entry is not None:
-            self._settings_edit_entry.destroy()
-            self._settings_edit_entry = None
+        # Commit any existing in-place edit before starting a new one so multiple edits are preserved.
+        self._commit_pending_setting_edit()
 
         entry = ttk.Entry(self.settings_tree)
         entry.place(x=x, y=y, width=w, height=h)
         entry.insert(0, current)
         entry.focus_set()
+        entry._item = item
+        entry._key = key
         self._settings_edit_entry = entry
 
         def commit(_event=None):
-            new_val = entry.get().strip()
-            self.settings_tree.set(item, "value", new_val)
-            self._settings_values[key] = new_val
-            self._settings_edited[key] = new_val
-            entry.destroy()
-            self._settings_edit_entry = None
+            self._commit_pending_setting_edit()
 
         def cancel(_event=None):
-            entry.destroy()
-            self._settings_edit_entry = None
+            self._cancel_pending_setting_edit()
 
         entry.bind("<Return>", commit)
         entry.bind("<FocusOut>", commit)
         entry.bind("<Escape>", cancel)
 
+    def _commit_pending_setting_edit(self):
+        """Persist any active inline edit into the edited set."""
+        entry = getattr(self, "_settings_edit_entry", None)
+        if entry is None:
+            return
+        key = getattr(entry, "_key", None)
+        item = getattr(entry, "_item", None)
+        try:
+            if key and item:
+                new_val = entry.get().strip()
+                # Inline numeric validation; most GRBL settings are numeric.
+                if new_val:
+                    try:
+                        idx = int(key[1:]) if key.startswith("$") else None
+                    except Exception:
+                        idx = None
+                    if idx not in GRBL_NON_NUMERIC_SETTINGS:
+                        try:
+                            val_num = float(new_val)
+                        except Exception:
+                            messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
+                            return
+                        limits = GRBL_SETTING_LIMITS.get(idx, None)
+                        if limits:
+                            lo, hi = limits
+                            if lo is not None and val_num < lo:
+                                messagebox.showwarning("Out of range", f"Setting {key} must be >= {lo}.")
+                                return
+                            if hi is not None and val_num > hi:
+                                messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
+                                return
+                self.settings_tree.set(item, "value", new_val)
+                self._settings_values[key] = new_val
+                baseline = self._settings_baseline.get(key, "")
+                if new_val == baseline and key in self._settings_edited:
+                    self._settings_edited.pop(key, None)
+                else:
+                    self._settings_edited[key] = new_val
+                self._update_setting_row_tags(key)
+        finally:
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+            self._settings_edit_entry = None
+
+    def _cancel_pending_setting_edit(self):
+        """Discard any active inline edit without saving."""
+        entry = getattr(self, "_settings_edit_entry", None)
+        if entry is None:
+            return
+        try:
+            entry.destroy()
+        except Exception:
+            pass
+        self._settings_edit_entry = None
+
     def _save_settings_changes(self):
+        # Ensure any active cell edit is committed before saving.
+        self._commit_pending_setting_edit()
         if not self.grbl.is_connected():
             messagebox.showwarning("Not connected", "Connect to GRBL first.")
             return
@@ -3509,12 +3691,42 @@ class App(tk.Tk):
             return
         if not messagebox.askyesno("Confirm save", "Send edited settings to GRBL?"):
             return
+        # Collect edits, allowing zeros but skipping blank strings.
+        changes = []
         for key, value in self._settings_edited.items():
-            if not value:
+            val = "" if value is None else str(value).strip()
+            if val == "":
                 continue
-            self.grbl.send_immediate(f"{key}={value}")
-        self._settings_edited = {}
-        self.status.config(text="Settings: changes sent")
+            changes.append((key, val))
+        if not changes:
+            messagebox.showinfo("No changes", "No non-empty settings to send.")
+            return
+
+        def worker():
+            sent = 0
+            for key, val in changes:
+                self.grbl.send_immediate(f"{key}={val}")
+                sent += 1
+                # Small spacing to avoid clobbering on noisy links.
+                time.sleep(0.05)
+            self._settings_edited = {}
+            self.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
+            try:
+                self.after(0, lambda: self._mark_settings_saved(changes, sent))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mark_settings_saved(self, changes, sent_count: int):
+        for key, _ in changes:
+            if key in self._settings_values:
+                self._settings_baseline[key] = self._settings_values[key]
+                self._update_setting_row_tags(key)
+        try:
+            self.status.config(text=f"Settings: sent {sent_count} change(s)")
+        except Exception:
+            pass
 
     def _settings_tooltip_motion(self, event):
         item = self.settings_tree.identify_row(event.y)
@@ -3534,30 +3746,114 @@ class App(tk.Tk):
         desc = info.get("desc", "")
         units = info.get("units", "")
         tooltip = info.get("tooltip", "")
-        if desc or tooltip:
-            tip = tooltip if tooltip else desc
-            if units:
-                tip = f"{tip}\nUnits: {units}"
-            tip = tip + "\nTypical: machine-specific"
-            self._settings_tip.set_text(tip)
-            self._settings_tip._schedule_show()
-        else:
-            self._settings_tooltip_hide()
+        baseline_val = self._settings_baseline.get(key, "")
+        current_val = self._settings_values.get(key, "")
+        limits = None
+        try:
+            limits = GRBL_SETTING_LIMITS.get(int(key[1:]), None)
+        except Exception:
+            limits = None
+        allow_text = False
+        try:
+            allow_text = int(key[1:]) in GRBL_NON_NUMERIC_SETTINGS
+        except Exception:
+            allow_text = False
+        value_line = (
+            f"Pending: {current_val} (last saved: {baseline_val})"
+            if current_val != baseline_val
+            else f"Value: {baseline_val}"
+        )
+        parts = []
+        if tooltip:
+            parts.append(tooltip)
+        elif desc:
+            parts.append(desc)
+        if units:
+            parts.append(f"Units: {units}")
+        if allow_text:
+            parts.append("Allows text values")
+        if limits:
+            lo, hi = limits
+            if lo is not None and hi is not None:
+                parts.append(f"Allowed: {lo} .. {hi}")
+            elif lo is not None:
+                parts.append(f"Allowed: >= {lo}")
+            elif hi is not None:
+                parts.append(f"Allowed: <= {hi}")
+        parts.append(value_line)
+        parts.append("Typical: machine-specific")
+        self._settings_tip.set_text("\n".join([p for p in parts if p]))
+        self._settings_tip._schedule_show()
 
     def _settings_tooltip_hide(self, _event=None):
         if self._settings_tip:
             self._settings_tip._hide()
 
+    def _maybe_auto_reconnect(self):
+        if self.connected or self._closing or (not self._auto_reconnect_pending):
+            return
+        if not self._auto_reconnect_last_port:
+            return
+        try:
+            if not bool(self.reconnect_on_open.get()):
+                self._auto_reconnect_pending = False
+                return
+        except Exception:
+            pass
+        now = time.time()
+        if now < self._auto_reconnect_next_ts:
+            return
+        ports = self.grbl.list_ports()
+        if self._auto_reconnect_last_port not in ports:
+            # If we've exceeded retries, allow a cool-down retry later.
+            if self._auto_reconnect_retry >= self._auto_reconnect_max_retry:
+                self._auto_reconnect_next_ts = now + max(30.0, self._auto_reconnect_delay)
+                self._auto_reconnect_pending = True
+            else:
+                self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+            return
+        self._auto_reconnect_last_attempt = now
+        try:
+            self.current_port.set(self._auto_reconnect_last_port)
+            self.grbl.connect(self._auto_reconnect_last_port, BAUD_DEFAULT)
+            # success: reset counters
+            self._auto_reconnect_pending = False
+            self._auto_reconnect_retry = 0
+            self._auto_reconnect_delay = 3.0
+            self._auto_reconnect_next_ts = 0.0
+        except Exception:
+            self._auto_reconnect_retry += 1
+            if self._auto_reconnect_retry > self._auto_reconnect_max_retry:
+                # Stop aggressive retries but leave a long cool-down in case the port reappears later.
+                self._auto_reconnect_delay = 30.0
+                self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+                self._auto_reconnect_pending = True
+                return
+            self._auto_reconnect_delay = min(30.0, self._auto_reconnect_delay * 1.5)
+            self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+
+    def _update_setting_row_tags(self, key: str):
+        item = self._settings_items.get(key)
+        if not item:
+            return
+        current = self._settings_values.get(key, "")
+        baseline = self._settings_baseline.get(key, "")
+        tags = list(self.settings_tree.item(item, "tags"))
+        if current != baseline:
+            if "edited" not in tags:
+                tags.append("edited")
+        else:
+            tags = [t for t in tags if t != "edited"]
+        self.settings_tree.item(item, tags=tuple(tags))
+
     def _set_unit_mode(self, mode: str):
         self.unit_mode.set(mode)
         with self._macro_vars_lock:
             self._macro_vars["units"] = "G21" if mode == "mm" else "G20"
-        if mode == "mm":
-            self.btn_unit_mm.config(state="disabled")
-            self.btn_unit_inch.config(state="normal")
-        else:
-            self.btn_unit_mm.config(state="normal")
-            self.btn_unit_inch.config(state="disabled")
+        try:
+            self.btn_unit_toggle.config(text="mm" if mode == "mm" else "inch")
+        except Exception:
+            pass
 
     def _set_step_xy(self, value: float):
         self.step_xy.set(value)
@@ -3579,6 +3875,9 @@ class App(tk.Tk):
                         w.config(state="normal")
                         continue
                     if w is getattr(self, "btn_unlock_mpos", None):
+                        w.config(state="normal")
+                        continue
+                    if w is getattr(self, "btn_unlock_top", None):
                         w.config(state="normal")
                         continue
                     w.config(state="disabled")
@@ -4330,7 +4629,7 @@ class App(tk.Tk):
                 result_q.put(cancel_label)
 
     # ---------- Zeroing (simple G92-based) ----------
-    # If you prefer G10 L20 (persistent work offset), say so and I’ll swap these.
+    # If you prefer G10 L20 (persistent work offset), say so and Iâ€™ll swap these.
     def zero_x(self):
         self.grbl.send_immediate("G92 X0")
 
@@ -4480,6 +4779,7 @@ class App(tk.Tk):
                     self._log(f"[ui] Event error: {exc}")
                 except Exception:
                     pass
+        self._maybe_auto_reconnect()
         self.after(50, self._drain_ui_queue)
 
     def _toggle_tooltips(self):
@@ -4503,6 +4803,27 @@ class App(tk.Tk):
             self.toolpath_view.set_enabled(new_val)
             if new_val and self._last_gcode_lines:
                 self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+
+    def _toggle_unit_mode(self):
+        new_mode = "inch" if self.unit_mode.get() == "mm" else "mm"
+        self._set_unit_mode(new_mode)
+
+
+    def _confirm_and_run(self, label: str, func):
+        """Optionally wrap an action with a confirmation dialog based on Training Wheels setting."""
+        try:
+            need_confirm = bool(self.training_wheels.get())
+        except Exception:
+            need_confirm = False
+        now = time.time()
+        last_ts = self._confirm_last_time.get(label, 0.0)
+        if need_confirm:
+            if (now - last_ts) < self._confirm_debounce_sec:
+                return
+            if not messagebox.askyesno("Confirm", f"{label}?"):
+                return
+        self._confirm_last_time[label] = now
+        func()
 
     def _save_3d_view(self):
         if not hasattr(self, "toolpath_view"):
@@ -4595,6 +4916,12 @@ class App(tk.Tk):
             self.connected = is_on
 
             if is_on:
+                self._auto_reconnect_last_port = port or self._auto_reconnect_last_port
+                self._auto_reconnect_pending = False
+                self._auto_reconnect_last_attempt = 0.0
+                self._auto_reconnect_retry = 0
+                self._auto_reconnect_delay = 3.0
+                self._auto_reconnect_next_ts = 0.0
                 self.btn_conn.config(text="Disconnect")
                 self._connected_port = port
                 self._grbl_ready = False
@@ -4631,6 +4958,12 @@ class App(tk.Tk):
                 self._accel_rates = None
                 if self._last_gcode_lines:
                     self._update_gcode_stats(self._last_gcode_lines)
+                if not self._user_disconnect:
+                    self._auto_reconnect_pending = True
+                    self._auto_reconnect_retry = 0
+                    self._auto_reconnect_delay = 3.0
+                    self._auto_reconnect_next_ts = 0.0
+                self._user_disconnect = False
 
         elif kind == "ui_call":
             func, args, kwargs, result_q = evt[1], evt[2], evt[3], evt[4]
@@ -5025,6 +5358,7 @@ class App(tk.Tk):
             btn._kb_id = f"macro_{idx}"
             btn.pack(fill="x", pady=(0, 4))
             apply_tooltip(btn, tip)
+            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
             self._manual_controls.append(btn)
             self._macro_buttons.append(btn)
 
@@ -5040,6 +5374,7 @@ class App(tk.Tk):
             btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
             right.grid_columnconfigure(col, weight=1)
             apply_tooltip(btn, tip)
+            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
             self._manual_controls.append(btn)
             self._macro_buttons.append(btn)
             col += 1
@@ -5058,6 +5393,40 @@ class App(tk.Tk):
             return name, tip
         except Exception:
             return f"Macro {index}", ""
+
+    def _show_macro_preview(self, name: str, lines: list[str]) -> None:
+        """Modal preview of macro contents (view-only)."""
+        body = "".join(lines[2:]) if len(lines) > 2 else ""
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Macro Preview - {name}")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(True, True)
+        frame = ttk.Frame(dlg, padding=8)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=name, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 6))
+        text = tk.Text(frame, wrap="word", height=14, width=80, state="normal")
+        text.insert("end", body)
+        text.config(state="disabled")
+        text.pack(fill="both", expand=True)
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=(0, 6))
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+        dlg.wait_window()
+
+    def _preview_macro(self, index: int):
+        path = self._macro_path(index)
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except Exception as e:
+            messagebox.showerror("Macro error", str(e))
+            return
+        name = lines[0].strip() if lines else f"Macro {index}"
+        self._show_macro_preview(name, lines)
 
     def _run_macro(self, index: int):
         if self.grbl.is_streaming():
@@ -5502,11 +5871,14 @@ class App(tk.Tk):
             "render3d_enabled": bool(self.render3d_enabled.get()),
             "view_3d": self.settings.get("view_3d"),
             "all_stop_mode": self.all_stop_mode.get(),
+            "training_wheels": bool(self.training_wheels.get()),
+            "reconnect_on_open": bool(self.reconnect_on_open.get()),
             "fallback_rapid_rate": self.fallback_rapid_rate.get().strip(),
             "estimate_factor": safe_float(self.estimate_factor, self.settings.get("estimate_factor", 1.0), "estimate factor"),
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
             "current_line_mode": self.current_line_mode.get(),
             "key_bindings": dict(self._key_bindings),
+            "last_port": self.current_port.get(),
         }
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
