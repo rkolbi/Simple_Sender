@@ -1031,6 +1031,12 @@ class GcodeText(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.text = tk.Text(self, wrap="none", height=18, undo=False)
+        text_fg = "#111111"
+        self.text.configure(
+            background="#ffffff",
+            foreground=text_fg,
+            insertbackground=text_fg,
+        )
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
         self.text.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
@@ -1042,10 +1048,10 @@ class GcodeText(ttk.Frame):
         self.grid_columnconfigure(0, weight=1)
 
         # Tags
-        # Lighter backgrounds for readability
-        self.text.tag_configure("sent", background="#c7d7f2")     # light blue
-        self.text.tag_configure("acked", background="#c8e6c9")    # light green
-        self.text.tag_configure("current", background="#ffe0b2")  # light orange
+        # Pastel highlights keep gcode readable on light backgrounds
+        self.text.tag_configure("sent", background="#e5efff", foreground=text_fg)      # light blue
+        self.text.tag_configure("acked", background="#e6f7ed", foreground=text_fg)     # light green
+        self.text.tag_configure("current", background="#fff4d8", foreground=text_fg)   # light orange
 
         self.lines_count = 0
         self._sent_upto = -1
