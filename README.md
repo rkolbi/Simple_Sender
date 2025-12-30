@@ -142,9 +142,64 @@ When to enable/disable options:
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-- Files: Macro-1..7 or Maccro-1..7 (.txt optional). Line1 label, Line2 tooltip, Line3+ body.
-- Left-click runs; Right-click previews (view-only). If streaming: blocked.
-- Supports bCNC-style directives (%wait, %msg, %update), expressions, and commands.
+- **File format & placement.** Store macros in the same folder as `simple-sender.py` with names `Macro-1` … `Macro-7` (legacy `Maccro-*` files and optional `.txt` extensions remain compatible). The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
+- **Why bCNC macros inspired this section.** The macro subsystem mirrors the flexibility of bCNC’s macros: you can interleave GRBL commands, real-time bytes, directives like `%wait`, expressions, and Python snippets. Like bCNC, the sender maintains `_macro_vars`, emulates `$J=` jog semantics, and exposes helper macros (print, prompt, etc.) so that you can stitch together familiar motion flows from a single file without building a separate script.
+- **Supported directives & commands.** The macro interpreter blends GRBL motion with helper directives:
+  - `%wait`, `%msg`, and `%update` behave like their bCNC counterparts: pause until idle, log operator-facing text, or request a status update.
+  - `%if running` skips the current line when a job is already in progress.
+  - Control keywords (`M0/M00/PROMPT`, `ABSOLUTE/ABS`, `RELATIVE/REL`, `HOME`, `UNLOCK`, `RESET`, `PAUSE`, `RESUME`, `FEEDHOLD`, `STOP`, `RUN`, `SAFE`, `SET0/SETX/SETY/SETZ/SET`, `LOAD <path>`, `OPEN`, `CLOSE`, `HELP`, `QUIT/EXIT`, `SENDHEX`, and more) invoke the sender’s helpers, so you can open/close the machine, toggle offsets, or trigger custom logic without writing raw G-code.
+  - Prefixing a line with `!`, `~`, `?`, or the Ctrl-X byte (`\x18`) sends the equivalent real-time command; lines starting with `$`, `@`, `{`, comments in `(…)` or `;…`, or those matching the `MACRO_GPAT` regex are forwarded verbatim.
+  - Pure G-code lines (e.g., `G0`, `G1`, `M3`, `M5`, `G92`, and any other GRBL commands) are sent directly to the controller.
+- **Mixing Python & GRBL.** Lines that begin with `_` run as Python (`_safe_height = …`). You can reference live variables in `_macro_vars` (e.g., `wx`, `wy`, `wz`, `OvFeed`, `safe`), call the UI via `app`/`os`, or log with `app._log(...)`. Wrap Python expressions in square brackets (`G0 Z[_safe_height]`), and the expression is evaluated before the line is streamed. Use `%msg`/`%update` inside macros for progress updates or for prompting the operator mid-sequence.
+- **Example macro (raise Z and park).**
+  ```text
+  Park & lift
+  Raise to a safe height, then move to X0 Y0.
+  _safe_height = max(5.0, float(_macro_vars.get("safe", 5.0)))
+  %msg Raising to Z[_safe_height] before parking.
+  G90
+  G0 Z[_safe_height]
+  G0 X0 Y0
+  %msg Parked and ready.
+  ```
+  This macro illustrates how to:
+  1. Use a Python helper to compute `_safe_height` (leveraging the pre-populated `_macro_vars` dictionary).
+  2. Emit `%msg` notifications before and after motion.
+  3. Mix G-code with embedded expressions (`[...]`), send absolute moves (`G90`/`G0`), and park at a known location.
+  You can expand this template with `%wait`, conditional Python (`if _safe_height < 10.0: …`), or macros that interact with `app` (e.g., `app._log(...)`) before/after sending commands. Macros always release `_macro_lock`, so even a raised exception won’t hang the UI.
+- **Variable math + GRBL example.**
+  ```text
+  Offset jog
+  Compute a dynamic X offset and move there with mixed Python/math.
+  _step = float(_macro_vars.get("stepz", 1.0))
+  _target = float(_macro_vars.get("wx", 0.0)) + _step * 3
+  %msg Moving to computed X[_target] (wx=[_macro_vars.get("wx",0.0)], step=[_step]).
+  G90
+  G0 X[_target] Y0
+  ```
+  This illustrates setting a variable, performing math against live data, and passing that result straight into a GRBL move (`G0 X[_target]`). Use `_macro_vars["wx"]`, `wx`, or any custom variables paired with macros that update them (`%update`, status parsing, or previous lines) to build macros that adapt to the current machine state.
+
+ - **Available machine information.** When macros run they can read (and modify) `_macro_vars`. The list below shows the values collected by the sender so you know what data is available for conditional logic, math, or logging:
+   | Variable | Meaning |
+   | --- | --- |
+   | `wx`, `wy`, `wz` | Most recent work position from GRBL (WPos). |
+   | `mx`, `my`, `mz` | Most recent machine position (MPos). |
+   | `wcox`, `wcoy`, `wcoz` | Work coordinate offsets (WCO). |
+   | `wa`/`wb`/`wc` | Auxiliary axis positions when available (also mirrored as `_macro_vars`). |
+   | `prbx`/`prby`/`prbz`/`prbcmd`/`prbfeed` | Probe-related placeholders (mirrors typical bCNC macros). |
+   | `curfeed`, `curspindle` | Live feed/speed values from the status report (`FS` field). |
+   | `rpm` | Current spindle RPM estimate. |
+   | `planner`, `rxbytes` | Planner buffer usage and remaining RX bytes from `Bf:`.
+   | `OvFeed`, `OvRapid`, `OvSpindle` (plus `_Ov*` mirror flags) | Override percentages for feed/rapid/spindle (set by override buttons). |
+   | `state` | Latest GRBL state string (Idle, Run, Hold, Alarm, etc.). |
+   | `_macro_vars["running"]` | Boolean flag that flips when a stream is running/paused/done. |
+   | `motion`, `distance`, `plane`, `feedmode`, `arc`, `units`, `WCS`, `cutter`, `tool`, `program`, `spindle`, `coolant` | Internal state placeholders that mirror the current G-code tokens processed by macros (same keys bCNC uses). |
+   | `diameter`, `cutfeed`, `cutfeedz`, `safe`, `stepz`, `stepover`, `surface`, `thickness` | User-defined helper numbers that can be tweaked in macros for tooling choices. |
+   | `PRB`, `version`, `controller`, `pins`, `msg`, `prompt_choice`/`prompt_index`/`prompt_cancelled` | Misc helpers used by macros and log dialogs; `PRB` holds last probe result, `pins` stores pin summary, and `prompt_*` track modal prompt outcomes.
+   | `_camwx`, `_camwy` | Camera or CAM coordinates that can be reused in macros (mirrors non-GRBL data). |
+
+   Use this table as your cheat sheet when composing macros—every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
+
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112 or fallback) with factor slider; shows “fallback” when applicable. Live remaining estimate during streaming.
@@ -171,9 +226,46 @@ When to enable/disable options:
 - **Persistent offsets (G10)?** Swap zero commands if desired.
 
 ## Appendix A: GRBL 1.1h Commands
-- Real-time (no newline): `Ctrl-X` (soft reset), `?` (status), `!` (hold), `~` (cycle start), `0x85` (jog cancel), Feed override `0x90/91/92`, Spindle override `0x99/9A/9B`.
-- System: `$` (help), `$$` (settings), `$#` (coords), `$I` (build info), `$N` (startup lines), `$RST=*| $RST=$| $RST=#` (reset), `$X` (unlock), `$H` (home), `$J=...` (jog), `$C` (check mode), `$SLP` (sleep).
-- Common G-code for sender UX: `G92` zeroing (default), `G90/G91` absolute/relative, `G20/G21` units, `M3/M4/M5` spindle, `G0/G1/G2/G3` motion, `G4` dwell.
+The sender exposes a curated subset of GRBL’s real-time, system, and motion commands. Below is the syntax and an example for each group.
+
+### Real-time bytes (no newline)
+| Command | Syntax | Notes / Example |
+| --- | --- | --- |
+| Soft reset | `Ctrl-X` | Immediately halts motion and resets GRBL. Example: used by **Stop/Reset** and ALL STOP (reset mode). |
+| Status report | `?` | Requests `<State|WPos|FS:...>` update (used by tooltips/estimations). |
+| Feed hold | `!` | Pauses execution (used for **Pause**). |
+| Cycle start / resume | `~` | Resumes execution after hold or start a job (used for **Resume**/**Run**). |
+| Jog cancel | `0x85` | Stops a `$J=` jog (bound to **JOG STOP**). |
+| Feed override +10%/−10%/reset | `0x91` / `0x92` / `0x90` | Matches the buttons in the Feed Override panel. |
+| Spindle override +10%/−10%/reset | `0x9A` / `0x9B` / `0x99` | Tied to the Spindle Override controls. |
+
+### System (`$`) commands
+| Command | Syntax | Example |
+| --- | --- | --- |
+| Help / info | `$` | Prints current build/config hints in the console. |
+| Print settings | `$$` | Captures settings table (refresh button). |
+| Coordinate report | `$#` | Shows offsets and workspace coordinates (rarely used). |
+| Build info | `$I` | Logs firmware version and capabilities. |
+| Startup lines | `$N` | Lists GRBL startup macro lines. |
+| Reset settings | `$RST=*`, `$RST=$`, `$RST=#` | Soft resets stored settings/config. |
+| Unlock | `$X` | Clears alarms; exposed via **Unlock** buttons. |
+| Home | `$H` | Runs the homing cycle from the UI. |
+| Jog command | `$J=...` | Used by the jog pad/button macros; syntax `G91 X... Y... Z... F...`. |
+| Check mode | `$C` | Only available when GRBL is idle; reports planner buffer. |
+| Sleep | `$SLP` | Puts GRBL into low-power mode (not exposed by default). |
+
+### Common G-code commands used via UI / macros
+| Command | Syntax | Example | Notes |
+| --- | --- | --- | --- |
+| Absolute positioning | `G90` | `G90` before a `G0 X10` move | Ensures subsequent moves use machine coordinates. |
+| Relative positioning | `G91` | `G91` before `$J=` jog | Temporarily switches to incremental mode. |
+| Units | `G20` or `G21` | `G21` when working in millimeters | The unit toggle sends the proper command automatically. |
+| Zero work coords | `G92` | `G92 X0 Y0 Z0` (zero all buttons) | Sender uses this for DRO zero buttons; macros can adjust `G92` arguments. |
+| Motion | `G0`, `G1`, `G2`, `G3` | `G0 Z10` or `G2 X1 Y1 I0 J1` | Standard rapid/linear/arc commands used in macros. |
+| Dwell | `G4` | `G4 P1` | Macro `%wait` uses similar concepts (but there is also the `%wait` directive). |
+| Spindle on/off | `M3 S<rpm>` / `M5` | `M3 S12000` (button default) / `M5` | Spindle buttons log these commands via `attach_log_gcode`. |
+
+Use the console or macros whenever you need a command that is not exposed via buttons—every `G` current GRBL command can be typed manually. The tables above capture the commands that the UI, macros, and override controls leverage most heavily.
 
 ## Appendix B: GRBL 1.1h Settings (selected)
 - $0 Step pulse, µs
