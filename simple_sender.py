@@ -21,6 +21,7 @@ import types
 import csv
 import math
 import shlex
+import traceback
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -60,7 +61,7 @@ RX_BUFFER_WINDOW = RX_BUFFER_SIZE - RX_BUFFER_SAFETY
 MACRO_PREFIXES = ("Macro-", "Maccro-")
 MACRO_EXTS = ("", ".txt")
 MACRO_GPAT = re.compile(r"[A-Za-z]\s*[-+]?\d+.*")
-MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\\b *(.*)$")
+MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\b *(.*)$")
 MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
 MACRO_STDEXPR = False
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
@@ -820,6 +821,9 @@ class GrblWorker:
         self.send_immediate(cmd)
 
     # ---- RX/TX loops ----
+    def _encode_line_payload(self, s: str) -> bytes:
+        return (s.strip() + "\n").encode("utf-8", errors="replace")
+
     def _tx_loop(self, stop_evt: threading.Event):
         while not stop_evt.is_set():
             if not self.is_connected():
@@ -840,7 +844,8 @@ class GrblWorker:
                             if self._send_index >= len(self._gcode):
                                 break
                             line = self._gcode[self._send_index].strip()
-                        line_len = len(line) + 1  # newline consumes RX buffer space
+                        payload = self._encode_line_payload(line)
+                        line_len = len(payload)
                         can_fit = (self._stream_buf_used + line_len) < self._rx_window
 
                         if not can_fit and self._stream_buf_used > 0:
@@ -857,7 +862,7 @@ class GrblWorker:
                         self._stream_buf_used += line_len
                         self._stream_line_queue.append(line_len)
 
-                    if not self._write_line(line):
+                    if not self._write_line(line, payload):
                         with self._stream_lock:
                             if self._send_index > 0:
                                 self._send_index -= 1
@@ -902,11 +907,12 @@ class GrblWorker:
             self._write_line(s)
             self.ui_q.put(("log_tx", s))
 
-    def _write_line(self, s: str) -> bool:
+    def _write_line(self, s: str, payload: bytes | None = None) -> bool:
         if not self.is_connected():
             return False
         try:
-            payload = (s.strip() + "\n").encode("utf-8", errors="replace")
+            if payload is None:
+                payload = self._encode_line_payload(s)
             with self._write_lock:
                 self.ser.write(payload)
             return True
@@ -3496,7 +3502,7 @@ class App(tk.Tk):
                 md = f.read()
         except Exception:
             return
-        pattern = re.compile(r"^#### \\$(\\d+)[^\\n]*\\n(.*?)(?=^#### \\$|\\Z)", re.M | re.S)
+        pattern = re.compile(r"^#### \$(\d+)[^\n]*\n(.*?)(?=^#### \$|\Z)", re.M | re.S)
         for match in pattern.finditer(md):
             idx = int(match.group(1))
             body = match.group(2).strip()
@@ -3813,13 +3819,23 @@ class App(tk.Tk):
             self._settings_edited = {}
             self.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
             try:
-                self.after(0, lambda: self._mark_settings_saved(changes, sent))
+                self.after(0, lambda: self._mark_settings_saved(changes, sent, refresh=True))
             except Exception:
                 pass
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _mark_settings_saved(self, changes, sent_count: int):
+    def _mark_settings_saved(self, changes, sent_count: int, refresh: bool = False):
+        if refresh:
+            try:
+                self.status.config(text=f"Settings: sent {sent_count} change(s); refreshing $$ for confirmation")
+            except Exception:
+                pass
+            try:
+                self._request_settings_dump()
+            except Exception:
+                pass
+            return
         for key, _ in changes:
             if key in self._settings_values:
                 self._settings_baseline[key] = self._settings_values[key]
@@ -5525,6 +5541,10 @@ class App(tk.Tk):
         return None
 
     def _load_macro_buttons(self):
+        # Drop previously registered macro buttons from manual controls to avoid holding destroyed widgets.
+        old_macro_buttons = getattr(self, "_macro_buttons", [])
+        if old_macro_buttons:
+            self._manual_controls = [w for w in self._manual_controls if w not in old_macro_buttons]
         self._macro_buttons = []
 
         left = self.macro_frames["left"]
@@ -5677,6 +5697,10 @@ class App(tk.Tk):
                     continue
                 if not self._execute_bcnc_command(evaluated):
                     break
+        except Exception as exc:
+            self.ui_q.put(("log", f"[macro] Exception: {exc}"))
+            for ln in traceback.format_exc().splitlines():
+                self.ui_q.put(("log", ln))
         finally:
             self._macro_lock.release()
 
@@ -6070,7 +6094,6 @@ class App(tk.Tk):
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
             "current_line_mode": self.current_line_mode.get(),
             "key_bindings": dict(self._key_bindings),
-            "last_port": self.current_port.get(),
         }
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
