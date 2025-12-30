@@ -668,6 +668,11 @@ class GrblWorker:
             self.ui_q.put(("ready", True))
 
     def _handle_alarm(self, s: str):
+        # Surface alarm lines to the console explicitly.
+        try:
+            self.ui_q.put(("log", f"[ALARM] {s}"))
+        except Exception:
+            pass
         if not self._alarm_active:
             self._alarm_active = True
         if self._streaming or self._paused:
@@ -938,9 +943,7 @@ class GrblWorker:
         if is_status:
             parts = s.strip("<>").split("|")
             state = parts[0] if parts else ""
-        # Suppress repetitive idle status noise in the console log.
-        if not (is_status and state.lower().startswith("idle")):
-            self.ui_q.put(("log_rx", s))
+        self.ui_q.put(("log_rx", s))
 
         low = s.lower()
         if low.startswith("grbl"):
@@ -2025,6 +2028,20 @@ class App(tk.Tk):
         self.minsize(980, 620)
         self.settings_path = os.path.join(os.path.dirname(__file__), "settings.json")
         self.settings = self._load_settings()
+        # Migrate jog feed defaults: keep legacy jog_feed for XY, force Z to its own default when absent.
+        legacy_jog_feed = self.settings.get("jog_feed")
+        has_jog_xy = "jog_feed_xy" in self.settings
+        has_jog_z = "jog_feed_z" in self.settings
+        default_jog_feed_xy = (
+            self.settings["jog_feed_xy"]
+            if has_jog_xy
+            else (legacy_jog_feed if legacy_jog_feed is not None else 4000.0)
+        )
+        default_jog_feed_z = self.settings["jog_feed_z"] if has_jog_z else 500.0
+        if has_jog_z and (legacy_jog_feed is not None) and (self.settings["jog_feed_z"] == legacy_jog_feed) and (not has_jog_xy):
+            # Likely legacy single value carried over; reset to Z default.
+            default_jog_feed_z = 500.0
+            self.settings["jog_feed_z"] = default_jog_feed_z
 
         self.tooltip_enabled = tk.BooleanVar(value=self.settings.get("tooltips_enabled", True))
         self.gui_logging_enabled = tk.BooleanVar(value=self.settings.get("gui_logging_enabled", True))
@@ -2035,6 +2052,8 @@ class App(tk.Tk):
         self.keyboard_bindings_enabled = tk.BooleanVar(
             value=self.settings.get("keyboard_bindings_enabled", True)
         )
+        self.console_positions_enabled = tk.BooleanVar(value=self.settings.get("console_positions_enabled", True))
+        self.console_status_enabled = tk.BooleanVar(value=self.settings.get("console_status_enabled", True))
         self.current_line_mode = tk.StringVar(
             value=self.settings.get("current_line_mode", "acked")
         )
@@ -2054,7 +2073,7 @@ class App(tk.Tk):
         self._key_sequence_after_id = None
         self._kb_item_to_button = {}
         self._kb_edit = None
-        self._console_lines = []
+        self._console_lines: list[tuple[str, str | None]] = []
         self._console_filter = None
         self._closing = False
 
@@ -2064,7 +2083,8 @@ class App(tk.Tk):
         self.unit_mode = tk.StringVar(value=self.settings.get("unit_mode", "mm"))
         self.step_xy = tk.DoubleVar(value=self.settings.get("step_xy", 1.0))
         self.step_z = tk.DoubleVar(value=self.settings.get("step_z", 1.0))
-        self.jog_feed = tk.DoubleVar(value=self.settings.get("jog_feed", 800.0))  # mm/min default
+        self.jog_feed_xy = tk.DoubleVar(value=default_jog_feed_xy)
+        self.jog_feed_z = tk.DoubleVar(value=default_jog_feed_z)
 
         self.connected = False
         self.current_port = tk.StringVar(value=self.settings.get("last_port", ""))
@@ -2395,12 +2415,18 @@ class App(tk.Tk):
         pad = ttk.Frame(jog)
         pad.pack(side="left", padx=(0, 12))
 
+        def _jog_feed_for_move(dx, dy, dz) -> float:
+            # Use Z feed only for pure Z moves; otherwise use XY feed.
+            if abs(dz) > 0 and abs(dx) < 1e-9 and abs(dy) < 1e-9:
+                return float(self.jog_feed_z.get())
+            return float(self.jog_feed_xy.get())
+
         def j(dx, dy, dz):
-            feed = float(self.jog_feed.get())
+            feed = _jog_feed_for_move(dx, dy, dz)
             self.grbl.jog(dx, dy, dz, feed, self.unit_mode.get())
 
         def jog_cmd(dx, dy, dz):
-            feed = float(self.jog_feed.get())
+            feed = _jog_feed_for_move(dx, dy, dz)
             gunit = "G21" if self.unit_mode.get() == "mm" else "G20"
             return f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
 
@@ -2487,7 +2513,7 @@ class App(tk.Tk):
 
         xy_steps = ttk.Frame(pad)
         xy_steps.grid(row=4, column=0, columnspan=4, pady=(6, 0))
-        xy_values = [0.1, 0.5, 1.0, 5.0, 10, 25, 50, 100]
+        xy_values = [0.1, 1.0, 5.0, 10, 25, 50, 100, 400]
         for i, v in enumerate(xy_values):
             r = i // 4
             c = i % 4
@@ -2603,6 +2629,7 @@ class App(tk.Tk):
         self.console.configure(yscrollcommand=csb.set)
         self.console.grid(row=0, column=0, sticky="nsew")
         csb.grid(row=0, column=1, sticky="ns")
+        self._setup_console_tags()
         ctab.grid_rowconfigure(0, weight=1)
         ctab.grid_columnconfigure(0, weight=1)
 
@@ -2640,6 +2667,22 @@ class App(tk.Tk):
         set_kb_id(self.btn_console_alarms, "console_filter_alarms")
         self.btn_console_alarms.grid(row=0, column=7, padx=(1, 0))
         apply_tooltip(self.btn_console_alarms, "Show only alarm entries in the console log.")
+        self.btn_console_pos = ttk.Button(
+            entry_row,
+            text="Pos: On" if bool(self.console_positions_enabled.get()) else "Pos: Off",
+            command=self._toggle_console_positions,
+        )
+        set_kb_id(self.btn_console_pos, "console_pos_toggle")
+        self.btn_console_pos.grid(row=0, column=8, padx=(10, 0))
+        apply_tooltip(self.btn_console_pos, "Show/hide WPos/MPos reports in the console (not saved to log).")
+        self.btn_console_status = ttk.Button(
+            entry_row,
+            text="Status: On" if bool(self.console_status_enabled.get()) else "Status: Off",
+            command=self._toggle_console_status,
+        )
+        set_kb_id(self.btn_console_status, "console_status_toggle")
+        self.btn_console_status.grid(row=0, column=9, padx=(6, 0))
+        apply_tooltip(self.btn_console_status, "Show/hide machine status <...> reports in the console.")
 
         self.cmd_entry.bind("<Return>", lambda e: self._send_console())
 
@@ -2700,7 +2743,7 @@ class App(tk.Tk):
         sstab = ttk.Frame(nb, padding=8)
         nb.add(sstab, text="App Settings")
         sstab.grid_columnconfigure(0, weight=1)
-        sstab.grid_rowconfigure(2, weight=1)
+        sstab.grid_rowconfigure(3, weight=1)
 
         safety = ttk.LabelFrame(sstab, text="Safety", padding=8)
         safety.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -2757,8 +2800,43 @@ class App(tk.Tk):
             "Scale time estimates up or down (1.00x = default).",
         )
 
+        jog_frame = ttk.LabelFrame(sstab, text="Jogging", padding=8)
+        jog_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        jog_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.jog_feed_xy_entry = ttk.Entry(jog_frame, textvariable=self.jog_feed_xy, width=12)
+        self.jog_feed_xy_entry.grid(row=0, column=1, sticky="w", pady=4)
+        self.jog_feed_xy_entry.bind("<Return>", self._on_jog_feed_change_xy)
+        self.jog_feed_xy_entry.bind("<FocusOut>", self._on_jog_feed_change_xy)
+        ttk.Label(jog_frame, text="Default jog feed (Z)").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.jog_feed_z_entry = ttk.Entry(jog_frame, textvariable=self.jog_feed_z, width=12)
+        self.jog_feed_z_entry.grid(row=1, column=1, sticky="w", pady=4)
+        self.jog_feed_z_entry.bind("<Return>", self._on_jog_feed_change_z)
+        self.jog_feed_z_entry.bind("<FocusOut>", self._on_jog_feed_change_z)
+        ttk.Label(jog_frame, text="Units: mm/min (in/min when in inches mode)").grid(
+            row=0, column=2, sticky="w", padx=(8, 0), pady=4
+        )
+        ttk.Label(
+            jog_frame,
+            text="Used by the jog buttons. Enter positive values.",
+            wraplength=560,
+            justify="left",
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 2))
+        apply_tooltip(
+            self.jog_feed_xy_entry,
+            "Default speed for X/Y jog buttons (mm/min when in metric, in/min when in inches).",
+        )
+        apply_tooltip(
+            self.jog_feed_z_entry,
+            "Default speed for Z jog buttons (mm/min when in metric, in/min when in inches).",
+        )
+
         kb_frame = ttk.LabelFrame(sstab, text="Keyboard shortcuts", padding=8)
-        kb_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        kb_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
         self.kb_enable_check = ttk.Checkbutton(
@@ -2797,7 +2875,7 @@ class App(tk.Tk):
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         view_frame = ttk.LabelFrame(sstab, text="G-code view", padding=8)
-        view_frame.grid(row=3, column=0, sticky="ew")
+        view_frame.grid(row=4, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -2824,7 +2902,7 @@ class App(tk.Tk):
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         tw_frame = ttk.LabelFrame(sstab, text="Safety Aids", padding=8)
-        tw_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=5, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -3442,6 +3520,17 @@ class App(tk.Tk):
             if key in info and tooltip:
                 info[key]["tooltip"] = tooltip
 
+    def _setup_console_tags(self):
+        text_fg = "#111111"
+        try:
+            self.console.tag_configure("console_tx", background="#e5efff", foreground=text_fg)       # light blue
+            self.console.tag_configure("console_ok", background="#e6f7ed", foreground=text_fg)       # light green
+            self.console.tag_configure("console_status", background="#fff4d8", foreground=text_fg)   # light orange
+            self.console.tag_configure("console_error", background="#ffe5e5", foreground=text_fg)    # light red
+            self.console.tag_configure("console_alarm", background="#ffd8d8", foreground=text_fg)    # light red/darker
+        except Exception:
+            pass
+
     def _send_console(self):
         s = self.cmd_entry.get().strip()
         if not s:
@@ -3462,7 +3551,13 @@ class App(tk.Tk):
         )
         if not path:
             return
-        data = self.console.get("1.0", "end-1c")
+        # Save from stored console lines (position reports are excluded)
+        data_lines = [
+            text
+            for text, tag in self._console_lines
+            if self._console_filter_match((text, tag), for_save=True) and (not self._is_position_line(text))
+        ]
+        data = "\n".join(data_lines)
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -4528,6 +4623,26 @@ class App(tk.Tk):
         if self._last_gcode_lines:
             self._update_gcode_stats(self._last_gcode_lines)
 
+    def _validate_jog_feed_var(self, var: tk.DoubleVar, fallback_default: float):
+        try:
+            val = float(var.get())
+        except Exception:
+            val = None
+        if val is None or val <= 0:
+            try:
+                fallback = float(fallback_default)
+            except Exception:
+                fallback = fallback_default
+            var.set(fallback)
+            return
+        var.set(val)
+
+    def _on_jog_feed_change_xy(self, _event=None):
+        self._validate_jog_feed_var(self.jog_feed_xy, self.settings.get("jog_feed_xy", 4000.0))
+
+    def _on_jog_feed_change_z(self, _event=None):
+        self._validate_jog_feed_var(self.jog_feed_z, self.settings.get("jog_feed_z", 500.0))
+
     def _parse_macro_prompt(self, line: str):
         title = "Macro Pause"
         message = ""
@@ -4652,35 +4767,81 @@ class App(tk.Tk):
         self.grbl.send_immediate("G0 X0 Y0")
 
     # ---------- UI event handling ----------
-    def _log(self, s: str):
-        self._console_lines.append(s)
+    def _console_tag_for_line(self, s: str) -> str | None:
+        u = s.upper()
+        if "ALARM" in u:
+            return "console_alarm"
+        if "ERROR" in u:
+            return "console_error"
+        stripped = s.strip()
+        if stripped.upper() in ("<< OK", "OK"):
+            return "console_ok"
+        if stripped.startswith(">>"):
+            return "console_tx"
+        if stripped.startswith("<<") and "<" in stripped and ">" in stripped:
+            return "console_status"
+        return None
+
+    def _is_position_line(self, s: str) -> bool:
+        u = s.upper()
+        return ("WPOS:" in u) or ("MPOS:" in u)
+
+    def _is_status_line(self, s: str) -> bool:
+        stripped = s.strip()
+        return (stripped.startswith("<< <") or (stripped.startswith("<") and stripped.endswith(">")) or ("<" in stripped and ">" in stripped))
+
+    def _log(self, s: str, tag: str | None = None):
+        if tag is None:
+            tag = self._console_tag_for_line(s)
+        entry = (s, tag)
+        self._console_lines.append(entry)
         overflow = len(self._console_lines) - MAX_CONSOLE_LINES
         if overflow > 0:
             self._console_lines = self._console_lines[overflow:]
-            if self._console_filter != "all":
+            if self._console_filter is not None:
                 self._render_console()
                 return
             self._trim_console_widget(overflow)
-        if not self._console_filter_match(s):
+        if not self._console_filter_match(entry):
             return
         self.console.config(state="normal")
-        self.console.insert("end", s + "\n")
+        if tag:
+            self.console.insert("end", s + "\n", (tag,))
+        else:
+            self.console.insert("end", s + "\n")
         self.console.see("end")
         self.console.config(state="disabled")
 
-    def _console_filter_match(self, s: str) -> bool:
-        if self._console_filter == "alarms":
-            return "ALARM" in s.upper()
-        if self._console_filter == "errors":
-            return "ERROR" in s.upper()
+    def _console_filter_match(self, entry, for_save: bool = False) -> bool:
+        if isinstance(entry, tuple):
+            s, tag = entry
+        else:
+            s, tag = str(entry), None
+        upper = s.upper()
+        if self._console_filter == "alarms" and "ALARM" not in upper:
+            return False
+        if self._console_filter == "errors" and "ERROR" not in upper:
+            return False
+        if for_save and self._is_position_line(s):
+            return False
+        is_pos = self._is_position_line(s)
+        if (not for_save) and is_pos and not bool(self.console_positions_enabled.get()):
+            return False
+        is_status = self._is_status_line(s)
+        if (not for_save) and is_status and not bool(self.console_status_enabled.get()):
+            if ("ALARM" not in upper) and ("ERROR" not in upper):
+                return False
         return True
 
     def _render_console(self):
         self.console.config(state="normal")
         self.console.delete("1.0", "end")
-        for line in self._console_lines:
-            if self._console_filter_match(line):
-                self.console.insert("end", line + "\n")
+        for line, tag in self._console_lines:
+            if self._console_filter_match((line, tag)):
+                if tag:
+                    self.console.insert("end", line + "\n", (tag,))
+                else:
+                    self.console.insert("end", line + "\n")
         self.console.see("end")
         self.console.config(state="disabled")
 
@@ -4799,6 +4960,22 @@ class App(tk.Tk):
         new_val = not current
         self.gui_logging_enabled.set(new_val)
         self.btn_toggle_logging.config(text="Logging: On" if new_val else "Logging: Off")
+
+    def _toggle_console_positions(self):
+        current = bool(self.console_positions_enabled.get())
+        new_val = not current
+        self.console_positions_enabled.set(new_val)
+        if hasattr(self, "btn_console_pos"):
+            self.btn_console_pos.config(text="Pos: On" if new_val else "Pos: Off")
+        self._render_console()
+
+    def _toggle_console_status(self):
+        current = bool(self.console_status_enabled.get())
+        new_val = not current
+        self.console_status_enabled.set(new_val)
+        if hasattr(self, "btn_console_status"):
+            self.btn_console_status.config(text="Status: On" if new_val else "Status: Off")
+        self._render_console()
 
     def _toggle_render_3d(self):
         current = bool(self.render3d_enabled.get())
@@ -5013,7 +5190,9 @@ class App(tk.Tk):
             self._log(f">> {evt[1]}")
 
         elif kind == "log_rx":
-            self._log(f"<< {evt[1]}")
+            raw = evt[1]
+            msg = f"<< {raw}"
+            self._log(msg, self._console_tag_for_line(msg))
             self._handle_settings_line(evt[1])
 
         elif kind == "ready":
@@ -5869,7 +6048,12 @@ class App(tk.Tk):
             "unit_mode": self.unit_mode.get(),
             "step_xy": safe_float(self.step_xy, self.settings.get("step_xy", 1.0), "step XY"),
             "step_z": safe_float(self.step_z, self.settings.get("step_z", 1.0), "step Z"),
-            "jog_feed": safe_float(self.jog_feed, self.settings.get("jog_feed", 800.0), "jog feed"),
+            "jog_feed_xy": safe_float(
+                self.jog_feed_xy, self.settings.get("jog_feed_xy", 4000.0), "jog feed XY"
+            ),
+            "jog_feed_z": safe_float(
+                self.jog_feed_z, self.settings.get("jog_feed_z", 500.0), "jog feed Z"
+            ),
             "last_gcode_dir": self.settings.get("last_gcode_dir", ""),
             "window_geometry": self.geometry(),
             "tooltips_enabled": bool(self.tooltip_enabled.get()),
@@ -5879,6 +6063,8 @@ class App(tk.Tk):
             "all_stop_mode": self.all_stop_mode.get(),
             "training_wheels": bool(self.training_wheels.get()),
             "reconnect_on_open": bool(self.reconnect_on_open.get()),
+            "console_positions_enabled": bool(self.console_positions_enabled.get()),
+            "console_status_enabled": bool(self.console_status_enabled.get()),
             "fallback_rapid_rate": self.fallback_rapid_rate.get().strip(),
             "estimate_factor": safe_float(self.estimate_factor, self.settings.get("estimate_factor", 1.0), "estimate factor"),
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
