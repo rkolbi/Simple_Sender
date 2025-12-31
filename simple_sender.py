@@ -28,6 +28,7 @@ from collections import deque
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
+from gcode_parser import clean_gcode_line, parse_gcode_lines
 
 SERIAL_IMPORT_ERROR: str | None = None
 try:
@@ -73,8 +74,6 @@ MACRO_GPAT = re.compile(r"[A-Za-z]\s*[-+]?\d+.*")
 MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\b *(.*)$")
 MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
 MACRO_STDEXPR = False
-PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
-WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
 
 ALL_STOP_CHOICES = [
     ("Soft Reset (Ctrl-X)", "reset"),
@@ -205,100 +204,25 @@ def _resolve_settings_path() -> str:
             base_dir = os.path.dirname(__file__)
     return os.path.join(base_dir, "settings.json")
 
-def clean_gcode_line(line: str) -> str:
-    """Strip comments and whitespace; keep simple + safe."""
-    # Remove parenthesis and semicolon comments
-    line = line.replace("\ufeff", "")
-    line = PAREN_COMMENT_PAT.sub("", line)
-    if ";" in line:
-        line = line.split(";", 1)[0]
-    line = line.strip()
-    if line.startswith("%"):
-        return ""
-    if not line:
-        return ""
-    return line
-
-
-def _arc_sweep(u0: float, v0: float, u1: float, v1: float, cu: float, cv: float, cw: bool) -> float:
-    start_ang = math.atan2(v0 - cv, u0 - cu)
-    end_ang = math.atan2(v1 - cv, u1 - cu)
-    if cw:
-        sweep = (start_ang - end_ang) % (2 * math.pi)
-    else:
-        sweep = (end_ang - start_ang) % (2 * math.pi)
-    return sweep
-
-
-def _arc_center_from_radius(
-    u0: float, v0: float, u1: float, v1: float, r: float, cw: bool
-) -> tuple[float, float, float] | None:
-    if r == 0:
-        return None
-    r_abs = abs(r)
-    dx = u1 - u0
-    dy = v1 - v0
-    d = math.hypot(dx, dy)
-    if d == 0 or d > 2 * r_abs:
-        return None
-    um = (u0 + u1) / 2.0
-    vm = (v0 + v1) / 2.0
-    h = math.sqrt(max(r_abs * r_abs - (d / 2) * (d / 2), 0.0))
-    ux = -dy / d
-    uy = dx / d
-    c1 = (um + ux * h, vm + uy * h)
-    c2 = (um - ux * h, vm - uy * h)
-    sweep1 = _arc_sweep(u0, v0, u1, v1, c1[0], c1[1], cw)
-    sweep2 = _arc_sweep(u0, v0, u1, v1, c2[0], c2[1], cw)
-    if r > 0:
-        if sweep1 <= sweep2:
-            return c1[0], c1[1], sweep1
-        return c2[0], c2[1], sweep2
-    if sweep1 >= sweep2:
-        return c1[0], c1[1], sweep1
-    return c2[0], c2[1], sweep2
-
 
 def compute_gcode_stats(
     lines: list[str],
     rapid_rates: tuple[float, float, float] | None = None,
     accel_rates: tuple[float, float, float] | None = None,
 ) -> dict:
-    x = y = z = 0.0
-    units = 1.0
-    absolute = True
-    plane = "G17"
-    feed_mode = "G94"
-    arc_abs = False
-    feed = None
-    g92_offset = [0.0, 0.0, 0.0]
-    g92_enabled = True
+    if not lines:
+        return {"bounds": None, "time_min": None, "rapid_min": None}
+    result = parse_gcode_lines(lines)
+    if result is None:
+        return {"bounds": None, "time_min": None, "rapid_min": None}
+    bounds = result.bounds
     total_time_min = 0.0
     has_time = False
     total_rapid_min = 0.0
     has_rapid = False
-    minx = maxx = None
-    miny = maxy = None
-    minz = maxz = None
-    last_motion = 1
-
-    def update_bounds(nx, ny, nz):
-        nonlocal minx, maxx, miny, maxy, minz, maxz
-        if minx is None:
-            minx = maxx = nx
-            miny = maxy = ny
-            minz = maxz = nz
-            return
-        minx = min(minx, nx)
-        maxx = max(maxx, nx)
-        miny = min(miny, ny)
-        maxy = max(maxy, ny)
-        minz = min(minz, nz)
-        maxz = max(maxz, nz)
-
     last_f = None
 
-    def axis_limits(dx, dy, dz):
+    def axis_limits(dx: float, dy: float, dz: float):
         max_feed = None
         min_accel = None
         if rapid_rates:
@@ -323,7 +247,7 @@ def compute_gcode_stats(
                 min_accel = min(candidates)
         return max_feed, min_accel
 
-    def move_duration(dist, feed_mm_min, min_accel, last_feed):
+    def move_duration(dist: float, feed_mm_min: float | None, min_accel: float | None, last_feed: float | None):
         if dist <= 0:
             return 0.0, last_feed
         if feed_mm_min is None or feed_mm_min <= 0:
@@ -347,258 +271,27 @@ def compute_gcode_stats(
         time_sec += half_len / f
         return 2 * time_sec, f
 
-    for raw in lines:
-        s = raw.strip().upper()
-        if not s:
-            continue
-        if "(" in s:
-            s = PAREN_COMMENT_PAT.sub("", s)
-        if ";" in s:
-            s = s.split(";", 1)[0]
-        s = s.strip()
-        if not s or s.startswith("%"):
-            continue
-        words = WORD_PAT.findall(s)
-        if not words:
-            continue
-        g_codes = []
-        for w, val in words:
-            if w == "G":
-                try:
-                    g_codes.append(float(val))
-                except Exception:
-                    pass
-
-        def has_g(code):
-            return any(abs(g - code) < 1e-3 for g in g_codes)
-
-        if has_g(20):
-            units = 25.4
-        if has_g(21):
-            units = 1.0
-        if has_g(90):
-            absolute = True
-        if has_g(91):
-            absolute = False
-        if has_g(17):
-            plane = "G17"
-        if has_g(18):
-            plane = "G18"
-        if has_g(19):
-            plane = "G19"
-        if has_g(93):
-            feed_mode = "G93"
-        if has_g(94):
-            feed_mode = "G94"
-        if has_g(90.1):
-            arc_abs = True
-        if has_g(91.1):
-            arc_abs = False
-
-        nx, ny, nz = x, y, z
-        has_axis = False
-        has_x = False
-        has_y = False
-        has_z = False
-        i_val = None
-        j_val = None
-        k_val = None
-        r_val = None
-        p_val = None
-        for w, val in words:
-            try:
-                raw_val = float(val)
-            except Exception:
-                continue
-            if w == "P":
-                p_val = raw_val
-                continue
-            fval = raw_val * units
-            if w == "X":
-                has_axis = True
-                has_x = True
-                nx = fval if absolute else (nx + fval)
-            elif w == "Y":
-                has_axis = True
-                has_y = True
-                ny = fval if absolute else (ny + fval)
-            elif w == "Z":
-                has_axis = True
-                has_z = True
-                nz = fval if absolute else (nz + fval)
-            elif w == "F":
-                feed = raw_val if feed_mode == "G93" else fval
-            elif w == "I":
-                i_val = fval
-            elif w == "J":
-                j_val = fval
-            elif w == "K":
-                k_val = fval
-            elif w == "R":
-                r_val = fval
-
-        if has_g(92):
-            if not (has_x or has_y or has_z):
-                if g92_enabled:
-                    x += g92_offset[0]
-                    y += g92_offset[1]
-                    z += g92_offset[2]
-                g92_offset = [0.0, 0.0, 0.0]
-            else:
-                if has_x:
-                    mx = x + (g92_offset[0] if g92_enabled else 0.0)
-                    g92_offset[0] = mx - nx
-                    x = nx
-                if has_y:
-                    my = y + (g92_offset[1] if g92_enabled else 0.0)
-                    g92_offset[1] = my - ny
-                    y = ny
-                if has_z:
-                    mz = z + (g92_offset[2] if g92_enabled else 0.0)
-                    g92_offset[2] = mz - nz
-                    z = nz
-            g92_enabled = True
-            continue
-        if has_g(92.1):
-            if g92_enabled:
-                x += g92_offset[0]
-                y += g92_offset[1]
-                z += g92_offset[2]
-            g92_offset = [0.0, 0.0, 0.0]
-            g92_enabled = False
-            continue
-        if has_g(92.2):
-            if g92_enabled:
-                x += g92_offset[0]
-                y += g92_offset[1]
-                z += g92_offset[2]
-            g92_enabled = False
-            continue
-        if has_g(92.3):
-            if not g92_enabled:
-                x -= g92_offset[0]
-                y -= g92_offset[1]
-                z -= g92_offset[2]
-            g92_enabled = True
-            continue
-        if has_g(4):
-            if p_val and p_val > 0:
-                total_time_min += p_val / 60.0
-                has_time = True
-            continue
-
-        motion = None
-        for g in g_codes:
-            if abs(g - 0) < 1e-3:
-                motion = 0
-            elif abs(g - 1) < 1e-3:
-                motion = 1
-            elif abs(g - 2) < 1e-3:
-                motion = 2
-            elif abs(g - 3) < 1e-3:
-                motion = 3
-        if motion is None and has_axis:
-            motion = last_motion
-
-        if motion in (0, 1) and has_axis:
-            update_bounds(x, y, z)
-            dx = nx - x
-            dy = ny - y
-            dz = nz - z
-            dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if motion == 1 and feed and feed > 0:
-                if feed_mode == "G93":
-                    total_time_min += 1.0 / feed
+    for move in result.moves:
+        if move.motion == 0 and rapid_rates:
+            max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
+            if max_feed:
+                t_sec, last_f = move_duration(move.dist, max_feed, min_accel, last_f)
+                if t_sec is not None:
+                    total_rapid_min += t_sec / 60.0
+                    has_rapid = True
+        if move.motion in (1, 2, 3):
+            if move.feed and move.feed > 0:
+                if move.feed_mode == "G93":
+                    total_time_min += 1.0 / move.feed
                 else:
-                    max_feed, min_accel = axis_limits(dx, dy, dz)
-                    use_feed = feed
+                    max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
+                    use_feed = move.feed
                     if max_feed and use_feed > max_feed:
                         use_feed = max_feed
-                    t_sec, last_f = move_duration(dist, use_feed, min_accel, last_f)
+                    t_sec, last_f = move_duration(move.dist, use_feed, min_accel, last_f)
                     if t_sec is not None:
                         total_time_min += t_sec / 60.0
                 has_time = True
-            if motion == 0 and rapid_rates:
-                max_feed, min_accel = axis_limits(dx, dy, dz)
-                if max_feed:
-                    t_sec, last_f = move_duration(dist, max_feed, min_accel, last_f)
-                    if t_sec is not None:
-                        total_rapid_min += t_sec / 60.0
-                        has_rapid = True
-            x, y, z = nx, ny, nz
-            update_bounds(x, y, z)
-            last_motion = motion
-            continue
-
-        if motion in (2, 3) and has_axis:
-            update_bounds(x, y, z)
-            cw = motion == 2
-            if plane == "G17":
-                u0, v0, u1, v1 = x, y, nx, ny
-                w0, w1 = z, nz
-                off1, off2 = i_val, j_val
-            elif plane == "G18":
-                u0, v0, u1, v1 = x, z, nx, nz
-                w0, w1 = y, ny
-                off1, off2 = i_val, k_val
-            else:
-                u0, v0, u1, v1 = y, z, ny, nz
-                w0, w1 = x, nx
-                off1, off2 = j_val, k_val
-
-            arc_len = math.hypot(u1 - u0, v1 - v0)
-            full_circle = abs(u1 - u0) < 1e-6 and abs(v1 - v0) < 1e-6
-            if r_val is not None:
-                if full_circle:
-                    r = abs(r_val)
-                    arc_len = 2 * math.pi * r if r > 0 else 0.0
-                else:
-                    res = _arc_center_from_radius(u0, v0, u1, v1, r_val, cw)
-                    if res:
-                        cu, cv, sweep = res
-                        r = math.hypot(u0 - cu, v0 - cv)
-                        arc_len = abs(sweep) * r
-            else:
-                if off1 is None:
-                    off1 = u0 if arc_abs else 0.0
-                if off2 is None:
-                    off2 = v0 if arc_abs else 0.0
-                cu = off1 if arc_abs else (u0 + off1)
-                cv = off2 if arc_abs else (v0 + off2)
-                r = math.hypot(u0 - cu, v0 - cv)
-                if r > 0:
-                    if full_circle:
-                        arc_len = 2 * math.pi * r
-                    else:
-                        sweep = _arc_sweep(u0, v0, u1, v1, cu, cv, cw)
-                        arc_len = abs(sweep) * r
-
-            dist = math.hypot(arc_len, w1 - w0)
-            if feed and feed > 0:
-                if feed_mode == "G93":
-                    total_time_min += 1.0 / feed
-                else:
-                    dx = nx - x
-                    dy = ny - y
-                    dz = nz - z
-                    max_feed, min_accel = axis_limits(dx, dy, dz)
-                    use_feed = feed
-                    if max_feed and use_feed > max_feed:
-                        use_feed = max_feed
-                    t_sec, last_f = move_duration(dist, use_feed, min_accel, last_f)
-                    if t_sec is not None:
-                        total_time_min += t_sec / 60.0
-                has_time = True
-            x, y, z = nx, ny, nz
-            update_bounds(x, y, z)
-            last_motion = motion
-            continue
-
-    if minx is None:
-        bounds = None
-    else:
-        bounds = (minx, maxx, miny, maxy, minz, maxz)
-
     return {
         "bounds": bounds,
         "time_min": total_time_min if has_time else None,
@@ -1071,11 +764,18 @@ class GrblWorker:
             if self.is_connected():
                 try:
                     self.send_realtime(RT_STATUS)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.ui_q.put(("log", f"[status] {exc}"))
             with self._status_interval_lock:
                 interval = self._status_poll_interval
-            time.sleep(interval)
+            try:
+                interval = float(interval)
+            except Exception:
+                interval = STATUS_POLL_DEFAULT
+            if interval <= 0:
+                interval = STATUS_POLL_DEFAULT
+            if stop_evt.wait(interval):
+                break
 
     def set_status_poll_interval(self, interval: float):
         if interval is None:
@@ -1374,6 +1074,9 @@ class Toolpath3D(ttk.Frame):
         self._last_lines_hash = None
         self._last_segments = None
         self._last_bounds = None
+        self._lightweight_mode = False
+        self._lightweight_preview_target = 400
+        self._job_name = ""
 
     def _legend_label(self, parent, color, text, var):
         swatch = tk.Label(parent, width=2, background=color)
@@ -1382,7 +1085,9 @@ class Toolpath3D(ttk.Frame):
         chk.pack(side="left", padx=(0, 10))
 
     def set_gcode(self, lines: list[str]):
-        self.segments, self.bounds = self._parse_gcode(lines)
+        segs, bnds = self._parse_gcode(lines)
+        if segs is not None:
+            self.segments, self.bounds = segs, bnds
         self._schedule_render()
 
     def set_gcode_async(self, lines: list[str]):
@@ -1414,18 +1119,24 @@ class Toolpath3D(ttk.Frame):
             self.bounds = None
             self._schedule_render()
             return
+        preview_target = self._lightweight_preview_target if self._lightweight_mode else self._preview_target
         quick_lines = lines
-        if len(lines) > self._preview_target:
-            step = max(2, len(lines) // self._preview_target)
+        if len(lines) > preview_target:
+            step = max(2, len(lines) // preview_target)
             quick_lines = lines[::step]
-        self.segments, self.bounds = self._parse_gcode(quick_lines)
+        res = self._parse_gcode(quick_lines, token)
+        if res[0] is None:
+            return
+        self.segments, self.bounds = res
         if quick_lines is lines:
             self._cache_parse_results(lines_hash, self.segments, self.bounds)
         self._schedule_render()
         if len(lines) > self._full_parse_limit:
             return
         def worker():
-            segs, bnds = self._parse_gcode(lines)
+            segs, bnds = self._parse_gcode(lines, token)
+            if segs is None:
+                return
             self.after(0, lambda: self._apply_full_parse(token, segs, bnds, lines_hash))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1436,6 +1147,17 @@ class Toolpath3D(ttk.Frame):
         self._last_lines_hash = lines_hash
         self._last_segments = segments
         self._last_bounds = bounds
+
+    def set_lightweight_mode(self, lightweight: bool):
+        new_mode = bool(lightweight)
+        if self._lightweight_mode == new_mode:
+            return
+        self._lightweight_mode = new_mode
+        self._schedule_render()
+
+    def set_job_name(self, name: str | None):
+        self._job_name = str(name) if name else ""
+        self._schedule_render()
 
 
     def _apply_full_parse(self, token, segments, bounds, parse_hash: str | None = None):
@@ -1655,229 +1377,13 @@ class Toolpath3D(ttk.Frame):
             maxz = max(maxz, z1, z2)
         return minx, maxx, miny, maxy, minz, maxz
 
-    def _parse_gcode(self, lines: list[str]):
-        segments = []
-        x = y = z = 0.0
-        units = 1.0
-        absolute = True
-        plane = "G17"
-        arc_abs = False
-        last_motion = 1
-        g92_offset = [0.0, 0.0, 0.0]
-        g92_enabled = True
-        for raw in lines:
-            s = raw.strip().upper()
-            if not s:
-                continue
-            if "(" in s:
-                s = PAREN_COMMENT_PAT.sub("", s)
-            if ";" in s:
-                s = s.split(";", 1)[0]
-            s = s.strip()
-            if not s or s.startswith("%"):
-                continue
-            words = WORD_PAT.findall(s)
-            if not words:
-                continue
-            g_codes = []
-            for w, val in words:
-                if w == "G":
-                    try:
-                        g_codes.append(float(val))
-                    except Exception:
-                        pass
-
-            def has_g(code):
-                return any(abs(g - code) < 1e-3 for g in g_codes)
-
-            if has_g(20):
-                units = 25.4
-            if has_g(21):
-                units = 1.0
-            if has_g(90):
-                absolute = True
-            if has_g(91):
-                absolute = False
-            if has_g(17):
-                plane = "G17"
-            if has_g(18):
-                plane = "G18"
-            if has_g(19):
-                plane = "G19"
-            if has_g(90.1):
-                arc_abs = True
-            if has_g(91.1):
-                arc_abs = False
-
-            has_axis = False
-            has_x = False
-            has_y = False
-            has_z = False
-            nx, ny, nz = x, y, z
-            i_val = None
-            j_val = None
-            k_val = None
-            r_val = None
-            for w, val in words:
-                try:
-                    fval = float(val) * units
-                except Exception:
-                    continue
-                if w == "X":
-                    has_axis = True
-                    has_x = True
-                    nx = fval if absolute else (nx + fval)
-                elif w == "Y":
-                    has_axis = True
-                    has_y = True
-                    ny = fval if absolute else (ny + fval)
-                elif w == "Z":
-                    has_axis = True
-                    has_z = True
-                    nz = fval if absolute else (nz + fval)
-                elif w == "I":
-                    i_val = fval
-                elif w == "J":
-                    j_val = fval
-                elif w == "K":
-                    k_val = fval
-                elif w == "R":
-                    r_val = fval
-
-            if has_g(92):
-                if not (has_x or has_y or has_z):
-                    if g92_enabled:
-                        x += g92_offset[0]
-                        y += g92_offset[1]
-                        z += g92_offset[2]
-                    g92_offset = [0.0, 0.0, 0.0]
-                else:
-                    if has_x:
-                        mx = x + (g92_offset[0] if g92_enabled else 0.0)
-                        g92_offset[0] = mx - nx
-                        x = nx
-                    if has_y:
-                        my = y + (g92_offset[1] if g92_enabled else 0.0)
-                        g92_offset[1] = my - ny
-                        y = ny
-                    if has_z:
-                        mz = z + (g92_offset[2] if g92_enabled else 0.0)
-                        g92_offset[2] = mz - nz
-                        z = nz
-                g92_enabled = True
-                continue
-            if has_g(92.1):
-                if g92_enabled:
-                    x += g92_offset[0]
-                    y += g92_offset[1]
-                    z += g92_offset[2]
-                g92_offset = [0.0, 0.0, 0.0]
-                g92_enabled = False
-                continue
-            if has_g(92.2):
-                if g92_enabled:
-                    x += g92_offset[0]
-                    y += g92_offset[1]
-                    z += g92_offset[2]
-                g92_enabled = False
-                continue
-            if has_g(92.3):
-                if not g92_enabled:
-                    x -= g92_offset[0]
-                    y -= g92_offset[1]
-                    z -= g92_offset[2]
-                g92_enabled = True
-                continue
-
-            motion = None
-            for g in g_codes:
-                if abs(g - 0) < 1e-3:
-                    motion = 0
-                elif abs(g - 1) < 1e-3:
-                    motion = 1
-                elif abs(g - 2) < 1e-3:
-                    motion = 2
-                elif abs(g - 3) < 1e-3:
-                    motion = 3
-            if motion is None and has_axis:
-                motion = last_motion
-
-            if motion in (0, 1):
-                if has_axis and (nx != x or ny != y or nz != z):
-                    color = "rapid" if motion == 0 else "feed"
-                    segments.append((x, y, z, nx, ny, nz, color))
-                    x, y, z = nx, ny, nz
-                if motion is not None:
-                    last_motion = motion
-                continue
-
-            if motion in (2, 3):
-                if not has_axis:
-                    continue
-                cw = motion == 2
-                if plane == "G17":
-                    u0, v0, u1, v1 = x, y, nx, ny
-                    w0, w1 = z, nz
-                    off1, off2 = i_val, j_val
-                    to_xyz = lambda u, v, w: (u, v, w)
-                elif plane == "G18":
-                    u0, v0, u1, v1 = x, z, nx, nz
-                    w0, w1 = y, ny
-                    off1, off2 = i_val, k_val
-                    to_xyz = lambda u, v, w: (u, w, v)
-                else:
-                    u0, v0, u1, v1 = y, z, ny, nz
-                    w0, w1 = x, nx
-                    off1, off2 = j_val, k_val
-                    to_xyz = lambda u, v, w: (w, u, v)
-
-                full_circle = abs(u1 - u0) < 1e-6 and abs(v1 - v0) < 1e-6
-                if r_val is not None:
-                    if full_circle:
-                        r = abs(r_val)
-                        if r == 0:
-                            x, y, z = nx, ny, nz
-                            continue
-                        cu = u0 + r
-                        cv = v0
-                        sweep = 2 * math.pi
-                    else:
-                        res = _arc_center_from_radius(u0, v0, u1, v1, r_val, cw)
-                        if not res:
-                            x, y, z = nx, ny, nz
-                            continue
-                        cu, cv, sweep = res
-                else:
-                    if off1 is None:
-                        off1 = u0 if arc_abs else 0.0
-                    if off2 is None:
-                        off2 = v0 if arc_abs else 0.0
-                    cu = off1 if arc_abs else (u0 + off1)
-                    cv = off2 if arc_abs else (v0 + off2)
-                    sweep = 2 * math.pi if full_circle else _arc_sweep(u0, v0, u1, v1, cu, cv, cw)
-
-                r = math.hypot(u0 - cu, v0 - cv)
-                if r == 0 or sweep == 0:
-                    x, y, z = nx, ny, nz
-                    continue
-                steps = max(8, int(abs(sweep) / self._arc_step_rad))
-                start_ang = math.atan2(v0 - cv, u0 - cu)
-                px, py, pz = x, y, z
-                for i in range(1, steps + 1):
-                    t = i / steps
-                    ang = start_ang - sweep * t if cw else start_ang + sweep * t
-                    u = cu + r * math.cos(ang)
-                    v = cv + r * math.sin(ang)
-                    w = w0 + (w1 - w0) * t
-                    qx, qy, qz = to_xyz(u, v, w)
-                    segments.append((px, py, pz, qx, qy, qz, "arc"))
-                    px, py, pz = qx, qy, qz
-                x, y, z = nx, ny, nz
-                last_motion = motion
-                continue
-
-        bounds = self._segments_bounds(segments)
-        return segments, bounds
+    def _parse_gcode(self, lines: list[str], token: int | None = None):
+        def keep_running() -> bool:
+            return token is None or token == self._parse_token
+        result = parse_gcode_lines(lines, self._arc_step_rad, keep_running=keep_running)
+        if result is None:
+            return None, None
+        return result.segments, result.bounds
 
     def _render(self):
         self._render_pending = False
@@ -1892,10 +1398,35 @@ class Toolpath3D(ttk.Frame):
         self._position_item = None
         self._render_params = None
         if not self.enabled:
-            self.canvas.create_text(w / 2, h / 2, text="3D render disabled", fill="#666666")
+            job_txt = f" (Job: {self._job_name})" if self._job_name else ""
+            self.canvas.create_text(
+                w / 2,
+                h / 2 - 10,
+                text=f"3D render disabled{job_txt}",
+                fill="#666666",
+            )
+            if self._job_name:
+                self.canvas.create_text(
+                    w / 2,
+                    h / 2 + 10,
+                    text="Enable 3D render for the full preview.",
+                    fill="#666666",
+                )
             return
         if not self.segments:
-            self.canvas.create_text(w / 2, h / 2, text="No G-code loaded", fill="#666666")
+            self.canvas.create_text(
+                w / 2,
+                h / 2 - 10,
+                text="No G-code loaded",
+                fill="#666666",
+            )
+            if self._job_name:
+                self.canvas.create_text(
+                    w / 2,
+                    h / 2 + 10,
+                    text=f"Last job: {self._job_name}",
+                    fill="#666666",
+                )
             return
 
         total_segments = len(self.segments)
@@ -2312,6 +1843,7 @@ class App(tk.Tk):
         self.toolpath_full_limit = tk.StringVar(value=str(saved_full))
         self.toolpath_interactive_limit = tk.StringVar(value=str(saved_interactive))
         self.toolpath_arc_detail = tk.DoubleVar(value=saved_arc)
+        self.toolpath_lightweight = tk.BooleanVar(value=self.settings.get("toolpath_lightweight", False))
         self._toolpath_arc_detail_value = tk.StringVar(value=f"{saved_arc:.1f}°")
         self._toolpath_arc_detail_reparse_after_id = None
         self._toolpath_arc_detail_reparse_delay = 300
@@ -3280,6 +2812,17 @@ class App(tk.Tk):
             arc_scale,
             "Use smaller degrees when you want smoother arcs (more segments); larger values are faster.",
         )
+        lightweight_chk = ttk.Checkbutton(
+            toolpath_frame,
+            text="Use lightweight preview (faster)",
+            variable=self.toolpath_lightweight,
+            command=self._on_toolpath_lightweight_change,
+        )
+        lightweight_chk.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        apply_tooltip(
+            lightweight_chk,
+            "Render a smaller preview (fewer segments) to keep the view responsive on weaker hardware.",
+        )
 
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
         tw_frame.grid(row=7, column=0, sticky="ew", pady=(8, 0))
@@ -3309,6 +2852,7 @@ class App(tk.Tk):
         )
         self.toolpath_view.pack(fill="both", expand=True)
         self.toolpath_view.set_enabled(bool(self.render3d_enabled.get()))
+        self.toolpath_view.set_lightweight_mode(bool(self.toolpath_lightweight.get()))
         self._load_3d_view(show_status=False)
         self._apply_toolpath_draw_limits()
         self._apply_toolpath_arc_detail()
@@ -3453,17 +2997,23 @@ class App(tk.Tk):
             return
         self._start_connect_worker(port)
 
-    def _start_connect_worker(self, port: str):
+    def _start_connect_worker(self, port: str, *, show_error: bool = True, on_failure=None):
         if self._connecting:
             return
         def worker():
             try:
                 self.grbl.connect(port, BAUD_DEFAULT)
             except Exception as exc:
-                try:
-                    self.after(0, lambda: messagebox.showerror("Connect failed", str(exc)))
-                except Exception:
-                    pass
+                if show_error:
+                    try:
+                        self.after(0, lambda: messagebox.showerror("Connect failed", str(exc)))
+                    except Exception:
+                        pass
+                if on_failure:
+                    try:
+                        self.after(0, lambda exc=exc: on_failure(exc))
+                    except Exception:
+                        pass
             finally:
                 self._connecting = False
 
@@ -3588,6 +3138,7 @@ class App(tk.Tk):
                 self.toolpath_view.set_gcode_async(lines)
             else:
                 self.toolpath_view.set_enabled(False)
+            self.toolpath_view.set_job_name(os.path.basename(path))
         self.status.config(text=f"Loaded: {os.path.basename(path)}  ({len(lines)} lines)")
 
         def on_done():
@@ -3632,6 +3183,7 @@ class App(tk.Tk):
         self.btn_resume.config(state="disabled")
         if hasattr(self, "toolpath_view"):
             self.toolpath_view.set_gcode_async([])
+            self.toolpath_view.set_job_name("")
 
     def _show_gcode_loading(self):
         if not hasattr(self, "gcode_load_bar"):
@@ -4366,6 +3918,8 @@ class App(tk.Tk):
     def _maybe_auto_reconnect(self):
         if self.connected or self._closing or (not self._auto_reconnect_pending):
             return
+        if self._connecting:
+            return
         if not self._auto_reconnect_last_port:
             return
         try:
@@ -4387,24 +3941,24 @@ class App(tk.Tk):
                 self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
             return
         self._auto_reconnect_last_attempt = now
-        try:
-            self.current_port.set(self._auto_reconnect_last_port)
-            self.grbl.connect(self._auto_reconnect_last_port, BAUD_DEFAULT)
-            # success: reset counters
-            self._auto_reconnect_pending = False
-            self._auto_reconnect_retry = 0
-            self._auto_reconnect_delay = 3.0
-            self._auto_reconnect_next_ts = 0.0
-        except Exception:
-            self._auto_reconnect_retry += 1
-            if self._auto_reconnect_retry > self._auto_reconnect_max_retry:
-                # Stop aggressive retries but leave a long cool-down in case the port reappears later.
-                self._auto_reconnect_delay = 30.0
-                self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
-                self._auto_reconnect_pending = True
-                return
+        self.current_port.set(self._auto_reconnect_last_port)
+        self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+        self._start_connect_worker(
+            self._auto_reconnect_last_port,
+            show_error=False,
+            on_failure=self._handle_auto_reconnect_failure,
+        )
+
+    def _handle_auto_reconnect_failure(self, exc: Exception):
+        now = time.time()
+        self.ui_q.put(("log", f"[auto-reconnect] Attempt failed: {exc}"))
+        self._auto_reconnect_retry += 1
+        if self._auto_reconnect_retry > self._auto_reconnect_max_retry:
+            self._auto_reconnect_delay = 30.0
+        else:
             self._auto_reconnect_delay = min(30.0, self._auto_reconnect_delay * 1.5)
-            self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+        self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
+        self._auto_reconnect_pending = True
 
     def _update_setting_row_tags(self, key: str):
         item = self._settings_items.get(key)
@@ -5669,6 +5223,12 @@ class App(tk.Tk):
         if hasattr(self, "toolpath_view") and self._last_gcode_lines:
             self.toolpath_view.set_gcode_async(self._last_gcode_lines)
 
+    def _on_toolpath_lightweight_change(self):
+        if hasattr(self, "toolpath_view"):
+            self.toolpath_view.set_lightweight_mode(bool(self.toolpath_lightweight.get()))
+            if self._last_gcode_lines:
+                self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+
     def _toggle_unit_mode(self):
         new_mode = "inch" if self.unit_mode.get() == "mm" else "mm"
         self._set_unit_mode(new_mode)
@@ -6790,7 +6350,9 @@ class App(tk.Tk):
             "toolpath_full_limit": full_limit,
             "toolpath_interactive_limit": interactive_limit,
             "toolpath_arc_detail_deg": arc_detail_deg,
+            "toolpath_lightweight": bool(self.toolpath_lightweight.get()),
         }
+        self.settings = data
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, sort_keys=True)
