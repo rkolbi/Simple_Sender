@@ -3190,6 +3190,7 @@ class App(tk.Tk):
         if self.connected:
             self._user_disconnect = True
             self.grbl.disconnect()
+            return
         else:
             port = self.current_port.get().strip()
         if not port:
@@ -4802,6 +4803,9 @@ class App(tk.Tk):
     def _all_stop_action(self):
         mode = self.all_stop_mode.get()
         if mode == "reset":
+            self.grbl.reset()
+        elif mode == "stop_reset":
+            self.grbl.stop_stream()
             self.grbl.reset()
         else:
             self.grbl.stop_stream()
