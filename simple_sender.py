@@ -1363,7 +1363,12 @@ class Toolpath3D(ttk.Frame):
         self._arc_step_fast = math.pi / 12
         self._arc_step_large = math.pi / 8
         self._arc_step_rad = self._arc_step_default
+        self._arc_step_override_rad = None
         self._max_draw_segments = 40000
+        self._interactive_max_draw_segments = 5000
+        self._fast_mode = False
+        self._fast_mode_after_id = None
+        self._fast_mode_duration = 0.3
         self._render_params = None
         self._position_item = None
         self._last_lines_hash = None
@@ -1391,11 +1396,15 @@ class Toolpath3D(ttk.Frame):
             return
         line_count = len(lines)
         if line_count > self._full_parse_limit:
-            self._arc_step_rad = self._arc_step_large
+            base_step = self._arc_step_large
         elif line_count > 5000:
-            self._arc_step_rad = self._arc_step_fast
+            base_step = self._arc_step_fast
         else:
-            self._arc_step_rad = self._arc_step_default
+            base_step = self._arc_step_default
+        if self._arc_step_override_rad is not None:
+            self._arc_step_rad = self._arc_step_override_rad
+        else:
+            self._arc_step_rad = base_step
         if not self.enabled:
             self._pending_lines = lines
             return
@@ -1509,6 +1518,7 @@ class Toolpath3D(ttk.Frame):
         limit = math.pi / 2 - 0.1
         self.elevation = max(-limit, min(limit, self.elevation))
         self._schedule_render()
+        self._enter_fast_mode()
 
     def _on_pan_start(self, event):
         self._pan_start = (event.x, event.y)
@@ -1522,6 +1532,7 @@ class Toolpath3D(ttk.Frame):
         self.pan_x += dx
         self.pan_y += dy
         self._schedule_render()
+        self._enter_fast_mode()
 
     def _on_mousewheel(self, event):
         if hasattr(event, "delta") and event.delta:
@@ -1534,6 +1545,7 @@ class Toolpath3D(ttk.Frame):
             self.zoom /= 1.1
         self.zoom = max(0.2, min(5.0, self.zoom))
         self._schedule_render()
+        self._enter_fast_mode()
 
     def _reset_view(self):
         self.azimuth = math.radians(45)
@@ -1582,6 +1594,42 @@ class Toolpath3D(ttk.Frame):
         now = time.time()
         delay = max(0.0, self._render_interval - (now - self._last_render_ts))
         self.after(int(delay * 1000), self._render)
+
+    def set_draw_limits(self, full_limit: int | None = None, interactive_limit: int | None = None):
+        if full_limit is not None:
+            if full_limit <= 0:
+                self._max_draw_segments = None
+            else:
+                self._max_draw_segments = int(full_limit)
+        if interactive_limit is not None:
+            if interactive_limit <= 0:
+                self._interactive_max_draw_segments = None
+            else:
+                self._interactive_max_draw_segments = int(interactive_limit)
+        self._schedule_render()
+
+    def set_arc_detail_override(self, step_rad: float | None):
+        if step_rad is None or step_rad <= 0:
+            self._arc_step_override_rad = None
+        else:
+            self._arc_step_override_rad = float(step_rad)
+        self._schedule_render()
+
+    def _enter_fast_mode(self):
+        self._fast_mode = True
+        if self._fast_mode_after_id is not None:
+            try:
+                self.after_cancel(self._fast_mode_after_id)
+            except Exception:
+                pass
+        self._fast_mode_after_id = self.after(int(self._fast_mode_duration * 1000), self._exit_fast_mode)
+
+    def _exit_fast_mode(self):
+        self._fast_mode_after_id = None
+        if not self._fast_mode:
+            return
+        self._fast_mode = False
+        self._schedule_render()
 
     def _project(self, x: float, y: float, z: float) -> tuple[float, float]:
         ca = math.cos(self.azimuth)
@@ -1850,9 +1898,16 @@ class Toolpath3D(ttk.Frame):
             self.canvas.create_text(w / 2, h / 2, text="No G-code loaded", fill="#666666")
             return
 
+        total_segments = len(self.segments)
         segments = self.segments
-        if self._max_draw_segments and len(segments) > self._max_draw_segments:
-            step = max(2, len(segments) // self._max_draw_segments)
+        max_draw = self._max_draw_segments
+        if self._fast_mode and self._interactive_max_draw_segments:
+            if max_draw:
+                max_draw = min(max_draw, self._interactive_max_draw_segments)
+            else:
+                max_draw = self._interactive_max_draw_segments
+        if max_draw and total_segments > max_draw:
+            step = max(2, total_segments // max_draw)
             segments = segments[::step]
         proj = []
         minx = miny = float("inf")
@@ -1898,10 +1953,90 @@ class Toolpath3D(ttk.Frame):
             "pan_y": self.pan_y,
         }
 
+        runs: dict[str, list[list[float]]] = {}
+        cur_color = None
+        cur_pts: list[float] = []
+        last_end = None
+
+        def flush_run():
+            nonlocal cur_color, cur_pts, last_end
+            if cur_color and len(cur_pts) >= 4:
+                runs.setdefault(cur_color, []).append(cur_pts)
+            cur_color = None
+            cur_pts = []
+            last_end = None
+
+        eps = 1e-6
         for px1, py1, px2, py2, color in proj:
             x1, y1 = to_canvas(px1, py1)
             x2, y2 = to_canvas(px2, py2)
-            self.canvas.create_line(x1, y1, x2, y2, fill=self._colors.get(color, "#2c6dd2"))
+            continuous = (
+                cur_color == color
+                and last_end is not None
+                and abs(x1 - last_end[0]) <= eps
+                and abs(y1 - last_end[1]) <= eps
+            )
+            if not continuous:
+                flush_run()
+                cur_color = color
+                cur_pts = [x1, y1, x2, y2]
+            else:
+                cur_pts.extend([x2, y2])
+            last_end = (x2, y2)
+        flush_run()
+
+        for color, polylines in runs.items():
+            color_hex = self._colors.get(color, "#2c6dd2")
+            for pts in polylines:
+                self.canvas.create_line(*pts, fill=color_hex)
+
+        x0, y0 = to_canvas(minx, miny)
+        x1, y1 = to_canvas(maxx, maxy)
+        x_low, x_high = min(x0, x1), max(x0, x1)
+        y_low, y_high = min(y0, y1), max(y0, y1)
+        self.canvas.create_rectangle(
+            x_low,
+            y_low,
+            x_high,
+            y_high,
+            outline="#ffffff",
+            width=1,
+        )
+
+        origin = self._project(0.0, 0.0, 0.0)
+        ox, oy = to_canvas(*origin)
+        cross = 6
+        self.canvas.create_line(ox - cross, oy, ox + cross, oy, fill="#ffffff")
+        self.canvas.create_line(ox, oy - cross, ox, oy + cross, fill="#ffffff")
+
+        drawn = len(proj)
+        filters = []
+        if self.show_rapid.get():
+            filters.append("Rapid")
+        if self.show_feed.get():
+            filters.append("Feed")
+        if self.show_arc.get():
+            filters.append("Arc")
+        filters_text = ", ".join(filters) if filters else "None"
+        az_deg = math.degrees(self.azimuth)
+        el_deg = math.degrees(self.elevation)
+        mode_text = "Fast preview" if self._fast_mode else "Full quality"
+        overlay = "\n".join(
+            [
+                f"Segments: {drawn:,}/{total_segments:,}",
+                f"View: Az {az_deg:.0f}° El {el_deg:.0f}° Zoom {self.zoom:.2f}x",
+                f"Filters: {filters_text}",
+                f"Mode: {mode_text}",
+            ]
+        )
+        self.canvas.create_text(
+            margin + 6,
+            margin + 6,
+            text=overlay,
+            fill="#ffffff",
+            anchor="nw",
+            justify="left",
+        )
 
         self._update_position_marker()
 
@@ -2154,6 +2289,32 @@ class App(tk.Tk):
         self.current_line_mode = tk.StringVar(
             value=self.settings.get("current_line_mode", "acked")
         )
+        self._toolpath_full_limit_default = 40000
+        self._toolpath_interactive_limit_default = 5000
+        self._toolpath_arc_detail_min = 2.0
+        self._toolpath_arc_detail_max = 45.0
+        self._toolpath_arc_detail_default = math.degrees(math.pi / 18)
+        try:
+            saved_full = int(self.settings.get("toolpath_full_limit", self._toolpath_full_limit_default))
+        except Exception:
+            saved_full = self._toolpath_full_limit_default
+        try:
+            saved_interactive = int(
+                self.settings.get("toolpath_interactive_limit", self._toolpath_interactive_limit_default)
+            )
+        except Exception:
+            saved_interactive = self._toolpath_interactive_limit_default
+        try:
+            saved_arc = float(self.settings.get("toolpath_arc_detail_deg", self._toolpath_arc_detail_default))
+        except Exception:
+            saved_arc = self._toolpath_arc_detail_default
+        saved_arc = max(self._toolpath_arc_detail_min, min(saved_arc, self._toolpath_arc_detail_max))
+        self.toolpath_full_limit = tk.StringVar(value=str(saved_full))
+        self.toolpath_interactive_limit = tk.StringVar(value=str(saved_interactive))
+        self.toolpath_arc_detail = tk.DoubleVar(value=saved_arc)
+        self._toolpath_arc_detail_value = tk.StringVar(value=f"{saved_arc:.1f}°")
+        self._toolpath_arc_detail_reparse_after_id = None
+        self._toolpath_arc_detail_reparse_delay = 300
         raw_bindings = self.settings.get("key_bindings", {})
         if isinstance(raw_bindings, dict):
             self._key_bindings = {}
@@ -3071,8 +3232,57 @@ class App(tk.Tk):
         )
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
+        toolpath_frame = ttk.LabelFrame(self._app_settings_inner, text="3D view quality", padding=8)
+        toolpath_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        toolpath_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(toolpath_frame, text="Full draw limit (segments, 0=unlimited)").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        full_limit_entry = ttk.Entry(toolpath_frame, textvariable=self.toolpath_full_limit, width=14)
+        full_limit_entry.grid(row=0, column=1, sticky="w", pady=4)
+        full_limit_entry.bind("<Return>", self._apply_toolpath_draw_limits)
+        full_limit_entry.bind("<FocusOut>", self._apply_toolpath_draw_limits)
+        apply_tooltip(
+            full_limit_entry,
+            "Sets the maximum number of segments drawn when the view is static (0 = unlimited).",
+        )
+        ttk.Label(toolpath_frame, text="Interactive draw limit (segments, 0=unlimited)").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        interactive_limit_entry = ttk.Entry(
+            toolpath_frame, textvariable=self.toolpath_interactive_limit, width=14
+        )
+        interactive_limit_entry.grid(row=1, column=1, sticky="w", pady=4)
+        interactive_limit_entry.bind("<Return>", self._apply_toolpath_draw_limits)
+        interactive_limit_entry.bind("<FocusOut>", self._apply_toolpath_draw_limits)
+        apply_tooltip(
+            interactive_limit_entry,
+            "Limits segment count during drags/pans (0 = unlimited, but may be slower).",
+        )
+        ttk.Label(toolpath_frame, text="Arc detail (degrees per step)").grid(
+            row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        arc_scale = ttk.Scale(
+            toolpath_frame,
+            from_=self._toolpath_arc_detail_min,
+            to=self._toolpath_arc_detail_max,
+            orient="horizontal",
+            variable=self.toolpath_arc_detail,
+            command=self._on_arc_detail_scale_move,
+        )
+        arc_scale.grid(row=2, column=1, sticky="ew", pady=4)
+        arc_scale.bind("<ButtonRelease-1>", self._apply_toolpath_arc_detail)
+        arc_scale.bind("<KeyRelease>", self._on_arc_detail_scale_key_release)
+        ttk.Label(toolpath_frame, textvariable=self._toolpath_arc_detail_value).grid(
+            row=2, column=2, sticky="w", padx=(8, 0)
+        )
+        apply_tooltip(
+            arc_scale,
+            "Use smaller degrees when you want smoother arcs (more segments); larger values are faster.",
+        )
+
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
-        tw_frame.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=7, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -3100,6 +3310,8 @@ class App(tk.Tk):
         self.toolpath_view.pack(fill="both", expand=True)
         self.toolpath_view.set_enabled(bool(self.render3d_enabled.get()))
         self._load_3d_view(show_status=False)
+        self._apply_toolpath_draw_limits()
+        self._apply_toolpath_arc_detail()
 
 
         # Status bar
@@ -4478,8 +4690,18 @@ class App(tk.Tk):
         except Exception:
             label = ""
         if not label:
+            label = getattr(btn, "_text", "")
+        if not label:
+            label = getattr(btn, "_label", "")
+        if not label:
             label = btn.winfo_name()
-        return label.replace("\n", " ").strip()
+        label = label.replace("\n", " ").strip()
+        if label.startswith("!"):
+            tooltip = getattr(btn, "_tooltip_text", "")
+            kb_id = getattr(btn, "_kb_id", "")
+            meta = tooltip or kb_id or label
+            label = f"{btn.winfo_class()} ({meta})"
+        return label
 
     def _keyboard_key_for_button(self, btn) -> str:
         binding_id = self._button_binding_id(btn)
@@ -5385,6 +5607,67 @@ class App(tk.Tk):
             self.toolpath_view.set_enabled(new_val)
             if new_val and self._last_gcode_lines:
                 self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+
+    def _toolpath_limit_value(self, raw, fallback):
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            value = fallback
+        if value < 0:
+            value = 0
+        return value
+
+    def _apply_toolpath_draw_limits(self, _event=None):
+        full = self._toolpath_limit_value(self.toolpath_full_limit.get(), self._toolpath_full_limit_default)
+        interactive = self._toolpath_limit_value(
+            self.toolpath_interactive_limit.get(), self._toolpath_interactive_limit_default
+        )
+        self.toolpath_full_limit.set(str(full))
+        self.toolpath_interactive_limit.set(str(interactive))
+        if hasattr(self, "toolpath_view"):
+            self.toolpath_view.set_draw_limits(full, interactive)
+
+    def _on_arc_detail_scale_move(self, value):
+        try:
+            deg = float(value)
+        except Exception:
+            deg = self.toolpath_arc_detail.get()
+        self._toolpath_arc_detail_value.set(f"{deg:.1f}°")
+
+    def _on_arc_detail_scale_key_release(self, event):
+        if event.keysym in ("Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next"):
+            self._apply_toolpath_arc_detail()
+
+    def _clamp_arc_detail(self, value):
+        try:
+            deg = float(value)
+        except Exception:
+            deg = self._toolpath_arc_detail_default
+        deg = max(self._toolpath_arc_detail_min, min(deg, self._toolpath_arc_detail_max))
+        return deg
+
+    def _apply_toolpath_arc_detail(self, _event=None):
+        deg = self._clamp_arc_detail(self.toolpath_arc_detail.get())
+        self.toolpath_arc_detail.set(deg)
+        self._toolpath_arc_detail_value.set(f"{deg:.1f}°")
+        if hasattr(self, "toolpath_view"):
+            self.toolpath_view.set_arc_detail_override(math.radians(deg))
+            self._schedule_toolpath_arc_detail_reparse()
+
+    def _schedule_toolpath_arc_detail_reparse(self):
+        if self._toolpath_arc_detail_reparse_after_id:
+            try:
+                self.after_cancel(self._toolpath_arc_detail_reparse_after_id)
+            except Exception:
+                pass
+        self._toolpath_arc_detail_reparse_after_id = self.after(
+            self._toolpath_arc_detail_reparse_delay, self._run_toolpath_arc_detail_reparse
+        )
+
+    def _run_toolpath_arc_detail_reparse(self):
+        self._toolpath_arc_detail_reparse_after_id = None
+        if hasattr(self, "toolpath_view") and self._last_gcode_lines:
+            self.toolpath_view.set_gcode_async(self._last_gcode_lines)
 
     def _toggle_unit_mode(self):
         new_mode = "inch" if self.unit_mode.get() == "mm" else "mm"
@@ -6459,6 +6742,14 @@ class App(tk.Tk):
                 self.ui_q.put(("log", f"[settings] Invalid {label}; using {fallback}."))
                 return fallback
 
+        full_limit = self._toolpath_limit_value(
+            self.toolpath_full_limit.get(), self._toolpath_full_limit_default
+        )
+        interactive_limit = self._toolpath_limit_value(
+            self.toolpath_interactive_limit.get(), self._toolpath_interactive_limit_default
+        )
+        arc_detail_deg = self._clamp_arc_detail(self.toolpath_arc_detail.get())
+
         try:
             os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
         except Exception:
@@ -6496,6 +6787,9 @@ class App(tk.Tk):
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
             "current_line_mode": self.current_line_mode.get(),
             "key_bindings": dict(self._key_bindings),
+            "toolpath_full_limit": full_limit,
+            "toolpath_interactive_limit": interactive_limit,
+            "toolpath_arc_detail_deg": arc_detail_deg,
         }
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
