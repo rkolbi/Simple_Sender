@@ -2100,6 +2100,7 @@ def set_kb_id(widget, kb_id: str):
     return widget
 
 class App(tk.Tk):
+    HIDDEN_MPOS_BUTTON_STYLE = "SimpleSender.HiddenMpos.TButton"
     def __init__(self):
         super().__init__()
         self.title("Simple Streamer")
@@ -2425,6 +2426,27 @@ class App(tk.Tk):
         self.machine_state_label.pack(side="right")
 
     def _build_main(self):
+        style = ttk.Style()
+        hidden_style = self.HIDDEN_MPOS_BUTTON_STYLE
+        bg_color = (
+            self.cget("background")
+            or style.lookup("TLabelframe", "background")
+            or style.lookup("TFrame", "background")
+            or "#f0f0f0"
+        )
+        style.configure(
+            hidden_style,
+            relief="flat",
+            borderwidth=0,
+            padding=0,
+            background=bg_color,
+            foreground=bg_color,
+        )
+        style.map(
+            hidden_style,
+            background=[("active", bg_color), ("disabled", bg_color), ("!disabled", bg_color)],
+            foreground=[("active", bg_color), ("disabled", bg_color), ("!disabled", bg_color)],
+        )
         body = ttk.Frame(self, padding=(8, 8))
         body.pack(side="top", fill="both", expand=True)
 
@@ -3121,6 +3143,16 @@ class App(tk.Tk):
         row.pack(fill="x", pady=2)
         ttk.Label(row, text=f"{axis}:", width=3).pack(side="left")
         ttk.Label(row, textvariable=var, width=10).pack(side="left")
+        # Keep a hidden button area so the MPos rows mirror the WPos layout.
+        btn = ttk.Button(
+            row,
+            text="",
+            style=self.HIDDEN_MPOS_BUTTON_STYLE,
+            state="disabled",
+            width=9,
+            takefocus=False,
+        )
+        btn.pack(side="right")
 
     def _dro_row(self, parent, axis, var, zero_cmd):
         row = ttk.Frame(parent)
