@@ -12,6 +12,7 @@
 # Safety note: This application is in the Alpha stage; test in air, spindle off.
 
 import os
+import sys
 import time
 import threading
 import queue
@@ -22,13 +23,20 @@ import csv
 import math
 import shlex
 import traceback
+import hashlib
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-import serial
-from serial.tools import list_ports
+SERIAL_IMPORT_ERROR: str | None = None
+try:
+    import serial
+    from serial.tools import list_ports
+except ImportError as exc:
+    serial = None
+    list_ports = None
+    SERIAL_IMPORT_ERROR = str(exc)
 
 
 BAUD_DEFAULT = 115200
@@ -158,6 +166,43 @@ GRBL_SETTING_LIMITS = {
 
 # Settings that are allowed to be non-numeric (currently none; placeholder for future extensions)
 GRBL_NON_NUMERIC_SETTINGS: set[int] = set()
+
+
+def _hash_lines(lines: list[str] | None) -> str | None:
+    if not lines:
+        return None
+    hasher = hashlib.sha256()
+    for ln in lines:
+        hasher.update(ln.encode("utf-8"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def _default_settings_store_dir() -> str:
+    env_dir = os.getenv("SIMPLE_SENDER_CONFIG_DIR")
+    if env_dir:
+        return env_dir
+    if sys.platform.startswith("win"):
+        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+    else:
+        base = os.getenv("XDG_CONFIG_HOME")
+    if not base:
+        base = os.path.expanduser("~")
+    return os.path.join(base, "SimpleSender")
+
+
+def _resolve_settings_path() -> str:
+    base_dir = _default_settings_store_dir()
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+    except Exception:
+        fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
+        try:
+            os.makedirs(fallback_dir, exist_ok=True)
+            base_dir = fallback_dir
+        except Exception:
+            base_dir = os.path.dirname(__file__)
+    return os.path.join(base_dir, "settings.json")
 
 def clean_gcode_line(line: str) -> str:
     """Strip comments and whitespace; keep simple + safe."""
@@ -599,9 +644,16 @@ class GrblWorker:
 
     # ---- connection ----
     def list_ports(self) -> list[str]:
+        if list_ports is None:
+            return []
         return [p.device for p in list_ports.comports()]
 
     def connect(self, port: str, baud: int = BAUD_DEFAULT):
+        if serial is None:
+            raise RuntimeError(
+                "pyserial is required to connect to GRBL. "
+                "Install pyserial (pip install pyserial) and restart the application."
+            )
         self.disconnect()
         self._stop_evt = threading.Event()
         stop_evt = self._stop_evt
@@ -1297,6 +1349,9 @@ class Toolpath3D(ttk.Frame):
         self._max_draw_segments = 40000
         self._render_params = None
         self._position_item = None
+        self._last_lines_hash = None
+        self._last_segments = None
+        self._last_bounds = None
 
     def _legend_label(self, parent, color, text, var):
         swatch = tk.Label(parent, width=2, background=color)
@@ -1311,6 +1366,12 @@ class Toolpath3D(ttk.Frame):
     def set_gcode_async(self, lines: list[str]):
         self._parse_token += 1
         token = self._parse_token
+        lines_hash = _hash_lines(lines)
+        if lines_hash and (lines_hash == self._last_lines_hash) and self._last_segments is not None:
+            self.segments = self._last_segments
+            self.bounds = self._last_bounds
+            self._schedule_render()
+            return
         line_count = len(lines)
         if line_count > self._full_parse_limit:
             self._arc_step_rad = self._arc_step_large
@@ -1332,21 +1393,32 @@ class Toolpath3D(ttk.Frame):
             step = max(2, len(lines) // self._preview_target)
             quick_lines = lines[::step]
         self.segments, self.bounds = self._parse_gcode(quick_lines)
+        if quick_lines is lines:
+            self._cache_parse_results(lines_hash, self.segments, self.bounds)
         self._schedule_render()
         if len(lines) > self._full_parse_limit:
             return
         def worker():
             segs, bnds = self._parse_gcode(lines)
-            self.after(0, lambda: self._apply_full_parse(token, segs, bnds))
+            self.after(0, lambda: self._apply_full_parse(token, segs, bnds, lines_hash))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_full_parse(self, token, segments, bounds):
+    def _cache_parse_results(self, lines_hash: str | None, segments, bounds):
+        if not lines_hash:
+            return
+        self._last_lines_hash = lines_hash
+        self._last_segments = segments
+        self._last_bounds = bounds
+
+
+    def _apply_full_parse(self, token, segments, bounds, parse_hash: str | None = None):
         if token != self._parse_token:
             return
         if not self.enabled:
             self._pending_lines = None
             return
+        self._cache_parse_results(parse_hash, segments, bounds)
         self.segments = segments
         self.bounds = bounds
         self._schedule_render()
@@ -2032,7 +2104,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("Simple Streamer")
         self.minsize(980, 620)
-        self.settings_path = os.path.join(os.path.dirname(__file__), "settings.json")
+        self.settings_path = _resolve_settings_path()
+        self.settings_dir = os.path.dirname(self.settings_path)
         self.settings = self._load_settings()
         # Migrate jog feed defaults: keep legacy jog_feed for XY, force Z to its own default when absent.
         legacy_jog_feed = self.settings.get("jog_feed")
@@ -2104,6 +2177,7 @@ class App(tk.Tk):
         self.mpos_y = tk.StringVar(value="0.000")
         self.mpos_z = tk.StringVar(value="0.000")
         self._last_gcode_lines = []
+        self._gcode_hash = None
         self._gcode_loading = False
         self._gcode_load_token = 0
         self.gcode_stats_var = tk.StringVar(value="No file loaded")
@@ -2117,6 +2191,7 @@ class App(tk.Tk):
         self._stats_token = 0
         self._last_stats = None
         self._last_rate_source = None
+        self._stats_cache: dict = {}
         self._live_estimate_min = None
         self._stream_state = None
         self._stream_start_ts = None
@@ -2243,6 +2318,10 @@ class App(tk.Tk):
         self._progress_after_id = None
         self._pending_buffer = None
         self._buffer_after_id = None
+        self._state_flash_after_id = None
+        self._state_flash_color = None
+        self._state_flash_on = False
+        self._state_default_fg = None
 
         # Top + main layout
         self._build_toolbar()
@@ -2342,7 +2421,8 @@ class App(tk.Tk):
         attach_log_gcode(self.btn_spindle_off, "M5")
 
         # right side status
-        ttk.Label(bar, textvariable=self.machine_state).pack(side="right")
+        self.machine_state_label = ttk.Label(bar, textvariable=self.machine_state)
+        self.machine_state_label.pack(side="right")
 
     def _build_main(self):
         body = ttk.Frame(self, padding=(8, 8))
@@ -2749,9 +2829,28 @@ class App(tk.Tk):
         sstab = ttk.Frame(nb, padding=8)
         nb.add(sstab, text="App Settings")
         sstab.grid_columnconfigure(0, weight=1)
-        sstab.grid_rowconfigure(3, weight=1)
+        sstab.grid_rowconfigure(0, weight=1)
 
-        safety = ttk.LabelFrame(sstab, text="Safety", padding=8)
+        self.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
+        self.app_settings_canvas.grid(row=0, column=0, sticky="nsew")
+        self.app_settings_scroll = ttk.Scrollbar(
+            sstab, orient="vertical", command=self.app_settings_canvas.yview
+        )
+        self.app_settings_scroll.grid(row=0, column=1, sticky="ns")
+        self.app_settings_canvas.configure(yscrollcommand=self.app_settings_scroll.set)
+        self._app_settings_inner = ttk.Frame(self.app_settings_canvas)
+        self._app_settings_window = self.app_settings_canvas.create_window(
+            (0, 0), window=self._app_settings_inner, anchor="nw"
+        )
+        self._app_settings_inner.bind("<Configure>", lambda event: self._update_app_settings_scrollregion())
+        self.app_settings_canvas.bind("<Configure>", lambda event: self.app_settings_canvas.itemconfig(
+            self._app_settings_window, width=event.width
+        ))
+        self._app_settings_inner.bind("<Enter>", lambda event: self._bind_app_settings_mousewheel())
+        self._app_settings_inner.bind("<Leave>", lambda event: self._unbind_app_settings_mousewheel())
+        self._app_settings_inner.grid_columnconfigure(0, weight=1)
+
+        safety = ttk.LabelFrame(self._app_settings_inner, text="Safety", padding=8)
         safety.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         safety.grid_columnconfigure(1, weight=1)
         ttk.Label(safety, text="All Stop behavior").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
@@ -2773,7 +2872,7 @@ class App(tk.Tk):
         )
         self.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        estimation = ttk.LabelFrame(sstab, text="Estimation", padding=8)
+        estimation = ttk.LabelFrame(self._app_settings_inner, text="Estimation", padding=8)
         estimation.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         estimation.grid_columnconfigure(1, weight=1)
         ttk.Label(estimation, text="Fallback rapid rate (mm/min)").grid(
@@ -2806,7 +2905,7 @@ class App(tk.Tk):
             "Scale time estimates up or down (1.00x = default).",
         )
 
-        jog_frame = ttk.LabelFrame(sstab, text="Jogging", padding=8)
+        jog_frame = ttk.LabelFrame(self._app_settings_inner, text="Jogging", padding=8)
         jog_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         jog_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
@@ -2841,7 +2940,7 @@ class App(tk.Tk):
             "Default speed for Z jog buttons (mm/min when in metric, in/min when in inches).",
         )
 
-        kb_frame = ttk.LabelFrame(sstab, text="Keyboard shortcuts", padding=8)
+        kb_frame = ttk.LabelFrame(self._app_settings_inner, text="Keyboard shortcuts", padding=8)
         kb_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
@@ -2880,7 +2979,7 @@ class App(tk.Tk):
         )
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
-        view_frame = ttk.LabelFrame(sstab, text="G-code view", padding=8)
+        view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
         view_frame.grid(row=4, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
@@ -2907,7 +3006,7 @@ class App(tk.Tk):
         )
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        tw_frame = ttk.LabelFrame(sstab, text="Safety Aids", padding=8)
+        tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
         tw_frame.grid(row=5, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
@@ -2963,6 +3062,7 @@ class App(tk.Tk):
         )
         self.buffer_bar.pack(side="right", padx=(6, 0))
         ttk.Label(status_bar, textvariable=self.buffer_fill, anchor="e").pack(side="right")
+        self._build_led_panel(status_bar)
         self.btn_toggle_tips = ttk.Button(
             status_bar,
             text="Tool Tips: On",
@@ -3006,6 +3106,8 @@ class App(tk.Tk):
         self.btn_toggle_keybinds.config(
             text="Keybindings: On" if self.keyboard_bindings_enabled.get() else "Keybindings: Off"
         )
+        self._state_default_fg = self.status.cget("foreground") or "#000000"
+        self._apply_state_fg(None)
 
         self.macro_frames = {
             "left": macro_left,
@@ -3048,6 +3150,8 @@ class App(tk.Tk):
                     pass
 
     def toggle_connect(self):
+        if not self._ensure_serial_available():
+            return
         if self.grbl.is_streaming():
             messagebox.showwarning("Busy", "Stop the stream before disconnecting.")
             return
@@ -3056,14 +3160,26 @@ class App(tk.Tk):
             self.grbl.disconnect()
         else:
             port = self.current_port.get().strip()
-            if not port:
-                messagebox.showwarning("No port", "No serial port selected.")
-                return
-            try:
-                self.grbl.connect(port, BAUD_DEFAULT)
-                self._auto_reconnect_last_port = port
-            except Exception as e:
-                messagebox.showerror("Connect failed", str(e))
+        if not port:
+            messagebox.showwarning("No port", "No serial port selected.")
+            return
+        try:
+            self.grbl.connect(port, BAUD_DEFAULT)
+            self._auto_reconnect_last_port = port
+        except Exception as e:
+            messagebox.showerror("Connect failed", str(e))
+
+    def _ensure_serial_available(self) -> bool:
+        if serial is not None:
+            return True
+        msg = (
+            "pyserial is required to communicate with GRBL. Install pyserial (pip install pyserial) "
+            "and restart the application."
+        )
+        if SERIAL_IMPORT_ERROR:
+            msg += f"\n{SERIAL_IMPORT_ERROR}"
+        messagebox.showerror("Missing dependency", msg)
+        return False
 
     def open_gcode(self):
         if self.grbl.is_streaming():
@@ -3142,6 +3258,8 @@ class App(tk.Tk):
             return
         self._clear_pending_ui_updates()
         self._last_gcode_lines = lines
+        self._gcode_hash = _hash_lines(lines)
+        self._stats_cache.clear()
         self._live_estimate_min = None
         self._refresh_gcode_stats_display()
         self.grbl.load_gcode(lines)
@@ -3185,6 +3303,8 @@ class App(tk.Tk):
             messagebox.showwarning("Busy", "Stop the stream before clearing the G-code file.")
             return
         self._last_gcode_lines = []
+        self._gcode_hash = None
+        self._stats_cache.clear()
         self.grbl.load_gcode([])
         self.gview.set_lines([])
         self.gcode_stats_var.set("No file loaded")
@@ -3345,6 +3465,17 @@ class App(tk.Tk):
     def _get_accel_rates_for_estimate(self):
         return self._accel_rates
 
+    def _make_stats_cache_key(
+        self,
+        rapid_rates: tuple[float, float, float] | None,
+        accel_rates: tuple[float, float, float] | None,
+    ):
+        if not self._gcode_hash:
+            return None
+        rapid = tuple(rapid_rates) if rapid_rates is not None else None
+        accel = tuple(accel_rates) if accel_rates is not None else None
+        return (self._gcode_hash, rapid, accel)
+
     def _update_gcode_stats(self, lines: list[str]):
         if not lines:
             self._last_stats = None
@@ -3357,6 +3488,11 @@ class App(tk.Tk):
         token = self._stats_token
         rapid_rates, rate_source = self._get_rapid_rates_for_estimate()
         accel_rates = self._get_accel_rates_for_estimate()
+        cache_key = self._make_stats_cache_key(rapid_rates, accel_rates)
+        if cache_key and cache_key in self._stats_cache:
+            stats, cached_source = self._stats_cache[cache_key]
+            self._apply_gcode_stats(token, stats, cached_source)
+            return
         if len(lines) > 2000:
             self.gcode_stats_var.set("Calculating stats...")
 
@@ -3367,6 +3503,8 @@ class App(tk.Tk):
                     self.after(0, lambda: self._apply_gcode_stats(token, None, rate_source))
                     self.ui_q.put(("log", f"[stats] Estimate failed: {exc}"))
                     return
+                if cache_key:
+                    self._stats_cache[cache_key] = (stats, rate_source)
                 self.after(0, lambda: self._apply_gcode_stats(token, stats, rate_source))
 
             threading.Thread(target=worker, daemon=True).start()
@@ -3377,6 +3515,8 @@ class App(tk.Tk):
             self._apply_gcode_stats(token, None, rate_source)
             self.ui_q.put(("log", f"[stats] Estimate failed: {exc}"))
             return
+        if cache_key:
+            self._stats_cache[cache_key] = (stats, rate_source)
         self._apply_gcode_stats(token, stats, rate_source)
 
     def _load_grbl_setting_info(self):
@@ -4056,6 +4196,9 @@ class App(tk.Tk):
                 self.status.config(text=self._format_alarm_message(message or self._alarm_message))
             except Exception:
                 pass
+            self._machine_state_text = "Alarm"
+            self.machine_state.set("Alarm")
+            self._start_state_flash("#ff5252")
             return
 
         if not self._alarm_locked:
@@ -4081,6 +4224,8 @@ class App(tk.Tk):
         if self._pending_settings_refresh and self._grbl_ready:
             self._pending_settings_refresh = False
             self._request_settings_dump()
+        self.machine_state.set(self._machine_state_text)
+        self._update_state_highlight(self._machine_state_text)
 
     def _sync_all_stop_mode_combo(self):
         mode = self.all_stop_mode.get()
@@ -4934,6 +5079,38 @@ class App(tk.Tk):
             return
         self.toolpath_view.set_visible(label == "3D View")
 
+    def _update_app_settings_scrollregion(self):
+        if not hasattr(self, "app_settings_canvas"):
+            return
+        self.app_settings_canvas.configure(scrollregion=self.app_settings_canvas.bbox("all"))
+
+    def _on_app_settings_mousewheel(self, event):
+        if not hasattr(self, "app_settings_canvas"):
+            return
+        delta = 0
+        if event.delta:
+            delta = -int(event.delta / 120)
+        elif getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        if delta:
+            self.app_settings_canvas.yview_scroll(delta, "units")
+
+    def _bind_app_settings_mousewheel(self):
+        if not hasattr(self, "app_settings_canvas"):
+            return
+        self.app_settings_canvas.bind_all("<MouseWheel>", self._on_app_settings_mousewheel)
+        self.app_settings_canvas.bind_all("<Button-4>", self._on_app_settings_mousewheel)
+        self.app_settings_canvas.bind_all("<Button-5>", self._on_app_settings_mousewheel)
+
+    def _unbind_app_settings_mousewheel(self):
+        if not hasattr(self, "app_settings_canvas"):
+            return
+        self.app_settings_canvas.unbind_all("<MouseWheel>")
+        self.app_settings_canvas.unbind_all("<Button-4>")
+        self.app_settings_canvas.unbind_all("<Button-5>")
+
     def _on_tab_changed(self, event):
         self._update_tab_visibility(event.widget)
         if not bool(self.gui_logging_enabled.get()):
@@ -4948,6 +5125,92 @@ class App(tk.Tk):
             return
         ts = time.strftime("%H:%M:%S")
         self._log(f"[{ts}] Tab: {label}")
+
+    def _build_led_panel(self, parent):
+        frame = ttk.Frame(parent)
+        frame.pack(side="right", padx=(8, 0))
+        self._led_indicators = {}
+        labels = [
+            ("endstop", "Endstops"),
+            ("probe", "Probe"),
+            ("hold", "Hold"),
+        ]
+        for key, text in labels:
+            container = ttk.Frame(frame)
+            container.pack(side="left", padx=(0, 8))
+            canvas = tk.Canvas(container, width=18, height=18, highlightthickness=0, bd=0)
+            canvas.pack(side="left")
+            oval = canvas.create_oval(2, 2, 16, 16, fill="#b0b0b0", outline="#555")
+            ttk.Label(container, text=text).pack(side="left", padx=(4, 0))
+            self._led_indicators[key] = (canvas, oval)
+        self._led_states = {key: False for key in self._led_indicators}
+        self._update_led_panel(False, False, False)
+
+    def _set_led_state(self, key, on):
+        entry = self._led_indicators.get(key)
+        if not entry:
+            return
+        canvas, oval = entry
+        color = "#00c853" if on else "#b0b0b0"
+        canvas.itemconfig(oval, fill=color)
+        self._led_states[key] = on
+
+    def _update_led_panel(self, endstop: bool, probe: bool, hold: bool):
+        self._set_led_state("endstop", endstop)
+        self._set_led_state("probe", probe)
+        self._set_led_state("hold", hold)
+
+    def _apply_state_fg(self, color: str | None):
+        target = color if color else (self._state_default_fg or "#000000")
+        for lbl in (getattr(self, "machine_state_label", None), getattr(self, "status", None)):
+            if lbl:
+                try:
+                    lbl.config(foreground=target)
+                except tk.TclError:
+                    pass
+
+    def _cancel_state_flash(self):
+        if self._state_flash_after_id:
+            try:
+                self.after_cancel(self._state_flash_after_id)
+            except Exception:
+                pass
+        self._state_flash_after_id = None
+        self._state_flash_color = None
+        self._state_flash_on = False
+
+    def _toggle_state_flash(self):
+        if not self._state_flash_color:
+            return
+        self._state_flash_on = not self._state_flash_on
+        color = self._state_flash_color if self._state_flash_on else (self._state_default_fg or "#000000")
+        self._apply_state_fg(color)
+        self._state_flash_after_id = self.after(500, self._toggle_state_flash)
+
+    def _start_state_flash(self, color: str):
+        self._cancel_state_flash()
+        self._state_flash_color = color
+        self._toggle_state_flash()
+
+    def _update_state_highlight(self, state: str | None):
+        text = str(state or "").lower()
+        if not text:
+            self._cancel_state_flash()
+            self._apply_state_fg(None)
+            return
+        if text.startswith("run"):
+            self._cancel_state_flash()
+            self._apply_state_fg("#00c853")
+        elif text.startswith("idle"):
+            self._cancel_state_flash()
+            self._apply_state_fg("#2196f3")
+        elif text.startswith("alarm") or text.startswith("door"):
+            self._start_state_flash("#ff5252")
+        elif any(text.startswith(key) for key in ("hold", "jog", "check")):
+            self._start_state_flash("#ffc107")
+        else:
+            self._cancel_state_flash()
+            self._apply_state_fg(None)
 
     def _drain_ui_queue(self):
         for _ in range(100):
@@ -5275,12 +5538,16 @@ class App(tk.Tk):
                 elif p.startswith("Pn:"):
                     pins = p[3:]
 
-            self.machine_state.set(state)
+            state_lower = state.lower()
             self._machine_state_text = state
-            if str(state).lower().startswith("alarm"):
+            if state_lower.startswith("alarm"):
                 self._set_alarm_lock(True, state)
-            elif self._alarm_locked:
-                self._set_alarm_lock(False)
+            else:
+                if self._alarm_locked:
+                    self._set_alarm_lock(False)
+                else:
+                    self.machine_state.set(state)
+                    self._update_state_highlight(state)
             if self._grbl_ready and self._pending_settings_refresh and not self._alarm_locked:
                 self._pending_settings_refresh = False
                 self._request_settings_dump()
@@ -5389,6 +5656,11 @@ class App(tk.Tk):
                             self._macro_vars["_OvChanged"] = bool(changed)
                 except Exception:
                     pass
+            pin_state = {c for c in (pins or "").upper() if c.isalpha()}
+            endstop_active = bool(pin_state & {"X", "Y", "Z"})
+            probe_active = bool(pin_state & {"P"}) or bool(self._macro_vars.get("PRB"))
+            hold_active = bool(pin_state & {"H"}) or "hold" in str(state).lower()
+            self._update_led_panel(endstop_active, probe_active, hold_active)
         elif kind == "buffer_fill":
             pct, used, window = evt[1], evt[2], evt[3]
             self._pending_buffer = (pct, used, window)
@@ -6066,6 +6338,11 @@ class App(tk.Tk):
                     fallback = 0.0
                 self.ui_q.put(("log", f"[settings] Invalid {label}; using {fallback}."))
                 return fallback
+
+        try:
+            os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
+        except Exception:
+            pass
 
         data = {
             "last_port": self.current_port.get(),
