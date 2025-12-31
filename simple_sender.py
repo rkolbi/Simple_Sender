@@ -40,6 +40,7 @@ except ImportError as exc:
 
 
 BAUD_DEFAULT = 115200
+STATUS_POLL_DEFAULT = 0.2
 
 
 # ---------- GRBL real-time command bytes (GRBL 1.1) ----------
@@ -639,6 +640,8 @@ class GrblWorker:
         self._outgoing_q: queue.Queue[str] = queue.Queue()
         self._stream_lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._status_interval_lock = threading.Lock()
+        self._status_poll_interval = STATUS_POLL_DEFAULT
         self._ready = False
         self._alarm_active = False
 
@@ -1070,7 +1073,21 @@ class GrblWorker:
                     self.send_realtime(RT_STATUS)
                 except Exception:
                     pass
-            time.sleep(0.2)
+            with self._status_interval_lock:
+                interval = self._status_poll_interval
+            time.sleep(interval)
+
+    def set_status_poll_interval(self, interval: float):
+        if interval is None:
+            return
+        try:
+            val = float(interval)
+        except Exception:
+            return
+        if val <= 0:
+            return
+        with self._status_interval_lock:
+            self._status_poll_interval = val
 
     def _emit_buffer_fill(self):
         with self._stream_lock:
@@ -2156,9 +2173,17 @@ class App(tk.Tk):
         self._console_lines: list[tuple[str, str | None]] = []
         self._console_filter = None
         self._closing = False
+        self._connecting = False
+        self._disconnecting = False
+        self._connect_thread: threading.Thread | None = None
+        self._disconnect_thread: threading.Thread | None = None
 
         self.ui_q: queue.Queue = queue.Queue()
+        self.status_poll_interval = tk.DoubleVar(
+            value=self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT)
+        )
         self.grbl = GrblWorker(self.ui_q)
+        self.grbl.set_status_poll_interval(self.status_poll_interval.get())
 
         self.unit_mode = tk.StringVar(value=self.settings.get("unit_mode", "mm"))
         self.step_xy = tk.DoubleVar(value=self.settings.get("step_xy", 1.0))
@@ -2927,8 +2952,26 @@ class App(tk.Tk):
             "Scale time estimates up or down (1.00x = default).",
         )
 
+        status_frame = ttk.LabelFrame(self._app_settings_inner, text="Status polling", padding=8)
+        status_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        status_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(status_frame, text="Status report interval (seconds)").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.status_poll_entry = ttk.Entry(
+            status_frame, textvariable=self.status_poll_interval, width=12
+        )
+        self.status_poll_entry.grid(row=0, column=1, sticky="w", pady=4)
+        self.status_poll_entry.bind("<Return>", self._on_status_interval_change)
+        self.status_poll_entry.bind("<FocusOut>", self._on_status_interval_change)
+        apply_tooltip(
+            self.status_poll_entry,
+            "Set how often GRBL status reports are requested (seconds).",
+        )
+        self._on_status_interval_change()
+
         jog_frame = ttk.LabelFrame(self._app_settings_inner, text="Jogging", padding=8)
-        jog_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        jog_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         jog_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -2963,7 +3006,7 @@ class App(tk.Tk):
         )
 
         kb_frame = ttk.LabelFrame(self._app_settings_inner, text="Keyboard shortcuts", padding=8)
-        kb_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 8))
+        kb_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
         self.kb_enable_check = ttk.Checkbutton(
@@ -3002,7 +3045,7 @@ class App(tk.Tk):
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
-        view_frame.grid(row=4, column=0, sticky="ew")
+        view_frame.grid(row=5, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3029,7 +3072,7 @@ class App(tk.Tk):
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
-        tw_frame.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=6, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -3189,18 +3232,47 @@ class App(tk.Tk):
             return
         if self.connected:
             self._user_disconnect = True
-            self.grbl.disconnect()
+            self._start_disconnect_worker()
             return
         else:
             port = self.current_port.get().strip()
         if not port:
             messagebox.showwarning("No port", "No serial port selected.")
             return
-        try:
-            self.grbl.connect(port, BAUD_DEFAULT)
-            self._auto_reconnect_last_port = port
-        except Exception as e:
-            messagebox.showerror("Connect failed", str(e))
+        self._start_connect_worker(port)
+
+    def _start_connect_worker(self, port: str):
+        if self._connecting:
+            return
+        def worker():
+            try:
+                self.grbl.connect(port, BAUD_DEFAULT)
+            except Exception as exc:
+                try:
+                    self.after(0, lambda: messagebox.showerror("Connect failed", str(exc)))
+                except Exception:
+                    pass
+            finally:
+                self._connecting = False
+
+        self._connecting = True
+        self._connect_thread = threading.Thread(target=worker, daemon=True)
+        self._connect_thread.start()
+
+    def _start_disconnect_worker(self):
+        if self._disconnecting:
+            return
+        def worker():
+            try:
+                self.grbl.disconnect()
+            except Exception as exc:
+                self.ui_q.put(("log", f"[disconnect] {exc}"))
+            finally:
+                self._disconnecting = False
+
+        self._disconnecting = True
+        self._disconnect_thread = threading.Thread(target=worker, daemon=True)
+        self._disconnect_thread.start()
 
     def _ensure_serial_available(self) -> bool:
         if serial is not None:
@@ -4840,6 +4912,18 @@ class App(tk.Tk):
     def _on_jog_feed_change_z(self, _event=None):
         self._validate_jog_feed_var(self.jog_feed_z, self.settings.get("jog_feed_z", 500.0))
 
+    def _on_status_interval_change(self, _event=None):
+        try:
+            val = float(self.status_poll_interval.get())
+        except Exception:
+            val = self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT)
+        if val <= 0:
+            val = STATUS_POLL_DEFAULT
+        if val < 0.05:
+            val = 0.05
+        self.status_poll_interval.set(val)
+        self.grbl.set_status_poll_interval(val)
+
     def _parse_macro_prompt(self, line: str):
         title = "Macro Pause"
         message = ""
@@ -6396,6 +6480,11 @@ class App(tk.Tk):
             "tooltips_enabled": bool(self.tooltip_enabled.get()),
             "gui_logging_enabled": bool(self.gui_logging_enabled.get()),
             "render3d_enabled": bool(self.render3d_enabled.get()),
+            "status_poll_interval": safe_float(
+                self.status_poll_interval,
+                self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT),
+                "status interval",
+            ),
             "view_3d": self.settings.get("view_3d"),
             "all_stop_mode": self.all_stop_mode.get(),
             "training_wheels": bool(self.training_wheels.get()),
