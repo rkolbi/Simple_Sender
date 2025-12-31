@@ -5121,6 +5121,8 @@ class App(tk.Tk):
                     self._log(f"[ui] Event error: {exc}")
                 except Exception:
                     pass
+        if self._closing:
+            return
         self._maybe_auto_reconnect()
         self.after(50, self._drain_ui_queue)
 
@@ -5914,6 +5916,7 @@ class App(tk.Tk):
                     continue
                 compiled = self._bcnc_compile_line(line)
                 if compiled is None:
+                    self.ui_q.put(("log", f"[macro] Skipping line (compile error): {line}"))
                     continue
                 if isinstance(compiled, tuple):
                     kind = compiled[0]
