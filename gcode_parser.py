@@ -1,7 +1,7 @@
 import math
 import re
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Set, Tuple
 
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
 WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
@@ -95,7 +95,8 @@ def parse_gcode_lines(
     plane = "G17"
     feed_mode = "G94"
     arc_abs = False
-    feed: float | None = None
+    feed_raw: float | None = None
+    feed_mm: float | None = None
     g92_offset = [0.0, 0.0, 0.0]
     g92_enabled = True
     last_motion = 1
@@ -134,21 +135,25 @@ def parse_gcode_lines(
         words = WORD_PAT.findall(s)
         if not words:
             continue
-        g_codes: List[float] = []
+        g_codes: Set[float] = set()
         for w, val in words:
             if w == "G":
                 try:
-                    g_codes.append(float(val))
+                    g_codes.add(round(float(val), 3))
                 except Exception:
                     pass
 
         def has_g(code: float) -> bool:
-            return any(abs(g - code) < 1e-3 for g in g_codes)
+            return round(code, 3) in g_codes
 
         if has_g(20):
             units = 25.4
+            if feed_raw is not None:
+                feed_mm = feed_raw * units
         if has_g(21):
             units = 1.0
+            if feed_raw is not None:
+                feed_mm = feed_raw * units
         if has_g(90):
             absolute = True
         if has_g(91):
@@ -195,7 +200,8 @@ def parse_gcode_lines(
                 has_z = True
                 nz = fval if absolute else (nz + fval)
             elif w == "F":
-                feed = raw_val if feed_mode == "G93" else fval
+                feed_raw = raw_val
+                feed_mm = raw_val * units
             elif w == "I":
                 i_val = fval
             elif w == "J":
@@ -263,6 +269,7 @@ def parse_gcode_lines(
         if motion is None and has_axis:
             motion = last_motion
 
+        feed_for_mode = feed_raw if feed_mode == "G93" else feed_mm
         if motion in (0, 1) and has_axis:
             dx = nx - x
             dy = ny - y
@@ -275,7 +282,7 @@ def parse_gcode_lines(
                     start=(x, y, z),
                     end=(nx, ny, nz),
                     motion=motion,
-                    feed=feed,
+                    feed=feed_for_mode,
                     feed_mode=feed_mode,
                     dx=dx,
                     dy=dy,
@@ -340,6 +347,7 @@ def parse_gcode_lines(
             if sweep == 0 or r == 0:
                 x, y, z = nx, ny, nz
                 continue
+            arc_len2d = abs(sweep) * r
             steps = max(8, int(abs(sweep) / arc_step_rad))
             start_ang = math.atan2(v0 - cv, u0 - cu)
             px, py, pz = x, y, z
@@ -361,7 +369,7 @@ def parse_gcode_lines(
                     start=(x, y, z),
                     end=(nx, ny, nz),
                     motion=motion,
-                    feed=feed,
+                    feed=feed_for_mode,
                     feed_mode=feed_mode,
                     dx=dx,
                     dy=dy,
