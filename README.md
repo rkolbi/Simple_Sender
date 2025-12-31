@@ -116,7 +116,15 @@ When to enable/disable options:
   - GRBL Settings (editable table, tooltips, pending-change highlight).
   - App Settings (ALL STOP mode, estimation factor/fallback, keybindings, Training Wheels, auto-reconnect).
   - 3D View (toggle render, save/load view).
-- **Status bar:** Progress, buffer fill, toggle buttons (tooltips/logging/3D/keybindings).
+- **Status bar:** Progress, buffer fill, status LEDs (Endstops/Probe/Hold), and toggle buttons (tooltips/logging/3D render/keybindings).
+
+## Status Lights
+- **Placement:** The LEDs sit inline with the status bar so they stay next to the logging/3D/keybinding toggles and provide a quick glance of machine triggers.
+- **Meaning & data source:** GRBL 1.1h’s status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|…>`). We mirror gSender’s approach:
+  - `X`, `Y`, `Z` light the **Endstops** indicator whenever those limit pins feed a high signal.
+  - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
+  - `H` or the textual **Hold** state lights the **Hold** LED while GRBL is paused/feed-hold.
+- **How to use them:** Watch them before you jog to confirm no limits are stuck, rely on the Probe LED during probing macros, and note Hold when you issue `!`/`~`. They’re purely informational; the rest of the UI still enforces streaming locks, alarms, and macro gating.
 
 ## Core Behaviors
 - **Handshake:** Waits for GRBL banner or status + first status report before enabling controls/$$.
@@ -150,6 +158,8 @@ When to enable/disable options:
   - Control keywords (`M0/M00/PROMPT`, `ABSOLUTE/ABS`, `RELATIVE/REL`, `HOME`, `UNLOCK`, `RESET`, `PAUSE`, `RESUME`, `FEEDHOLD`, `STOP`, `RUN`, `SAFE`, `SET0/SETX/SETY/SETZ/SET`, `LOAD <path>`, `OPEN`, `CLOSE`, `HELP`, `QUIT/EXIT`, `SENDHEX`, and more) invoke the sender’s helpers, so you can open/close the machine, toggle offsets, or trigger custom logic without writing raw G-code.
   - Prefixing a line with `!`, `~`, `?`, or the Ctrl-X byte (`\x18`) sends the equivalent real-time command; lines starting with `$`, `@`, `{`, comments in `(…)` or `;…`, or those matching the `MACRO_GPAT` regex are forwarded verbatim.
   - Pure G-code lines (e.g., `G0`, `G1`, `M3`, `M5`, `G92`, and any other GRBL commands) are sent directly to the controller.
+  - **Prompt customization & state tracking.** `M0`, `M00`, and `PROMPT` lines present the modal built in `_show_macro_prompt`. Text can come from a trailing comment (e.g., `M0 (What’s next?)`) or from tokens such as `title=`, `msg=`/`message=`/`text=`, and `buttons=` (comma- or pipe-separated) to add extra options next to the default Resume/Cancel pair. Add `noresume` to hide the Resume button or rename buttons via `resume=`/`resumelabel=` and `cancel=`/`cancellabel=`. When the user picks a choice, the macro stores it in `_macro_vars["prompt_choice"]`, `_macro_vars["prompt_index"]`, and `_macro_vars["prompt_cancelled"]`, logs the selection, and either continues or aborts (Cancel immediately stops the macro).
+  - **Logging, threading, and safety.** Macros run on a background worker (`_run_macro_worker`), log their name/tip/contents when GUI logging is enabled, and respect the streaming/alarm gate and Training Wheels confirmations so they only run when it is safe. `_macro_lock` serializes macro execution, is always released (even on exceptions), and the runner flips `_macro_vars["running"]` so `%wait`/`_macro_wait_for_idle()` stream updates know when to block or resume.
 - **Mixing Python & GRBL.** Lines that begin with `_` run as Python (`_safe_height = …`). You can reference live variables in `_macro_vars` (e.g., `wx`, `wy`, `wz`, `OvFeed`, `safe`), call the UI via `app`/`os`, or log with `app._log(...)`. Wrap Python expressions in square brackets (`G0 Z[_safe_height]`), and the expression is evaluated before the line is streamed. Use `%msg`/`%update` inside macros for progress updates or for prompting the operator mid-sequence.
 - **Example macro (raise Z and park).**
   ```text
@@ -167,7 +177,7 @@ When to enable/disable options:
   2. Emit `%msg` notifications before and after motion.
   3. Mix G-code with embedded expressions (`[...]`), send absolute moves (`G90`/`G0`), and park at a known location.
   You can expand this template with `%wait`, conditional Python (`if _safe_height < 10.0: …`), or macros that interact with `app` (e.g., `app._log(...)`) before/after sending commands. Macros always release `_macro_lock`, so even a raised exception won’t hang the UI.
-- **Variable math + GRBL example.**
+ - **Variable math + GRBL example.**
   ```text
   Offset jog
   Compute a dynamic X offset and move there with mixed Python/math.
@@ -198,7 +208,7 @@ When to enable/disable options:
    | `PRB`, `version`, `controller`, `pins`, `msg`, `prompt_choice`/`prompt_index`/`prompt_cancelled` | Misc helpers used by macros and log dialogs; `PRB` holds last probe result, `pins` stores pin summary, and `prompt_*` track modal prompt outcomes.
    | `_camwx`, `_camwy` | Camera or CAM coordinates that can be reused in macros (mirrors non-GRBL data). |
 
-   Use this table as your cheat sheet when composing macros—every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
+  Use this table as your cheat sheet when composing macros—every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
 
 
 ## Estimation & 3D View
