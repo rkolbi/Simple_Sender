@@ -24,6 +24,7 @@ import math
 import shlex
 import traceback
 import hashlib
+import shutil
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -74,6 +75,7 @@ MACRO_GPAT = re.compile(r"[A-Za-z]\s*[-+]?\d+.*")
 MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\b *(.*)$")
 MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
 MACRO_STDEXPR = False
+RESUME_WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
 
 ALL_STOP_CHOICES = [
     ("Soft Reset (Ctrl-X)", "reset"),
@@ -326,9 +328,14 @@ class GrblWorker:
         self._send_index = 0   # next index to send
         self._ack_index = -1   # last acked index
         self._stream_buf_used = 0
-        self._stream_line_queue: deque[int] = deque()
-        self._stream_pending_line = ""
-        self._rx_window = RX_BUFFER_WINDOW
+        self._stream_line_queue: deque[tuple[int, bool, int | None]] = deque()
+        self._stream_pending_item: tuple[str, bool, int | None] | None = None
+        self._resume_preamble: deque[str] = deque()
+        self._rx_window = RX_BUFFER_SIZE
+        self._tx_bytes_window: deque[tuple[float, int]] = deque()
+        self._tx_window_sec = 2.0
+        self._tx_emit_interval = 0.5
+        self._last_tx_emit_ts = 0.0
 
         self._outgoing_q: queue.Queue[str] = queue.Queue()
         self._stream_lock = threading.Lock()
@@ -518,10 +525,13 @@ class GrblWorker:
         with self._stream_lock:
             self._stream_buf_used = 0
             self._stream_line_queue.clear()
-            self._stream_pending_line = ""
-            self._rx_window = RX_BUFFER_WINDOW
+            self._stream_pending_item = None
+            self._resume_preamble.clear()
+            self._rx_window = RX_BUFFER_SIZE
             self._send_index = 0
             self._ack_index = -1
+            self._tx_bytes_window.clear()
+            self._last_tx_emit_ts = 0.0
 
     def start_stream(self):
         if not self.is_connected():
@@ -533,6 +543,30 @@ class GrblWorker:
         self._paused = False
         self._reset_stream_buffer()
         self._emit_buffer_fill()
+        self.ui_q.put(("stream_state", "running", None))
+
+    def start_stream_from(self, start_index: int, preamble: list[str] | None = None):
+        """Resume streaming from `start_index`, optionally prepending `preamble` lines."""
+        if not self.is_connected():
+            return
+        if not self._gcode:
+            return
+        if start_index < 0:
+            start_index = 0
+        if start_index >= len(self._gcode):
+            return
+        self._clear_outgoing()
+        self._streaming = True
+        self._paused = False
+        self._reset_stream_buffer()
+        with self._stream_lock:
+            self._send_index = start_index
+            self._ack_index = start_index - 1
+            if preamble:
+                cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
+                self._resume_preamble = deque(cleaned)
+        self._emit_buffer_fill()
+        self.ui_q.put(("progress", start_index, len(self._gcode)))
         self.ui_q.put(("stream_state", "running", None))
 
     def pause_stream(self):
@@ -558,15 +592,34 @@ class GrblWorker:
     # ---- jog ----
     def jog(self, dx: float, dy: float, dz: float, feed: float, unit_mode: str):
         """
-        GRBL jog: $J=G91 ... incremental
-        unit_mode: "mm" or "inch" (uses G21/G20)
+        Issue a $J jog command in G91 incremental mode.
+
+        Args:
+            dx: X axis move (mm or inch depending on unit_mode)
+            dy: Y axis move
+            dz: Z axis move
+            feed: Feed rate for the jog (must be > 0)
+            unit_mode: "mm" or "inch"; controls whether the command sends G21 or G20
+
+        Returns:
+            True if the jog command was enqueued, False otherwise.
         """
         if not self.is_connected():
-            return
+            self.ui_q.put(("log", "[jog] Ignored: not connected"))
+            return False
+        if feed <= 0:
+            self.ui_q.put(("log", f"[jog] Ignored: feed must be positive (got {feed})"))
+            return False
+        if unit_mode not in ("mm", "inch"):
+            self.ui_q.put(("log", f"[jog] Ignored: invalid unit mode '{unit_mode}'"))
+            return False
+        if self._streaming:
+            self.ui_q.put(("log", "[jog] Ignored: stream already running"))
+            return False
         gunit = "G21" if unit_mode == "mm" else "G20"
-        # Jog cancels can be sent with 0x85, but we keep it simple here.
         cmd = f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
         self.send_immediate(cmd)
+        return True
 
     # ---- RX/TX loops ----
     def _encode_line_payload(self, s: str) -> bytes:
@@ -580,62 +633,79 @@ class GrblWorker:
 
             # Streaming: fill the controller RX buffer window (character-counting)
             if self._streaming and (not self._paused):
-                while self._send_index < len(self._gcode):
+                while True:
                     if not self._streaming or self._paused:
                         break
                     with self._stream_lock:
                         if not self._streaming or self._paused:
                             break
-                        if self._stream_pending_line:
-                            line = self._stream_pending_line
-                        else:
-                            if self._send_index >= len(self._gcode):
-                                break
-                            line = self._gcode[self._send_index].strip()
+                        item = self._stream_pending_item
+                        if item is None:
+                            if self._resume_preamble:
+                                line = self._resume_preamble[0]
+                                item = (line, False, None)
+                            else:
+                                if self._send_index >= len(self._gcode):
+                                    break
+                                line = self._gcode[self._send_index].strip()
+                                item = (line, True, self._send_index)
+                        line, is_gcode, idx = item
                         payload = self._encode_line_payload(line)
                         line_len = len(payload)
-                        can_fit = (self._stream_buf_used + line_len) < self._rx_window
+                        usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
+                        can_fit = (self._stream_buf_used + line_len) <= usable
 
                         if not can_fit and self._stream_buf_used > 0:
-                            self._stream_pending_line = line
+                            self._stream_pending_item = item
                             break
 
                         if not can_fit and self._stream_buf_used == 0:
                             # Allow a single oversized line to prevent deadlock
                             pass
 
-                        self._stream_pending_line = ""
-                        idx = self._send_index
-                        self._send_index += 1
+                        self._stream_pending_item = None
+                        if is_gcode:
+                            idx = self._send_index
+                            self._send_index += 1
                         self._stream_buf_used += line_len
-                        self._stream_line_queue.append(line_len)
+                        self._stream_line_queue.append((line_len, is_gcode, idx))
 
                     if not self._write_line(line, payload):
                         with self._stream_lock:
-                            if self._send_index > 0:
+                            if is_gcode and self._send_index > 0:
                                 self._send_index -= 1
                             if self._stream_line_queue:
                                 try:
-                                    last = self._stream_line_queue.pop()
+                                    last_len, _, _ = self._stream_line_queue.pop()
                                 except Exception:
-                                    last = line_len
-                                self._stream_buf_used = max(0, self._stream_buf_used - last)
+                                    last_len = line_len
+                                self._stream_buf_used = max(0, self._stream_buf_used - last_len)
                             else:
                                 self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                            self._stream_pending_line = line
+                            self._stream_pending_item = item
                         self._emit_buffer_fill()
                         self._streaming = False
                         self._paused = False
                         self.ui_q.put(("stream_state", "error", "Write failed"))
                         break
 
+                    if not is_gcode and self._resume_preamble:
+                        self._resume_preamble.popleft()
+                    self._record_tx_bytes(line_len)
                     self._emit_buffer_fill()
-                    self.ui_q.put(("gcode_sent", idx, line))
+                    if is_gcode:
+                        self.ui_q.put(("gcode_sent", idx, line))
 
                 with self._stream_lock:
                     send_index = self._send_index
                     ack_index = self._ack_index
-                if self._streaming and send_index >= len(self._gcode) and ack_index >= len(self._gcode) - 1:
+                    pending = bool(self._stream_line_queue or self._stream_pending_item or self._resume_preamble)
+                if (
+                    self._streaming
+                    and (not pending)
+                    and send_index >= len(self._gcode)
+                    and ack_index >= len(self._gcode) - 1
+                ):
                     # done
                     self._streaming = False
                     self.ui_q.put(("stream_state", "done", None))
@@ -664,8 +734,15 @@ class GrblWorker:
             with self._write_lock:
                 self.ser.write(payload)
             return True
-        except Exception as e:
-            self.ui_q.put(("log", f"[write err] {e}"))
+        except Exception as exc:
+            if serial is not None:
+                if isinstance(exc, serial.SerialTimeoutException):
+                    self.ui_q.put(("log", f"[serial timeout] {exc}"))
+                    return False
+                if isinstance(exc, serial.SerialException):
+                    self.ui_q.put(("log", f"[serial error] {exc}"))
+                    return False
+            self.ui_q.put(("log", f"[write err] {exc}"))
             return False
 
     def _rx_loop(self, stop_evt: threading.Event):
@@ -710,17 +787,19 @@ class GrblWorker:
             return
 
         if low == "ok" or low.startswith("error"):
+            ack_index = None
             with self._stream_lock:
                 if self._stream_line_queue:
-                    self._stream_buf_used -= self._stream_line_queue.popleft()
+                    line_len, is_gcode, _ = self._stream_line_queue.popleft()
+                    self._stream_buf_used -= line_len
                     if self._stream_buf_used < 0:
                         self._stream_buf_used = 0
+                    if is_gcode and self._streaming:
+                        self._ack_index += 1
+                        ack_index = self._ack_index
             self._emit_buffer_fill()
             # streaming ack progression
-            if self._streaming:
-                with self._stream_lock:
-                    self._ack_index += 1
-                    ack_index = self._ack_index
+            if ack_index is not None:
                 self.ui_q.put(("gcode_acked", ack_index))
                 self.ui_q.put(("progress", ack_index + 1, len(self._gcode)))
 
@@ -749,10 +828,10 @@ class GrblWorker:
                         _, rx_free = p[3:].split(",", 1)
                         rx_free = int(rx_free.strip())
                         with self._stream_lock:
-                            window = max(1, rx_free - RX_BUFFER_SAFETY)
-                            if window < self._stream_buf_used:
-                                window = self._stream_buf_used
-                            self._rx_window = window
+                            capacity = rx_free + self._stream_buf_used
+                            if capacity < RX_BUFFER_SIZE:
+                                capacity = RX_BUFFER_SIZE
+                            self._rx_window = capacity
                         self._emit_buffer_fill()
                     except Exception:
                         pass
@@ -804,6 +883,24 @@ class GrblWorker:
         self._last_buffer_emit_ts = now
         self.ui_q.put(("buffer_fill", pct, used, window))
 
+    def _record_tx_bytes(self, count: int):
+        if count <= 0:
+            return
+        now = time.time()
+        self._tx_bytes_window.append((now, count))
+        cutoff = now - self._tx_window_sec
+        while self._tx_bytes_window and self._tx_bytes_window[0][0] < cutoff:
+            self._tx_bytes_window.popleft()
+        if not self._tx_bytes_window:
+            return
+        if (now - self._last_tx_emit_ts) < self._tx_emit_interval:
+            return
+        span = max(0.1, now - self._tx_bytes_window[0][0])
+        total = sum(b for _, b in self._tx_bytes_window)
+        bps = total / span
+        self._last_tx_emit_ts = now
+        self.ui_q.put(("throughput", bps))
+
 
 class GcodeText(ttk.Frame):
     def __init__(self, parent):
@@ -843,19 +940,7 @@ class GcodeText(ttk.Frame):
         self._insert_progress_cb = None
 
     def set_lines(self, lines: list[str]):
-        self._cancel_chunk_insert()
-        self.text.config(state="normal")
-        self.text.delete("1.0", "end")
-        for i, ln in enumerate(lines, start=1):
-            self.text.insert("end", f"{i:5d}  {ln}\n")
-        self.text.config(state="disabled")
-        self.lines_count = len(lines)
-        self._sent_upto = -1
-        self._acked_upto = -1
-
-        self.clear_highlights()
-        if self.lines_count:
-            self.highlight_current(0)
+        self._start_chunk_insert(lines, chunk_size=200)
 
     def set_lines_chunked(
         self,
@@ -864,20 +949,7 @@ class GcodeText(ttk.Frame):
         on_done=None,
         on_progress=None,
     ):
-        self._cancel_chunk_insert()
-        self.lines_count = len(lines)
-        self._insert_lines = lines
-        self._insert_index = 0
-        self._insert_chunk_size = max(50, int(chunk_size))
-        self._insert_done_cb = on_done
-        self._insert_progress_cb = on_progress
-        self._sent_upto = -1
-        self._acked_upto = -1
-        self.text.config(state="normal")
-        self.text.delete("1.0", "end")
-        if callable(self._insert_progress_cb):
-            self._insert_progress_cb(0, self.lines_count)
-        self._insert_next_chunk()
+        self._start_chunk_insert(lines, chunk_size=chunk_size, on_done=on_done, on_progress=on_progress)
 
     def _cancel_chunk_insert(self):
         if self._insert_after_id is not None:
@@ -918,6 +990,28 @@ class GcodeText(ttk.Frame):
                 cb()
             return
         self._insert_after_id = self.after(1, self._insert_next_chunk)
+
+    def _start_chunk_insert(
+        self,
+        lines: list[str],
+        chunk_size: int = 200,
+        on_done=None,
+        on_progress=None,
+    ):
+        self._cancel_chunk_insert()
+        self.lines_count = len(lines)
+        self._insert_lines = lines
+        self._insert_index = 0
+        self._insert_chunk_size = max(20, int(chunk_size))
+        self._insert_done_cb = on_done
+        self._insert_progress_cb = on_progress
+        self._sent_upto = -1
+        self._acked_upto = -1
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        if callable(on_progress):
+            on_progress(0, self.lines_count)
+        self._insert_next_chunk()
 
     def _line_range(self, idx: int) -> tuple[str, str]:
         # idx is 0-based gcode index; text lines are 1-based
@@ -1077,6 +1171,9 @@ class Toolpath3D(ttk.Frame):
         self._lightweight_mode = False
         self._lightweight_preview_target = 400
         self._job_name = ""
+        self._cached_projection_state = None
+        self._cached_projection = None
+        self._cached_projection_metrics = None
 
     def _legend_label(self, parent, color, text, var):
         swatch = tk.Label(parent, width=2, background=color)
@@ -1084,10 +1181,74 @@ class Toolpath3D(ttk.Frame):
         chk = ttk.Checkbutton(parent, text=text, variable=var, command=self._schedule_render)
         chk.pack(side="left", padx=(0, 10))
 
+    def _invalidate_render_cache(self):
+        self._cached_projection_state = None
+        self._cached_projection = None
+        self._cached_projection_metrics = None
+
+    def _build_projection_cache(self, filters: tuple[bool, bool, bool], max_draw: int | None):
+        segments = self.segments
+        total_segments = len(segments)
+        draw_segments = segments
+        if max_draw and total_segments > max_draw:
+            step = max(2, total_segments // max_draw)
+            draw_segments = segments[::step]
+        proj: list[tuple[float, float, float, float, str]] = []
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        drawn = 0
+        for x1, y1, z1, x2, y2, z2, color in draw_segments:
+            if color == "rapid" and not filters[0]:
+                continue
+            if color == "feed" and not filters[1]:
+                continue
+            if color == "arc" and not filters[2]:
+                continue
+            px1, py1 = self._project(x1, y1, z1)
+            px2, py2 = self._project(x2, y2, z2)
+            minx = min(minx, px1, px2)
+            miny = min(miny, py1, py2)
+            maxx = max(maxx, px1, px2)
+            maxy = max(maxy, py1, py2)
+            proj.append((px1, py1, px2, py2, color))
+            drawn += 1
+        bounds = None
+        if proj and (minx < float("inf")):
+            bounds = (minx, maxx, miny, maxy)
+        return proj, bounds, drawn, total_segments
+
+    def set_display_options(
+        self,
+        rapid: bool | None = None,
+        feed: bool | None = None,
+        arc: bool | None = None,
+    ):
+        changed = False
+        if rapid is not None:
+            self.show_rapid.set(bool(rapid))
+            changed = True
+        if feed is not None:
+            self.show_feed.set(bool(feed))
+            changed = True
+        if arc is not None:
+            self.show_arc.set(bool(arc))
+            changed = True
+        if changed:
+            self._schedule_render()
+            self._invalidate_render_cache()
+
+    def get_display_options(self) -> tuple[bool, bool, bool]:
+        return (
+            bool(self.show_rapid.get()),
+            bool(self.show_feed.get()),
+            bool(self.show_arc.get()),
+        )
+
     def set_gcode(self, lines: list[str]):
         segs, bnds = self._parse_gcode(lines)
         if segs is not None:
             self.segments, self.bounds = segs, bnds
+            self._invalidate_render_cache()
         self._schedule_render()
 
     def set_gcode_async(self, lines: list[str]):
@@ -1169,6 +1330,7 @@ class Toolpath3D(ttk.Frame):
         self._cache_parse_results(parse_hash, segments, bounds)
         self.segments = segments
         self.bounds = bounds
+        self._invalidate_render_cache()
         self._schedule_render()
 
     def set_enabled(self, enabled: bool):
@@ -1328,6 +1490,7 @@ class Toolpath3D(ttk.Frame):
                 self._interactive_max_draw_segments = None
             else:
                 self._interactive_max_draw_segments = int(interactive_limit)
+        self._invalidate_render_cache()
         self._schedule_render()
 
     def set_arc_detail_override(self, step_rad: float | None):
@@ -1808,6 +1971,7 @@ class App(tk.Tk):
 
         self.tooltip_enabled = tk.BooleanVar(value=self.settings.get("tooltips_enabled", True))
         self.gui_logging_enabled = tk.BooleanVar(value=self.settings.get("gui_logging_enabled", True))
+        self.performance_mode = tk.BooleanVar(value=self.settings.get("performance_mode", False))
         self.render3d_enabled = tk.BooleanVar(value=self.settings.get("render3d_enabled", True))
         self.all_stop_mode = tk.StringVar(value=self.settings.get("all_stop_mode", "stop_reset"))
         self.training_wheels = tk.BooleanVar(value=self.settings.get("training_wheels", True))
@@ -1854,6 +2018,19 @@ class App(tk.Tk):
                 self._key_bindings[str(k)] = self._normalize_key_label(str(v))
         else:
             self._key_bindings = {}
+        self._machine_profiles = self._load_machine_profiles()
+        active_profile = self.settings.get("active_profile", "")
+        if active_profile and not self._get_profile_by_name(active_profile):
+            active_profile = ""
+        if not active_profile and self._machine_profiles:
+            active_profile = self._machine_profiles[0]["name"]
+        self.active_profile_name = tk.StringVar(value=active_profile)
+        self.profile_name_var = tk.StringVar()
+        self.profile_units_var = tk.StringVar(value="mm")
+        self.profile_rate_x_var = tk.StringVar()
+        self.profile_rate_y_var = tk.StringVar()
+        self.profile_rate_z_var = tk.StringVar()
+        self._apply_profile_to_vars(self._get_profile_by_name(active_profile))
         self._bound_key_sequences = set()
         self._key_sequence_map = {}
         self._kb_conflicts = set()
@@ -1865,6 +2042,10 @@ class App(tk.Tk):
         self._kb_edit = None
         self._console_lines: list[tuple[str, str | None]] = []
         self._console_filter = None
+        self._pending_console_entries: list[tuple[str, str | None]] = []
+        self._pending_console_trim = 0
+        self._console_after_id = None
+        self._console_render_pending = False
         self._closing = False
         self._connecting = False
         self._disconnecting = False
@@ -1876,7 +2057,7 @@ class App(tk.Tk):
             value=self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT)
         )
         self.grbl = GrblWorker(self.ui_q)
-        self.grbl.set_status_poll_interval(self.status_poll_interval.get())
+        self._apply_status_poll_profile()
 
         self.unit_mode = tk.StringVar(value=self.settings.get("unit_mode", "mm"))
         self.step_xy = tk.DoubleVar(value=self.settings.get("step_xy", 1.0))
@@ -1924,6 +2105,7 @@ class App(tk.Tk):
         self._status_seen = False
         self.progress_pct = tk.IntVar(value=0)
         self.buffer_fill = tk.StringVar(value="Buffer: 0%")
+        self.throughput_var = tk.StringVar(value="TX: 0 B/s")
         self.buffer_fill_pct = tk.IntVar(value=0)
         self._manual_controls = []
         self._override_controls = []
@@ -2059,6 +2241,8 @@ class App(tk.Tk):
         self._load_grbl_setting_info()
         self._bind_button_logging()
         self._apply_keyboard_bindings()
+        self._display_settings_load_error()
+        self._announce_serial_dependency()
 
     # ---------- UI ----------
     def _build_toolbar(self):
@@ -2111,10 +2295,28 @@ class App(tk.Tk):
         self.btn_stop.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_stop, "Stop the job and soft reset GRBL.")
         attach_log_gcode(self.btn_stop, "Ctrl-X")
+        self.btn_resume_from = ttk.Button(
+            bar,
+            text="Resume From...",
+            command=lambda: self._confirm_and_run("Resume from line", self._show_resume_dialog),
+            state="disabled",
+        )
+        set_kb_id(self.btn_resume_from, "job_resume_from")
+        self.btn_resume_from.pack(side="left", padx=(6, 0))
+        apply_tooltip(self.btn_resume_from, "Resume from a specific line with modal re-sync.")
         self.btn_unlock_top = ttk.Button(bar, text="Unlock", command=lambda: self._confirm_and_run("Unlock ($X)", self.grbl.unlock), state="disabled")
         set_kb_id(self.btn_unlock_top, "unlock_top")
         self.btn_unlock_top.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_unlock_top, "Send $X to clear alarm (top-bar).")
+        self.btn_alarm_recover = ttk.Button(
+            bar,
+            text="Recover",
+            command=self._show_alarm_recovery,
+            state="disabled",
+        )
+        set_kb_id(self.btn_alarm_recover, "alarm_recover")
+        self.btn_alarm_recover.pack(side="left", padx=(6, 0))
+        apply_tooltip(self.btn_alarm_recover, "Show alarm recovery steps.")
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -2142,6 +2344,8 @@ class App(tk.Tk):
         # right side status
         self.machine_state_label = ttk.Label(bar, textvariable=self.machine_state)
         self.machine_state_label.pack(side="right")
+
+        self._set_serial_dependency_state(serial is not None)
 
     def _build_main(self):
         style = ttk.Style()
@@ -2842,6 +3046,81 @@ class App(tk.Tk):
         self.reconnect_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
         apply_tooltip(self.reconnect_check, "Auto-connect to the last used port when the app starts.")
 
+        profile_frame = ttk.LabelFrame(self._app_settings_inner, text="Machine profile", padding=8)
+        profile_frame.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        profile_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(profile_frame, text="Active profile").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.profile_combo = ttk.Combobox(
+            profile_frame,
+            textvariable=self.active_profile_name,
+            state="readonly",
+            values=[p.get("name", "") for p in self._machine_profiles],
+            width=28,
+        )
+        self.profile_combo.grid(row=0, column=1, sticky="w", pady=4)
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_select)
+        self.btn_profile_new = ttk.Button(profile_frame, text="New", command=self._new_profile)
+        self.btn_profile_new.grid(row=0, column=2, sticky="w", padx=(8, 0), pady=4)
+        self.btn_profile_save = ttk.Button(profile_frame, text="Save", command=self._save_profile)
+        self.btn_profile_save.grid(row=0, column=3, sticky="w", padx=(6, 0), pady=4)
+        self.btn_profile_delete = ttk.Button(profile_frame, text="Delete", command=self._delete_profile)
+        self.btn_profile_delete.grid(row=0, column=4, sticky="w", padx=(6, 0), pady=4)
+        ttk.Label(profile_frame, text="Name").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.profile_name_entry = ttk.Entry(profile_frame, textvariable=self.profile_name_var, width=24)
+        self.profile_name_entry.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(profile_frame, text="Units").grid(
+            row=1, column=2, sticky="w", padx=(8, 0), pady=4
+        )
+        self.profile_units_combo = ttk.Combobox(
+            profile_frame,
+            textvariable=self.profile_units_var,
+            state="readonly",
+            values=("mm", "inch"),
+            width=8,
+        )
+        self.profile_units_combo.grid(row=1, column=3, sticky="w", pady=4)
+        self.profile_units_combo.bind("<<ComboboxSelected>>", self._on_profile_units_change)
+        ttk.Label(profile_frame, text="Max rates (X/Y/Z)").grid(
+            row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        rates_frame = ttk.Frame(profile_frame)
+        rates_frame.grid(row=2, column=1, columnspan=3, sticky="w", pady=4)
+        ttk.Label(rates_frame, text="X").pack(side="left")
+        self.profile_rate_x_entry = ttk.Entry(rates_frame, textvariable=self.profile_rate_x_var, width=8)
+        self.profile_rate_x_entry.pack(side="left", padx=(4, 8))
+        ttk.Label(rates_frame, text="Y").pack(side="left")
+        self.profile_rate_y_entry = ttk.Entry(rates_frame, textvariable=self.profile_rate_y_var, width=8)
+        self.profile_rate_y_entry.pack(side="left", padx=(4, 8))
+        ttk.Label(rates_frame, text="Z").pack(side="left")
+        self.profile_rate_z_entry = ttk.Entry(rates_frame, textvariable=self.profile_rate_z_var, width=8)
+        self.profile_rate_z_entry.pack(side="left", padx=(4, 8))
+        self.profile_rate_units = ttk.Label(rates_frame, text="mm/min")
+        self.profile_rate_units.pack(side="left", padx=(8, 0))
+        apply_tooltip(
+            self.profile_combo,
+            "Select a machine profile for units and max rates used in time estimates.",
+        )
+        apply_tooltip(
+            self.profile_rate_x_entry,
+            "Set machine max rate for X (used in time estimates).",
+        )
+        apply_tooltip(
+            self.profile_rate_y_entry,
+            "Set machine max rate for Y (used in time estimates).",
+        )
+        apply_tooltip(
+            self.profile_rate_z_entry,
+            "Set machine max rate for Z (used in time estimates).",
+        )
+        self._refresh_profile_combo()
+        if self.active_profile_name.get():
+            self.profile_combo.set(self.active_profile_name.get())
+            self._on_profile_select()
+
         # 3D tab
         ttab = ttk.Frame(nb, padding=6)
         nb.add(ttab, text="3D View")
@@ -2851,6 +3130,11 @@ class App(tk.Tk):
             on_load_view=self._load_3d_view,
         )
         self.toolpath_view.pack(fill="both", expand=True)
+        self.toolpath_view.set_display_options(
+            rapid=bool(self.settings.get("toolpath_show_rapid", False)),
+            feed=bool(self.settings.get("toolpath_show_feed", True)),
+            arc=bool(self.settings.get("toolpath_show_arc", False)),
+        )
         self.toolpath_view.set_enabled(bool(self.render3d_enabled.get()))
         self.toolpath_view.set_lightweight_mode(bool(self.toolpath_lightweight.get()))
         self._load_3d_view(show_status=False)
@@ -2882,6 +3166,8 @@ class App(tk.Tk):
             variable=self.buffer_fill_pct,
         )
         self.buffer_bar.pack(side="right", padx=(6, 0))
+        self.throughput_label = ttk.Label(status_bar, textvariable=self.throughput_var, anchor="e")
+        self.throughput_label.pack(side="right", padx=(6, 0))
         ttk.Label(status_bar, textvariable=self.buffer_fill, anchor="e").pack(side="right")
         self._build_led_panel(status_bar)
         self.btn_toggle_tips = ttk.Button(
@@ -2905,6 +3191,17 @@ class App(tk.Tk):
             text="Logging: On" if self.gui_logging_enabled.get() else "Logging: Off"
         )
         apply_tooltip(self.btn_toggle_logging, "Toggle GUI button logging in the console.")
+        self.btn_toggle_performance = ttk.Button(
+            status_bar,
+            text="Performance: Off",
+            command=self._toggle_performance,
+        )
+        set_kb_id(self.btn_toggle_performance, "toggle_performance")
+        self.btn_toggle_performance.pack(side="right", padx=(8, 0))
+        self.btn_toggle_performance.config(
+            text="Performance: On" if self.performance_mode.get() else "Performance: Off"
+        )
+        apply_tooltip(self.btn_toggle_performance, "Enable performance mode (batch console updates).")
         self.btn_toggle_3d = ttk.Button(
             status_bar,
             text="3D Render: On",
@@ -3045,6 +3342,8 @@ class App(tk.Tk):
         )
         if SERIAL_IMPORT_ERROR:
             msg += f"\n{SERIAL_IMPORT_ERROR}"
+        self._set_serial_dependency_state(False)
+        self._announce_serial_dependency()
         messagebox.showerror("Missing dependency", msg)
         return False
 
@@ -3074,6 +3373,227 @@ class App(tk.Tk):
     def stop_job(self):
         self.grbl.stop_stream()
 
+    def _show_resume_dialog(self):
+        if self.grbl.is_streaming():
+            messagebox.showwarning("Busy", "Stop the stream before resuming from a line.")
+            return
+        if not self.connected or not self._grbl_ready:
+            messagebox.showwarning("Not ready", "Connect to GRBL before resuming.")
+            return
+        if self._alarm_locked:
+            messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
+            return
+        if not self._last_gcode_lines:
+            messagebox.showwarning("No G-code", "Load a G-code file first.")
+            return
+        total_lines = len(self._last_gcode_lines)
+        default_line = 1
+        if self._last_acked_index >= 0:
+            default_line = min(total_lines, self._last_acked_index + 2)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Resume from line")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Line number (1-{total_lines})").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        line_var = tk.StringVar(value=str(default_line))
+        line_entry = ttk.Entry(frm, textvariable=line_var, width=10)
+        line_entry.grid(row=0, column=1, sticky="w", pady=4)
+
+        def use_last_acked():
+            if self._last_acked_index >= 0:
+                line_var.set(str(min(total_lines, self._last_acked_index + 2)))
+                update_preview()
+
+        ttk.Button(frm, text="Use last acked", command=use_last_acked).grid(
+            row=0, column=2, sticky="w", padx=(8, 0), pady=4
+        )
+        sync_var = tk.BooleanVar(value=True)
+        sync_chk = ttk.Checkbutton(frm, text="Send modal re-sync before resuming", variable=sync_var)
+        sync_chk.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
+        preview_var = tk.StringVar(value="")
+        warning_var = tk.StringVar(value="")
+        preview_lbl = ttk.Label(frm, textvariable=preview_var, wraplength=460, justify="left")
+        preview_lbl.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 2))
+        warning_lbl = ttk.Label(frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left")
+        warning_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
+
+        def update_preview():
+            try:
+                line_no = int(line_var.get())
+            except Exception:
+                preview_var.set("Enter a valid line number.")
+                warning_var.set("")
+                return
+            if line_no < 1 or line_no > total_lines:
+                preview_var.set("Line number is out of range.")
+                warning_var.set("")
+                return
+            preamble, has_g92 = self._build_resume_preamble(self._last_gcode_lines, line_no - 1)
+            if sync_var.get():
+                if preamble:
+                    preview_var.set("Modal re-sync: " + " ".join(preamble))
+                else:
+                    preview_var.set("Modal re-sync: (none)")
+            else:
+                preview_var.set("Modal re-sync: disabled")
+            if has_g92:
+                warning_var.set(
+                    "Warning: G92 offsets appear before this line. Confirm work zero before resuming."
+                )
+            else:
+                warning_var.set("")
+
+        def on_start():
+            try:
+                line_no = int(line_var.get())
+            except Exception:
+                messagebox.showwarning("Resume", "Enter a valid line number.")
+                return
+            if line_no < 1 or line_no > total_lines:
+                messagebox.showwarning("Resume", "Line number is out of range.")
+                return
+            preamble = []
+            if sync_var.get():
+                preamble, _ = self._build_resume_preamble(self._last_gcode_lines, line_no - 1)
+            self._resume_from_line(line_no - 1, preamble)
+            dlg.destroy()
+
+        update_preview()
+        line_entry.bind("<KeyRelease>", lambda _evt: update_preview())
+        sync_chk.config(command=update_preview)
+
+        btn_row = ttk.Frame(frm)
+        btn_row.grid(row=4, column=0, columnspan=3, sticky="w")
+        ttk.Button(btn_row, text="Start Resume", command=on_start).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="left")
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+
+    def _build_resume_preamble(self, lines: list[str], stop_index: int) -> tuple[list[str], bool]:
+        units = None
+        distance = None
+        plane = None
+        feed_mode = None
+        arc_mode = None
+        coord = None
+        spindle = None
+        coolant = None
+        feed = None
+        spindle_speed = None
+        has_g92 = False
+
+        def is_code(code: float, target: float) -> bool:
+            return abs(code - target) < 1e-3
+
+        for raw in lines[: max(0, stop_index)]:
+            s = clean_gcode_line(raw)
+            if not s:
+                continue
+            s = s.upper()
+            for w, val in RESUME_WORD_PAT.findall(s):
+                if w == "G":
+                    try:
+                        code = float(val)
+                    except Exception:
+                        continue
+                    if is_code(code, 92) or is_code(code, 92.1) or is_code(code, 92.2) or is_code(code, 92.3):
+                        has_g92 = True
+                        continue
+                    gstr = f"G{val}"
+                    if is_code(code, 20) or is_code(code, 21):
+                        units = gstr
+                    elif is_code(code, 90) or is_code(code, 91):
+                        distance = gstr
+                    elif is_code(code, 17) or is_code(code, 18) or is_code(code, 19):
+                        plane = gstr
+                    elif is_code(code, 93) or is_code(code, 94):
+                        feed_mode = gstr
+                    elif is_code(code, 90.1) or is_code(code, 91.1):
+                        arc_mode = gstr
+                    elif (
+                        is_code(code, 54)
+                        or is_code(code, 55)
+                        or is_code(code, 56)
+                        or is_code(code, 57)
+                        or is_code(code, 58)
+                        or is_code(code, 59)
+                        or is_code(code, 59.1)
+                        or is_code(code, 59.2)
+                        or is_code(code, 59.3)
+                    ):
+                        coord = gstr
+                elif w == "M":
+                    try:
+                        code = int(float(val))
+                    except Exception:
+                        continue
+                    if code in (3, 4, 5):
+                        spindle = code
+                    elif code in (7, 8, 9):
+                        coolant = code
+                elif w == "F":
+                    try:
+                        feed = float(val)
+                    except Exception:
+                        pass
+                elif w == "S":
+                    try:
+                        spindle_speed = float(val)
+                    except Exception:
+                        pass
+
+        preamble = []
+        for item in (units, distance, plane, arc_mode, feed_mode, coord):
+            if item:
+                preamble.append(item)
+        if feed is not None:
+            preamble.append(f"F{feed:g}")
+        if spindle is not None:
+            if spindle in (3, 4):
+                if spindle_speed is not None:
+                    preamble.append(f"M{spindle} S{spindle_speed:g}")
+                else:
+                    preamble.append(f"M{spindle}")
+            else:
+                preamble.append("M5")
+        if coolant is not None:
+            preamble.append(f"M{coolant}")
+        return preamble, has_g92
+
+    def _resume_from_line(self, start_index: int, preamble: list[str]):
+        if self.grbl.is_streaming():
+            messagebox.showwarning("Busy", "Stop the stream before resuming.")
+            return
+        if not self.connected or not self._grbl_ready:
+            messagebox.showwarning("Not ready", "Connect to GRBL before resuming.")
+            return
+        if self._alarm_locked:
+            messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
+            return
+        if not self._last_gcode_lines:
+            messagebox.showwarning("No G-code", "Load a G-code file first.")
+            return
+        if start_index < 0 or start_index >= len(self._last_gcode_lines):
+            messagebox.showwarning("Resume", "Line number is out of range.")
+            return
+        self._clear_pending_ui_updates()
+        self.gview.clear_highlights()
+        self._last_sent_index = start_index - 1
+        self._last_acked_index = start_index - 1
+        if start_index > 0:
+            self.gview.mark_acked_upto(start_index - 1)
+        self.gview.highlight_current(start_index)
+        if len(self._last_gcode_lines) > 0:
+            pct = int(round((start_index / len(self._last_gcode_lines)) * 100))
+            self.progress_pct.set(pct)
+        self.status.config(text=f"Resuming at line {start_index + 1}")
+        self.grbl.start_stream_from(start_index, preamble)
+
     def _reset_gcode_view_for_run(self):
         if not hasattr(self, "gview") or self.gview.lines_count <= 0:
             return
@@ -3097,6 +3617,7 @@ class App(tk.Tk):
         self.btn_run.config(state="disabled")
         self.btn_pause.config(state="disabled")
         self.btn_resume.config(state="disabled")
+        self.btn_resume_from.config(state="disabled")
         self.gcode_stats_var.set("Loading...")
         self.status.config(text=f"Loading: {os.path.basename(path)}")
         self._set_gcode_loading_indeterminate(f"Reading {os.path.basename(path)}")
@@ -3152,8 +3673,10 @@ class App(tk.Tk):
                 and not self._alarm_locked
             ):
                 self.btn_run.config(state="normal")
+                self.btn_resume_from.config(state="normal")
             else:
                 self.btn_run.config(state="disabled")
+                self.btn_resume_from.config(state="disabled")
 
         def on_progress(done, total):
             self._set_gcode_loading_progress(done, total, os.path.basename(path))
@@ -3181,6 +3704,7 @@ class App(tk.Tk):
         self.btn_run.config(state="disabled")
         self.btn_pause.config(state="disabled")
         self.btn_resume.config(state="disabled")
+        self.btn_resume_from.config(state="disabled")
         if hasattr(self, "toolpath_view"):
             self.toolpath_view.set_gcode_async([])
             self.toolpath_view.set_job_name("")
@@ -3229,6 +3753,15 @@ class App(tk.Tk):
         hours = total_minutes // 60
         minutes = total_minutes % 60
         return f"Hours:{hours:02d} Minutes:{minutes:02d}"
+
+    def _format_throughput(self, bps: float) -> str:
+        if bps <= 0:
+            return "TX: 0 B/s"
+        if bps < 1024:
+            return f"TX: {bps:.0f} B/s"
+        if bps < 1024 * 1024:
+            return f"TX: {bps / 1024.0:.1f} KB/s"
+        return f"TX: {bps / (1024.0 * 1024.0):.2f} MB/s"
 
     def _estimate_factor_value(self) -> float:
         try:
@@ -3287,6 +3820,8 @@ class App(tk.Tk):
             total_txt = self._format_duration(seconds)
             if rate_source == "fallback":
                 total_txt = f"{total_txt} (fallback)"
+            elif rate_source == "profile":
+                total_txt = f"{total_txt} (profile)"
         live_txt = ""
         if self._live_estimate_min is not None:
             live_seconds = int(round(self._live_estimate_min * factor * 60))
@@ -3326,6 +3861,9 @@ class App(tk.Tk):
     def _get_rapid_rates_for_estimate(self):
         if self._rapid_rates:
             return self._rapid_rates, "grbl"
+        profile_rates = self._get_profile_rapid_rates()
+        if profile_rates:
+            return profile_rates, "profile"
         fallback = self._get_fallback_rapid_rate()
         if fallback:
             return (fallback, fallback, fallback), "fallback"
@@ -4042,6 +4580,34 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _set_serial_dependency_state(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        try:
+            self.btn_conn.config(state=state)
+        except Exception:
+            pass
+        try:
+            self.btn_refresh.config(state=state)
+        except Exception:
+            pass
+        try:
+            self.port_combo.config(state="readonly" if enabled else "disabled")
+        except Exception:
+            pass
+
+    def _announce_serial_dependency(self):
+        if serial is not None:
+            return
+        msg = "Missing pyserial: install via 'pip install pyserial' to enable serial controls."
+        try:
+            self.status.config(text=msg)
+        except Exception:
+            pass
+        try:
+            self._log(f"[startup] {msg}")
+        except Exception:
+            pass
+
     def _format_alarm_message(self, message: str | None) -> str:
         if not message:
             return "ALARM"
@@ -4062,6 +4628,14 @@ class App(tk.Tk):
             self.btn_run.config(state="disabled")
             self.btn_pause.config(state="disabled")
             self.btn_resume.config(state="disabled")
+            try:
+                self.btn_resume_from.config(state="disabled")
+            except Exception:
+                pass
+            try:
+                self.btn_alarm_recover.config(state="normal")
+            except Exception:
+                pass
             self._set_manual_controls_enabled(True)
             try:
                 self.status.config(text=self._format_alarm_message(message or self._alarm_message))
@@ -4076,6 +4650,10 @@ class App(tk.Tk):
             return
         self._alarm_locked = False
         self._alarm_message = ""
+        try:
+            self.btn_alarm_recover.config(state="disabled")
+        except Exception:
+            pass
         if (
             self.connected
             and self._grbl_ready
@@ -4085,6 +4663,7 @@ class App(tk.Tk):
             self._set_manual_controls_enabled(True)
             if self.gview.lines_count:
                 self.btn_run.config(state="normal")
+                self.btn_resume_from.config(state="normal")
         status_text = ""
         try:
             status_text = self.status.cget("text")
@@ -4097,6 +4676,52 @@ class App(tk.Tk):
             self._request_settings_dump()
         self.machine_state.set(self._machine_state_text)
         self._update_state_highlight(self._machine_state_text)
+        self._apply_status_poll_profile()
+
+    def _show_alarm_recovery(self):
+        if not self._alarm_locked:
+            messagebox.showinfo("Alarm recovery", "No active alarm.")
+            return
+        msg = self._format_alarm_message(self._alarm_message)
+        dlg = tk.Toplevel(self)
+        dlg.title("Alarm recovery")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=msg, wraplength=460, justify="left").pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            frm,
+            text="Suggested steps: Unlock ($X) to clear the alarm, then Home ($H) if required. "
+            "If motion feels unsafe, use Reset (Ctrl-X).",
+            wraplength=460,
+            justify="left",
+        ).pack(fill="x", pady=(0, 10))
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(fill="x")
+
+        def run_and_close(action):
+            try:
+                action()
+            except Exception:
+                pass
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+
+        ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(self.grbl.unlock)).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(btn_row, text="Home ($H)", command=lambda: run_and_close(self.grbl.home)).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(btn_row, text="Reset", command=lambda: run_and_close(self.grbl.reset)).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(btn_row, text="Close", command=dlg.destroy).pack(side="left")
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
 
     def _sync_all_stop_mode_combo(self):
         mode = self.all_stop_mode.get()
@@ -4698,7 +5323,243 @@ class App(tk.Tk):
         if val < 0.05:
             val = 0.05
         self.status_poll_interval.set(val)
-        self.grbl.set_status_poll_interval(val)
+        self._apply_status_poll_profile()
+
+    def _effective_status_poll_interval(self) -> float:
+        try:
+            base = float(self.status_poll_interval.get())
+        except Exception:
+            base = STATUS_POLL_DEFAULT
+        if base <= 0:
+            base = STATUS_POLL_DEFAULT
+        if not bool(self.performance_mode.get()):
+            return base
+        stream_state = getattr(self, "_stream_state", None)
+        alarm_locked = getattr(self, "_alarm_locked", False)
+        is_connected = getattr(self, "connected", False)
+        if stream_state == "running":
+            return max(base, 0.25)
+        if stream_state == "paused":
+            return max(base, 0.3)
+        if alarm_locked:
+            return max(base, 0.5)
+        if is_connected:
+            return max(base * 2.0, 0.5)
+        return base
+
+    def _apply_status_poll_profile(self):
+        interval = self._effective_status_poll_interval()
+        self.grbl.set_status_poll_interval(interval)
+
+    def _load_machine_profiles(self) -> list[dict]:
+        raw = self.settings.get("machine_profiles", [])
+        profiles: list[dict] = []
+        if not isinstance(raw, list):
+            return profiles
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            units = str(item.get("units", "mm")).lower()
+            units = "inch" if units.startswith("in") else "mm"
+            rates = item.get("max_rates", {})
+            if not isinstance(rates, dict):
+                rates = {}
+            def to_float(value):
+                try:
+                    return float(value)
+                except Exception:
+                    return None
+            rx = to_float(rates.get("x"))
+            ry = to_float(rates.get("y"))
+            rz = to_float(rates.get("z"))
+            profiles.append(
+                {
+                    "name": name,
+                    "units": units,
+                    "max_rates": {"x": rx, "y": ry, "z": rz},
+                }
+            )
+        return profiles
+
+    def _get_profile_by_name(self, name: str):
+        if not name:
+            return None
+        name = str(name).strip()
+        for profile in self._machine_profiles:
+            if profile.get("name") == name:
+                return profile
+        return None
+
+    def _profile_units_scale(self, units: str) -> float:
+        return 25.4 if str(units).lower().startswith("in") else 1.0
+
+    def _get_profile_rapid_rates(self):
+        profile = self._get_profile_by_name(self.active_profile_name.get())
+        if not profile:
+            return None
+        rates = profile.get("max_rates", {})
+        try:
+            rx = float(rates.get("x"))
+            ry = float(rates.get("y"))
+            rz = float(rates.get("z"))
+        except Exception:
+            return None
+        if rx <= 0 or ry <= 0 or rz <= 0:
+            return None
+        scale = self._profile_units_scale(profile.get("units", "mm"))
+        return (rx * scale, ry * scale, rz * scale)
+
+    def _refresh_profile_combo(self):
+        names = [p.get("name", "") for p in self._machine_profiles]
+        if hasattr(self, "profile_combo"):
+            self.profile_combo["values"] = names
+        current = self.active_profile_name.get()
+        if current not in names:
+            if names:
+                self.active_profile_name.set(names[0])
+            else:
+                self.active_profile_name.set("")
+
+    def _apply_profile_to_vars(self, profile: dict | None):
+        if not profile:
+            self.profile_name_var.set("")
+            self.profile_units_var.set("mm")
+            self.profile_rate_x_var.set("")
+            self.profile_rate_y_var.set("")
+            self.profile_rate_z_var.set("")
+            if hasattr(self, "profile_rate_units"):
+                self.profile_rate_units.config(text="mm/min")
+            return
+        self.profile_name_var.set(profile.get("name", ""))
+        units = profile.get("units", "mm")
+        self.profile_units_var.set(units)
+        rates = profile.get("max_rates", {})
+        self.profile_rate_x_var.set("" if rates.get("x") is None else str(rates.get("x")))
+        self.profile_rate_y_var.set("" if rates.get("y") is None else str(rates.get("y")))
+        self.profile_rate_z_var.set("" if rates.get("z") is None else str(rates.get("z")))
+        self._update_profile_units_label()
+
+    def _update_profile_units_label(self):
+        units = str(self.profile_units_var.get()).lower()
+        label = "in/min" if units.startswith("in") else "mm/min"
+        if hasattr(self, "profile_rate_units"):
+            try:
+                self.profile_rate_units.config(text=label)
+            except Exception:
+                pass
+
+    def _on_profile_units_change(self, _event=None):
+        self._update_profile_units_label()
+
+    def _apply_profile_units(self, profile: dict | None):
+        if not profile:
+            return
+        units = profile.get("units", "mm")
+        if units not in ("mm", "inch"):
+            units = "mm"
+        self._set_unit_mode(units)
+
+    def _on_profile_select(self, _event=None):
+        name = self.active_profile_name.get()
+        profile = self._get_profile_by_name(name)
+        if not profile:
+            return
+        self._apply_profile_to_vars(profile)
+        self._apply_profile_units(profile)
+        if self._last_gcode_lines:
+            self._update_gcode_stats(self._last_gcode_lines)
+
+    def _new_profile(self):
+        try:
+            self.profile_combo.set("")
+        except Exception:
+            pass
+        self.active_profile_name.set("")
+        self.profile_name_var.set("")
+        self.profile_units_var.set(self.unit_mode.get())
+        rates = None
+        if self._rapid_rates:
+            scale = self._profile_units_scale(self.unit_mode.get())
+            rates = (
+                self._rapid_rates[0] / scale,
+                self._rapid_rates[1] / scale,
+                self._rapid_rates[2] / scale,
+            )
+        if rates:
+            self.profile_rate_x_var.set(f"{rates[0]:.3f}")
+            self.profile_rate_y_var.set(f"{rates[1]:.3f}")
+            self.profile_rate_z_var.set(f"{rates[2]:.3f}")
+        else:
+            self.profile_rate_x_var.set("")
+            self.profile_rate_y_var.set("")
+            self.profile_rate_z_var.set("")
+        self._update_profile_units_label()
+
+    def _save_profile(self):
+        name = self.profile_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Profile", "Enter a profile name.")
+            return
+        units = str(self.profile_units_var.get()).lower()
+        units = "inch" if units.startswith("in") else "mm"
+
+        def parse_rate(var, label):
+            raw = var.get().strip()
+            if not raw:
+                raise ValueError(f"Missing {label} rate.")
+            value = float(raw)
+            if value <= 0:
+                raise ValueError(f"{label} rate must be positive.")
+            return value
+
+        try:
+            rx = parse_rate(self.profile_rate_x_var, "X")
+            ry = parse_rate(self.profile_rate_y_var, "Y")
+            rz = parse_rate(self.profile_rate_z_var, "Z")
+        except Exception as exc:
+            messagebox.showwarning("Profile", str(exc))
+            return
+
+        profile = {"name": name, "units": units, "max_rates": {"x": rx, "y": ry, "z": rz}}
+        found = False
+        for i, existing in enumerate(self._machine_profiles):
+            if existing.get("name") == name:
+                self._machine_profiles[i] = profile
+                found = True
+                break
+        if not found:
+            self._machine_profiles.append(profile)
+        self.active_profile_name.set(name)
+        self._refresh_profile_combo()
+        try:
+            self.profile_combo.set(name)
+        except Exception:
+            pass
+        self._apply_profile_to_vars(profile)
+        self._apply_profile_units(profile)
+        if self._last_gcode_lines:
+            self._update_gcode_stats(self._last_gcode_lines)
+        self.status.config(text=f"Profile saved: {name}")
+
+    def _delete_profile(self):
+        name = self.active_profile_name.get().strip()
+        if not name:
+            messagebox.showwarning("Profile", "Select a profile to delete.")
+            return
+        if not messagebox.askyesno("Profile", f"Delete profile '{name}'?"):
+            return
+        self._machine_profiles = [p for p in self._machine_profiles if p.get("name") != name]
+        self._refresh_profile_combo()
+        profile = self._get_profile_by_name(self.active_profile_name.get())
+        self._apply_profile_to_vars(profile)
+        if profile:
+            self._apply_profile_units(profile)
+        if self._last_gcode_lines:
+            self._update_gcode_stats(self._last_gcode_lines)
+        self.status.config(text=f"Profile deleted: {name}")
 
     def _parse_macro_prompt(self, line: str):
         title = "Macro Pause"
@@ -4856,16 +5717,58 @@ class App(tk.Tk):
         if overflow > 0:
             self._console_lines = self._console_lines[overflow:]
             if self._console_filter is not None:
+                if bool(self.performance_mode.get()):
+                    self._queue_console_render()
+                    return
                 self._render_console()
                 return
-            self._trim_console_widget(overflow)
+            if bool(self.performance_mode.get()):
+                self._pending_console_trim += overflow
+            else:
+                self._trim_console_widget(overflow)
         if not self._console_filter_match(entry):
+            return
+        if bool(self.performance_mode.get()):
+            self._pending_console_entries.append(entry)
+            self._schedule_console_flush()
             return
         self.console.config(state="normal")
         if tag:
             self.console.insert("end", s + "\n", (tag,))
         else:
             self.console.insert("end", s + "\n")
+        self.console.see("end")
+        self.console.config(state="disabled")
+
+    def _queue_console_render(self):
+        self._console_render_pending = True
+        self._schedule_console_flush()
+
+    def _schedule_console_flush(self):
+        if self._console_after_id is not None:
+            return
+        self._console_after_id = self.after(self._ui_throttle_ms, self._flush_console_updates)
+
+    def _flush_console_updates(self):
+        self._console_after_id = None
+        if self._console_render_pending:
+            self._console_render_pending = False
+            self._pending_console_entries = []
+            self._pending_console_trim = 0
+            self._render_console()
+            return
+        if (not self._pending_console_entries) and (self._pending_console_trim <= 0):
+            return
+        self.console.config(state="normal")
+        if self._pending_console_trim > 0:
+            self._trim_console_widget_unlocked(self._pending_console_trim)
+            self._pending_console_trim = 0
+        for line, tag in self._pending_console_entries:
+            if tag:
+                self.console.insert("end", line + "\n", (tag,))
+            else:
+                self.console.insert("end", line + "\n")
+        self._pending_console_entries = []
         self.console.see("end")
         self.console.config(state="disabled")
 
@@ -4890,6 +5793,18 @@ class App(tk.Tk):
                 return False
         return True
 
+    def _should_suppress_rx_log(self, raw: str) -> bool:
+        if not bool(self.performance_mode.get()):
+            return False
+        if self._stream_state != "running":
+            return False
+        upper = raw.upper()
+        if ("ALARM" in upper) or ("ERROR" in upper):
+            return False
+        if "[MSG" in upper or "RESET TO CONTINUE" in upper:
+            return False
+        return True
+
     def _render_console(self):
         self.console.config(state="normal")
         self.console.delete("1.0", "end")
@@ -4912,8 +5827,19 @@ class App(tk.Tk):
             self.console.delete("1.0", "end")
         self.console.config(state="disabled")
 
+    def _trim_console_widget_unlocked(self, count: int):
+        if count <= 0:
+            return
+        try:
+            self.console.delete("1.0", f"{count + 1}.0")
+        except Exception:
+            self.console.delete("1.0", "end")
+
     def _set_console_filter(self, mode):
         self._console_filter = mode
+        self._pending_console_entries = []
+        self._pending_console_trim = 0
+        self._console_render_pending = False
         self._render_console()
 
     def _bind_button_logging(self):
@@ -5138,6 +6064,20 @@ class App(tk.Tk):
         self.gui_logging_enabled.set(new_val)
         self.btn_toggle_logging.config(text="Logging: On" if new_val else "Logging: Off")
 
+    def _toggle_performance(self):
+        current = bool(self.performance_mode.get())
+        new_val = not current
+        self.performance_mode.set(new_val)
+        try:
+            self.btn_toggle_performance.config(
+                text="Performance: On" if new_val else "Performance: Off"
+            )
+        except Exception:
+            pass
+        if not new_val:
+            self._flush_console_updates()
+        self._apply_status_poll_profile()
+
     def _toggle_console_positions(self):
         current = bool(self.console_positions_enabled.get())
         new_val = not current
@@ -5320,7 +6260,7 @@ class App(tk.Tk):
         self.buffer_fill_pct.set(pct)
 
     def _clear_pending_ui_updates(self):
-        for attr in ("_pending_marks_after_id", "_progress_after_id", "_buffer_after_id"):
+        for attr in ("_pending_marks_after_id", "_progress_after_id", "_buffer_after_id", "_console_after_id"):
             after_id = getattr(self, attr, None)
             if after_id is None:
                 continue
@@ -5333,6 +6273,19 @@ class App(tk.Tk):
         self._pending_acked_index = None
         self._pending_progress = None
         self._pending_buffer = None
+        self._pending_console_entries = []
+        self._pending_console_trim = 0
+        self._console_render_pending = False
+
+    def _is_ready_for_run(self) -> bool:
+        """Return True if GRBL is ready to accept a new stream."""
+        return (
+            self.connected
+            and self._grbl_ready
+            and self._status_seen
+            and not self._alarm_locked
+            and (self._stream_state not in ("running", "paused"))
+        )
 
     def _handle_evt(self, evt):
         kind = evt[0]
@@ -5363,7 +6316,10 @@ class App(tk.Tk):
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
+                self.btn_resume_from.config(state="disabled")
+                self.btn_alarm_recover.config(state="disabled")
                 self._set_manual_controls_enabled(False)
+                self.throughput_var.set("TX: 0 B/s")
             else:
                 self.btn_conn.config(text="Connect")
                 self._connected_port = None
@@ -5379,6 +6335,8 @@ class App(tk.Tk):
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
                 self.btn_stop.config(state="disabled")
+                self.btn_resume_from.config(state="disabled")
+                self.btn_alarm_recover.config(state="disabled")
                 self._set_manual_controls_enabled(True)
                 self._rapid_rates = None
                 self._rapid_rates_source = None
@@ -5391,6 +6349,8 @@ class App(tk.Tk):
                     self._auto_reconnect_delay = 3.0
                     self._auto_reconnect_next_ts = 0.0
                 self._user_disconnect = False
+                self.throughput_var.set("TX: 0 B/s")
+            self._apply_status_poll_profile()
 
         elif kind == "ui_call":
             func, args, kwargs, result_q = evt[1], evt[2], evt[3], evt[4]
@@ -5435,9 +6395,11 @@ class App(tk.Tk):
 
         elif kind == "log_rx":
             raw = evt[1]
+            self._handle_settings_line(evt[1])
+            if self._should_suppress_rx_log(raw):
+                return
             msg = f"<< {raw}"
             self._log(msg, self._console_tag_for_line(msg))
-            self._handle_settings_line(evt[1])
 
         elif kind == "ready":
             self._grbl_ready = bool(evt[1])
@@ -5449,18 +6411,22 @@ class App(tk.Tk):
                     self.btn_run.config(state="disabled")
                     self.btn_pause.config(state="disabled")
                     self.btn_resume.config(state="disabled")
+                    self.btn_resume_from.config(state="disabled")
                     self._set_manual_controls_enabled(False)
                     if self._connected_port:
                         self.status.config(text=f"Connected: {self._connected_port} (waiting for Grbl)")
+                self._apply_status_poll_profile()
                 return
             if self._alarm_locked:
                 return
             if self.connected and self._connected_port:
                 self.status.config(text=f"Connected: {self._connected_port}")
+            self._apply_status_poll_profile()
 
         elif kind == "alarm":
             msg = evt[1] if len(evt) > 1 else ""
             self._set_alarm_lock(True, msg)
+            self._apply_status_poll_profile()
 
         elif kind == "status":
             # Parse minimal fields: state + WPos if present
@@ -5516,16 +6482,11 @@ class App(tk.Tk):
             if self._grbl_ready and self._pending_settings_refresh and not self._alarm_locked:
                 self._pending_settings_refresh = False
                 self._request_settings_dump()
-            if (
-                self.connected
-                and self._grbl_ready
-                and self._status_seen
-                and not self._alarm_locked
-                and self._stream_state not in ("running", "paused")
-            ):
+            if self._is_ready_for_run():
                 self._set_manual_controls_enabled(True)
                 if self.gview.lines_count:
                     self.btn_run.config(state="normal")
+                    self.btn_resume_from.config(state="normal")
             with self._macro_vars_lock:
                 self._macro_vars["state"] = state
             def parse_xyz(text: str):
@@ -5631,6 +6592,10 @@ class App(tk.Tk):
             self._pending_buffer = (pct, used, window)
             self._schedule_buffer_flush()
 
+        elif kind == "throughput":
+            bps = evt[1] if len(evt) > 1 else 0.0
+            self.throughput_var.set(self._format_throughput(float(bps)))
+
         elif kind == "stream_state":
             st = evt[1]
             prev = self._stream_state
@@ -5647,6 +6612,7 @@ class App(tk.Tk):
                     self._stream_paused_at = None
                     self._live_estimate_min = None
                     self._refresh_gcode_stats_display()
+                    self.throughput_var.set("TX: 0 B/s")
             elif st == "paused":
                 if self._stream_paused_at is None:
                     self._stream_paused_at = now
@@ -5656,6 +6622,7 @@ class App(tk.Tk):
                 self._stream_paused_at = None
                 self._live_estimate_min = None
                 self._refresh_gcode_stats_display()
+                self.throughput_var.set("TX: 0 B/s")
             if st == "loaded":
                 self.progress_pct.set(0)
                 total = evt[2]
@@ -5671,8 +6638,10 @@ class App(tk.Tk):
                     and not self._alarm_locked
                 ):
                     self.btn_run.config(state="normal")
+                    self.btn_resume_from.config(state="normal")
                 else:
                     self.btn_run.config(state="disabled")
+                    self.btn_resume_from.config(state="disabled")
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
             elif st == "running":
@@ -5681,6 +6650,7 @@ class App(tk.Tk):
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="normal")
                 self.btn_resume.config(state="disabled")
+                self.btn_resume_from.config(state="disabled")
                 self._set_manual_controls_enabled(False)
                 self._set_streaming_lock(True)
             elif st == "paused":
@@ -5688,6 +6658,7 @@ class App(tk.Tk):
                     self._macro_vars["running"] = True
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="normal")
+                self.btn_resume_from.config(state="disabled")
                 self._set_manual_controls_enabled(False)
                 self._set_streaming_lock(True)
             elif st in ("done", "stopped"):
@@ -5710,6 +6681,17 @@ class App(tk.Tk):
                 )
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
+                self.btn_resume_from.config(
+                    state="normal"
+                    if (
+                        self.connected
+                        and self.gview.lines_count
+                        and self._grbl_ready
+                        and self._status_seen
+                        and not self._alarm_locked
+                    )
+                    else "disabled"
+                )
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
             elif st == "error":
@@ -5729,6 +6711,17 @@ class App(tk.Tk):
                 )
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
+                self.btn_resume_from.config(
+                    state="normal"
+                    if (
+                        self.connected
+                        and self.gview.lines_count
+                        and self._grbl_ready
+                        and self._status_seen
+                        and not self._alarm_locked
+                    )
+                    else "disabled"
+                )
                 self.status.config(text=f"Stream error: {evt[2]}")
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
@@ -5739,8 +6732,10 @@ class App(tk.Tk):
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
+                self.btn_resume_from.config(state="disabled")
                 self._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
                 self._set_streaming_lock(False)
+            self._apply_status_poll_profile()
 
         elif kind == "gcode_sent":
             idx = evt[1]
@@ -6284,14 +7279,35 @@ class App(tk.Tk):
         return True
 
     def _load_settings(self) -> dict:
+        self._settings_load_error_message = None
         try:
             with open(self.settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
+        except json.JSONDecodeError as exc:
+            self._settings_load_error_message = f"Invalid settings: {exc}"
+            corrupt_path = self.settings_path + ".corrupt"
+            try:
+                os.replace(self.settings_path, corrupt_path)
+            except Exception:
+                pass
+        except Exception as exc:
+            self._settings_load_error_message = f"Failed to load settings: {exc}"
+        return {}
+
+    def _display_settings_load_error(self):
+        message = getattr(self, "_settings_load_error_message", None)
+        if not message:
+            return
+        try:
+            self.status.config(text=message)
         except Exception:
             pass
-        return {}
+        try:
+            self._log(f"[settings] {message}")
+        except Exception:
+            pass
 
     def _save_settings(self):
         def safe_float(var, default, label):
@@ -6304,6 +7320,12 @@ class App(tk.Tk):
                     fallback = 0.0
                 self.ui_q.put(("log", f"[settings] Invalid {label}; using {fallback}."))
                 return fallback
+
+        show_rapid = False
+        show_feed = True
+        show_arc = False
+        if hasattr(self, "toolpath_view") and self.toolpath_view is not None:
+            show_rapid, show_feed, show_arc = self.toolpath_view.get_display_options()
 
         full_limit = self._toolpath_limit_value(
             self.toolpath_full_limit.get(), self._toolpath_full_limit_default
@@ -6333,6 +7355,7 @@ class App(tk.Tk):
             "window_geometry": self.geometry(),
             "tooltips_enabled": bool(self.tooltip_enabled.get()),
             "gui_logging_enabled": bool(self.gui_logging_enabled.get()),
+            "performance_mode": bool(self.performance_mode.get()),
             "render3d_enabled": bool(self.render3d_enabled.get()),
             "status_poll_interval": safe_float(
                 self.status_poll_interval,
@@ -6350,19 +7373,43 @@ class App(tk.Tk):
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
             "current_line_mode": self.current_line_mode.get(),
             "key_bindings": dict(self._key_bindings),
+            "machine_profiles": list(self._machine_profiles),
+            "active_profile": self.active_profile_name.get(),
             "toolpath_full_limit": full_limit,
             "toolpath_interactive_limit": interactive_limit,
             "toolpath_arc_detail_deg": arc_detail_deg,
             "toolpath_lightweight": bool(self.toolpath_lightweight.get()),
+            "toolpath_show_rapid": show_rapid,
+            "toolpath_show_feed": show_feed,
+            "toolpath_show_arc": show_arc,
         }
         self.settings = data
+        tmp_path = self.settings_path + ".tmp"
+        backup_path = self.settings_path + ".backup"
         try:
-            with open(self.settings_path, "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, sort_keys=True)
+            if os.path.exists(self.settings_path):
+                try:
+                    shutil.copy2(self.settings_path, backup_path)
+                except Exception:
+                    pass
+            os.replace(tmp_path, self.settings_path)
         except Exception as exc:
             try:
                 self.ui_q.put(("log", f"[settings] Save failed: {exc}"))
                 self.status.config(text="Settings save failed")
+            except Exception:
+                pass
+            try:
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, self.settings_path)
+            except Exception:
+                pass
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
             except Exception:
                 pass
 
