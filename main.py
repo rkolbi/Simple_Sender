@@ -2560,6 +2560,33 @@ class ToolTip:
         self.text = text
 
 
+def _resolve_widget_bg(widget):
+    if not widget:
+        return "#f0f0f0"
+    try:
+        bg = widget.cget("background")
+    except Exception:
+        bg = ""
+    if bg:
+        return bg
+        style = ttk.Style()
+        for target in ("TLabelframe", "TFrame", "TButton", "TLabel"):
+            try:
+                lookup = style.lookup(target, "background")
+            except tk.TclError:
+                continue
+            if lookup:
+                return lookup
+    try:
+        root = widget.winfo_toplevel()
+        bg = root.cget("background")
+        if bg:
+            return bg
+    except Exception:
+        pass
+    return "#f0f0f0"
+
+
 class StopSignButton(tk.Canvas):
     def __init__(
         self,
@@ -2575,6 +2602,8 @@ class StopSignButton(tk.Canvas):
         bg = kwargs.pop("bg", None)
         if bg is None:
             bg = kwargs.pop("background", None)
+        if not bg:
+            bg = _resolve_widget_bg(master)
         super().__init__(
             master,
             width=size,
@@ -2584,6 +2613,7 @@ class StopSignButton(tk.Canvas):
             bg=bg,
             **kwargs,
         )
+        self._default_bg = bg
         self._text = text
         self._fill = fill
         self._text_color = text_color
@@ -2611,6 +2641,14 @@ class StopSignButton(tk.Canvas):
         g = int(bg + (tg - bg) * factor)
         b = int(bb + (tb - bb) * factor)
         return f"#{r:02x}{g:02x}{b:02x}"
+
+    def refresh_background(self):
+        bg = _resolve_widget_bg(self.master)
+        self._default_bg = bg
+        try:
+            self.config(bg=bg)
+        except Exception:
+            pass
 
     def _draw_octagon(self):
         size = self._size
@@ -2748,6 +2786,11 @@ class App(tk.Tk):
         combined_console_enabled = pos_enabled or status_enabled
         self.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
         self.console_status_enabled = tk.BooleanVar(value=combined_console_enabled)
+        self.style = ttk.Style()
+        self.available_themes = list(self.style.theme_names())
+        theme_choice = self.settings.get("theme", self.style.theme_use())
+        self.selected_theme = tk.StringVar(value=theme_choice)
+        self._apply_theme(theme_choice)
         self.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{APP_VERSION}")
         self.show_resume_from_button = tk.BooleanVar(value=self.settings.get("show_resume_from_button", True))
         self.show_recover_button = tk.BooleanVar(value=self.settings.get("show_recover_button", True))
@@ -2864,6 +2907,7 @@ class App(tk.Tk):
         self.macro_panel = MacroPanel(self)
         self.toolpath_panel = ToolpathPanel(self)
         self.settings_controller = GRBLSettingsController(self)
+        self._install_dialog_loggers()
         self.report_callback_exception = self._tk_report_callback_exception
         self._apply_status_poll_profile()
 
@@ -3060,7 +3104,7 @@ class App(tk.Tk):
         self.machine_state_label.pack(side="right")
 
     def _build_main(self):
-        style = ttk.Style()
+        style = self.style
         hidden_style = self.HIDDEN_MPOS_BUTTON_STYLE
         bg_color = (
             self.cget("background")
@@ -3080,6 +3124,18 @@ class App(tk.Tk):
             hidden_style,
             background=[("active", bg_color), ("disabled", bg_color), ("!disabled", bg_color)],
             foreground=[("active", bg_color), ("disabled", bg_color), ("!disabled", bg_color)],
+        )
+        style.configure(
+            "SimpleSender.Blue.Horizontal.TProgressbar",
+            troughcolor="#e3f2fd",
+            background="#1976d2",
+            bordercolor="#90caf9",
+            lightcolor="#64b5f6",
+            darkcolor="#1565c0",
+        )
+        style.map(
+            "SimpleSender.Blue.Horizontal.TProgressbar",
+            background=[("disabled", "#90caf9"), ("!disabled", "#1976d2")],
         )
         body = ttk.Frame(self, padding=(8, 8))
         body.pack(side="top", fill="both", expand=True)
@@ -3424,8 +3480,26 @@ class App(tk.Tk):
         )
         version_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
+        theme_frame = ttk.LabelFrame(self._app_settings_inner, text="Theme", padding=8)
+        theme_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        theme_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(theme_frame, text="UI theme").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
+        self.theme_combo = ttk.Combobox(
+            theme_frame,
+            state="readonly",
+            values=self.available_themes,
+            textvariable=self.selected_theme,
+            width=28,
+        )
+        self.theme_combo.grid(row=0, column=1, sticky="w", pady=4)
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_change)
+        apply_tooltip(
+            self.theme_combo,
+            "Pick a ttk theme; some themes require a restart for best results.",
+        )
+
         safety = ttk.LabelFrame(self._app_settings_inner, text="Safety", padding=8)
-        safety.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        safety.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         safety.grid_columnconfigure(1, weight=1)
         ttk.Label(safety, text="All Stop behavior").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
         self.all_stop_combo = ttk.Combobox(
@@ -3447,7 +3521,7 @@ class App(tk.Tk):
         self.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         estimation = ttk.LabelFrame(self._app_settings_inner, text="Estimation", padding=8)
-        estimation.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        estimation.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         estimation.grid_columnconfigure(1, weight=1)
         ttk.Label(estimation, text="Fallback rapid rate (mm/min)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3480,7 +3554,7 @@ class App(tk.Tk):
         )
 
         status_frame = ttk.LabelFrame(self._app_settings_inner, text="Status polling", padding=8)
-        status_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        status_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         status_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(status_frame, text="Status report interval (seconds)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3512,7 +3586,7 @@ class App(tk.Tk):
         )
 
         dialog_frame = ttk.LabelFrame(self._app_settings_inner, text="Error dialogs", padding=8)
-        dialog_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        dialog_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         dialog_frame.grid_columnconfigure(1, weight=1)
         self.error_dialogs_check = ttk.Checkbutton(
             dialog_frame,
@@ -3586,7 +3660,7 @@ class App(tk.Tk):
         ).grid(row=1, column=0, sticky="w")
 
         jog_frame = ttk.LabelFrame(self._app_settings_inner, text="Jogging", padding=8)
-        jog_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        jog_frame.grid(row=7, column=0, sticky="ew", pady=(0, 8))
         jog_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3621,7 +3695,7 @@ class App(tk.Tk):
         )
 
         kb_frame = ttk.LabelFrame(self._app_settings_inner, text="Keyboard shortcuts", padding=8)
-        kb_frame.grid(row=7, column=0, sticky="nsew", pady=(0, 8))
+        kb_frame.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
         self.kb_enable_check = ttk.Checkbutton(
@@ -3660,7 +3734,7 @@ class App(tk.Tk):
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
-        view_frame.grid(row=8, column=0, sticky="ew")
+        view_frame.grid(row=9, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3687,7 +3761,7 @@ class App(tk.Tk):
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         toolpath_frame = ttk.LabelFrame(self._app_settings_inner, text="3D view quality", padding=8)
-        toolpath_frame.grid(row=9, column=0, sticky="ew", pady=(0, 8))
+        toolpath_frame.grid(row=10, column=0, sticky="ew", pady=(0, 8))
         toolpath_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(toolpath_frame, text="Full draw limit (segments, 0=unlimited)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3747,7 +3821,7 @@ class App(tk.Tk):
         )
 
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
-        tw_frame.grid(row=10, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -3765,7 +3839,7 @@ class App(tk.Tk):
         apply_tooltip(self.reconnect_check, "Auto-connect to the last used port when the app starts.")
 
         profile_frame = ttk.LabelFrame(self._app_settings_inner, text="Machine profile", padding=8)
-        profile_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        profile_frame.grid(row=12, column=0, sticky="ew", pady=(8, 0))
         profile_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(profile_frame, text="Active profile").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3840,7 +3914,7 @@ class App(tk.Tk):
             self._on_profile_select()
 
         interface_frame = ttk.LabelFrame(self._app_settings_inner, text="Interface", padding=8)
-        interface_frame.grid(row=12, column=0, sticky="ew", pady=(8, 0))
+        interface_frame.grid(row=13, column=0, sticky="ew", pady=(8, 0))
         interface_frame.grid_columnconfigure(0, weight=1)
         self.resume_button_check = ttk.Checkbutton(
             interface_frame,
@@ -3903,6 +3977,7 @@ class App(tk.Tk):
             mode="determinate",
             maximum=100,
             variable=self.progress_pct,
+            style="SimpleSender.Blue.Horizontal.TProgressbar",
         )
         self.progress_bar.pack(side="right", padx=(6, 12))
         self.buffer_bar = ttk.Progressbar(
@@ -3912,6 +3987,7 @@ class App(tk.Tk):
             mode="determinate",
             maximum=100,
             variable=self.buffer_fill_pct,
+            style="SimpleSender.Blue.Horizontal.TProgressbar",
         )
         self.buffer_bar.pack(side="right", padx=(6, 0))
         self.error_dialog_status_label = ttk.Label(
@@ -5768,9 +5844,16 @@ class App(tk.Tk):
     def _keyboard_binding_allowed(self) -> bool:
         if not bool(self.keyboard_bindings_enabled.get()):
             return False
-        if self.grab_current() is not None:
+        try:
+            current_grab = self.grab_current()
+        except Exception:
+            current_grab = None
+        if current_grab is not None:
             return False
-        widget = self.focus_get()
+        try:
+            widget = self.focus_get()
+        except Exception:
+            return False
         if widget is None:
             return True
         try:
@@ -6329,19 +6412,29 @@ class App(tk.Tk):
         frame = ttk.Frame(parent)
         frame.pack(side="right", padx=(8, 0))
         self._led_indicators = {}
+        self._led_containers = []
+        self._led_bg = _resolve_widget_bg(parent)
         labels = [
             ("endstop", "Endstops"),
             ("probe", "Probe"),
             ("hold", "Hold"),
         ]
         for key, text in labels:
-            container = ttk.Frame(frame)
+            container = tk.Frame(frame, bg=self._led_bg)
             container.pack(side="left", padx=(0, 8))
-            canvas = tk.Canvas(container, width=18, height=18, highlightthickness=0, bd=0)
+            canvas = tk.Canvas(
+                container,
+                width=18,
+                height=18,
+                highlightthickness=0,
+                bd=0,
+                bg=self._led_bg,
+            )
             canvas.pack(side="left")
             oval = canvas.create_oval(2, 2, 16, 16, fill="#b0b0b0", outline="#555")
             ttk.Label(container, text=text).pack(side="left", padx=(4, 0))
             self._led_indicators[key] = (canvas, oval)
+            self._led_containers.append(container)
         self._led_states = {key: False for key in self._led_indicators}
         self._update_led_panel(False, False, False)
 
@@ -6432,12 +6525,55 @@ class App(tk.Tk):
         self.tooltip_enabled.set(new_val)
         self.btn_toggle_tips.config(text="Tool Tips: On" if new_val else "Tool Tips: Off")
 
+    def _apply_theme(self, theme: str):
+        try:
+            if theme in self.available_themes:
+                self.style.theme_use(theme)
+                self._refresh_stop_button_backgrounds()
+                self._refresh_led_backgrounds()
+        except tk.TclError:
+            pass
+
     def _on_gui_logging_change(self):
         status = "enabled" if self.gui_logging_enabled.get() else "disabled"
         try:
             self.streaming_controller.handle_log(f"[settings] GUI logging {status}")
         except Exception:
             pass
+
+    def _on_theme_change(self, *_):
+        self._apply_theme(self.selected_theme.get())
+
+    def _refresh_stop_button_backgrounds(self):
+        for btn in (getattr(self, "btn_jog_cancel", None), getattr(self, "btn_all_stop", None)):
+            if isinstance(btn, StopSignButton):
+                btn.refresh_background()
+
+    def _refresh_led_backgrounds(self):
+        bg = _resolve_widget_bg(self)
+        self._led_bg = bg
+        for canvas, _ in getattr(self, "_led_indicators", {}).values():
+            try:
+                canvas.config(bg=bg)
+            except Exception:
+                pass
+        for container in getattr(self, "_led_containers", []):
+            try:
+                container.config(bg=bg)
+            except Exception:
+                pass
+
+    def _install_dialog_loggers(self):
+        orig_error = messagebox.showerror
+
+        def _showerror(title, message, **kwargs):
+            try:
+                self.streaming_controller.handle_log(f"[dialog] {title}: {message}")
+            except Exception:
+                pass
+            return orig_error(title, message, **kwargs)
+
+        messagebox.showerror = _showerror
 
     def _toggle_error_dialogs(self):
         self.error_dialogs_enabled.set(not bool(self.error_dialogs_enabled.get()))
@@ -7315,6 +7451,7 @@ class App(tk.Tk):
             "all_stop_mode": self.all_stop_mode.get(),
             "training_wheels": bool(self.training_wheels.get()),
             "reconnect_on_open": bool(self.reconnect_on_open.get()),
+            "theme": self.selected_theme.get(),
             "console_positions_enabled": pos_status_enabled,
             "console_status_enabled": pos_status_enabled,
             "show_resume_from_button": bool(self.show_resume_from_button.get()),
