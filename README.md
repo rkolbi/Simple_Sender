@@ -47,6 +47,8 @@ python -m venv .venv
 pip install pyserial
 ```
 
+Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` on Windows or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender` or the app folder.
+
 ## Launching
 ```powershell
 python main.py
@@ -106,17 +108,17 @@ This is a practical, end-to-end flow with rationale for key options.
 5) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
-- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch), Spindle ON/OFF.
-- **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Feed/Spindle overrides.
+- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
+- **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Macro buttons (if Macro-1..Macro-7 files exist).
 - **Tabs:**
   - G-code viewer (highlights sent/acked/current; light colors).
   - Console (log + manual command entry; filters).
   - Raw $$ (captured settings dump).
   - GRBL Settings (editable table, tooltips, pending-change highlight).
-  - App Settings (ALL STOP mode, estimation factor/fallback, status polling, machine profiles, keybindings, Training Wheels, auto-reconnect, and the Interface block for toggling Performance mode plus resume/recover button visibility).
+  - App Settings (banner showing `Simple Sender – Version: v0.1.0`, ALL STOP mode, estimation factor/fallback, status polling interval + disconnect threshold, error dialog settings, jogging feed defaults, macro scripting toggle, keybindings, current-line highlight mode, 3D view quality, Training Wheels, auto-reconnect, machine profiles, and the Interface block for toggling Performance mode plus resume/recover button visibility—logging/error-dialog toggles also live here).
   - Overdrive (Spindle ON/OFF plus feed/spindle override sliders with nice sliding controls, +/-/reset shortcuts, and a live override summary that follows GRBL's Ov* values while slider moves send the matching 10% real-time override bytes).
-  - 3D View (toggle render, save/load view).
-- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and toggle buttons for tooltips, logging, 3D render, and keybindings (performance mode now lives in the App Settings Interface block).
+  - 3D View (Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view).
+- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
 ## Status Lights
 - **Placement:** The LEDs sit inline with the status bar so they stay next to the logging/3D/keybinding toggles and provide a quick glance of machine triggers.
 - **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). We mirror gSender's approach:
@@ -130,6 +132,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **Performance mode:** Batches console updates, suppresses per-line RX logging during streaming, and adapts status polling by state.
+- **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 ## Jobs, Files, and Streaming
 - **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads.
@@ -148,7 +151,8 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-- **File format & placement.** Store macros alongside `main.py` (or in its parent directory) using names `Macro-1` through `Macro-7`; legacy `Maccro-*` files and optional `.txt` extensions remain compatible. The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
+- **File format & placement.** Macros are discovered in `simple_sender/macros`, `macros/` next to `main.py`, or the folder containing `main.py`, using names `Macro-1` through `Macro-7`; legacy `Maccro-*` files and optional `.txt` extensions remain compatible. The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
+- **Macro scripting toggle.** In App Settings > Macros, disable scripting to allow only plain G-code lines (no `%` directives, `_` Python lines, or `[...]` expressions).
 - **Why bCNC macros inspired this section.** The macro subsystem mirrors the flexibility of bCNC's macros: you can interleave GRBL commands, real-time bytes, directives like `%wait`, expressions, and Python snippets. Like bCNC, the sender maintains `_macro_vars`, emulates `$J=` jog semantics, and exposes helper macros (print, prompt, etc.) so that you can stitch together familiar motion flows from a single file without building a separate script.
 - **Supported directives & commands.** The macro interpreter blends GRBL motion with helper directives:
   - `%wait`, `%msg`, and `%update` behave like their bCNC counterparts: pause until idle, log operator-facing text, or request a status update.
@@ -211,9 +215,9 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
-- 3D View: toggle render; shows rapid/feed/arc; live position; save/load/reset view.
+- 3D View: Rapid/Feed/Arc legend toggles, rotate/pan/zoom, live position marker, save/load/reset view; quality controls (draw limits, arc detail, lightweight preview) live in App Settings.
 ## Keyboard Shortcuts
-- Configurable (up to 3-key sequences); conflicts flagged; ignored while typing. Training Wheels confirmations still apply.
+- Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
@@ -230,6 +234,9 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Why $$ deferred?** Avoids startup interleaving; mirrors cncjs/gSender.
 - **Why strict alarms?** Safety; matches ref senders.
 - **Persistent offsets (G10)?** Swap zero commands if desired.
+
+## License
+GPL-3.0-or-later © 2026 Bob Kolbasowski
 
 ## Appendix A: GRBL 1.1h Commands
 The sender exposes a curated subset of GRBL's real-time, system, and motion commands. Below is the syntax and an example for each group.

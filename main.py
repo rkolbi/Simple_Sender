@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
-"""Simple Sender - GRBL 1.1h CNC Controller - Refactored Version.
-
-This is the complete application using the refactored core modules.
+# Simple Sender (GRBL G-code Sender)
+# Copyright (C) 2026 Bob Kolbasowski
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+""" 
+    Simple Sender - GRBL 1.1h CNC Controller
 """
 
 # Standard library imports
@@ -37,6 +53,7 @@ from simple_sender.ui.gcode_viewer import GcodeViewer
 from simple_sender.ui.console import Console
 
 logger = logging.getLogger(__name__)
+APP_VERSION = "0.1.0"
 
 SERIAL_IMPORT_ERROR = ""
 
@@ -2731,6 +2748,7 @@ class App(tk.Tk):
         combined_console_enabled = pos_enabled or status_enabled
         self.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
         self.console_status_enabled = tk.BooleanVar(value=combined_console_enabled)
+        self.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{APP_VERSION}")
         self.show_resume_from_button = tk.BooleanVar(value=self.settings.get("show_resume_from_button", True))
         self.show_recover_button = tk.BooleanVar(value=self.settings.get("show_recover_button", True))
         self.current_line_mode = tk.StringVar(
@@ -3399,8 +3417,15 @@ class App(tk.Tk):
         self._app_settings_inner.bind("<Leave>", lambda event: self._unbind_app_settings_mousewheel())
         self._app_settings_inner.grid_columnconfigure(0, weight=1)
 
+        version_label = ttk.Label(
+            self._app_settings_inner,
+            textvariable=self.version_var,
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        version_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
         safety = ttk.LabelFrame(self._app_settings_inner, text="Safety", padding=8)
-        safety.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        safety.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         safety.grid_columnconfigure(1, weight=1)
         ttk.Label(safety, text="All Stop behavior").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
         self.all_stop_combo = ttk.Combobox(
@@ -3422,7 +3447,7 @@ class App(tk.Tk):
         self.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         estimation = ttk.LabelFrame(self._app_settings_inner, text="Estimation", padding=8)
-        estimation.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        estimation.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         estimation.grid_columnconfigure(1, weight=1)
         ttk.Label(estimation, text="Fallback rapid rate (mm/min)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3455,7 +3480,7 @@ class App(tk.Tk):
         )
 
         status_frame = ttk.LabelFrame(self._app_settings_inner, text="Status polling", padding=8)
-        status_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        status_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         status_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(status_frame, text="Status report interval (seconds)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3487,7 +3512,7 @@ class App(tk.Tk):
         )
 
         dialog_frame = ttk.LabelFrame(self._app_settings_inner, text="Error dialogs", padding=8)
-        dialog_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        dialog_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         dialog_frame.grid_columnconfigure(1, weight=1)
         self.error_dialogs_check = ttk.Checkbutton(
             dialog_frame,
@@ -3541,7 +3566,7 @@ class App(tk.Tk):
         )
 
         macro_frame = ttk.LabelFrame(self._app_settings_inner, text="Macros", padding=8)
-        macro_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        macro_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
         macro_frame.grid_columnconfigure(0, weight=1)
         self.macros_allow_python_check = ttk.Checkbutton(
             macro_frame,
@@ -3561,7 +3586,7 @@ class App(tk.Tk):
         ).grid(row=1, column=0, sticky="w")
 
         jog_frame = ttk.LabelFrame(self._app_settings_inner, text="Jogging", padding=8)
-        jog_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        jog_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         jog_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3596,7 +3621,7 @@ class App(tk.Tk):
         )
 
         kb_frame = ttk.LabelFrame(self._app_settings_inner, text="Keyboard shortcuts", padding=8)
-        kb_frame.grid(row=6, column=0, sticky="nsew", pady=(0, 8))
+        kb_frame.grid(row=7, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
         self.kb_enable_check = ttk.Checkbutton(
@@ -3635,7 +3660,7 @@ class App(tk.Tk):
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
-        view_frame.grid(row=7, column=0, sticky="ew")
+        view_frame.grid(row=8, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3662,7 +3687,7 @@ class App(tk.Tk):
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         toolpath_frame = ttk.LabelFrame(self._app_settings_inner, text="3D view quality", padding=8)
-        toolpath_frame.grid(row=8, column=0, sticky="ew", pady=(0, 8))
+        toolpath_frame.grid(row=9, column=0, sticky="ew", pady=(0, 8))
         toolpath_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(toolpath_frame, text="Full draw limit (segments, 0=unlimited)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3722,7 +3747,7 @@ class App(tk.Tk):
         )
 
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
-        tw_frame.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=10, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -3740,7 +3765,7 @@ class App(tk.Tk):
         apply_tooltip(self.reconnect_check, "Auto-connect to the last used port when the app starts.")
 
         profile_frame = ttk.LabelFrame(self._app_settings_inner, text="Machine profile", padding=8)
-        profile_frame.grid(row=10, column=0, sticky="ew", pady=(8, 0))
+        profile_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
         profile_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(profile_frame, text="Active profile").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -3815,7 +3840,7 @@ class App(tk.Tk):
             self._on_profile_select()
 
         interface_frame = ttk.LabelFrame(self._app_settings_inner, text="Interface", padding=8)
-        interface_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        interface_frame.grid(row=12, column=0, sticky="ew", pady=(8, 0))
         interface_frame.grid_columnconfigure(0, weight=1)
         self.resume_button_check = ttk.Checkbutton(
             interface_frame,
@@ -3850,6 +3875,18 @@ class App(tk.Tk):
         self.btn_performance_mode.pack(side="left")
         apply_tooltip(self.btn_performance_mode, "Enable performance mode (batch console updates).")
 
+        self.logging_check = ttk.Checkbutton(
+            interface_frame,
+            text="Log GUI button actions",
+            variable=self.gui_logging_enabled,
+            command=self._on_gui_logging_change,
+        )
+        self.logging_check.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        apply_tooltip(
+            self.logging_check,
+            "Record GUI button actions in the console log when enabled.",
+        )
+
         # 3D tab
         self.toolpath_panel.build_tab(nb)
 
@@ -3877,8 +3914,6 @@ class App(tk.Tk):
             variable=self.buffer_fill_pct,
         )
         self.buffer_bar.pack(side="right", padx=(6, 0))
-        self.throughput_label = ttk.Label(status_bar, textvariable=self.throughput_var, anchor="e")
-        self.throughput_label.pack(side="right", padx=(6, 0))
         self.error_dialog_status_label = ttk.Label(
             status_bar,
             textvariable=self.error_dialog_status_var,
@@ -3890,6 +3925,12 @@ class App(tk.Tk):
             "Shows when error dialogs are disabled or suppressed.",
         )
         ttk.Label(status_bar, textvariable=self.buffer_fill, anchor="e").pack(side="right")
+        self.throughput_label = ttk.Label(
+            status_bar,
+            textvariable=self.throughput_var,
+            anchor="e",
+        )
+        self.throughput_label.pack(side="right", padx=(6, 0))
         self._build_led_panel(status_bar)
         self.btn_toggle_tips = ttk.Button(
             status_bar,
@@ -3901,28 +3942,6 @@ class App(tk.Tk):
         self.btn_toggle_tips.config(
             text="Tool Tips: On" if self.tooltip_enabled.get() else "Tool Tips: Off"
         )
-        self.btn_toggle_logging = ttk.Button(
-            status_bar,
-            text="Logging: On",
-            command=self._toggle_gui_logging,
-        )
-        set_kb_id(self.btn_toggle_logging, "toggle_logging")
-        self.btn_toggle_logging.pack(side="right", padx=(8, 0))
-        self.btn_toggle_logging.config(
-            text="Logging: On" if self.gui_logging_enabled.get() else "Logging: Off"
-        )
-        apply_tooltip(self.btn_toggle_logging, "Toggle GUI button logging in the console.")
-        self.btn_toggle_error_dialogs = ttk.Button(
-            status_bar,
-            text="Error Dialogs: On",
-            command=self._toggle_error_dialogs,
-        )
-        set_kb_id(self.btn_toggle_error_dialogs, "toggle_error_dialogs")
-        self.btn_toggle_error_dialogs.pack(side="right", padx=(8, 0))
-        self.btn_toggle_error_dialogs.config(
-            text="Error Dialogs: On" if self.error_dialogs_enabled.get() else "Error Dialogs: Off"
-        )
-        apply_tooltip(self.btn_toggle_error_dialogs, "Toggle modal error dialogs.")
         self.btn_toggle_3d = ttk.Button(
             status_bar,
             text="3D Render: On",
@@ -6413,11 +6432,12 @@ class App(tk.Tk):
         self.tooltip_enabled.set(new_val)
         self.btn_toggle_tips.config(text="Tool Tips: On" if new_val else "Tool Tips: Off")
 
-    def _toggle_gui_logging(self):
-        current = bool(self.gui_logging_enabled.get())
-        new_val = not current
-        self.gui_logging_enabled.set(new_val)
-        self.btn_toggle_logging.config(text="Logging: On" if new_val else "Logging: Off")
+    def _on_gui_logging_change(self):
+        status = "enabled" if self.gui_logging_enabled.get() else "disabled"
+        try:
+            self.streaming_controller.handle_log(f"[settings] GUI logging {status}")
+        except Exception:
+            pass
 
     def _toggle_error_dialogs(self):
         self.error_dialogs_enabled.set(not bool(self.error_dialogs_enabled.get()))
@@ -6429,10 +6449,6 @@ class App(tk.Tk):
             self._reset_error_dialog_state()
         else:
             self._set_error_dialog_status("Dialogs: Off")
-        if hasattr(self, "btn_toggle_error_dialogs"):
-            self.btn_toggle_error_dialogs.config(
-                text="Error Dialogs: On" if enabled else "Error Dialogs: Off"
-            )
 
     def _toggle_performance(self):
         current = bool(self.performance_mode.get())
