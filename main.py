@@ -1,16 +1,10 @@
-# Simple-Sender.py
-# Minimal GRBL 1.1h sender
-# Python 3 + Tkinter + pyserial
-#
-# Features:
-# - Connect/disconnect, open gcode, run/pause/resume/stop (Ctrl-X), unlock, home, spindle toggle
-# - DRO (WPos) display, zero buttons (G92 approach by default), goto zero
-# - Jog pad using $J= incremental jogging
-# - Gcode viewer highlights: current / sent / acked
-# - Console log + manual command entry
-#
-# Safety note: This application is in the Alpha stage; test in air, spindle off.
+#!/usr/bin/env python3
+"""Simple Sender - GRBL 1.1h CNC Controller - Refactored Version.
 
+This is the complete application using the refactored core modules.
+"""
+
+# Standard library imports
 import os
 import sys
 import time
@@ -24,151 +18,36 @@ import math
 import shlex
 import traceback
 import hashlib
-import shutil
 from collections import deque
+
+# GUI imports
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
-from gcode_parser import clean_gcode_line, parse_gcode_lines
 
-SERIAL_IMPORT_ERROR: str | None = None
+# Refactored module imports
+from simple_sender.grbl_worker import GrblWorker
+from simple_sender.gcode_parser import clean_gcode_line, parse_gcode_lines
+from simple_sender.utils import Settings
+from simple_sender.utils.constants import *
+from simple_sender.ui.gcode_viewer import GcodeViewer
+from simple_sender.ui.console import Console
+
+SERIAL_IMPORT_ERROR = ""
+
+# Serial imports
 try:
     import serial
     from serial.tools import list_ports
+    SERIAL_AVAILABLE = True
 except ImportError as exc:
     serial = None
     list_ports = None
+    SERIAL_AVAILABLE = False
     SERIAL_IMPORT_ERROR = str(exc)
 
 
-BAUD_DEFAULT = 115200
-STATUS_POLL_DEFAULT = 0.2
-
-
-# ---------- GRBL real-time command bytes (GRBL 1.1) ----------
-RT_RESET = b"\x18"        # Ctrl-X soft reset
-RT_STATUS = b"?"          # status report query
-RT_HOLD = b"!"            # feed hold
-RT_RESUME = b"~"          # cycle start / resume
-
-# Feed override
-RT_FO_RESET = b"\x90"
-RT_FO_PLUS_10 = b"\x91"
-RT_FO_MINUS_10 = b"\x92"
-
-# Spindle override
-RT_SO_RESET = b"\x99"
-RT_SO_PLUS_10 = b"\x9A"
-RT_SO_MINUS_10 = b"\x9B"
-
-# Jog cancel
-RT_JOG_CANCEL = b"\x85"
-
-# Streaming buffer window (character counting)
-RX_BUFFER_SIZE = 128
-RX_BUFFER_SAFETY = 8
-RX_BUFFER_WINDOW = RX_BUFFER_SIZE - RX_BUFFER_SAFETY
-
-MACRO_PREFIXES = ("Macro-", "Maccro-")
-MACRO_EXTS = ("", ".txt")
-MACRO_GPAT = re.compile(r"[A-Za-z]\s*[-+]?\d+.*")
-MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\b *(.*)$")
-MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
-MACRO_STDEXPR = False
-RESUME_WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
-
-ALL_STOP_CHOICES = [
-    ("Soft Reset (Ctrl-X)", "reset"),
-    ("Stop Stream + Reset", "stop_reset"),
-]
-CURRENT_LINE_CHOICES = [
-    ("Processing (acked)", "acked"),
-    ("Sent (queued)", "sent"),
-]
-CLEAR_ICON = "X"
-
-MAX_CONSOLE_LINES = 5000
-
-GRBL_SETTING_DESC = {
-    0: "Step pulse, microseconds",
-    1: "Step idle delay, milliseconds",
-    2: "Step port invert mask",
-    3: "Direction port invert mask",
-    4: "Step enable invert",
-    5: "Limit pins invert",
-    6: "Probe pin invert",
-    10: "Status report mask",
-    11: "Junction deviation, mm",
-    12: "Arc tolerance, mm",
-    13: "Report inches",
-    20: "Soft limits enable",
-    21: "Hard limits enable",
-    22: "Homing cycle enable",
-    23: "Homing direction invert mask",
-    24: "Homing locate feed rate, mm/min",
-    25: "Homing search seek rate, mm/min",
-    26: "Homing switch debounce, ms",
-    27: "Homing switch pull-off, mm",
-    30: "Max spindle speed, RPM",
-    31: "Min spindle speed, RPM",
-    32: "Laser mode enable",
-    100: "X steps/mm",
-    101: "Y steps/mm",
-    102: "Z steps/mm",
-    110: "X max rate, mm/min",
-    111: "Y max rate, mm/min",
-    112: "Z max rate, mm/min",
-    120: "X accel, mm/sec^2",
-    121: "Y accel, mm/sec^2",
-    122: "Z accel, mm/sec^2",
-    130: "X max travel, mm",
-    131: "Y max travel, mm",
-    132: "Z max travel, mm",
-}
-
-GRBL_SETTING_KEYS = sorted(GRBL_SETTING_DESC.keys())
-
-# Conservative numeric limits for basic validation. Values are broad to avoid blocking legitimate configs.
-GRBL_SETTING_LIMITS = {
-    0: (1, 1000),    # step pulse us
-    1: (0, 255),
-    2: (0, 255),
-    3: (0, 255),
-    4: (0, 1),
-    5: (0, 1),
-    6: (0, 1),
-    10: (0, 511),
-    11: (0, 5),
-    12: (0, 5),
-    13: (0, 1),
-    20: (0, 1),
-    21: (0, 1),
-    22: (0, 1),
-    23: (0, 255),
-    24: (0, 5000),
-    25: (0, 5000),
-    26: (0, 255),
-    27: (0, 50),
-    30: (0, 100000),
-    31: (0, 100000),
-    32: (0, 1),
-    100: (0, 2000),
-    101: (0, 2000),
-    102: (0, 2000),
-    110: (0, 200000),
-    111: (0, 200000),
-    112: (0, 200000),
-    120: (0, 20000),
-    121: (0, 20000),
-    122: (0, 20000),
-    130: (0, 2000),
-    131: (0, 2000),
-    132: (0, 2000),
-}
-
-# Settings that are allowed to be non-numeric (currently none; placeholder for future extensions)
-GRBL_NON_NUMERIC_SETTINGS: set[int] = set()
-
+# Utility functions
 
 def _hash_lines(lines: list[str] | None) -> str | None:
     if not lines:
@@ -300,787 +179,6 @@ def compute_gcode_stats(
         "rapid_min": total_rapid_min if has_rapid else None,
     }
 
-
-class GrblWorker:
-    """
-    Serial worker:
-    - reads lines from GRBL
-    - handles streaming: send next line only after ok/error
-    - periodically queries status (?)
-    """
-
-    def __init__(self, ui_event_q: queue.Queue):
-        self.ui_q = ui_event_q
-        self.ser: serial.Serial | None = None
-
-        self._rx_thread: threading.Thread | None = None
-        self._tx_thread: threading.Thread | None = None
-        self._status_thread: threading.Thread | None = None
-        self._stop_evt = threading.Event()
-        self._last_buffer_emit = None
-        self._last_buffer_emit_ts = 0.0
-        self._buffer_emit_interval = 0.1
-
-        # streaming state
-        self._gcode: list[str] = []
-        self._streaming = False
-        self._paused = False
-        self._send_index = 0   # next index to send
-        self._ack_index = -1   # last acked index
-        self._stream_buf_used = 0
-        self._stream_line_queue: deque[tuple[int, bool, int | None]] = deque()
-        self._stream_pending_item: tuple[str, bool, int | None] | None = None
-        self._resume_preamble: deque[str] = deque()
-        self._rx_window = RX_BUFFER_SIZE
-        self._tx_bytes_window: deque[tuple[float, int]] = deque()
-        self._tx_window_sec = 2.0
-        self._tx_emit_interval = 0.5
-        self._last_tx_emit_ts = 0.0
-
-        self._outgoing_q: queue.Queue[str] = queue.Queue()
-        self._stream_lock = threading.Lock()
-        self._write_lock = threading.Lock()
-        self._status_interval_lock = threading.Lock()
-        self._status_poll_interval = STATUS_POLL_DEFAULT
-        self._ready = False
-        self._alarm_active = False
-
-    # ---- connection ----
-    def list_ports(self) -> list[str]:
-        if list_ports is None:
-            return []
-        return [p.device for p in list_ports.comports()]
-
-    def connect(self, port: str, baud: int = BAUD_DEFAULT):
-        if serial is None:
-            raise RuntimeError(
-                "pyserial is required to connect to GRBL. "
-                "Install pyserial (pip install pyserial) and restart the application."
-            )
-        self.disconnect()
-        self._stop_evt = threading.Event()
-        stop_evt = self._stop_evt
-        self._ready = False
-        self._alarm_active = False
-
-        self.ser = serial.Serial(port, baudrate=baud, timeout=0.1, write_timeout=0.5)
-        # Give GRBL a moment; some setups reset on connect
-        time.sleep(0.25)
-        try:
-            self.ser.reset_input_buffer()
-            self.ser.reset_output_buffer()
-        except Exception:
-            pass
-
-        self._rx_thread = threading.Thread(target=self._rx_loop, args=(stop_evt,), daemon=True)
-        self._tx_thread = threading.Thread(target=self._tx_loop, args=(stop_evt,), daemon=True)
-        self._status_thread = threading.Thread(target=self._status_loop, args=(stop_evt,), daemon=True)
-        self._rx_thread.start()
-        self._tx_thread.start()
-        self._status_thread.start()
-
-        self.ui_q.put(("conn", True, port))
-
-    def disconnect(self):
-        self._stop_evt.set()
-        self._streaming = False
-        self._paused = False
-        self._gcode = []
-        self._send_index = 0
-        self._ack_index = -1
-        self._reset_stream_buffer()
-        self._last_buffer_emit = None
-        self._last_buffer_emit_ts = 0.0
-        self._clear_outgoing()
-        self._emit_buffer_fill()
-        self._ready = False
-        self._alarm_active = False
-        self.ui_q.put(("ready", False))
-        self.ui_q.put(("stream_state", "stopped", None))
-
-        if self.ser:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-        self.ser = None
-        for t in (self._rx_thread, self._tx_thread, self._status_thread):
-            if t and t.is_alive():
-                t.join(timeout=0.5)
-        self._rx_thread = None
-        self._tx_thread = None
-        self._status_thread = None
-        self.ui_q.put(("conn", False, None))
-
-    def is_connected(self) -> bool:
-        return self.ser is not None and self.ser.is_open
-
-    def is_streaming(self) -> bool:
-        return self._streaming
-
-    def _mark_ready(self):
-        if not self._ready:
-            self._ready = True
-            self.ui_q.put(("ready", True))
-
-    def _handle_alarm(self, s: str):
-        # Surface alarm lines to the console explicitly.
-        try:
-            self.ui_q.put(("log", f"[ALARM] {s}"))
-        except Exception:
-            pass
-        if not self._alarm_active:
-            self._alarm_active = True
-        if self._streaming or self._paused:
-            self._streaming = False
-            self._paused = False
-            self._reset_stream_buffer()
-            self._emit_buffer_fill()
-            self.ui_q.put(("stream_state", "alarm", s))
-        else:
-            self.ui_q.put(("stream_state", "alarm", s))
-        self._clear_outgoing()
-        self.ui_q.put(("alarm", s))
-
-    # ---- commands ----
-    def send_immediate(self, s: str):
-        """Manual send (console)."""
-        if not self.is_connected():
-            return
-        if self._streaming:
-            return
-        if self._alarm_active:
-            s_check = s.strip().upper()
-            if not (s_check.startswith("$X") or s_check.startswith("$H")):
-                return
-        s = s.strip()
-        if not s:
-            return
-        self._outgoing_q.put(s)
-
-    def send_realtime(self, b: bytes):
-        """Real-time byte commands (no newline)."""
-        if not self.is_connected():
-            return
-        try:
-            with self._write_lock:
-                self.ser.write(b)
-        except Exception as e:
-            self.ui_q.put(("log", f"[write err] {e}"))
-
-    def unlock(self):
-        self.send_immediate("$X")
-
-    def home(self):
-        self.send_immediate("$H")
-
-    def reset(self, emit_state: bool = True):
-        self.send_realtime(RT_RESET)
-        self._ready = False
-        self._alarm_active = False
-        was_streaming = self._streaming or self._paused
-        self._streaming = False
-        self._paused = False
-        self._reset_stream_buffer()
-        self._clear_outgoing()
-        self.ui_q.put(("ready", False))
-        if emit_state and was_streaming:
-            self.ui_q.put(("stream_state", "stopped", None))
-
-    def hold(self):
-        self.send_realtime(RT_HOLD)
-
-    def resume(self):
-        self.send_realtime(RT_RESUME)
-
-    def spindle_on(self, rpm: int = 12000):
-        # Note: Many spindles ignore S unless PWM configured; safe default is still useful.
-        self.send_immediate(f"M3 S{int(rpm)}")
-
-    def spindle_off(self):
-        self.send_immediate("M5")
-
-    def jog_cancel(self):
-        self.send_realtime(RT_JOG_CANCEL)
-
-    # ---- streaming ----
-    def load_gcode(self, lines: list[str]):
-        self._gcode = lines
-        self._streaming = False
-        self._paused = False
-        self._send_index = 0
-        self._ack_index = -1
-        self._reset_stream_buffer()
-        self.ui_q.put(("stream_state", "loaded", len(lines)))
-
-    def _clear_outgoing(self):
-        try:
-            while True:
-                self._outgoing_q.get_nowait()
-        except queue.Empty:
-            pass
-        self._emit_buffer_fill()
-
-    def _reset_stream_buffer(self):
-        with self._stream_lock:
-            self._stream_buf_used = 0
-            self._stream_line_queue.clear()
-            self._stream_pending_item = None
-            self._resume_preamble.clear()
-            self._rx_window = RX_BUFFER_SIZE
-            self._send_index = 0
-            self._ack_index = -1
-            self._tx_bytes_window.clear()
-            self._last_tx_emit_ts = 0.0
-
-    def start_stream(self):
-        if not self.is_connected():
-            return
-        if not self._gcode:
-            return
-        self._clear_outgoing()
-        self._streaming = True
-        self._paused = False
-        self._reset_stream_buffer()
-        self._emit_buffer_fill()
-        self.ui_q.put(("stream_state", "running", None))
-
-    def start_stream_from(self, start_index: int, preamble: list[str] | None = None):
-        """Resume streaming from `start_index`, optionally prepending `preamble` lines."""
-        if not self.is_connected():
-            return
-        if not self._gcode:
-            return
-        if start_index < 0:
-            start_index = 0
-        if start_index >= len(self._gcode):
-            return
-        self._clear_outgoing()
-        self._streaming = True
-        self._paused = False
-        self._reset_stream_buffer()
-        with self._stream_lock:
-            self._send_index = start_index
-            self._ack_index = start_index - 1
-            if preamble:
-                cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
-                self._resume_preamble = deque(cleaned)
-        self._emit_buffer_fill()
-        self.ui_q.put(("progress", start_index, len(self._gcode)))
-        self.ui_q.put(("stream_state", "running", None))
-
-    def pause_stream(self):
-        if self._streaming:
-            self._paused = True
-            self.hold()
-            self.ui_q.put(("stream_state", "paused", None))
-
-    def resume_stream(self):
-        if self._streaming:
-            self._paused = False
-            self.resume()
-            self.ui_q.put(("stream_state", "running", None))
-
-    def stop_stream(self):
-        self._streaming = False
-        self._paused = False
-        self.reset(emit_state=False)
-        self._reset_stream_buffer()
-        self._emit_buffer_fill()
-        self.ui_q.put(("stream_state", "stopped", None))
-
-    # ---- jog ----
-    def jog(self, dx: float, dy: float, dz: float, feed: float, unit_mode: str):
-        """
-        Issue a $J jog command in G91 incremental mode.
-
-        Args:
-            dx: X axis move (mm or inch depending on unit_mode)
-            dy: Y axis move
-            dz: Z axis move
-            feed: Feed rate for the jog (must be > 0)
-            unit_mode: "mm" or "inch"; controls whether the command sends G21 or G20
-
-        Returns:
-            True if the jog command was enqueued, False otherwise.
-        """
-        if not self.is_connected():
-            self.ui_q.put(("log", "[jog] Ignored: not connected"))
-            return False
-        if feed <= 0:
-            self.ui_q.put(("log", f"[jog] Ignored: feed must be positive (got {feed})"))
-            return False
-        if unit_mode not in ("mm", "inch"):
-            self.ui_q.put(("log", f"[jog] Ignored: invalid unit mode '{unit_mode}'"))
-            return False
-        if self._streaming:
-            self.ui_q.put(("log", "[jog] Ignored: stream already running"))
-            return False
-        gunit = "G21" if unit_mode == "mm" else "G20"
-        cmd = f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
-        self.send_immediate(cmd)
-        return True
-
-    # ---- RX/TX loops ----
-    def _encode_line_payload(self, s: str) -> bytes:
-        return (s.strip() + "\n").encode("utf-8", errors="replace")
-
-    def _tx_loop(self, stop_evt: threading.Event):
-        while not stop_evt.is_set():
-            if not self.is_connected():
-                time.sleep(0.05)
-                continue
-
-            # Streaming: fill the controller RX buffer window (character-counting)
-            if self._streaming and (not self._paused):
-                while True:
-                    if not self._streaming or self._paused:
-                        break
-                    with self._stream_lock:
-                        if not self._streaming or self._paused:
-                            break
-                        item = self._stream_pending_item
-                        if item is None:
-                            if self._resume_preamble:
-                                line = self._resume_preamble[0]
-                                item = (line, False, None)
-                            else:
-                                if self._send_index >= len(self._gcode):
-                                    break
-                                line = self._gcode[self._send_index].strip()
-                                item = (line, True, self._send_index)
-                        line, is_gcode, idx = item
-                        payload = self._encode_line_payload(line)
-                        line_len = len(payload)
-                        usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                        can_fit = (self._stream_buf_used + line_len) <= usable
-
-                        if not can_fit and self._stream_buf_used > 0:
-                            self._stream_pending_item = item
-                            break
-
-                        if not can_fit and self._stream_buf_used == 0:
-                            # Allow a single oversized line to prevent deadlock
-                            pass
-
-                        self._stream_pending_item = None
-                        if is_gcode:
-                            idx = self._send_index
-                            self._send_index += 1
-                        self._stream_buf_used += line_len
-                        self._stream_line_queue.append((line_len, is_gcode, idx))
-
-                    if not self._write_line(line, payload):
-                        with self._stream_lock:
-                            if is_gcode and self._send_index > 0:
-                                self._send_index -= 1
-                            if self._stream_line_queue:
-                                try:
-                                    last_len, _, _ = self._stream_line_queue.pop()
-                                except Exception:
-                                    last_len = line_len
-                                self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                            else:
-                                self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                            self._stream_pending_item = item
-                        self._emit_buffer_fill()
-                        self._streaming = False
-                        self._paused = False
-                        self.ui_q.put(("stream_state", "error", "Write failed"))
-                        break
-
-                    if not is_gcode and self._resume_preamble:
-                        self._resume_preamble.popleft()
-                    self._record_tx_bytes(line_len)
-                    self._emit_buffer_fill()
-                    if is_gcode:
-                        self.ui_q.put(("gcode_sent", idx, line))
-
-                with self._stream_lock:
-                    send_index = self._send_index
-                    ack_index = self._ack_index
-                    pending = bool(self._stream_line_queue or self._stream_pending_item or self._resume_preamble)
-                if (
-                    self._streaming
-                    and (not pending)
-                    and send_index >= len(self._gcode)
-                    and ack_index >= len(self._gcode) - 1
-                ):
-                    # done
-                    self._streaming = False
-                    self.ui_q.put(("stream_state", "done", None))
-
-            # Manual outgoing queue (console / buttons)
-            try:
-                s = self._outgoing_q.get_nowait()
-            except queue.Empty:
-                time.sleep(0.01)
-                continue
-            if self._alarm_active:
-                s_check = s.strip().upper()
-                if not (s_check.startswith("$X") or s_check.startswith("$H")):
-                    self._clear_outgoing()
-                    time.sleep(0.01)
-                    continue
-            self._write_line(s)
-            self.ui_q.put(("log_tx", s))
-
-    def _write_line(self, s: str, payload: bytes | None = None) -> bool:
-        if not self.is_connected():
-            return False
-        try:
-            if payload is None:
-                payload = self._encode_line_payload(s)
-            with self._write_lock:
-                self.ser.write(payload)
-            return True
-        except Exception as exc:
-            if serial is not None:
-                if isinstance(exc, serial.SerialTimeoutException):
-                    self.ui_q.put(("log", f"[serial timeout] {exc}"))
-                    return False
-                if isinstance(exc, serial.SerialException):
-                    self.ui_q.put(("log", f"[serial error] {exc}"))
-                    return False
-            self.ui_q.put(("log", f"[write err] {exc}"))
-            return False
-
-    def _rx_loop(self, stop_evt: threading.Event):
-        buf = b""
-        while not stop_evt.is_set():
-            if not self.is_connected():
-                time.sleep(0.05)
-                continue
-            try:
-                chunk = self.ser.read(256)
-            except Exception as e:
-                self.ui_q.put(("log", f"[read err] {e}"))
-                time.sleep(0.1)
-                continue
-
-            if not chunk:
-                continue
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                s = line.decode("utf-8", errors="replace").strip()
-                if not s:
-                    continue
-                self._handle_rx_line(s)
-
-    def _handle_rx_line(self, s: str):
-        is_status = s.startswith("<") and s.endswith(">")
-        state = ""
-        if is_status:
-            parts = s.strip("<>").split("|")
-            state = parts[0] if parts else ""
-        self.ui_q.put(("log_rx", s))
-
-        low = s.lower()
-        if low.startswith("grbl"):
-            self._mark_ready()
-        if low.startswith("alarm:"):
-            self._handle_alarm(s)
-            return
-        if "[msg:" in low and "reset to continue" in low:
-            self._handle_alarm(s)
-            return
-
-        if low == "ok" or low.startswith("error"):
-            ack_index = None
-            with self._stream_lock:
-                if self._stream_line_queue:
-                    line_len, is_gcode, _ = self._stream_line_queue.popleft()
-                    self._stream_buf_used -= line_len
-                    if self._stream_buf_used < 0:
-                        self._stream_buf_used = 0
-                    if is_gcode and self._streaming:
-                        self._ack_index += 1
-                        ack_index = self._ack_index
-            self._emit_buffer_fill()
-            # streaming ack progression
-            if ack_index is not None:
-                self.ui_q.put(("gcode_acked", ack_index))
-                self.ui_q.put(("progress", ack_index + 1, len(self._gcode)))
-
-            if low.startswith("error"):
-                # Stop streaming on error for safety
-                self._streaming = False
-                self._paused = False
-                self._reset_stream_buffer()
-                self._emit_buffer_fill()
-                self.ui_q.put(("stream_state", "error", s))
-
-        # Status report looks like: <Idle|WPos:0.000,0.000,0.000|FS:0,0>
-        if s.startswith("<") and s.endswith(">"):
-            # Example: <Idle|WPos:0.000,0.000,0.000|Bf:15,128|FS:0,0>
-            self._mark_ready()
-            parts = s.strip("<>").split("|")
-            state = parts[0] if parts else ""
-            if state.lower().startswith("alarm"):
-                if not self._alarm_active:
-                    self._handle_alarm(state)
-            elif self._alarm_active:
-                self._alarm_active = False
-            for p in parts:
-                if p.startswith("Bf:"):
-                    try:
-                        _, rx_free = p[3:].split(",", 1)
-                        rx_free = int(rx_free.strip())
-                        with self._stream_lock:
-                            capacity = rx_free + self._stream_buf_used
-                            if capacity < RX_BUFFER_SIZE:
-                                capacity = RX_BUFFER_SIZE
-                            self._rx_window = capacity
-                        self._emit_buffer_fill()
-                    except Exception:
-                        pass
-            self.ui_q.put(("status", s))
-
-    def _status_loop(self, stop_evt: threading.Event):
-        # periodic status query; keeps DRO updated
-        while not stop_evt.is_set():
-            if self.is_connected():
-                try:
-                    self.send_realtime(RT_STATUS)
-                except Exception as exc:
-                    self.ui_q.put(("log", f"[status] {exc}"))
-            with self._status_interval_lock:
-                interval = self._status_poll_interval
-            try:
-                interval = float(interval)
-            except Exception:
-                interval = STATUS_POLL_DEFAULT
-            if interval <= 0:
-                interval = STATUS_POLL_DEFAULT
-            if stop_evt.wait(interval):
-                break
-
-    def set_status_poll_interval(self, interval: float):
-        if interval is None:
-            return
-        try:
-            val = float(interval)
-        except Exception:
-            return
-        if val <= 0:
-            return
-        with self._status_interval_lock:
-            self._status_poll_interval = val
-
-    def _emit_buffer_fill(self):
-        with self._stream_lock:
-            window = max(1, int(self._rx_window))
-            used = max(0, int(self._stream_buf_used))
-        if used > window:
-            used = window
-        pct = int(round((used / window) * 100))
-        payload = (pct, used, window)
-        now = time.time()
-        if payload == self._last_buffer_emit and (now - self._last_buffer_emit_ts) < self._buffer_emit_interval:
-            return
-        self._last_buffer_emit = payload
-        self._last_buffer_emit_ts = now
-        self.ui_q.put(("buffer_fill", pct, used, window))
-
-    def _record_tx_bytes(self, count: int):
-        if count <= 0:
-            return
-        now = time.time()
-        self._tx_bytes_window.append((now, count))
-        cutoff = now - self._tx_window_sec
-        while self._tx_bytes_window and self._tx_bytes_window[0][0] < cutoff:
-            self._tx_bytes_window.popleft()
-        if not self._tx_bytes_window:
-            return
-        if (now - self._last_tx_emit_ts) < self._tx_emit_interval:
-            return
-        span = max(0.1, now - self._tx_bytes_window[0][0])
-        total = sum(b for _, b in self._tx_bytes_window)
-        bps = total / span
-        self._last_tx_emit_ts = now
-        self.ui_q.put(("throughput", bps))
-
-
-class GcodeText(ttk.Frame):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.text = tk.Text(self, wrap="none", height=18, undo=False)
-        text_fg = "#111111"
-        self.text.configure(
-            background="#ffffff",
-            foreground=text_fg,
-            insertbackground=text_fg,
-        )
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
-        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
-        self.text.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
-
-        self.text.grid(row=0, column=0, sticky="nsew")
-        self.vsb.grid(row=0, column=1, sticky="ns")
-        self.hsb.grid(row=1, column=0, sticky="ew")
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-
-        # Tags
-        # Pastel highlights keep gcode readable on light backgrounds
-        self.text.tag_configure("sent", background="#e5efff", foreground=text_fg)      # light blue
-        self.text.tag_configure("acked", background="#e6f7ed", foreground=text_fg)     # light green
-        self.text.tag_configure("current", background="#fff4d8", foreground=text_fg)   # light orange
-
-        self.lines_count = 0
-        self._sent_upto = -1
-        self._acked_upto = -1
-        self._current_idx = -1
-        self._insert_after_id = None
-        self._insert_lines = []
-        self._insert_index = 0
-        self._insert_chunk_size = 200
-        self._insert_done_cb = None
-        self._insert_progress_cb = None
-
-    def set_lines(self, lines: list[str]):
-        self._start_chunk_insert(lines, chunk_size=200)
-
-    def set_lines_chunked(
-        self,
-        lines: list[str],
-        chunk_size: int = 200,
-        on_done=None,
-        on_progress=None,
-    ):
-        self._start_chunk_insert(lines, chunk_size=chunk_size, on_done=on_done, on_progress=on_progress)
-
-    def _cancel_chunk_insert(self):
-        if self._insert_after_id is not None:
-            try:
-                self.after_cancel(self._insert_after_id)
-            except Exception:
-                pass
-        self._insert_after_id = None
-        self._insert_lines = []
-        self._insert_index = 0
-        self._insert_done_cb = None
-        self._insert_progress_cb = None
-
-    def _insert_next_chunk(self):
-        if not self._insert_lines:
-            self.text.config(state="disabled")
-            return
-        start = self._insert_index
-        end = min(start + self._insert_chunk_size, len(self._insert_lines))
-        chunk = self._insert_lines[start:end]
-        if chunk:
-            base = start + 1
-            lines_out = [f"{base + i:5d}  {ln}" for i, ln in enumerate(chunk)]
-            self.text.insert("end", "\n".join(lines_out) + "\n")
-        self._insert_index = end
-        if callable(self._insert_progress_cb):
-            self._insert_progress_cb(self._insert_index, len(self._insert_lines))
-        if self._insert_index >= len(self._insert_lines):
-            self.text.config(state="disabled")
-            self._insert_after_id = None
-            self.clear_highlights()
-            if self.lines_count:
-                self.highlight_current(0)
-            cb = self._insert_done_cb
-            self._insert_done_cb = None
-            self._insert_progress_cb = None
-            if callable(cb):
-                cb()
-            return
-        self._insert_after_id = self.after(1, self._insert_next_chunk)
-
-    def _start_chunk_insert(
-        self,
-        lines: list[str],
-        chunk_size: int = 200,
-        on_done=None,
-        on_progress=None,
-    ):
-        self._cancel_chunk_insert()
-        self.lines_count = len(lines)
-        self._insert_lines = lines
-        self._insert_index = 0
-        self._insert_chunk_size = max(20, int(chunk_size))
-        self._insert_done_cb = on_done
-        self._insert_progress_cb = on_progress
-        self._sent_upto = -1
-        self._acked_upto = -1
-        self.text.config(state="normal")
-        self.text.delete("1.0", "end")
-        if callable(on_progress):
-            on_progress(0, self.lines_count)
-        self._insert_next_chunk()
-
-    def _line_range(self, idx: int) -> tuple[str, str]:
-        # idx is 0-based gcode index; text lines are 1-based
-        line_no = idx + 1
-        start = f"{line_no}.0"
-        end = f"{line_no}.end"
-        return start, end
-
-    def clear_highlights(self):
-        self.text.config(state="normal")
-        self.text.tag_remove("sent", "1.0", "end")
-        self.text.tag_remove("acked", "1.0", "end")
-        self.text.tag_remove("current", "1.0", "end")
-        self.text.config(state="disabled")
-        self._sent_upto = -1
-        self._acked_upto = -1
-        self._current_idx = -1
-
-    def mark_sent_upto(self, idx: int):
-        if self.lines_count <= 0 or idx < 0:
-            return
-        idx = min(idx, self.lines_count - 1)
-        if idx <= self._sent_upto:
-            return
-        start_line = self._sent_upto + 2
-        end_line = idx + 1
-        self.text.config(state="normal")
-        self.text.tag_add("sent", f"{start_line}.0", f"{end_line}.end")
-        self.text.config(state="disabled")
-        self._sent_upto = idx
-
-    def mark_acked_upto(self, idx: int):
-        if self.lines_count <= 0 or idx < 0:
-            return
-        idx = min(idx, self.lines_count - 1)
-        if idx <= self._acked_upto:
-            return
-        start_line = self._acked_upto + 2
-        end_line = idx + 1
-        self.text.config(state="normal")
-        self.text.tag_remove("sent", f"{start_line}.0", f"{end_line}.end")
-        self.text.tag_add("acked", f"{start_line}.0", f"{end_line}.end")
-        self.text.config(state="disabled")
-        self._acked_upto = idx
-        if self._sent_upto < idx:
-            self._sent_upto = idx
-
-    def mark_sent(self, idx: int):
-        self.mark_sent_upto(idx)
-
-    def mark_acked(self, idx: int):
-        self.mark_acked_upto(idx)
-
-    def highlight_current(self, idx: int):
-        if idx == self._current_idx:
-            return
-        self.text.config(state="normal")
-        if 0 <= self._current_idx < self.lines_count:
-            start, end = self._line_range(self._current_idx)
-            self.text.tag_remove("current", start, end)
-        if 0 <= idx < self.lines_count:
-            start, end = self._line_range(idx)
-            self.text.tag_add("current", start, end)
-            # keep in view
-            self.text.see(start)
-            self._current_idx = idx
-        else:
-            self._current_idx = -1
-        self.text.config(state="disabled")
 
 
 class Toolpath3D(ttk.Frame):
@@ -1938,12 +1036,14 @@ def attach_log_gcode(widget, gcode_or_func):
     except Exception:
         pass
 
+
 def set_kb_id(widget, kb_id: str):
     try:
         widget._kb_id = kb_id
     except Exception:
         pass
     return widget
+
 
 class App(tk.Tk):
     HIDDEN_MPOS_BUTTON_STYLE = "SimpleSender.HiddenMpos.TButton"
@@ -1979,8 +1079,13 @@ class App(tk.Tk):
         self.keyboard_bindings_enabled = tk.BooleanVar(
             value=self.settings.get("keyboard_bindings_enabled", True)
         )
-        self.console_positions_enabled = tk.BooleanVar(value=self.settings.get("console_positions_enabled", True))
-        self.console_status_enabled = tk.BooleanVar(value=self.settings.get("console_status_enabled", True))
+        pos_enabled = bool(self.settings.get("console_positions_enabled", True))
+        status_enabled = bool(self.settings.get("console_status_enabled", True))
+        combined_console_enabled = pos_enabled or status_enabled
+        self.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
+        self.console_status_enabled = tk.BooleanVar(value=combined_console_enabled)
+        self.show_resume_from_button = tk.BooleanVar(value=self.settings.get("show_resume_from_button", True))
+        self.show_recover_button = tk.BooleanVar(value=self.settings.get("show_recover_button", True))
         self.current_line_mode = tk.StringVar(
             value=self.settings.get("current_line_mode", "acked")
         )
@@ -2111,6 +1216,15 @@ class App(tk.Tk):
         self._override_controls = []
         self._xy_step_buttons = []
         self._z_step_buttons = []
+        self.feed_override_scale = None
+        self.spindle_override_scale = None
+        self.feed_override_display = tk.StringVar(value="100%")
+        self.spindle_override_display = tk.StringVar(value="100%")
+        self.override_info_var = tk.StringVar(value="Overrides: Feed 100% | Rapid 100% | Spindle 100%")
+        self._feed_override_slider_locked = False
+        self._spindle_override_slider_locked = False
+        self._feed_override_slider_last_position = 100
+        self._spindle_override_slider_last_position = 100
         self._macro_lock = threading.Lock()
         self._macro_vars_lock = threading.Lock()
         self._macro_local_vars = {"app": self, "os": os}
@@ -2241,8 +1355,6 @@ class App(tk.Tk):
         self._load_grbl_setting_info()
         self._bind_button_logging()
         self._apply_keyboard_bindings()
-        self._display_settings_load_error()
-        self._announce_serial_dependency()
 
     # ---------- UI ----------
     def _build_toolbar(self):
@@ -2318,7 +1430,11 @@ class App(tk.Tk):
         self.btn_alarm_recover.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_alarm_recover, "Show alarm recovery steps.")
 
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
+        self._recover_separator = ttk.Separator(bar, orient="vertical")
+        self._recover_separator.pack(side="left", fill="y", padx=10)
+
+        self._update_resume_button_visibility()
+        self._update_recover_button_visibility()
 
         self.btn_unit_toggle = ttk.Button(bar, text="mm", command=self._toggle_unit_mode)
         set_kb_id(self.btn_unit_toggle, "unit_toggle")
@@ -2328,24 +1444,9 @@ class App(tk.Tk):
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_spindle_on = ttk.Button(bar, text="Spindle ON", command=lambda: self._confirm_and_run("Spindle ON", lambda: self.grbl.spindle_on(12000)))
-        set_kb_id(self.btn_spindle_on, "spindle_on")
-        self.btn_spindle_on.pack(side="left")
-        self._manual_controls.append(self.btn_spindle_on)
-        apply_tooltip(self.btn_spindle_on, "Turn spindle on at default RPM.")
-        attach_log_gcode(self.btn_spindle_on, "M3 S12000")
-        self.btn_spindle_off = ttk.Button(bar, text="Spindle OFF", command=lambda: self._confirm_and_run("Spindle OFF", self.grbl.spindle_off))
-        set_kb_id(self.btn_spindle_off, "spindle_off")
-        self.btn_spindle_off.pack(side="left", padx=(6, 0))
-        self._manual_controls.append(self.btn_spindle_off)
-        apply_tooltip(self.btn_spindle_off, "Turn spindle off.")
-        attach_log_gcode(self.btn_spindle_off, "M5")
-
         # right side status
         self.machine_state_label = ttk.Label(bar, textvariable=self.machine_state)
         self.machine_state_label.pack(side="right")
-
-        self._set_serial_dependency_state(serial is not None)
 
     def _build_main(self):
         style = ttk.Style()
@@ -2583,54 +1684,6 @@ class App(tk.Tk):
 
         self._set_unit_mode(self.unit_mode.get())
 
-        # Right: Overrides
-        ov = ttk.Labelframe(top, text="Feed Override", padding=8)
-        ov.pack(side="left", fill="y", padx=(10, 0))
-        self.btn_fo_plus = ttk.Button(ov, text="+10%", command=lambda: self.grbl.send_realtime(RT_FO_PLUS_10))
-        set_kb_id(self.btn_fo_plus, "feed_override_plus_10")
-        self.btn_fo_plus.pack(fill="x")
-        self._manual_controls.append(self.btn_fo_plus)
-        self._override_controls.append(self.btn_fo_plus)
-        apply_tooltip(self.btn_fo_plus, "Increase feed override by 10%.")
-        attach_log_gcode(self.btn_fo_plus, "RT 0x91")
-        self.btn_fo_minus = ttk.Button(ov, text="-10%", command=lambda: self.grbl.send_realtime(RT_FO_MINUS_10))
-        set_kb_id(self.btn_fo_minus, "feed_override_minus_10")
-        self.btn_fo_minus.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_fo_minus)
-        self._override_controls.append(self.btn_fo_minus)
-        apply_tooltip(self.btn_fo_minus, "Decrease feed override by 10%.")
-        attach_log_gcode(self.btn_fo_minus, "RT 0x92")
-        self.btn_fo_reset = ttk.Button(ov, text="Reset", command=lambda: self.grbl.send_realtime(RT_FO_RESET))
-        set_kb_id(self.btn_fo_reset, "feed_override_reset")
-        self.btn_fo_reset.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_fo_reset)
-        self._override_controls.append(self.btn_fo_reset)
-        apply_tooltip(self.btn_fo_reset, "Reset feed override to 100%.")
-        attach_log_gcode(self.btn_fo_reset, "RT 0x90")
-        ttk.Separator(ov, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Label(ov, text="Spindle Override").pack()
-        self.btn_so_plus = ttk.Button(ov, text="+10%", command=lambda: self.grbl.send_realtime(RT_SO_PLUS_10))
-        set_kb_id(self.btn_so_plus, "spindle_override_plus_10")
-        self.btn_so_plus.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_so_plus)
-        self._override_controls.append(self.btn_so_plus)
-        apply_tooltip(self.btn_so_plus, "Increase spindle override by 10%.")
-        attach_log_gcode(self.btn_so_plus, "RT 0x9A")
-        self.btn_so_minus = ttk.Button(ov, text="-10%", command=lambda: self.grbl.send_realtime(RT_SO_MINUS_10))
-        set_kb_id(self.btn_so_minus, "spindle_override_minus_10")
-        self.btn_so_minus.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_so_minus)
-        self._override_controls.append(self.btn_so_minus)
-        apply_tooltip(self.btn_so_minus, "Decrease spindle override by 10%.")
-        attach_log_gcode(self.btn_so_minus, "RT 0x9B")
-        self.btn_so_reset = ttk.Button(ov, text="Reset", command=lambda: self.grbl.send_realtime(RT_SO_RESET))
-        set_kb_id(self.btn_so_reset, "spindle_override_reset")
-        self.btn_so_reset.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_so_reset)
-        self._override_controls.append(self.btn_so_reset)
-        apply_tooltip(self.btn_so_reset, "Reset spindle override to 100%.")
-        attach_log_gcode(self.btn_so_reset, "RT 0x99")
-
         # Bottom notebook: G-code + Console + Settings
         nb = ttk.Notebook(body)
         self.notebook = nb
@@ -2647,7 +1700,7 @@ class App(tk.Tk):
         self.gcode_load_bar = ttk.Progressbar(stats_row, length=140, mode="determinate")
         self.gcode_load_label = ttk.Label(stats_row, textvariable=self.gcode_load_var, anchor="e")
         self._hide_gcode_loading()
-        self.gview = GcodeText(gtab)
+        self.gview = GcodeViewer(gtab)  # Using refactored GcodeViewer
         self.gview.pack(fill="both", expand=True)
 
         # Console tab
@@ -2699,22 +1752,21 @@ class App(tk.Tk):
         apply_tooltip(self.btn_console_alarms, "Show only alarm entries in the console log.")
         self.btn_console_pos = ttk.Button(
             entry_row,
-            text="Pos: On" if bool(self.console_positions_enabled.get()) else "Pos: Off",
-            command=self._toggle_console_positions,
+            text="Pos/Status: On" if bool(self.console_positions_enabled.get()) else "Pos/Status: Off",
+            command=self._toggle_console_pos_status,
         )
         set_kb_id(self.btn_console_pos, "console_pos_toggle")
         self.btn_console_pos.grid(row=0, column=8, padx=(10, 0))
-        apply_tooltip(self.btn_console_pos, "Show/hide WPos/MPos reports in the console (not saved to log).")
-        self.btn_console_status = ttk.Button(
-            entry_row,
-            text="Status: On" if bool(self.console_status_enabled.get()) else "Status: Off",
-            command=self._toggle_console_status,
+        apply_tooltip(
+            self.btn_console_pos,
+            "Show/hide position and status reports in the console (not saved to log).",
         )
-        set_kb_id(self.btn_console_status, "console_status_toggle")
-        self.btn_console_status.grid(row=0, column=9, padx=(6, 0))
-        apply_tooltip(self.btn_console_status, "Show/hide machine status <...> reports in the console.")
 
         self.cmd_entry.bind("<Return>", lambda e: self._send_console())
+
+        otab = ttk.Frame(nb, padding=6)
+        nb.add(otab, text="Overdrive")
+        self._build_overdrive_tab(otab)
 
         # Raw $$ tab
         rtab = ttk.Frame(nb, padding=6)
@@ -2774,7 +1826,6 @@ class App(tk.Tk):
         nb.add(sstab, text="App Settings")
         sstab.grid_columnconfigure(0, weight=1)
         sstab.grid_rowconfigure(0, weight=1)
-
         self.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
         self.app_settings_canvas.grid(row=0, column=0, sticky="nsew")
         self.app_settings_scroll = ttk.Scrollbar(
@@ -3121,6 +2172,42 @@ class App(tk.Tk):
             self.profile_combo.set(self.active_profile_name.get())
             self._on_profile_select()
 
+        interface_frame = ttk.LabelFrame(self._app_settings_inner, text="Interface", padding=8)
+        interface_frame.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        interface_frame.grid_columnconfigure(0, weight=1)
+        self.resume_button_check = ttk.Checkbutton(
+            interface_frame,
+            text="Show 'Resume From...' button",
+            variable=self.show_resume_from_button,
+            command=self._on_resume_button_visibility_change,
+        )
+        self.resume_button_check.grid(row=0, column=0, sticky="w")
+        apply_tooltip(
+            self.resume_button_check,
+            "Toggle the visibility of the toolbar button that lets you resume from a specific line.",
+        )
+        self.recover_button_check = ttk.Checkbutton(
+            interface_frame,
+            text="Show 'Recover' button",
+            variable=self.show_recover_button,
+            command=self._on_recover_button_visibility_change,
+        )
+        self.recover_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        apply_tooltip(
+            self.recover_button_check,
+            "Show or hide the Recover button that brings up the alarm recovery dialog.",
+        )
+        perf_btn_frame = ttk.Frame(interface_frame)
+        perf_btn_frame.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.btn_performance_mode = ttk.Button(
+            perf_btn_frame,
+            text="Performance: On" if self.performance_mode.get() else "Performance: Off",
+            command=self._toggle_performance,
+        )
+        set_kb_id(self.btn_performance_mode, "toggle_performance")
+        self.btn_performance_mode.pack(side="left")
+        apply_tooltip(self.btn_performance_mode, "Enable performance mode (batch console updates).")
+
         # 3D tab
         ttab = ttk.Frame(nb, padding=6)
         nb.add(ttab, text="3D View")
@@ -3140,7 +2227,6 @@ class App(tk.Tk):
         self._load_3d_view(show_status=False)
         self._apply_toolpath_draw_limits()
         self._apply_toolpath_arc_detail()
-
 
         # Status bar
         status_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
@@ -3191,17 +2277,6 @@ class App(tk.Tk):
             text="Logging: On" if self.gui_logging_enabled.get() else "Logging: Off"
         )
         apply_tooltip(self.btn_toggle_logging, "Toggle GUI button logging in the console.")
-        self.btn_toggle_performance = ttk.Button(
-            status_bar,
-            text="Performance: Off",
-            command=self._toggle_performance,
-        )
-        set_kb_id(self.btn_toggle_performance, "toggle_performance")
-        self.btn_toggle_performance.pack(side="right", padx=(8, 0))
-        self.btn_toggle_performance.config(
-            text="Performance: On" if self.performance_mode.get() else "Performance: Off"
-        )
-        apply_tooltip(self.btn_toggle_performance, "Enable performance mode (batch console updates).")
         self.btn_toggle_3d = ttk.Button(
             status_bar,
             text="3D Render: On",
@@ -3227,12 +2302,220 @@ class App(tk.Tk):
         self._state_default_fg = self.status.cget("foreground") or "#000000"
         self._apply_state_fg(None)
 
-        self.macro_frames = {
-            "left": macro_left,
-            "right": macro_right,
-        }
-        self._load_macro_buttons()
-        self._update_tab_visibility()
+    def _build_overdrive_tab(self, parent):
+        container = ttk.Frame(parent)
+        container.pack(fill="both", expand=True)
+
+        spindle_frame = ttk.Labelframe(container, text="Spindle Control", padding=8)
+        spindle_frame.pack(fill="x", pady=(0, 10))
+        self.btn_spindle_on = ttk.Button(
+            spindle_frame,
+            text="Spindle ON",
+            command=lambda: self._confirm_and_run("Spindle ON", lambda: self.grbl.spindle_on(DEFAULT_SPINDLE_RPM)),
+        )
+        set_kb_id(self.btn_spindle_on, "spindle_on")
+        self.btn_spindle_on.pack(side="left", padx=(0, 6))
+        self._manual_controls.append(self.btn_spindle_on)
+        apply_tooltip(self.btn_spindle_on, "Turn spindle on at default RPM.")
+        attach_log_gcode(self.btn_spindle_on, f"M3 S{DEFAULT_SPINDLE_RPM}")
+
+        self.btn_spindle_off = ttk.Button(
+            spindle_frame,
+            text="Spindle OFF",
+            command=lambda: self._confirm_and_run("Spindle OFF", self.grbl.spindle_off),
+        )
+        set_kb_id(self.btn_spindle_off, "spindle_off")
+        self.btn_spindle_off.pack(side="left")
+        self._manual_controls.append(self.btn_spindle_off)
+        apply_tooltip(self.btn_spindle_off, "Turn spindle off.")
+        attach_log_gcode(self.btn_spindle_off, "M5")
+
+        info_label = ttk.Label(container, textvariable=self.override_info_var, anchor="center")
+        info_label.pack(fill="x", pady=(0, 10))
+
+        feed_frame = ttk.Labelframe(container, text="Feed Override", padding=8)
+        feed_frame.pack(fill="x", pady=(0, 10))
+        feed_slider_row = ttk.Frame(feed_frame)
+        feed_slider_row.pack(fill="x", pady=(0, 6))
+        self.feed_override_scale = ttk.Scale(
+            feed_slider_row,
+            from_=50,
+            to=150,
+            orient="horizontal",
+            command=self._on_feed_override_slider,
+        )
+        self.feed_override_scale.pack(side="left", fill="x", expand=True)
+        self.feed_override_scale.set(100)
+        ttk.Label(feed_slider_row, textvariable=self.feed_override_display).pack(side="right", padx=(10, 0))
+
+        feed_btn_row = ttk.Frame(feed_frame)
+        feed_btn_row.pack(fill="x")
+        self.btn_fo_plus = ttk.Button(feed_btn_row, text="+10%", command=lambda: self.grbl.send_realtime(RT_FO_PLUS_10))
+        set_kb_id(self.btn_fo_plus, "feed_override_plus_10")
+        self.btn_fo_plus.pack(side="left", expand=True, fill="x")
+        self._manual_controls.append(self.btn_fo_plus)
+        self._override_controls.append(self.btn_fo_plus)
+        apply_tooltip(self.btn_fo_plus, "Increase feed override by 10%.")
+        attach_log_gcode(self.btn_fo_plus, "RT 0x91")
+
+        self.btn_fo_minus = ttk.Button(feed_btn_row, text="-10%", command=lambda: self.grbl.send_realtime(RT_FO_MINUS_10))
+        set_kb_id(self.btn_fo_minus, "feed_override_minus_10")
+        self.btn_fo_minus.pack(side="left", expand=True, fill="x", padx=6)
+        self._manual_controls.append(self.btn_fo_minus)
+        self._override_controls.append(self.btn_fo_minus)
+        apply_tooltip(self.btn_fo_minus, "Decrease feed override by 10%.")
+        attach_log_gcode(self.btn_fo_minus, "RT 0x92")
+
+        self.btn_fo_reset = ttk.Button(feed_btn_row, text="Reset", command=lambda: self.grbl.send_realtime(RT_FO_RESET))
+        set_kb_id(self.btn_fo_reset, "feed_override_reset")
+        self.btn_fo_reset.pack(side="left", expand=True, fill="x")
+        self._manual_controls.append(self.btn_fo_reset)
+        self._override_controls.append(self.btn_fo_reset)
+        apply_tooltip(self.btn_fo_reset, "Reset feed override to 100%.")
+        attach_log_gcode(self.btn_fo_reset, "RT 0x90")
+
+        spindle_override_frame = ttk.Labelframe(container, text="Spindle Override", padding=8)
+        spindle_override_frame.pack(fill="x", pady=(0, 10))
+        spindle_slider_row = ttk.Frame(spindle_override_frame)
+        spindle_slider_row.pack(fill="x", pady=(0, 6))
+        self.spindle_override_scale = ttk.Scale(
+            spindle_slider_row,
+            from_=50,
+            to=150,
+            orient="horizontal",
+            command=self._on_spindle_override_slider,
+        )
+        self.spindle_override_scale.pack(side="left", fill="x", expand=True)
+        self.spindle_override_scale.set(100)
+        ttk.Label(spindle_slider_row, textvariable=self.spindle_override_display).pack(side="right", padx=(10, 0))
+
+        spindle_btn_row = ttk.Frame(spindle_override_frame)
+        spindle_btn_row.pack(fill="x")
+        self.btn_so_plus = ttk.Button(spindle_btn_row, text="+10%", command=lambda: self.grbl.send_realtime(RT_SO_PLUS_10))
+        set_kb_id(self.btn_so_plus, "spindle_override_plus_10")
+        self.btn_so_plus.pack(side="left", expand=True, fill="x")
+        self._manual_controls.append(self.btn_so_plus)
+        self._override_controls.append(self.btn_so_plus)
+        apply_tooltip(self.btn_so_plus, "Increase spindle override by 10%.")
+        attach_log_gcode(self.btn_so_plus, "RT 0x9A")
+
+        self.btn_so_minus = ttk.Button(spindle_btn_row, text="-10%", command=lambda: self.grbl.send_realtime(RT_SO_MINUS_10))
+        set_kb_id(self.btn_so_minus, "spindle_override_minus_10")
+        self.btn_so_minus.pack(side="left", expand=True, fill="x", padx=6)
+        self._manual_controls.append(self.btn_so_minus)
+        self._override_controls.append(self.btn_so_minus)
+        apply_tooltip(self.btn_so_minus, "Decrease spindle override by 10%.")
+        attach_log_gcode(self.btn_so_minus, "RT 0x9B")
+
+        self.btn_so_reset = ttk.Button(spindle_btn_row, text="Reset", command=lambda: self.grbl.send_realtime(RT_SO_RESET))
+        set_kb_id(self.btn_so_reset, "spindle_override_reset")
+        self.btn_so_reset.pack(side="left", expand=True, fill="x")
+        self._manual_controls.append(self.btn_so_reset)
+        self._override_controls.append(self.btn_so_reset)
+        apply_tooltip(self.btn_so_reset, "Reset spindle override to 100%.")
+        attach_log_gcode(self.btn_so_reset, "RT 0x99")
+        self._set_feed_override_slider_value(100)
+        self._set_spindle_override_slider_value(100)
+        self._refresh_override_info()
+
+    def _normalize_override_slider_value(self, raw_value, minimum=50, maximum=150):
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        value = max(minimum, min(maximum, value))
+        rounded = int(round(value / 10.0)) * 10
+        if rounded < minimum:
+            rounded = minimum
+        if rounded > maximum:
+            rounded = maximum
+        return rounded
+
+    def _set_override_scale(self, scale_attr, value, lock_attr):
+        scale = getattr(self, scale_attr, None)
+        if not scale:
+            return
+        setattr(self, lock_attr, True)
+        try:
+            scale.set(value)
+        finally:
+            setattr(self, lock_attr, False)
+
+    def _handle_override_slider_change(
+        self,
+        raw_value,
+        last_attr,
+        scale_attr,
+        lock_attr,
+        display_var,
+        plus_cmd,
+        minus_cmd,
+    ):
+        if getattr(self, lock_attr):
+            return
+        target = self._normalize_override_slider_value(raw_value)
+        if target is None:
+            return
+        last = getattr(self, last_attr, 100)
+        if target == last:
+            return
+        delta = target - last
+        self._send_override_delta(delta, plus_cmd, minus_cmd)
+        setattr(self, last_attr, target)
+        display_var.set(f"{target}%")
+        self._set_override_scale(scale_attr, target, lock_attr)
+
+    def _on_feed_override_slider(self, raw_value):
+        self._handle_override_slider_change(
+            raw_value,
+            "_feed_override_slider_last_position",
+            "feed_override_scale",
+            "_feed_override_slider_locked",
+            self.feed_override_display,
+            RT_FO_PLUS_10,
+            RT_FO_MINUS_10,
+        )
+
+    def _on_spindle_override_slider(self, raw_value):
+        self._handle_override_slider_change(
+            raw_value,
+            "_spindle_override_slider_last_position",
+            "spindle_override_scale",
+            "_spindle_override_slider_locked",
+            self.spindle_override_display,
+            RT_SO_PLUS_10,
+            RT_SO_MINUS_10,
+        )
+
+    def _send_override_delta(self, delta, plus_cmd, minus_cmd):
+        if not self.grbl.is_connected() or delta == 0:
+            return
+        step = 10
+        while delta >= step:
+            self.grbl.send_realtime(plus_cmd)
+            delta -= step
+        while delta <= -step:
+            self.grbl.send_realtime(minus_cmd)
+            delta += step
+
+    def _set_feed_override_slider_value(self, value):
+        self.feed_override_display.set(f"{value}%")
+        self._feed_override_slider_last_position = value
+        self._set_override_scale("feed_override_scale", value, "_feed_override_slider_locked")
+
+    def _set_spindle_override_slider_value(self, value):
+        self.spindle_override_display.set(f"{value}%")
+        self._spindle_override_slider_last_position = value
+        self._set_override_scale("spindle_override_scale", value, "_spindle_override_slider_locked")
+
+    def _refresh_override_info(self):
+        with self._macro_vars_lock:
+            feed = self._macro_vars.get("OvFeed", 100)
+            rapid = self._macro_vars.get("OvRapid", 100)
+            spindle = self._macro_vars.get("OvSpindle", 100)
+        self.override_info_var.set(
+            f"Overrides — Feed: {feed}% | Rapid: {rapid}% | Spindle: {spindle}%"
+        )
 
     def _dro_value_row(self, parent, axis, var):
         row = ttk.Frame(parent)
@@ -3342,8 +2625,6 @@ class App(tk.Tk):
         )
         if SERIAL_IMPORT_ERROR:
             msg += f"\n{SERIAL_IMPORT_ERROR}"
-        self._set_serial_dependency_state(False)
-        self._announce_serial_dependency()
         messagebox.showerror("Missing dependency", msg)
         return False
 
@@ -4580,34 +3861,6 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _set_serial_dependency_state(self, enabled: bool):
-        state = "normal" if enabled else "disabled"
-        try:
-            self.btn_conn.config(state=state)
-        except Exception:
-            pass
-        try:
-            self.btn_refresh.config(state=state)
-        except Exception:
-            pass
-        try:
-            self.port_combo.config(state="readonly" if enabled else "disabled")
-        except Exception:
-            pass
-
-    def _announce_serial_dependency(self):
-        if serial is not None:
-            return
-        msg = "Missing pyserial: install via 'pip install pyserial' to enable serial controls."
-        try:
-            self.status.config(text=msg)
-        except Exception:
-            pass
-        try:
-            self._log(f"[startup] {msg}")
-        except Exception:
-            pass
-
     def _format_alarm_message(self, message: str | None) -> str:
         if not message:
             return "ALARM"
@@ -5712,6 +4965,8 @@ class App(tk.Tk):
         if tag is None:
             tag = self._console_tag_for_line(s)
         entry = (s, tag)
+        if self._should_skip_console_entry_for_toggles(entry):
+            return
         self._console_lines.append(entry)
         overflow = len(self._console_lines) - MAX_CONSOLE_LINES
         if overflow > 0:
@@ -5785,13 +5040,28 @@ class App(tk.Tk):
         if for_save and self._is_position_line(s):
             return False
         is_pos = self._is_position_line(s)
-        if (not for_save) and is_pos and not bool(self.console_positions_enabled.get()):
-            return False
+        enabled = bool(self.console_positions_enabled.get())
         is_status = self._is_status_line(s)
-        if (not for_save) and is_status and not bool(self.console_status_enabled.get()):
-            if ("ALARM" not in upper) and ("ERROR" not in upper):
+        if (not for_save) and not enabled:
+            if is_pos:
+                return False
+            if is_status and ("ALARM" not in upper) and ("ERROR" not in upper):
                 return False
         return True
+
+    def _should_skip_console_entry_for_toggles(self, entry) -> bool:
+        if isinstance(entry, tuple):
+            s, _ = entry
+        else:
+            s = str(entry)
+        enabled = bool(self.console_positions_enabled.get())
+        if not enabled and self._is_position_line(s):
+            return True
+        upper = s.upper()
+        if not enabled and self._is_status_line(s):
+            if ("ALARM" not in upper) and ("ERROR" not in upper):
+                return True
+        return False
 
     def _should_suppress_rx_log(self, raw: str) -> bool:
         if not bool(self.performance_mode.get()):
@@ -6069,7 +5339,7 @@ class App(tk.Tk):
         new_val = not current
         self.performance_mode.set(new_val)
         try:
-            self.btn_toggle_performance.config(
+            self.btn_performance_mode.config(
                 text="Performance: On" if new_val else "Performance: Off"
             )
         except Exception:
@@ -6078,20 +5348,13 @@ class App(tk.Tk):
             self._flush_console_updates()
         self._apply_status_poll_profile()
 
-    def _toggle_console_positions(self):
+    def _toggle_console_pos_status(self):
         current = bool(self.console_positions_enabled.get())
         new_val = not current
         self.console_positions_enabled.set(new_val)
-        if hasattr(self, "btn_console_pos"):
-            self.btn_console_pos.config(text="Pos: On" if new_val else "Pos: Off")
-        self._render_console()
-
-    def _toggle_console_status(self):
-        current = bool(self.console_status_enabled.get())
-        new_val = not current
         self.console_status_enabled.set(new_val)
-        if hasattr(self, "btn_console_status"):
-            self.btn_console_status.config(text="Status: On" if new_val else "Status: Off")
+        if hasattr(self, "btn_console_pos"):
+            self.btn_console_pos.config(text="Pos/Status: On" if new_val else "Pos/Status: Off")
         self._render_console()
 
     def _toggle_render_3d(self):
@@ -6174,6 +5437,42 @@ class App(tk.Tk):
     def _toggle_unit_mode(self):
         new_mode = "inch" if self.unit_mode.get() == "mm" else "mm"
         self._set_unit_mode(new_mode)
+
+    def _on_resume_button_visibility_change(self):
+        self.settings["show_resume_from_button"] = bool(self.show_resume_from_button.get())
+        self._update_resume_button_visibility()
+
+    def _on_recover_button_visibility_change(self):
+        self.settings["show_recover_button"] = bool(self.show_recover_button.get())
+        self._update_recover_button_visibility()
+
+    def _update_resume_button_visibility(self):
+        if not hasattr(self, "btn_resume_from"):
+            return
+        visible = bool(self.show_resume_from_button.get())
+        if visible:
+            if not self.btn_resume_from.winfo_ismapped():
+                pack_kwargs = {"side": "left", "padx": (6, 0)}
+                before_widget = getattr(self, "btn_unlock_top", None)
+                if before_widget and before_widget.winfo_exists():
+                    pack_kwargs["before"] = before_widget
+                self.btn_resume_from.pack(**pack_kwargs)
+        else:
+            self.btn_resume_from.pack_forget()
+
+    def _update_recover_button_visibility(self):
+        if not hasattr(self, "btn_alarm_recover"):
+            return
+        visible = bool(self.show_recover_button.get())
+        if visible:
+            if not self.btn_alarm_recover.winfo_ismapped():
+                pack_kwargs = {"side": "left", "padx": (6, 0)}
+                separator = getattr(self, "_recover_separator", None)
+                if separator and separator.winfo_exists():
+                    pack_kwargs["before"] = separator
+                self.btn_alarm_recover.pack(**pack_kwargs)
+        else:
+            self.btn_alarm_recover.pack_forget()
 
 
     def _confirm_and_run(self, label: str, func):
@@ -6276,16 +5575,6 @@ class App(tk.Tk):
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
-
-    def _is_ready_for_run(self) -> bool:
-        """Return True if GRBL is ready to accept a new stream."""
-        return (
-            self.connected
-            and self._grbl_ready
-            and self._status_seen
-            and not self._alarm_locked
-            and (self._stream_state not in ("running", "paused"))
-        )
 
     def _handle_evt(self, evt):
         kind = evt[0]
@@ -6482,7 +5771,13 @@ class App(tk.Tk):
             if self._grbl_ready and self._pending_settings_refresh and not self._alarm_locked:
                 self._pending_settings_refresh = False
                 self._request_settings_dump()
-            if self._is_ready_for_run():
+            if (
+                self.connected
+                and self._grbl_ready
+                and self._status_seen
+                and not self._alarm_locked
+                and self._stream_state not in ("running", "paused")
+            ):
                 self._set_manual_controls_enabled(True)
                 if self.gview.lines_count:
                     self.btn_run.config(state="normal")
@@ -6567,9 +5862,11 @@ class App(tk.Tk):
                 with self._macro_vars_lock:
                     self._macro_vars["pins"] = pins
             if ov:
+                feed_val = spindle_val = None
                 try:
                     ov_parts = [int(float(v)) for v in ov.split(",")]
                     if len(ov_parts) >= 3:
+                        feed_val, spindle_val = ov_parts[0], ov_parts[2]
                         with self._macro_vars_lock:
                             changed = (
                                 self._macro_vars.get("OvFeed") != ov_parts[0]
@@ -6582,6 +5879,12 @@ class App(tk.Tk):
                             self._macro_vars["_OvChanged"] = bool(changed)
                 except Exception:
                     pass
+                else:
+                    if feed_val is not None:
+                        self._set_feed_override_slider_value(feed_val)
+                    if spindle_val is not None:
+                        self._set_spindle_override_slider_value(spindle_val)
+                    self._refresh_override_info()
             pin_state = {c for c in (pins or "").upper() if c.isalpha()}
             endstop_active = bool(pin_state & {"X", "Y", "Z"})
             probe_active = bool(pin_state & {"P"}) or bool(self._macro_vars.get("PRB"))
@@ -7279,35 +6582,14 @@ class App(tk.Tk):
         return True
 
     def _load_settings(self) -> dict:
-        self._settings_load_error_message = None
         try:
             with open(self.settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
-        except json.JSONDecodeError as exc:
-            self._settings_load_error_message = f"Invalid settings: {exc}"
-            corrupt_path = self.settings_path + ".corrupt"
-            try:
-                os.replace(self.settings_path, corrupt_path)
-            except Exception:
-                pass
-        except Exception as exc:
-            self._settings_load_error_message = f"Failed to load settings: {exc}"
+        except Exception:
+            pass
         return {}
-
-    def _display_settings_load_error(self):
-        message = getattr(self, "_settings_load_error_message", None)
-        if not message:
-            return
-        try:
-            self.status.config(text=message)
-        except Exception:
-            pass
-        try:
-            self._log(f"[settings] {message}")
-        except Exception:
-            pass
 
     def _save_settings(self):
         def safe_float(var, default, label):
@@ -7340,6 +6622,8 @@ class App(tk.Tk):
         except Exception:
             pass
 
+        pos_status_enabled = bool(self.console_positions_enabled.get())
+
         data = {
             "last_port": self.current_port.get(),
             "unit_mode": self.unit_mode.get(),
@@ -7366,8 +6650,10 @@ class App(tk.Tk):
             "all_stop_mode": self.all_stop_mode.get(),
             "training_wheels": bool(self.training_wheels.get()),
             "reconnect_on_open": bool(self.reconnect_on_open.get()),
-            "console_positions_enabled": bool(self.console_positions_enabled.get()),
-            "console_status_enabled": bool(self.console_status_enabled.get()),
+            "console_positions_enabled": pos_status_enabled,
+            "console_status_enabled": pos_status_enabled,
+            "show_resume_from_button": bool(self.show_resume_from_button.get()),
+            "show_recover_button": bool(self.show_recover_button.get()),
             "fallback_rapid_rate": self.fallback_rapid_rate.get().strip(),
             "estimate_factor": safe_float(self.estimate_factor, self.settings.get("estimate_factor", 1.0), "estimate factor"),
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
@@ -7384,32 +6670,13 @@ class App(tk.Tk):
             "toolpath_show_arc": show_arc,
         }
         self.settings = data
-        tmp_path = self.settings_path + ".tmp"
-        backup_path = self.settings_path + ".backup"
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with open(self.settings_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, sort_keys=True)
-            if os.path.exists(self.settings_path):
-                try:
-                    shutil.copy2(self.settings_path, backup_path)
-                except Exception:
-                    pass
-            os.replace(tmp_path, self.settings_path)
         except Exception as exc:
             try:
                 self.ui_q.put(("log", f"[settings] Save failed: {exc}"))
                 self.status.config(text="Settings save failed")
-            except Exception:
-                pass
-            try:
-                if os.path.exists(backup_path):
-                    shutil.copy2(backup_path, self.settings_path)
-            except Exception:
-                pass
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
             except Exception:
                 pass
 

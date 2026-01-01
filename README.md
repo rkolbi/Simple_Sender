@@ -1,4 +1,4 @@
-# Simple Sender – Full Manual
+# Simple Sender - Full Manual
 
 Minimal, reliable GRBL 1.1h sender for 3-axis controllers. Python + Tkinter + pyserial. This manual is the single place to learn, use, and troubleshoot the app.
 
@@ -28,14 +28,17 @@ Safety: Alpha software. Test in air with spindle off.
 
 ## Overview
 - Target: GRBL 1.1h, 3-axis.
-- Character-count streaming with live buffer fill.
+- Character-count streaming with Bf-informed RX window; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
-- Read-only file load (“Read G-code”), clear/unload button, inline status/progress.
+- Read-only file load (Read G-code), clear/unload button, inline status/progress.
+- Resume From... dialog to continue a job with modal re-sync and safety warnings.
+- Performance mode: batches console updates, suppresses per-line RX logs during streaming, adapts status polling by state.
+- Overdrive tab: spindle control plus feed/spindle override sliders with nice sliding controls and +/-/reset shortcuts keep the console tidy while the live override summary mirrors GRBL's Ov* values and slider moves send the matching 10% real-time override bytes.
+- Machine profiles for units + max rates; estimates prefer GRBL settings, then profile, then fallback.
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Macros: left-click to run, right-click to preview.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
-
 ## Requirements & Installation
 - Python 3.x, Tkinter (bundled), pyserial.
 ```powershell
@@ -46,7 +49,7 @@ pip install pyserial
 
 ## Launching
 ```powershell
-python simple-sender.py
+python main.py
 ```
 
 ## Safety Basics
@@ -60,10 +63,11 @@ python simple-sender.py
 This is a practical, end-to-end flow with rationale for key options.
 
 1) **Connect and handshake**
-   - Pick your COM port (auto-selects last if “Reconnect to last port on open” is enabled in App Settings).
+   - Pick your COM port (auto-selects last if "Reconnect to last port on open" is enabled in App Settings).
    - Click Connect (Training Wheels may prompt). The app waits for the GRBL banner and first status before enabling controls and $$; this avoids startup races.
 2) **Confirm machine readiness**
-   - If the state is Alarm, use **Unlock ($X)** or **Home ($H)**. The top-bar Unlock is always available; it’s safest to home if switches exist.
+   - If the state is Alarm, use **Unlock ($X)** or **Home ($H)**. The top-bar Unlock is always available; it is safest to home if switches exist.
+   - Use **Recover** to see alarm recovery steps and quick actions.
    - Verify limits/homing are configured in GRBL ($20/$21/$22) as needed.
    - Check DRO updates (MPos/WPos) to ensure status is flowing; idle status spam is muted in the console but still processed.
 3) **Set units and jogging**
@@ -72,33 +76,28 @@ This is a practical, end-to-end flow with rationale for key options.
 4) **Load G-code**
    - Click **Read G-code**; file is read-only, comments/% lines stripped, chunked if large. Use **Clear G-code** to unload if needed.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
-   - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate in App Settings and adjust the estimate factor.
-5) **App safety options**
-   - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
-   - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
-   - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
-6) **Prepare the machine**
-   - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
-   - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
+   - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
+   - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
+ 5) **App safety options**
+    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
+    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
+    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
+    - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
+ 6) **Prepare the machine**
+    - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
+    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
+    - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts; each slider move nudges GRBL in 10% steps while the override summary mirrors the current Ov* values.
 7) **Start and monitor**
-   - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and progress update as acks arrive.
+   - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
-   - Idle status logs are muted, but status drives DRO/overrides; overrides buttons (feed/spindle) send RT codes.
 8) **Alarms / errors**
-   - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Console filters can show ALARMS/ERRORS quickly.
-   - Clear with $X/$H, re-home if needed, and reload if appropriate.
+   - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
+   - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
 9) **Settings and tuning**
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
    - Raw $$ tab keeps the text capture.
 10) **Macros**
     - Left-click to run; right-click to preview contents. Macros blocked during streaming/alarms; `%wait/%msg/%update` supported.
-
-When to enable/disable options:
-- **Training Wheels ON** for new users, shared machines, or risky setups; OFF for faster ops once comfortable.
-- **Auto-reconnect ON** for field/production where USB drops happen; OFF in controlled labs to avoid unplanned reconnects.
-- **3D View OFF** on low-end machines or huge files; ON for visual sanity checks.
-- **Idle status mute** is fixed for console; toggle GUI logging if you don’t want button logs.
-
 ## Quick Start Workflow
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
@@ -107,60 +106,59 @@ When to enable/disable options:
 5) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
-- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Unlock, unit toggle (mm/inch), Spindle ON/OFF.
+- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch), Spindle ON/OFF.
 - **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Feed/Spindle overrides.
 - **Tabs:**
   - G-code viewer (highlights sent/acked/current; light colors).
   - Console (log + manual command entry; filters).
   - Raw $$ (captured settings dump).
   - GRBL Settings (editable table, tooltips, pending-change highlight).
-  - App Settings (ALL STOP mode, estimation factor/fallback, keybindings, Training Wheels, auto-reconnect).
+  - App Settings (ALL STOP mode, estimation factor/fallback, status polling, machine profiles, keybindings, Training Wheels, auto-reconnect, and the Interface block for toggling Performance mode plus resume/recover button visibility).
+  - Overdrive (Spindle ON/OFF plus feed/spindle override sliders with nice sliding controls, +/-/reset shortcuts, and a live override summary that follows GRBL's Ov* values while slider moves send the matching 10% real-time override bytes).
   - 3D View (toggle render, save/load view).
-- **Status bar:** Progress, buffer fill, status LEDs (Endstops/Probe/Hold), and toggle buttons (tooltips/logging/3D render/keybindings).
-
+- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and toggle buttons for tooltips, logging, 3D render, and keybindings (performance mode now lives in the App Settings Interface block).
 ## Status Lights
 - **Placement:** The LEDs sit inline with the status bar so they stay next to the logging/3D/keybinding toggles and provide a quick glance of machine triggers.
-- **Meaning & data source:** GRBL 1.1h’s status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|…>`). We mirror gSender’s approach:
+- **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). We mirror gSender's approach:
   - `X`, `Y`, `Z` light the **Endstops** indicator whenever those limit pins feed a high signal.
   - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
   - `H` or the textual **Hold** state lights the **Hold** LED while GRBL is paused/feed-hold.
-- **How to use them:** Watch them before you jog to confirm no limits are stuck, rely on the Probe LED during probing macros, and note Hold when you issue `!`/`~`. They’re purely informational; the rest of the UI still enforces streaming locks, alarms, and macro gating.
-
+- **How to use them:** Watch them before you jog to confirm no limits are stuck, rely on the Probe LED during probing macros, and note Hold when you issue `!`/`~`. They are purely informational; the rest of the UI still enforces streaming locks, alarms, and macro gating.
 ## Core Behaviors
 - **Handshake:** Waits for GRBL banner or status + first status report before enabling controls/$$.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
-- **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects “Reconnect to last port on open”.
-- **Alarms:** ALARM:x, “[MSG:Reset to continue]”, or status Alarm → stop/clear queues, lock controls except Unlock/Home/ALL STOP.
+- **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
+- **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
+- **Performance mode:** Batches console updates, suppresses per-line RX logging during streaming, and adapts status polling by state.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
-
 ## Jobs, Files, and Streaming
 - **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads.
-- **Streaming:** Character-counting; uses `Bf:` to size window; stops on error/alarm; buffer fill shown.
+- **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown.
+- **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting; status/progress bar; live estimate while running.
-
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
 - Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.
 
 ## Console & Manual Commands
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
-- Filters: ALL / ERRORS / ALARMS. TX/RX logged (idle suppressed).
-
+- Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
+- Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
 ## GRBL Settings UI
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-- **File format & placement.** Store macros in the same folder as `simple-sender.py` with names `Macro-1` … `Macro-7` (legacy `Maccro-*` files and optional `.txt` extensions remain compatible). The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
-- **Why bCNC macros inspired this section.** The macro subsystem mirrors the flexibility of bCNC’s macros: you can interleave GRBL commands, real-time bytes, directives like `%wait`, expressions, and Python snippets. Like bCNC, the sender maintains `_macro_vars`, emulates `$J=` jog semantics, and exposes helper macros (print, prompt, etc.) so that you can stitch together familiar motion flows from a single file without building a separate script.
+- **File format & placement.** Store macros alongside `main.py` (or in its parent directory) using names `Macro-1` through `Macro-7`; legacy `Maccro-*` files and optional `.txt` extensions remain compatible. The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
+- **Why bCNC macros inspired this section.** The macro subsystem mirrors the flexibility of bCNC's macros: you can interleave GRBL commands, real-time bytes, directives like `%wait`, expressions, and Python snippets. Like bCNC, the sender maintains `_macro_vars`, emulates `$J=` jog semantics, and exposes helper macros (print, prompt, etc.) so that you can stitch together familiar motion flows from a single file without building a separate script.
 - **Supported directives & commands.** The macro interpreter blends GRBL motion with helper directives:
   - `%wait`, `%msg`, and `%update` behave like their bCNC counterparts: pause until idle, log operator-facing text, or request a status update.
   - `%if running` skips the current line when a job is already in progress.
-  - Control keywords (`M0/M00/PROMPT`, `ABSOLUTE/ABS`, `RELATIVE/REL`, `HOME`, `UNLOCK`, `RESET`, `PAUSE`, `RESUME`, `FEEDHOLD`, `STOP`, `RUN`, `SAFE`, `SET0/SETX/SETY/SETZ/SET`, `LOAD <path>`, `OPEN`, `CLOSE`, `HELP`, `QUIT/EXIT`, `SENDHEX`, and more) invoke the sender’s helpers, so you can open/close the machine, toggle offsets, or trigger custom logic without writing raw G-code.
-  - Prefixing a line with `!`, `~`, `?`, or the Ctrl-X byte (`\x18`) sends the equivalent real-time command; lines starting with `$`, `@`, `{`, comments in `(…)` or `;…`, or those matching the `MACRO_GPAT` regex are forwarded verbatim.
+  - Control keywords (`M0/M00/PROMPT`, `ABSOLUTE/ABS`, `RELATIVE/REL`, `HOME`, `UNLOCK`, `RESET`, `PAUSE`, `RESUME`, `FEEDHOLD`, `STOP`, `RUN`, `SAFE`, `SET0/SETX/SETY/SETZ/SET`, `LOAD <path>`, `OPEN`, `CLOSE`, `HELP`, `QUIT/EXIT`, `SENDHEX`, and more) invoke the sender's helpers, so you can open/close the machine, toggle offsets, or trigger custom logic without writing raw G-code.
+  - Prefixing a line with `!`, `~`, `?`, or the Ctrl-X byte (`\x18`) sends the equivalent real-time command; lines starting with `$`, `@`, `{`, comments in `(...)` or `;...`, or those matching the `MACRO_GPAT` regex are forwarded verbatim.
   - Pure G-code lines (e.g., `G0`, `G1`, `M3`, `M5`, `G92`, and any other GRBL commands) are sent directly to the controller.
-  - **Prompt customization & state tracking.** `M0`, `M00`, and `PROMPT` lines present the modal built in `_show_macro_prompt`. Text can come from a trailing comment (e.g., `M0 (What’s next?)`) or from tokens such as `title=`, `msg=`/`message=`/`text=`, and `buttons=` (comma- or pipe-separated) to add extra options next to the default Resume/Cancel pair. Add `noresume` to hide the Resume button or rename buttons via `resume=`/`resumelabel=` and `cancel=`/`cancellabel=`. When the user picks a choice, the macro stores it in `_macro_vars["prompt_choice"]`, `_macro_vars["prompt_index"]`, and `_macro_vars["prompt_cancelled"]`, logs the selection, and either continues or aborts (Cancel immediately stops the macro).
+  - **Prompt customization & state tracking.** `M0`, `M00`, and `PROMPT` lines present the modal built in `_show_macro_prompt`. Text can come from a trailing comment (e.g., `M0 (What's next?)`) or from tokens such as `title=`, `msg=`/`message=`/`text=`, and `buttons=` (comma- or pipe-separated) to add extra options next to the default Resume/Cancel pair. Add `noresume` to hide the Resume button or rename buttons via `resume=`/`resumelabel=` and `cancel=`/`cancellabel=`. When the user picks a choice, the macro stores it in `_macro_vars["prompt_choice"]`, `_macro_vars["prompt_index"]`, and `_macro_vars["prompt_cancelled"]`, logs the selection, and either continues or aborts (Cancel immediately stops the macro).
   - **Logging, threading, and safety.** Macros run on a background worker (`_run_macro_worker`), log their name/tip/contents when GUI logging is enabled, and respect the streaming/alarm gate and Training Wheels confirmations so they only run when it is safe. `_macro_lock` serializes macro execution, is always released (even on exceptions), and the runner flips `_macro_vars["running"]` so `%wait`/`_macro_wait_for_idle()` stream updates know when to block or resume.
-- **Mixing Python & GRBL.** Lines that begin with `_` run as Python (`_safe_height = …`). You can reference live variables in `_macro_vars` (e.g., `wx`, `wy`, `wz`, `OvFeed`, `safe`), call the UI via `app`/`os`, or log with `app._log(...)`. Wrap Python expressions in square brackets (`G0 Z[_safe_height]`), and the expression is evaluated before the line is streamed. Use `%msg`/`%update` inside macros for progress updates or for prompting the operator mid-sequence.
+- **Mixing Python & GRBL.** Lines that begin with `_` run as Python (`_safe_height = ...`). You can reference live variables in `_macro_vars` (e.g., `wx`, `wy`, `wz`, `OvFeed`, `safe`), call the UI via `app`/`os`, or log with `app._log(...)`. Wrap Python expressions in square brackets (`G0 Z[_safe_height]`), and the expression is evaluated before the line is streamed. Use `%msg`/`%update` inside macros for progress updates or for prompting the operator mid-sequence.
 - **Example macro (raise Z and park).**
   ```text
   Park & lift
@@ -176,8 +174,8 @@ When to enable/disable options:
   1. Use a Python helper to compute `_safe_height` (leveraging the pre-populated `_macro_vars` dictionary).
   2. Emit `%msg` notifications before and after motion.
   3. Mix G-code with embedded expressions (`[...]`), send absolute moves (`G90`/`G0`), and park at a known location.
-  You can expand this template with `%wait`, conditional Python (`if _safe_height < 10.0: …`), or macros that interact with `app` (e.g., `app._log(...)`) before/after sending commands. Macros always release `_macro_lock`, so even a raised exception won’t hang the UI.
- - **Variable math + GRBL example.**
+  You can expand this template with `%wait`, conditional Python (`if _safe_height < 10.0: ...`), or macros that interact with `app` (e.g., `app._log(...)`) before/after sending commands. Macros always release `_macro_lock`, so even a raised exception won't hang the UI.
+- **Variable math + GRBL example.**
   ```text
   Offset jog
   Compute a dynamic X offset and move there with mixed Python/math.
@@ -189,7 +187,7 @@ When to enable/disable options:
   ```
   This illustrates setting a variable, performing math against live data, and passing that result straight into a GRBL move (`G0 X[_target]`). Use `_macro_vars["wx"]`, `wx`, or any custom variables paired with macros that update them (`%update`, status parsing, or previous lines) to build macros that adapt to the current machine state.
 
- - **Available machine information.** When macros run they can read (and modify) `_macro_vars`. The list below shows the values collected by the sender so you know what data is available for conditional logic, math, or logging:
+- **Available machine information.** When macros run they can read (and modify) `_macro_vars`. The list below shows the values collected by the sender so you know what data is available for conditional logic, math, or logging:
    | Variable | Meaning |
    | --- | --- |
    | `wx`, `wy`, `wz` | Most recent work position from GRBL (WPos). |
@@ -208,19 +206,17 @@ When to enable/disable options:
    | `PRB`, `version`, `controller`, `pins`, `msg`, `prompt_choice`/`prompt_index`/`prompt_cancelled` | Misc helpers used by macros and log dialogs; `PRB` holds last probe result, `pins` stores pin summary, and `prompt_*` track modal prompt outcomes.
    | `_camwx`, `_camwy` | Camera or CAM coordinates that can be reused in macros (mirrors non-GRBL data). |
 
-  Use this table as your cheat sheet when composing macros—every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
+  Use this table as your cheat sheet when composing macros - every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
 
 
 ## Estimation & 3D View
-- Estimates bounds, feed time, rapid time (uses $110-112 or fallback) with factor slider; shows “fallback” when applicable. Live remaining estimate during streaming.
+- Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
 - 3D View: toggle render; shows rapid/feed/arc; live position; save/load/reset view.
-
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing. Training Wheels confirmations still apply.
 
 ## Logs & Filters
-- Console filters; idle muted; GUI button logging toggle; jog/ALL STOP hotkeys (Space/Enter defaults).
-
+- Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
 ## Troubleshooting
 - No ports: install driver, try another cable/port.
 - Connect fails: verify port/baud 115200; close other apps.
@@ -236,7 +232,7 @@ When to enable/disable options:
 - **Persistent offsets (G10)?** Swap zero commands if desired.
 
 ## Appendix A: GRBL 1.1h Commands
-The sender exposes a curated subset of GRBL’s real-time, system, and motion commands. Below is the syntax and an example for each group.
+The sender exposes a curated subset of GRBL's real-time, system, and motion commands. Below is the syntax and an example for each group.
 
 ### Real-time bytes (no newline)
 | Command | Syntax | Notes / Example |
@@ -246,8 +242,8 @@ The sender exposes a curated subset of GRBL’s real-time, system, and motion co
 | Feed hold | `!` | Pauses execution (used for **Pause**). |
 | Cycle start / resume | `~` | Resumes execution after hold or start a job (used for **Resume**/**Run**). |
 | Jog cancel | `0x85` | Stops a `$J=` jog (bound to **JOG STOP**). |
-| Feed override +10%/−10%/reset | `0x91` / `0x92` / `0x90` | Matches the buttons in the Feed Override panel. |
-| Spindle override +10%/−10%/reset | `0x9A` / `0x9B` / `0x99` | Tied to the Spindle Override controls. |
+| Feed override +10%/-10%/reset | `0x91` / `0x92` / `0x90` | Matches the buttons in the Feed Override panel. |
+| Spindle override +10%/-10%/reset | `0x9A` / `0x9B` / `0x99` | Tied to the Spindle Override controls. |
 
 ### System (`$`) commands
 | Command | Syntax | Example |
@@ -275,10 +271,10 @@ The sender exposes a curated subset of GRBL’s real-time, system, and motion co
 | Dwell | `G4` | `G4 P1` | Macro `%wait` uses similar concepts (but there is also the `%wait` directive). |
 | Spindle on/off | `M3 S<rpm>` / `M5` | `M3 S12000` (button default) / `M5` | Spindle buttons log these commands via `attach_log_gcode`. |
 
-Use the console or macros whenever you need a command that is not exposed via buttons—every `G` current GRBL command can be typed manually. The tables above capture the commands that the UI, macros, and override controls leverage most heavily.
+Use the console or macros whenever you need a command that is not exposed via buttons - every `G` current GRBL command can be typed manually. The tables above capture the commands that the UI, macros, and override controls leverage most heavily.
 
 ## Appendix B: GRBL 1.1h Settings (selected)
-- $0 Step pulse, µs
+- $0 Step pulse, us
 - $1 Step idle delay, ms
 - $2 Step port invert mask
 - $3 Direction port invert mask
@@ -302,7 +298,7 @@ Use the console or macros whenever you need a command that is not exposed via bu
 - $32 Laser mode (0/1)
 - $100/$101/$102 Steps/mm (X/Y/Z)
 - $110/$111/$112 Max rate, mm/min (X/Y/Z)
-- $120/$121/$122 Max accel, mm/sec² (X/Y/Z)
+- $120/$121/$122 Max accel, mm/sec^2 (X/Y/Z)
 - $130/$131/$132 Max travel, mm (X/Y/Z)
 
 Use the Settings tab to edit; pending edits highlight in yellow until sent. Numeric validation and broad ranges are enforced; adjust as needed for your machine. 
