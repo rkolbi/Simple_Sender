@@ -2561,29 +2561,44 @@ class ToolTip:
 
 
 def _resolve_widget_bg(widget):
-    if not widget:
-        return "#f0f0f0"
-    try:
-        bg = widget.cget("background")
-    except Exception:
-        bg = ""
-    if bg:
-        return bg
-        style = ttk.Style()
-        for target in ("TLabelframe", "TFrame", "TButton", "TLabel"):
+    if widget:
+        try:
+            bg = widget.cget("background")
+        except Exception:
+            bg = ""
+        if bg:
+            return bg
+    style = ttk.Style()
+    for target in (
+        "TFrame",
+        "TLabelframe",
+        "TButton",
+        "TLabel",
+        "Entry",
+        "TEntry",
+        "TCombobox",
+        "TLabelframe.Label",
+    ):
+        cfg = style.configure(target)
+        if isinstance(cfg, dict):
+            bg = cfg.get("background") or cfg.get("fieldbackground")
+            if bg:
+                return bg
+        else:
             try:
                 lookup = style.lookup(target, "background")
             except tk.TclError:
-                continue
+                lookup = ""
             if lookup:
                 return lookup
-    try:
-        root = widget.winfo_toplevel()
-        bg = root.cget("background")
-        if bg:
-            return bg
-    except Exception:
-        pass
+    if widget:
+        try:
+            root = widget.winfo_toplevel()
+            bg = root.cget("background")
+            if bg:
+                return bg
+        except Exception:
+            pass
     return "#f0f0f0"
 
 
