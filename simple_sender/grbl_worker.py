@@ -10,6 +10,7 @@ import time
 from collections import deque
 from typing import List, Optional, Tuple, Callable
 import logging
+import traceback
 
 try:
     import serial
@@ -106,6 +107,7 @@ class GrblWorker:
         self._stream_buf_used = 0
         self._stream_line_queue: deque[Tuple[int, bool, Optional[int]]] = deque()
         self._stream_pending_item: Optional[Tuple[str, bool, Optional[int]]] = None
+        self._manual_pending_item: Optional[Tuple[str, bytes, int]] = None
         self._resume_preamble: deque[str] = deque()
         self._rx_window = RX_BUFFER_SIZE
         
@@ -125,6 +127,10 @@ class GrblWorker:
         self._status_poll_interval = STATUS_POLL_DEFAULT
         self._ready = False
         self._alarm_active = False
+        self._status_query_failures = 0
+        self._status_query_failure_limit = 3
+        self._status_query_backoff_base = 0.2
+        self._status_query_backoff_max = 2.0
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -185,6 +191,7 @@ class GrblWorker:
         self._stop_evt = threading.Event()
         self._ready = False
         self._alarm_active = False
+        self._status_query_failures = 0
         
         try:
             # Open serial port
@@ -264,6 +271,7 @@ class GrblWorker:
         # Reset state flags
         self._ready = False
         self._alarm_active = False
+        self._status_query_failures = 0
         
         # Notify UI
         self.ui_q.put(("ready", False))
@@ -582,8 +590,25 @@ class GrblWorker:
         
         with self._status_interval_lock:
             self._status_poll_interval = interval
-        
+
         logger.debug(f"Status poll interval set to {interval}s")
+
+    def set_status_query_failure_limit(self, limit: int) -> None:
+        """Set the number of consecutive status failures before disconnect.
+
+        Args:
+            limit: Positive integer failure limit
+        """
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 3
+        if limit < 1:
+            limit = 1
+        if limit > 10:
+            limit = 10
+        self._status_query_failure_limit = limit
+        logger.debug(f"Status query failure limit set to {limit}")
     
     def _mark_ready(self) -> None:
         """Mark GRBL as ready (banner received)."""
@@ -621,11 +646,47 @@ class GrblWorker:
         
         self._clear_outgoing()
         self.ui_q.put(("alarm", message))
-    
+
     # ========================================================================
     # INTERNAL HELPERS
     # ========================================================================
     
+    def _emit_exception(self, context: str, exc: BaseException) -> None:
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            self.ui_q.put(("log", f"[worker] {context}: {exc}"))
+            for ln in tb.splitlines():
+                self.ui_q.put(("log", ln))
+        except Exception:
+            pass
+
+    def _signal_disconnect(self, reason: str | None = None) -> None:
+        """Signal an unexpected disconnect and reset internal state."""
+        try:
+            if self.ser is not None:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+        finally:
+            self.ser = None
+        self._streaming = False
+        self._paused = False
+        self._ready = False
+        self._alarm_active = False
+        self._status_query_failures = 0
+        self._reset_stream_buffer()
+        self._clear_outgoing()
+        try:
+            self.ui_q.put(("conn", False, None))
+        except Exception:
+            pass
+        if reason:
+            try:
+                self.ui_q.put(("log", f"[disconnect] {reason}"))
+            except Exception:
+                pass
+
     def _clear_outgoing(self) -> None:
         """Clear the outgoing command queue."""
         try:
@@ -633,6 +694,7 @@ class GrblWorker:
                 self._outgoing_q.get_nowait()
         except queue.Empty:
             pass
+        self._manual_pending_item = None
         self._emit_buffer_fill()
     
     def _reset_stream_buffer(self) -> None:
@@ -641,6 +703,7 @@ class GrblWorker:
             self._stream_buf_used = 0
             self._stream_line_queue.clear()
             self._stream_pending_item = None
+            self._manual_pending_item = None
             self._resume_preamble.clear()
             self._rx_window = RX_BUFFER_SIZE
             self._send_index = 0
@@ -775,26 +838,18 @@ class GrblWorker:
                 # Handle streaming
                 if self._streaming and not self._paused:
                     self._process_stream_queue()
-                
-                # Handle manual commands
-                try:
-                    command = self._outgoing_q.get(timeout=EVENT_QUEUE_TIMEOUT)
-                    
-                    # Check alarm state
-                    if self._alarm_active:
-                        cmd_upper = command.strip().upper()
-                        if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
-                            self._clear_outgoing()
-                            continue
-                    
-                    self._write_line(command)
-                    self.ui_q.put(("log_tx", command))
-                    
-                except queue.Empty:
-                    pass
+
+                # Handle manual commands with buffer pacing
+                self._process_manual_queue()
+
+                if stop_evt.wait(EVENT_QUEUE_TIMEOUT):
+                    break
         
         except Exception as e:
             logger.error(f"TX thread error: {e}", exc_info=True)
+            self._emit_exception("TX thread error", e)
+            self._signal_disconnect(f"TX thread error: {e}")
+            stop_evt.set()
         
         finally:
             logger.debug("TX thread stopped")
@@ -897,6 +952,64 @@ class GrblWorker:
             self._streaming = False
             self.ui_q.put(("stream_state", "done", None))
             logger.info("Streaming complete")
+
+    def _process_manual_queue(self) -> None:
+        """Process immediate command queue with buffer pacing."""
+        while True:
+            if self._streaming or self._paused:
+                return
+            if not self.is_connected():
+                return
+
+            if self._manual_pending_item is not None:
+                line, payload, line_len = self._manual_pending_item
+            else:
+                try:
+                    line = self._outgoing_q.get_nowait()
+                except queue.Empty:
+                    return
+
+                if self._alarm_active:
+                    cmd_upper = line.strip().upper()
+                    if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
+                        self._clear_outgoing()
+                        continue
+
+                line = line.strip()
+                if not line:
+                    continue
+                payload = self._encode_line_payload(line)
+                line_len = len(payload)
+
+            with self._stream_lock:
+                usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
+                can_fit = (self._stream_buf_used + line_len) <= usable
+
+                if not can_fit and self._stream_buf_used > 0:
+                    self._manual_pending_item = (line, payload, line_len)
+                    break
+
+                self._manual_pending_item = None
+                self._stream_buf_used += line_len
+                self._stream_line_queue.append((line_len, False, None))
+
+            if not self._write_line(line, payload):
+                with self._stream_lock:
+                    if self._stream_line_queue:
+                        try:
+                            last_len, _, _ = self._stream_line_queue.pop()
+                        except Exception:
+                            last_len = line_len
+                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
+                    else:
+                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+                    self._manual_pending_item = (line, payload, line_len)
+                self._emit_buffer_fill()
+                break
+
+            self.ui_q.put(("log_tx", line))
+            self._record_tx_bytes(line_len)
+            self._emit_buffer_fill()
     
     def _rx_loop(self, stop_evt: threading.Event) -> None:
         """Receive thread - reads from GRBL and processes responses.
@@ -921,12 +1034,14 @@ class GrblWorker:
                 except serial.SerialException as e:
                     logger.error(f"Serial read error: {e}")
                     self.ui_q.put(("log", f"[read error] {e}"))
-                    time.sleep(0.1)
-                    continue
+                    self._signal_disconnect(f"Serial read error: {e}")
+                    stop_evt.set()
+                    break
                 except Exception as e:
                     logger.error(f"Unexpected read error: {e}")
-                    time.sleep(0.1)
-                    continue
+                    self._signal_disconnect(f"Unexpected serial read error: {e}")
+                    stop_evt.set()
+                    break
                 
                 if not chunk:
                     continue
@@ -942,6 +1057,9 @@ class GrblWorker:
         
         except Exception as e:
             logger.error(f"RX thread error: {e}", exc_info=True)
+            self._emit_exception("RX thread error", e)
+            self._signal_disconnect(f"RX thread error: {e}")
+            stop_evt.set()
         
         finally:
             logger.debug("RX thread stopped")
@@ -1047,9 +1165,29 @@ class GrblWorker:
                 if self.is_connected():
                     try:
                         self.send_realtime(RT_STATUS)
+                        self._status_query_failures = 0
                     except Exception as e:
                         logger.error(f"Status query error: {e}")
                         self.ui_q.put(("log", f"[status query error] {e}"))
+                        self._emit_exception("Status query error", e)
+                        self._status_query_failures += 1
+                        try:
+                            self.ui_q.put((
+                                "log",
+                                f"[status] Query failed ({self._status_query_failures}/{self._status_query_failure_limit})",
+                            ))
+                        except Exception:
+                            pass
+                        if self._status_query_failures >= self._status_query_failure_limit:
+                            self._signal_disconnect(f"Status query error: {e}")
+                            stop_evt.set()
+                            break
+                        backoff = min(
+                            self._status_query_backoff_max,
+                            self._status_query_backoff_base * self._status_query_failures,
+                        )
+                        if stop_evt.wait(backoff):
+                            break
                 
                 # Get current interval
                 with self._status_interval_lock:
@@ -1061,6 +1199,9 @@ class GrblWorker:
         
         except Exception as e:
             logger.error(f"Status thread error: {e}", exc_info=True)
+            self._emit_exception("Status thread error", e)
+            self._signal_disconnect(f"Status thread error: {e}")
+            stop_evt.set()
         
         finally:
             logger.debug("Status thread stopped")

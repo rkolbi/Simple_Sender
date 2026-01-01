@@ -10,7 +10,6 @@ import sys
 import time
 import threading
 import queue
-import json
 import re
 import types
 import csv
@@ -18,7 +17,10 @@ import math
 import shlex
 import traceback
 import hashlib
+import logging
 from collections import deque
+from typing import Callable
+from contextlib import contextmanager
 
 # GUI imports
 import tkinter as tk
@@ -30,8 +32,11 @@ from simple_sender.grbl_worker import GrblWorker
 from simple_sender.gcode_parser import clean_gcode_line, parse_gcode_lines
 from simple_sender.utils import Settings
 from simple_sender.utils.constants import *
+from simple_sender.utils.exceptions import SettingsLoadError, SettingsSaveError
 from simple_sender.ui.gcode_viewer import GcodeViewer
 from simple_sender.ui.console import Console
+
+logger = logging.getLogger(__name__)
 
 SERIAL_IMPORT_ERROR = ""
 
@@ -59,6 +64,10 @@ def _hash_lines(lines: list[str] | None) -> str | None:
     return hasher.hexdigest()
 
 
+def _format_exception(exc: BaseException) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
 def _default_settings_store_dir() -> str:
     env_dir = os.getenv("SIMPLE_SENDER_CONFIG_DIR")
     if env_dir:
@@ -76,12 +85,14 @@ def _resolve_settings_path() -> str:
     base_dir = _default_settings_store_dir()
     try:
         os.makedirs(base_dir, exist_ok=True)
-    except Exception:
+    except Exception as exc:
+        logger.exception("Failed to create settings directory '%s': %s", base_dir, exc)
         fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
         try:
             os.makedirs(fallback_dir, exist_ok=True)
             base_dir = fallback_dir
-        except Exception:
+        except Exception as exc:
+            logger.exception("Failed to create fallback settings directory '%s': %s", fallback_dir, exc)
             base_dir = os.path.dirname(__file__)
     return os.path.join(base_dir, "settings.json")
 
@@ -105,6 +116,1581 @@ def _discover_macro_dirs() -> tuple[str, ...]:
 
 _MACRO_SEARCH_DIRS = _discover_macro_dirs()
 
+
+class MacroExecutor:
+    def __init__(self, app):
+        self.app = app
+        self.ui_q = app.ui_q
+        self.grbl = app.grbl
+        self._macro_lock = threading.Lock()
+        self._macro_vars_lock = threading.Lock()
+        self._macro_local_vars = {"app": app, "os": os}
+        self._macro_vars = {
+            "prbx": 0.0,
+            "prby": 0.0,
+            "prbz": 0.0,
+            "prbcmd": "G38.2",
+            "prbfeed": 10.0,
+            "errline": "",
+            "wx": 0.0,
+            "wy": 0.0,
+            "wz": 0.0,
+            "wa": 0.0,
+            "wb": 0.0,
+            "wc": 0.0,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 0.0,
+            "ma": 0.0,
+            "mb": 0.0,
+            "mc": 0.0,
+            "wcox": 0.0,
+            "wcoy": 0.0,
+            "wcoz": 0.0,
+            "wcoa": 0.0,
+            "wcob": 0.0,
+            "wcoc": 0.0,
+            "curfeed": 0.0,
+            "curspindle": 0.0,
+            "_camwx": 0.0,
+            "_camwy": 0.0,
+            "G": [],
+            "TLO": 0.0,
+            "motion": "G0",
+            "WCS": "G54",
+            "plane": "G17",
+            "feedmode": "G94",
+            "distance": "G90",
+            "arc": "G91.1",
+            "units": "G21",
+            "cutter": "",
+            "tlo": "",
+            "program": "M0",
+            "spindle": "M5",
+            "coolant": "M9",
+            "tool": 0,
+            "feed": 0.0,
+            "rpm": 0.0,
+            "planner": 0,
+            "rxbytes": 0,
+            "OvFeed": 100,
+            "OvRapid": 100,
+            "OvSpindle": 100,
+            "_OvChanged": False,
+            "_OvFeed": 100,
+            "_OvRapid": 100,
+            "_OvSpindle": 100,
+            "diameter": 3.175,
+            "cutfeed": 1000.0,
+            "cutfeedz": 500.0,
+            "safe": 3.0,
+            "state": "",
+            "pins": "",
+            "msg": "",
+            "stepz": 1.0,
+            "surface": 0.0,
+            "thickness": 5.0,
+            "stepover": 40.0,
+            "PRB": None,
+            "version": "",
+            "controller": "",
+            "running": False,
+            "prompt_choice": "",
+            "prompt_index": -1,
+            "prompt_cancelled": False,
+        }
+
+    @contextmanager
+    def macro_vars(self):
+        with self._macro_vars_lock:
+            yield self._macro_vars
+
+    def macro_path(self, index: int) -> str | None:
+        for macro_dir in _MACRO_SEARCH_DIRS:
+            for prefix in MACRO_PREFIXES:
+                for ext in MACRO_EXTS:
+                    candidate = os.path.join(macro_dir, f"{prefix}{index}{ext}")
+                    if os.path.isfile(candidate):
+                        return candidate
+        return None
+
+    def run_macro(self, index: int):
+        if self.grbl.is_streaming():
+            messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
+            return
+        path = self.macro_path(index)
+        if not path:
+            return
+        if not self._macro_lock.acquire(blocking=False):
+            messagebox.showwarning("Macro busy", "Another macro is running.")
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except Exception as exc:
+            messagebox.showerror("Macro error", str(exc))
+            self._macro_lock.release()
+            return
+        name = lines[0].strip() if lines else f"Macro {index}"
+        tip = lines[1].strip() if len(lines) > 1 else ""
+        ts = time.strftime("%H:%M:%S")
+        if bool(self.app.gui_logging_enabled.get()):
+            if tip:
+                self.app.streaming_controller.log(f"[{ts}] Macro: {name} | Tip: {tip}")
+            else:
+                self.app.streaming_controller.log(f"[{ts}] Macro: {name}")
+            self.app.streaming_controller.log(f"[{ts}] Macro contents:")
+            for raw in lines[2:]:
+                self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
+        t = threading.Thread(target=self._run_macro_worker, args=(lines,), daemon=True)
+        t.start()
+
+    def _run_macro_worker(self, lines: list[str]):
+        start = time.perf_counter()
+        executed = 0
+        try:
+            with self._macro_vars_lock:
+                self._macro_local_vars = {"app": self.app, "os": os}
+                self._macro_vars["app"] = self.app
+                self._macro_vars["os"] = os
+            for raw in lines[2:]:
+                line = raw.strip()
+                if not line:
+                    continue
+                executed += 1
+                compiled = self._bcnc_compile_line(line)
+                if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
+                    self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
+                    break
+                if compiled is None:
+                    continue
+                if isinstance(compiled, tuple):
+                    kind = compiled[0]
+                    if kind == "WAIT":
+                        self._macro_wait_for_idle()
+                    elif kind == "MSG":
+                        msg = compiled[1] if len(compiled) > 1 else ""
+                        if msg:
+                            self.ui_q.put(("log", f"[macro] {msg}"))
+                    elif kind == "UPDATE":
+                        self.grbl.send_realtime(RT_STATUS)
+                    continue
+                evaluated = self._bcnc_evaluate_line(compiled)
+                if evaluated is None:
+                    continue
+                if not self._execute_bcnc_command(evaluated):
+                    break
+        except Exception as exc:
+            self.app._log_exception("Macro error", exc, show_dialog=True, dialog_title="Macro error")
+        finally:
+            self._macro_lock.release()
+            duration = time.perf_counter() - start
+            if duration >= 0.2:
+                avg = duration / executed if executed else duration
+                self.ui_q.put((
+                    "log",
+                    f"[macro] Executed {executed} line(s) in {duration:.2f}s ({avg:.3f}s/line)",
+                ))
+
+    def _macro_wait_for_idle(self, timeout_s: float = 30.0):
+        if not self.grbl.is_connected():
+            return
+        start = time.time()
+        while True:
+            if not self.grbl.is_connected():
+                return
+            if not self.grbl.is_streaming() and str(self.app._machine_state_text).startswith("Idle"):
+                return
+            if timeout_s and (time.time() - start) > timeout_s:
+                self.ui_q.put(("log", "[macro] %wait timeout"))
+                return
+            time.sleep(0.1)
+
+    def _parse_macro_prompt(self, line: str):
+        title = "Macro Pause"
+        message = ""
+        buttons: list[str] = []
+        show_resume = True
+        resume_label = "Resume"
+        cancel_label = "Cancel"
+
+        match = re.search(r"\((.*?)\)", line)
+        if match:
+            message = match.group(1).strip()
+        try:
+            tokens = shlex.split(line)
+        except Exception:
+            tokens = line.split()
+        tokens = tokens[1:] if tokens else []
+        msg_parts: list[str] = []
+        for tok in tokens:
+            low = tok.lower()
+            if low in ("noresume", "no-resume"):
+                show_resume = False
+                continue
+            if "=" in tok:
+                key, val = tok.split("=", 1)
+                key = key.lower()
+                if key in ("title", "t"):
+                    title = val
+                elif key in ("msg", "message", "text"):
+                    message = val
+                elif key in ("buttons", "btns"):
+                    raw = val.replace("|", ",")
+                    buttons = [b.strip() for b in raw.split(",") if b.strip()]
+                elif key in ("resume", "resumelabel"):
+                    if val.lower() in ("0", "false", "no", "off"):
+                        show_resume = False
+                    else:
+                        resume_label = val
+                elif key in ("cancel", "cancellabel"):
+                    cancel_label = val
+                continue
+            msg_parts.append(tok)
+        if not message and msg_parts:
+            message = " ".join(msg_parts)
+        if not message:
+            message = "Macro paused."
+        extras = [b for b in buttons if b and b not in (resume_label, cancel_label)]
+        choices = []
+        if show_resume:
+            choices.append(resume_label)
+        choices.extend(extras)
+        choices.append(cancel_label)
+        return title, message, choices, cancel_label
+
+    def _execute_bcnc_command(self, line: str):
+        if line is None:
+            return True
+        if isinstance(line, tuple):
+            return True
+        s = str(line).strip()
+        if not s:
+            return True
+        cmd_parts = s.replace(",", " ").split()
+        cmd = cmd_parts[0].upper()
+
+        if cmd in ("M0", "M00", "PROMPT"):
+            title, message, choices, cancel_label = self._parse_macro_prompt(s)
+            result_q: queue.Queue[str] = queue.Queue()
+            self.ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
+            while True:
+                try:
+                    choice = result_q.get(timeout=0.2)
+                    break
+                except queue.Empty:
+                    if self.app._closing:
+                        choice = cancel_label
+                        break
+            if choice not in choices:
+                choice = cancel_label
+            with self._macro_vars_lock:
+                self._macro_vars["prompt_choice"] = choice
+                self._macro_vars["prompt_index"] = choices.index(choice) if choice in choices else -1
+                self._macro_vars["prompt_cancelled"] = (choice == cancel_label)
+            self.ui_q.put(("log", f"[macro] Prompt: {message} | Selected: {choice}"))
+            if choice == cancel_label:
+                self.ui_q.put(("log", "[macro] Prompt canceled; macro aborted."))
+                return False
+            return True
+
+        if cmd in ("ABSOLUTE", "ABS"):
+            self.grbl.send_immediate("G90")
+            return True
+        if cmd in ("RELATIVE", "REL"):
+            self.grbl.send_immediate("G91")
+            return True
+        if cmd == "HOME":
+            self.grbl.home()
+            return True
+        if cmd == "OPEN":
+            if not self.app.connected:
+                self.app._call_on_ui_thread(self.app.toggle_connect)
+            return True
+        if cmd == "CLOSE":
+            if self.app.connected:
+                self.app._call_on_ui_thread(self.app.toggle_connect)
+            return True
+        if cmd == "HELP":
+            self.app._call_on_ui_thread(
+                messagebox.showinfo,
+                "Macro",
+                "Help is not available in this sender.",
+                timeout=None,
+            )
+            return True
+        if cmd in ("QUIT", "EXIT"):
+            self.app._call_on_ui_thread(self.app._on_close)
+            return True
+        if cmd == "LOAD" and len(cmd_parts) > 1:
+            self.app._call_on_ui_thread(
+                self.app._load_gcode_from_path,
+                " ".join(cmd_parts[1:]),
+                timeout=None,
+            )
+            return True
+        if cmd == "UNLOCK":
+            self.grbl.unlock()
+            return True
+        if cmd == "RESET":
+            self.grbl.reset()
+            return True
+        if cmd == "PAUSE":
+            self.grbl.hold()
+            return True
+        if cmd == "RESUME":
+            self.grbl.resume()
+            return True
+        if cmd == "FEEDHOLD":
+            self.grbl.hold()
+            return True
+        if cmd == "STOP":
+            self.grbl.stop_stream()
+            return True
+        if cmd == "RUN":
+            self.grbl.start_stream()
+            return True
+        if cmd == "SAVE":
+            self.ui_q.put(("log", "[macro] SAVE is not supported."))
+            return True
+        if cmd == "SENDHEX" and len(cmd_parts) > 1:
+            try:
+                b = bytes([int(cmd_parts[1], 16)])
+                self.grbl.send_realtime(b)
+            except Exception as exc:
+                logger.exception("Macro SENDHEX failed: %s", exc)
+                self.ui_q.put(("log", f"[macro] SENDHEX failed: {exc}"))
+            return True
+        if cmd == "SAFE" and len(cmd_parts) > 1:
+            try:
+                with self._macro_vars_lock:
+                    self._macro_vars["safe"] = float(cmd_parts[1])
+            except Exception as exc:
+                logger.exception("Macro SAFE failed: %s", exc)
+                self.ui_q.put(("log", f"[macro] SAFE failed: {exc}"))
+            return True
+        if cmd == "SET0":
+            self.grbl.send_immediate("G92 X0 Y0 Z0")
+            return True
+        if cmd == "SETX" and len(cmd_parts) > 1:
+            self.grbl.send_immediate(f"G92 X{cmd_parts[1]}")
+            return True
+        if cmd == "SETY" and len(cmd_parts) > 1:
+            self.grbl.send_immediate(f"G92 Y{cmd_parts[1]}")
+            return True
+        if cmd == "SETZ" and len(cmd_parts) > 1:
+            self.grbl.send_immediate(f"G92 Z{cmd_parts[1]}")
+            return True
+        if cmd == "SET":
+            parts = []
+            if len(cmd_parts) > 1:
+                parts.append(f"X{cmd_parts[1]}")
+            if len(cmd_parts) > 2:
+                parts.append(f"Y{cmd_parts[2]}")
+            if len(cmd_parts) > 3:
+                parts.append(f"Z{cmd_parts[3]}")
+            if parts:
+                self.grbl.send_immediate("G92 " + " ".join(parts))
+            return True
+
+        if s.startswith("!"):
+            self.grbl.hold()
+            return True
+        if s.startswith("~"):
+            self.grbl.resume()
+            return True
+        if s.startswith("?"):
+            self.grbl.send_realtime(RT_STATUS)
+            return True
+        if s.startswith("\x18"):
+            self.grbl.reset()
+            return True
+
+        if s.startswith("$") or s.startswith("@") or s.startswith("{"):
+            self.grbl.send_immediate(s)
+            return True
+        if s.startswith("(") or MACRO_GPAT.match(s):
+            self.grbl.send_immediate(s)
+            return True
+        self.grbl.send_immediate(s)
+        return True
+
+    def _bcnc_compile_line(self, line: str):
+        line = line.strip()
+        if not line:
+            return None
+        if not bool(self.app.macros_allow_python.get()):
+            if line.startswith(("%", "_")) or ("[" in line) or ("]" in line) or ("=" in line):
+                return ("COMPILE_ERROR", "Macro scripting disabled in settings.")
+        if line[0] == "$":
+            return line
+        line = line.replace("#", "_")
+        if line[0] == "%":
+            pat = MACRO_AUXPAT.match(line.strip())
+            if pat:
+                cmd = pat.group(1)
+                args = pat.group(2)
+            else:
+                cmd = None
+                args = None
+            if cmd == "%wait":
+                return ("WAIT",)
+            if cmd == "%msg":
+                return ("MSG", args if args else "")
+            if cmd == "%update":
+                return ("UPDATE", args if args else "")
+            if line.startswith("%if running"):
+                with self._macro_vars_lock:
+                    if not self._macro_vars.get("running"):
+                        return None
+            try:
+                return compile(line[1:], "", "exec")
+            except Exception as exc:
+                return ("COMPILE_ERROR", f"{line} ({exc})")
+        if line[0] == "_":
+            try:
+                return compile(line, "", "exec")
+            except Exception as exc:
+                return ("COMPILE_ERROR", f"{line} ({exc})")
+        if line[0] == ";":
+            return None
+        out: list[str] = []
+        bracket = 0
+        paren = 0
+        expr = ""
+        cmd = ""
+        in_comment = False
+        for i, ch in enumerate(line):
+            if ch == "(":
+                paren += 1
+                in_comment = bracket == 0
+                if not in_comment:
+                    expr += ch
+            elif ch == ")":
+                paren -= 1
+                if not in_comment:
+                    expr += ch
+                if paren == 0 and in_comment:
+                    in_comment = False
+            elif ch == "[":
+                if not in_comment:
+                    if MACRO_STDEXPR:
+                        ch = "("
+                    bracket += 1
+                    if bracket == 1:
+                        if cmd:
+                            out.append(cmd)
+                            cmd = ""
+                    else:
+                        expr += ch
+                else:
+                    pass
+            elif ch == "]":
+                if not in_comment:
+                    if MACRO_STDEXPR:
+                        ch = ")"
+                    bracket -= 1
+                    if bracket == 0:
+                        try:
+                            out.append(compile(expr, "", "eval"))
+                        except Exception as exc:
+                            return ("COMPILE_ERROR", f"[{expr}] in '{line}' ({exc})")
+                        expr = ""
+                    else:
+                        expr += ch
+            elif ch == "=":
+                if not out and bracket == 0 and paren == 0:
+                    for t in " ()-+*/^$":
+                        if t in cmd:
+                            cmd += ch
+                            break
+                    else:
+                        try:
+                            return compile(line, "", "exec")
+                        except Exception as exc:
+                            return ("COMPILE_ERROR", f"{line} ({exc})")
+                else:
+                    cmd += ch
+            elif ch == ";":
+                if not in_comment and paren == 0 and bracket == 0:
+                    break
+                else:
+                    expr += ch
+            elif bracket > 0:
+                expr += ch
+            elif not in_comment:
+                cmd += ch
+            else:
+                pass
+        if cmd:
+            out.append(cmd)
+        if not out:
+            return None
+        if len(out) > 1:
+            return out
+        return out[0]
+
+    def _bcnc_evaluate_line(self, compiled):
+        if isinstance(compiled, int):
+            return None
+        if isinstance(compiled, list):
+            for i, expr in enumerate(compiled):
+                if isinstance(expr, types.CodeType):
+                    with self._macro_vars_lock:
+                        globals_ctx = self._macro_eval_globals()
+                        result = eval(expr, globals_ctx, self._macro_local_vars)
+                    if isinstance(result, float):
+                        compiled[i] = str(round(result, 4))
+                    else:
+                        compiled[i] = str(result)
+            return "".join(compiled)
+        if isinstance(compiled, types.CodeType):
+            with self._macro_vars_lock:
+                globals_ctx = self._macro_exec_globals()
+                exec(compiled, globals_ctx, globals_ctx)
+                return None
+
+    def _macro_eval_globals(self) -> dict:
+        return self._macro_vars
+
+    def _macro_exec_globals(self) -> dict:
+        return self._macro_vars
+
+
+class StreamingController:
+    def __init__(self, app):
+        self.app = app
+        self.console: tk.Text | None = None
+        self.gview = None
+        self.progress_pct = None
+        self.buffer_fill = None
+        self.buffer_fill_pct = None
+        self.throughput_var = None
+        self._console_lines: list[tuple[str, str | None]] = []
+        self._console_filter: str | None = None
+        self._pending_console_entries: list[tuple[str, str | None]] = []
+        self._pending_console_trim = 0
+        self._console_after_id = None
+        self._console_render_pending = False
+        self._pending_marks_after_id = None
+        self._pending_sent_index = None
+        self._pending_acked_index = None
+        self._pending_progress = None
+        self._pending_buffer = None
+        self._progress_after_id = None
+        self._buffer_after_id = None
+
+    def attach_widgets(
+        self,
+        console: tk.Text,
+        gview,
+        progress_pct: tk.IntVar,
+        buffer_fill: tk.StringVar,
+        buffer_fill_pct: tk.IntVar,
+        throughput_var: tk.StringVar,
+    ):
+        self.console = console
+        self.gview = gview
+        self.progress_pct = progress_pct
+        self.buffer_fill = buffer_fill
+        self.buffer_fill_pct = buffer_fill_pct
+        self.throughput_var = throughput_var
+
+    def _console_tag_for_line(self, s: str) -> str | None:
+        u = s.upper()
+        if "ALARM" in u:
+            return "console_alarm"
+        if "ERROR" in u:
+            return "console_error"
+        stripped = s.strip()
+        if stripped.upper() in ("<< OK", "OK"):
+            return "console_ok"
+        if stripped.startswith(">>"):
+            return "console_tx"
+        if stripped.startswith("<<") and "<" in stripped and ">" in stripped:
+            return "console_status"
+        return None
+
+    def _is_position_line(self, s: str) -> bool:
+        u = s.upper()
+        return ("WPOS:" in u) or ("MPOS:" in u)
+
+    def _is_status_line(self, s: str) -> bool:
+        stripped = s.strip()
+        return (
+            stripped.startswith("<< <")
+            or (stripped.startswith("<") and stripped.endswith(">"))
+            or ("<" in stripped and ">" in stripped)
+        )
+
+    def _should_skip_console_entry_for_toggles(self, entry) -> bool:
+        if isinstance(entry, tuple):
+            s, _ = entry
+        else:
+            s = str(entry)
+        enabled = bool(self.app.console_positions_enabled.get())
+        if not enabled and self._is_position_line(s):
+            return True
+        upper = s.upper()
+        if not enabled and self._is_status_line(s):
+            if ("ALARM" not in upper) and ("ERROR" not in upper):
+                return True
+        return False
+
+    def _console_filter_match(self, entry, for_save: bool = False) -> bool:
+        if isinstance(entry, tuple):
+            s, tag = entry
+        else:
+            s, tag = str(entry), None
+        upper = s.upper()
+        if self._console_filter == "alarms" and "ALARM" not in upper:
+            return False
+        if self._console_filter == "errors" and "ERROR" not in upper:
+            return False
+        if for_save and self._is_position_line(s):
+            return False
+        is_pos = self._is_position_line(s)
+        enabled = bool(self.app.console_positions_enabled.get())
+        is_status = self._is_status_line(s)
+        if (not for_save) and not enabled:
+            if is_pos:
+                return False
+            if is_status and ("ALARM" not in upper) and ("ERROR" not in upper):
+                return False
+        return True
+
+    def _should_suppress_rx_log(self, raw: str) -> bool:
+        if not bool(self.app.performance_mode.get()):
+            return False
+        if self.app._stream_state != "running":
+            return False
+        upper = raw.upper()
+        if ("ALARM" in upper) or ("ERROR" in upper):
+            return False
+        if "[MSG" in upper or "RESET TO CONTINUE" in upper:
+            return False
+        return True
+
+    def log(self, s: str, tag: str | None = None):
+        if tag is None:
+            tag = self._console_tag_for_line(s)
+        entry = (s, tag)
+        if self._should_skip_console_entry_for_toggles(entry):
+            return
+        self._console_lines.append(entry)
+        overflow = len(self._console_lines) - MAX_CONSOLE_LINES
+        if overflow > 0:
+            self._console_lines = self._console_lines[overflow:]
+            if self._console_filter is not None:
+                if bool(self.app.performance_mode.get()):
+                    self._queue_console_render()
+                    return
+                self._render_console()
+                return
+            if bool(self.app.performance_mode.get()):
+                self._pending_console_trim += overflow
+            else:
+                self._trim_console_widget(overflow)
+        if not self._console_filter_match(entry):
+            return
+        if bool(self.app.performance_mode.get()):
+            self._pending_console_entries.append(entry)
+            self._schedule_console_flush()
+            return
+        self._append_to_console(entry)
+
+    def _append_to_console(self, entry):
+        if not self.console:
+            return
+        line, tag = entry
+        self.console.config(state="normal")
+        if tag:
+            self.console.insert("end", line + "\n", (tag,))
+        else:
+            self.console.insert("end", line + "\n")
+        self.console.see("end")
+        self.console.config(state="disabled")
+
+    def _queue_console_render(self):
+        self._console_render_pending = True
+        self._schedule_console_flush()
+
+    def _schedule_console_flush(self):
+        if self._console_after_id is not None:
+            return
+        self._console_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_console_updates)
+
+    def _flush_console_updates(self):
+        self._console_after_id = None
+        if self._console_render_pending:
+            self._console_render_pending = False
+            self._pending_console_entries = []
+            self._pending_console_trim = 0
+            self._render_console()
+            return
+        if (not self._pending_console_entries) and (self._pending_console_trim <= 0):
+            return
+        if not self.console:
+            return
+        self.console.config(state="normal")
+        if self._pending_console_trim > 0:
+            self._trim_console_widget_unlocked(self._pending_console_trim)
+            self._pending_console_trim = 0
+        for line, tag in self._pending_console_entries:
+            if tag:
+                self.console.insert("end", line + "\n", (tag,))
+            else:
+                self.console.insert("end", line + "\n")
+        self._pending_console_entries = []
+        self.console.see("end")
+        self.console.config(state="disabled")
+
+    def _render_console(self):
+        if not self.console:
+            return
+        self.console.config(state="normal")
+        self.console.delete("1.0", "end")
+        for line, tag in self._console_lines:
+            if self._console_filter_match((line, tag)):
+                if tag:
+                    self.console.insert("end", line + "\n", (tag,))
+                else:
+                    self.console.insert("end", line + "\n")
+        self.console.see("end")
+        self.console.config(state="disabled")
+
+    def _trim_console_widget(self, count: int):
+        if count <= 0 or not self.console:
+            return
+        self.console.config(state="normal")
+        try:
+            self.console.delete("1.0", f"{count + 1}.0")
+        except Exception:
+            self.console.delete("1.0", "end")
+        self.console.config(state="disabled")
+
+    def _trim_console_widget_unlocked(self, count: int):
+        if count <= 0 or not self.console:
+            return
+        try:
+            self.console.delete("1.0", f"{count + 1}.0")
+        except Exception:
+            self.console.delete("1.0", "end")
+
+    def set_console_filter(self, mode):
+        self._console_filter = mode
+        self._pending_console_entries = []
+        self._pending_console_trim = 0
+        self._console_render_pending = False
+        self._render_console()
+
+    def clear_console(self):
+        self._console_lines = []
+        self._pending_console_entries = []
+        self._pending_console_trim = 0
+        self._console_render_pending = False
+        if self.console:
+            self.console.config(state="normal")
+            self.console.delete("1.0", "end")
+            self.console.config(state="disabled")
+
+    def get_console_lines(self) -> list[tuple[str, str | None]]:
+        return list(self._console_lines)
+
+    def matches_filter(self, entry, for_save: bool = False) -> bool:
+        return self._console_filter_match(entry, for_save=for_save)
+
+    def is_position_line(self, s: str) -> bool:
+        return self._is_position_line(s)
+
+    def flush_console(self):
+        self._flush_console_updates()
+
+    def render_console(self):
+        self._render_console()
+
+    def bind_button_logging(self):
+        self.app.bind_class("TButton", "<Button-1>", self._on_button_press, add="+")
+        self.app.bind_class("Button", "<Button-1>", self._on_button_press, add="+")
+        self.app.bind_class("Canvas", "<Button-1>", self._on_button_press, add="+")
+
+    def _on_button_press(self, event):
+        w = event.widget
+        if isinstance(w, tk.Canvas) and not getattr(w, "_log_button", False):
+            return
+        try:
+            if w.cget("state") == "disabled":
+                return
+        except Exception as exc:
+            logger.debug("Failed to read widget state for logging: %s", exc)
+        if not bool(self.app.gui_logging_enabled.get()):
+            return
+        label = ""
+        try:
+            label = w.cget("text")
+        except Exception as exc:
+            logger.debug("Failed to read widget text for logging: %s", exc)
+        if not label:
+            label = w.winfo_name()
+        tip = ""
+        try:
+            tip = getattr(w, "_tooltip_text", "")
+        except Exception:
+            tip = ""
+        gcode = ""
+        try:
+            getter = getattr(w, "_log_gcode_get", None)
+            if callable(getter):
+                gcode = getter()
+            elif isinstance(getter, str):
+                gcode = getter
+        except Exception:
+            gcode = ""
+        ts = time.strftime("%H:%M:%S")
+        if tip and gcode:
+            self.log(f"[{ts}] Button: {label} | Tip: {tip} | GCode: {gcode}")
+        elif tip:
+            self.log(f"[{ts}] Button: {label} | Tip: {tip}")
+        elif gcode:
+            self.log(f"[{ts}] Button: {label} | GCode: {gcode}")
+        else:
+            self.log(f"[{ts}] Button: {label}")
+
+    def _schedule_gcode_mark_flush(self):
+        if self._pending_marks_after_id is not None:
+            return
+        self._pending_marks_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_gcode_marks)
+
+    def _flush_gcode_marks(self):
+        self._pending_marks_after_id = None
+        sent_idx = self._pending_sent_index
+        acked_idx = self._pending_acked_index
+        self._pending_sent_index = None
+        self._pending_acked_index = None
+        if sent_idx is not None:
+            self.app.gview.mark_sent_upto(sent_idx)
+            self.app._last_sent_index = sent_idx
+        if acked_idx is not None:
+            self.app.gview.mark_acked_upto(acked_idx)
+            self.app._last_acked_index = acked_idx
+            if sent_idx is None and acked_idx > self.app._last_sent_index:
+                self.app._last_sent_index = acked_idx
+        if sent_idx is not None or acked_idx is not None:
+            self.app._update_current_highlight()
+
+    def _schedule_progress_flush(self):
+        if self._progress_after_id is not None:
+            return
+        self._progress_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_progress)
+
+    def _flush_progress(self):
+        self._progress_after_id = None
+        if not self._pending_progress:
+            return
+        done, total = self._pending_progress
+        self._pending_progress = None
+        if self.progress_pct:
+            self.progress_pct.set(int(round((done / total) * 100)) if total else 0)
+        if done and total:
+            self.app._update_live_estimate(done, total)
+
+    def _schedule_buffer_flush(self):
+        if self._buffer_after_id is not None:
+            return
+        self._buffer_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_buffer_fill)
+
+    def _flush_buffer_fill(self):
+        self._buffer_after_id = None
+        if not self._pending_buffer:
+            return
+        pct, used, window = self._pending_buffer
+        self._pending_buffer = None
+        if self.buffer_fill:
+            self.buffer_fill.set(f"Buffer: {pct}% ({used}/{window})")
+        if self.buffer_fill_pct:
+            self.buffer_fill_pct.set(pct)
+
+    def clear_pending_ui_updates(self):
+        for attr in (
+            "_pending_marks_after_id",
+            "_progress_after_id",
+            "_buffer_after_id",
+            "_console_after_id",
+        ):
+            val = getattr(self, attr, None)
+            if val is None:
+                continue
+            try:
+                self.app.after_cancel(val)
+            except Exception:
+                pass
+            setattr(self, attr, None)
+        self._pending_marks_after_id = None
+        self._pending_sent_index = None
+        self._pending_acked_index = None
+        self._pending_progress = None
+        self._pending_buffer = None
+        self._pending_console_entries = []
+        self._pending_console_trim = 0
+        self._console_render_pending = False
+
+    def handle_log_rx(self, raw: str):
+        if self._should_suppress_rx_log(raw):
+            return
+        self.log(f"<< {raw}", self._console_tag_for_line(raw))
+
+    def handle_log_tx(self, message: str):
+        self.log(f">> {message}")
+
+    def handle_log(self, message: str):
+        self.log(message)
+
+    def handle_buffer_fill(self, pct: int, used: int, window: int):
+        self._pending_buffer = (pct, used, window)
+        self._schedule_buffer_flush()
+
+    def handle_throughput(self, bps: float):
+        if self.throughput_var:
+            self.throughput_var.set(self.app._format_throughput(float(bps)))
+
+    def handle_gcode_sent(self, idx: int):
+        if self._pending_sent_index is None or idx > self._pending_sent_index:
+            self._pending_sent_index = idx
+        self._schedule_gcode_mark_flush()
+
+    def handle_gcode_acked(self, idx: int):
+        if self._pending_acked_index is None or idx > self._pending_acked_index:
+            self._pending_acked_index = idx
+        self._schedule_gcode_mark_flush()
+
+    def handle_progress(self, done: int, total: int):
+        self._pending_progress = (done, total)
+        self._schedule_progress_flush()
+
+
+class MacroPanel:
+    def __init__(self, app):
+        self.app = app
+        self._left_frame: ttk.Frame | None = None
+        self._right_frame: ttk.Frame | None = None
+        self._macro_buttons: list[tk.Widget] = []
+
+    def attach_frames(self, left: ttk.Frame, right: ttk.Frame):
+        self._left_frame = left
+        self._right_frame = right
+        self._load_macro_buttons()
+
+    def _macro_path(self, index: int) -> str | None:
+        return self.app.macro_executor.macro_path(index)
+
+    def _read_macro_header(self, path: str, index: int) -> tuple[str, str]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                name = f.readline().strip()
+                tip = f.readline().strip()
+            if not name:
+                name = f"Macro {index}"
+            return name, tip
+        except Exception:
+            return f"Macro {index}", ""
+
+    def _show_macro_preview(self, name: str, lines: list[str]) -> None:
+        body = "".join(lines[2:]) if len(lines) > 2 else ""
+        dlg = tk.Toplevel(self.app)
+        dlg.title(f"Macro Preview - {name}")
+        dlg.transient(self.app)
+        dlg.grab_set()
+        dlg.resizable(True, True)
+        frame = ttk.Frame(dlg, padding=8)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=name, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 6))
+        text = tk.Text(frame, wrap="word", height=14, width=80, state="normal")
+        text.insert("end", body)
+        text.config(state="disabled")
+        text.pack(fill="both", expand=True)
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=(0, 6))
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+        dlg.wait_window()
+
+    def _preview_macro(self, index: int):
+        path = self._macro_path(index)
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except Exception as e:
+            messagebox.showerror("Macro error", str(e))
+            return
+        name = lines[0].strip() if lines else f"Macro {index}"
+        self._show_macro_preview(name, lines)
+
+    def _run_macro(self, index: int):
+        self.app.macro_executor.run_macro(index)
+
+    def _load_macro_buttons(self):
+        if not self._left_frame or not self._right_frame:
+            return
+        if self._macro_buttons:
+            self.app._manual_controls = [w for w in self.app._manual_controls if w not in self._macro_buttons]
+        self._macro_buttons = []
+        for w in self._left_frame.winfo_children():
+            w.destroy()
+        for w in self._right_frame.winfo_children():
+            w.destroy()
+
+        for idx in (1, 2, 3):
+            path = self._macro_path(idx)
+            if not path:
+                continue
+            name, tip = self._read_macro_header(path, idx)
+            btn = ttk.Button(self._left_frame, text=name, command=lambda i=idx: self._run_macro(i))
+            btn._kb_id = f"macro_{idx}"
+            btn.pack(fill="x", pady=(0, 4))
+            apply_tooltip(btn, tip)
+            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
+            self.app._manual_controls.append(btn)
+            self._macro_buttons.append(btn)
+
+        col = 0
+        row = 0
+        for idx in (4, 5, 6, 7):
+            path = self._macro_path(idx)
+            if not path:
+                continue
+            name, tip = self._read_macro_header(path, idx)
+            btn = ttk.Button(self._right_frame, text=name, command=lambda i=idx: self._run_macro(i))
+            btn._kb_id = f"macro_{idx}"
+            btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
+            self._right_frame.grid_columnconfigure(col, weight=1)
+            apply_tooltip(btn, tip)
+            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
+            self.app._manual_controls.append(btn)
+            self._macro_buttons.append(btn)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        self.app._refresh_keyboard_table()
+
+
+class ToolpathPanel:
+    def __init__(self, app):
+        self.app = app
+        self.view: Toolpath3D | None = None
+        self.tab: ttk.Frame | None = None
+
+    def build_tab(self, notebook: ttk.Notebook):
+        tab = ttk.Frame(notebook, padding=6)
+        notebook.add(tab, text="3D View")
+        self.tab = tab
+        self.view = Toolpath3D(
+            tab,
+            on_save_view=self.app._save_3d_view,
+            on_load_view=self.app._load_3d_view,
+            perf_callback=self._toolpath_perf_logger,
+        )
+        self.view.pack(fill="both", expand=True)
+        self._configure_view()
+        self.app._load_3d_view(show_status=False)
+
+    def _configure_view(self):
+        if not self.view:
+            return
+        self.view.set_display_options(
+            rapid=bool(self.app.settings.get("toolpath_show_rapid", False)),
+            feed=bool(self.app.settings.get("toolpath_show_feed", True)),
+            arc=bool(self.app.settings.get("toolpath_show_arc", False)),
+        )
+        self.view.set_enabled(bool(self.app.render3d_enabled.get()))
+        self.view.set_lightweight_mode(bool(self.app.toolpath_lightweight.get()))
+        self.view.set_draw_limits(
+            self.app._toolpath_limit_value(self.app.toolpath_full_limit.get(), self.app._toolpath_full_limit_default),
+            self.app._toolpath_limit_value(self.app.toolpath_interactive_limit.get(), self.app._toolpath_interactive_limit_default),
+        )
+        self.view.set_arc_detail_override(math.radians(self.app.toolpath_arc_detail.get()))
+
+    def _toolpath_perf_logger(self, label: str, duration: float):
+        if duration < 0.05:
+            return
+        try:
+            self.app.ui_q.put(("log", f"[toolpath] {label} took {duration:.2f}s"))
+        except Exception:
+            pass
+
+    def set_gcode_lines(self, lines: list[str]):
+        if self.view:
+            self.view.set_gcode_async(lines)
+
+    def clear(self):
+        if self.view:
+            self.view.set_gcode_async([])
+            self.view.set_job_name("")
+
+    def set_job_name(self, name: str):
+        if self.view:
+            self.view.set_job_name(name)
+
+    def set_visible(self, visible: bool):
+        if self.view:
+            self.view.set_visible(visible)
+
+    def set_enabled(self, enabled: bool):
+        if self.view:
+            self.view.set_enabled(enabled)
+
+    def set_lightweight(self, value: bool):
+        if self.view:
+            self.view.set_lightweight_mode(value)
+
+    def set_draw_limits(self, full: int, interactive: int):
+        if self.view:
+            self.view.set_draw_limits(full, interactive)
+
+    def set_arc_detail(self, deg: float):
+        if self.view:
+            self.view.set_arc_detail_override(math.radians(deg))
+
+    def reparse_lines(self, lines: list[str]):
+        if self.view:
+            self.view.set_gcode_async(lines)
+
+    def set_position(self, x: float, y: float, z: float):
+        if self.view:
+            self.view.set_position(x, y, z)
+
+    def get_view_state(self):
+        if self.view:
+            return self.view.get_view()
+        return None
+
+    def apply_view_state(self, state):
+        if self.view and state:
+            self.view.apply_view(state)
+
+    def get_display_options(self):
+        if self.view:
+            return self.view.get_display_options()
+        return (False, False, False)
+
+
+class GRBLSettingsController:
+    def __init__(self, app):
+        self.app = app
+        self.settings_tree: ttk.Treeview | None = None
+        self.settings_raw_text: tk.Text | None = None
+        self.settings_tip: ToolTip | None = None
+        self.btn_refresh: ttk.Button | None = None
+        self.btn_save: ttk.Button | None = None
+        self._settings_capture = False
+        self._settings_data: dict[str, tuple[str, int | None]] = {}
+        self._settings_values: dict[str, str] = {}
+        self._settings_edited: dict[str, str] = {}
+        self._settings_edit_entry: ttk.Entry | None = None
+        self._settings_baseline: dict[str, str] = {}
+        self._settings_items: dict[str, str] = {}
+        self._settings_raw_lines: list[str] = []
+
+    def build_tabs(self, notebook: ttk.Notebook):
+        rtab = ttk.Frame(notebook, padding=6)
+        notebook.add(rtab, text="Raw $$")
+        self.settings_raw_text = tk.Text(rtab, wrap="word", height=12, state="disabled")
+        rsb = ttk.Scrollbar(rtab, orient="vertical", command=self.settings_raw_text.yview)
+        self.settings_raw_text.configure(yscrollcommand=rsb.set)
+        self.settings_raw_text.grid(row=0, column=0, sticky="nsew")
+        rsb.grid(row=0, column=1, sticky="ns")
+        rtab.grid_rowconfigure(0, weight=1)
+        rtab.grid_columnconfigure(0, weight=1)
+
+        stab = ttk.Frame(notebook, padding=6)
+        notebook.add(stab, text="GRBL Settings")
+        sbar = ttk.Frame(stab)
+        sbar.pack(fill="x", pady=(0, 6))
+        self.btn_refresh = ttk.Button(
+            sbar,
+            text="Refresh $$",
+            command=self.app._request_settings_dump,
+        )
+        set_kb_id(self.btn_refresh, "grbl_settings_refresh")
+        self.btn_refresh.pack(side="left")
+        apply_tooltip(self.btn_refresh, "Request $$ settings from GRBL.")
+        attach_log_gcode(self.btn_refresh, "$$")
+        self.app._manual_controls.append(self.btn_refresh)
+        self.btn_save = ttk.Button(
+            sbar,
+            text="Save Changes",
+            command=self.save_changes,
+        )
+        set_kb_id(self.btn_save, "grbl_settings_save")
+        self.btn_save.pack(side="left", padx=(8, 0))
+        apply_tooltip(self.btn_save, "Send edited settings to GRBL.")
+        self.app._manual_controls.append(self.btn_save)
+
+        self.settings_tree = ttk.Treeview(
+            stab,
+            columns=("setting", "name", "value", "units", "desc"),
+            show="headings",
+            height=12,
+        )
+        self.settings_tree.heading("setting", text="Setting")
+        self.settings_tree.heading("name", text="Name")
+        self.settings_tree.heading("value", text="Value")
+        self.settings_tree.heading("units", text="Units")
+        self.settings_tree.heading("desc", text="Description")
+        self.settings_tree.column("setting", width=80, anchor="w")
+        self.settings_tree.column("name", width=200, anchor="w")
+        self.settings_tree.column("value", width=120, anchor="w")
+        self.settings_tree.column("units", width=100, anchor="w")
+        self.settings_tree.column("desc", width=420, anchor="w")
+        self.settings_tree.pack(fill="both", expand=True)
+        self.settings_tree.bind("<Double-1>", self._edit_setting_value)
+        self.settings_tree.bind("<Motion>", self._settings_tooltip_motion)
+        self.settings_tree.bind("<Leave>", self._settings_tooltip_hide)
+        self.settings_tip = ToolTip(self.settings_tree, "")
+        self.settings_tree.tag_configure("edited", background="#fff5c2")
+
+    def start_capture(self, header: str = "Requesting $$..."):
+        self._settings_capture = True
+        self._settings_data = {}
+        self._settings_edited = {}
+        self._settings_raw_lines = []
+        self._render_settings_raw(header)
+
+    def handle_line(self, line: str):
+        if not self._settings_capture:
+            return
+        s = line.strip()
+        if s.startswith("<") and s.endswith(">"):
+            return
+        low = s.lower()
+        if low != "ok" and not low.startswith("error"):
+            self._settings_raw_lines.append(s)
+        if s.startswith("$") and "=" in s:
+            key, value = s.split("=", 1)
+            try:
+                idx = int(key[1:])
+            except Exception:
+                idx = None
+            self._settings_data[key] = (value.strip(), idx)
+            return
+        if low == "ok":
+            self._settings_capture = False
+            self._render_settings()
+            self._update_rapid_rates()
+            self._update_accel_rates()
+            if self.app._last_gcode_lines:
+                self.app._update_gcode_stats(self.app._last_gcode_lines)
+            self._render_settings_raw()
+        elif low.startswith("error"):
+            self._settings_capture = False
+            self.app.status.config(text=f"Settings error: {s}")
+            self._render_settings_raw()
+
+    def save_changes(self):
+        self._commit_pending_setting_edit()
+        if not self.app.grbl.is_connected():
+            messagebox.showwarning("Not connected", "Connect to GRBL first.")
+            return
+        if self.app.grbl.is_streaming():
+            messagebox.showwarning("Busy", "Stop the stream before saving settings.")
+            return
+        if not self._settings_edited:
+            messagebox.showinfo("No changes", "No settings have been edited.")
+            return
+        if not messagebox.askyesno("Confirm save", "Send edited settings to GRBL?"):
+            return
+        changes: list[tuple[str, str]] = []
+        for key, value in self._settings_edited.items():
+            val = "" if value is None else str(value).strip()
+            if val == "":
+                continue
+            changes.append((key, val))
+        if not changes:
+            messagebox.showinfo("No changes", "No non-empty settings to send.")
+            return
+
+        def worker():
+            sent = 0
+            for key, val in changes:
+                self.app.grbl.send_immediate(f"{key}={val}")
+                sent += 1
+                time.sleep(0.05)
+            self._settings_edited = {}
+            self.app.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
+            try:
+                self.app.after(
+                    0,
+                    lambda sent_count=sent: self._mark_settings_saved(
+                        changes, sent_count, refresh=True
+                    ),
+                )
+            except Exception as exc:
+                logger.exception("Failed to schedule settings refresh: %s", exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mark_settings_saved(self, changes, sent_count: int, refresh: bool = False):
+        if refresh:
+            try:
+                self.app.status.config(
+                    text=f"Settings: sent {sent_count} change(s); refreshing $$ for confirmation"
+                )
+            except Exception as exc:
+                logger.exception("Failed to update settings status: %s", exc)
+            try:
+                self.app._request_settings_dump()
+            except Exception as exc:
+                logger.exception("Failed to request settings dump: %s", exc)
+            return
+        for key, _ in changes:
+            if key in self._settings_values:
+                self._settings_baseline[key] = self._settings_values[key]
+                self._update_setting_row_tags(key)
+        try:
+            self.app.status.config(text=f"Settings: sent {sent_count} change(s)")
+        except Exception as exc:
+            logger.exception("Failed to update settings status: %s", exc)
+
+    def _render_settings(self):
+        if not self.settings_tree:
+            return
+        self._settings_items = {}
+        for item in self.settings_tree.get_children():
+            self.settings_tree.delete(item)
+        items: list[tuple[int, str, str, str, str, str]] = []
+        self._settings_values = {}
+        for key, (value, idx) in self._settings_data.items():
+            self._settings_values[key] = value
+            info = self.app._grbl_setting_info.get(key, {})
+            name = info.get("name", "")
+            units = info.get("units", "")
+            desc = info.get("desc", "")
+            items.append((idx if idx is not None else 9999, key, name, value, units, desc))
+        for idx in self.app._grbl_setting_keys:
+            key = f"${idx}"
+            if key not in self._settings_values:
+                self._settings_values[key] = ""
+                info = self.app._grbl_setting_info.get(key, {})
+                name = info.get("name", "")
+                units = info.get("units", "")
+                desc = info.get("desc", "")
+                items.append((idx, key, name, "", units, desc))
+        for _, key, name, value, units, desc in sorted(items):
+            item_id = self.settings_tree.insert("", "end", values=(key, name, value, units, desc))
+            self._settings_items[key] = item_id
+        self._settings_baseline = dict(self._settings_values)
+        for key in self._settings_items:
+            self._update_setting_row_tags(key)
+        self.app.status.config(text=f"Settings: {len(items)} values")
+
+    def _update_rapid_rates(self):
+        try:
+            rx = float(self._settings_data.get("$110", ("", None))[0])
+            ry = float(self._settings_data.get("$111", ("", None))[0])
+            rz = float(self._settings_data.get("$112", ("", None))[0])
+            if rx > 0 and ry > 0 and rz > 0:
+                self.app._rapid_rates = (rx, ry, rz)
+                self.app._rapid_rates_source = "grbl"
+                return
+        except Exception:
+            pass
+        self.app._rapid_rates = None
+        self.app._rapid_rates_source = None
+
+    def _update_accel_rates(self):
+        try:
+            ax = float(self._settings_data.get("$120", ("", None))[0])
+            ay = float(self._settings_data.get("$121", ("", None))[0])
+            az = float(self._settings_data.get("$122", ("", None))[0])
+            if ax > 0 and ay > 0 and az > 0:
+                self.app._accel_rates = (ax, ay, az)
+                return
+        except Exception:
+            pass
+        self.app._accel_rates = None
+
+    def _render_settings_raw(self, header: str | None = None):
+        if not self.settings_raw_text:
+            return
+        lines = []
+        if header:
+            lines.append(header)
+        if self._settings_raw_lines:
+            lines.extend(self._settings_raw_lines)
+        self.settings_raw_text.config(state="normal")
+        self.settings_raw_text.delete("1.0", "end")
+        self.settings_raw_text.insert("end", "\n".join(lines).strip() + "\n")
+        self.settings_raw_text.config(state="disabled")
+
+    def _edit_setting_value(self, event):
+        if not self.settings_tree:
+            return
+        item = self.settings_tree.identify_row(event.y)
+        col = self.settings_tree.identify_column(event.x)
+        if not item or col != "#3":
+            return
+        bbox = self.settings_tree.bbox(item, column=col)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        values = self.settings_tree.item(item, "values")
+        if not values:
+            return
+        key = values[0]
+        current = values[2]
+        self._commit_pending_setting_edit()
+        entry = ttk.Entry(self.settings_tree)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.insert(0, current)
+        entry.focus_set()
+        entry._item = item
+        entry._key = key
+        self._settings_edit_entry = entry
+
+        def commit(_event=None):
+            self._commit_pending_setting_edit()
+
+        def cancel(_event=None):
+            self._cancel_pending_setting_edit()
+
+        entry.bind("<Return>", commit)
+        entry.bind("<FocusOut>", commit)
+        entry.bind("<Escape>", cancel)
+
+    def _commit_pending_setting_edit(self):
+        entry = getattr(self, "_settings_edit_entry", None)
+        if entry is None:
+            return
+        key = getattr(entry, "_key", None)
+        item = getattr(entry, "_item", None)
+        try:
+            if key and item:
+                new_val = entry.get().strip()
+                if new_val:
+                    try:
+                        idx = int(key[1:]) if key.startswith("$") else None
+                    except Exception:
+                        idx = None
+                    if idx not in GRBL_NON_NUMERIC_SETTINGS:
+                        try:
+                            val_num = float(new_val)
+                        except Exception:
+                            messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
+                            return
+                        limits = GRBL_SETTING_LIMITS.get(idx, None)
+                        if limits:
+                            lo, hi = limits
+                            if lo is not None and val_num < lo:
+                                messagebox.showwarning("Out of range", f"Setting {key} must be >= {lo}.")
+                                return
+                            if hi is not None and val_num > hi:
+                                messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
+                                return
+                self.settings_tree.set(item, "value", new_val)
+                self._settings_values[key] = new_val
+                baseline = self._settings_baseline.get(key, "")
+                if new_val == baseline and key in self._settings_edited:
+                    self._settings_edited.pop(key, None)
+                else:
+                    self._settings_edited[key] = new_val
+                self._update_setting_row_tags(key)
+        finally:
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+            self._settings_edit_entry = None
+
+    def _cancel_pending_setting_edit(self):
+        entry = getattr(self, "_settings_edit_entry", None)
+        if entry is None:
+            return
+        try:
+            entry.destroy()
+        except Exception:
+            pass
+        self._settings_edit_entry = None
+
+    def _update_setting_row_tags(self, key: str):
+        if not self.settings_tree:
+            return
+        item = self._settings_items.get(key)
+        if not item:
+            return
+        current = self._settings_values.get(key, "")
+        baseline = self._settings_baseline.get(key, "")
+        tags = list(self.settings_tree.item(item, "tags"))
+        if current != baseline:
+            if "edited" not in tags:
+                tags.append("edited")
+        else:
+            tags = [t for t in tags if t != "edited"]
+        self.settings_tree.item(item, tags=tuple(tags))
+
+    def _settings_tooltip_motion(self, event):
+        if not self.settings_tree or not self.settings_tip:
+            return
+        item = self.settings_tree.identify_row(event.y)
+        if not item:
+            self._settings_tooltip_hide()
+            return
+        values = self.settings_tree.item(item, "values")
+        if not values:
+            self._settings_tooltip_hide()
+            return
+        key = values[0]
+        try:
+            idx = int(key[1:])
+        except Exception:
+            idx = None
+        info = self.app._grbl_setting_info.get(key, {})
+        desc = info.get("desc", "")
+        units = info.get("units", "")
+        tooltip = info.get("tooltip", "")
+        baseline_val = self._settings_baseline.get(key, "")
+        current_val = self._settings_values.get(key, "")
+        limits = None
+        try:
+            limits = GRBL_SETTING_LIMITS.get(int(key[1:]), None)
+        except Exception:
+            limits = None
+        allow_text = False
+        try:
+            allow_text = int(key[1:]) in GRBL_NON_NUMERIC_SETTINGS
+        except Exception:
+            allow_text = False
+        value_line = (
+            f"Pending: {current_val} (last saved: {baseline_val})"
+            if current_val != baseline_val
+            else f"Value: {baseline_val}"
+        )
+        parts = []
+        if tooltip:
+            parts.append(tooltip)
+        elif desc:
+            parts.append(desc)
+        if units:
+            parts.append(f"Units: {units}")
+        if allow_text:
+            parts.append("Allows text values")
+        if limits:
+            lo, hi = limits
+            if lo is not None and hi is not None:
+                parts.append(f"Allowed: {lo} .. {hi}")
+            elif lo is not None:
+                parts.append(f"Allowed: >= {lo}")
+            elif hi is not None:
+                parts.append(f"Allowed: <= {hi}")
+        parts.append(value_line)
+        parts.append("Typical: machine-specific")
+        self.settings_tip.set_text("\n".join([p for p in parts if p]))
+        self.settings_tip._schedule_show()
+
+    def _settings_tooltip_hide(self, _event=None):
+        if self.settings_tip:
+            self.settings_tip._hide()
 
 def compute_gcode_stats(
     lines: list[str],
@@ -202,7 +1788,13 @@ def compute_gcode_stats(
 
 
 class Toolpath3D(ttk.Frame):
-    def __init__(self, parent, on_save_view=None, on_load_view=None):
+    def __init__(
+        self,
+        parent,
+        on_save_view=None,
+        on_load_view=None,
+        perf_callback: Callable[[str, float], None] | None = None,
+    ):
         super().__init__(parent)
         bg = "SystemButtonFace"
         try:
@@ -292,6 +1884,8 @@ class Toolpath3D(ttk.Frame):
         self._cached_projection_state = None
         self._cached_projection = None
         self._cached_projection_metrics = None
+        self._perf_callback = perf_callback
+        self._perf_threshold = 0.05
 
     def _legend_label(self, parent, color, text, var):
         swatch = tk.Label(parent, width=2, background=color)
@@ -299,41 +1893,55 @@ class Toolpath3D(ttk.Frame):
         chk = ttk.Checkbutton(parent, text=text, variable=var, command=self._schedule_render)
         chk.pack(side="left", padx=(0, 10))
 
+    def _report_perf(self, label: str, duration: float):
+        if not self._perf_callback:
+            return
+        if duration < self._perf_threshold:
+            return
+        try:
+            self._perf_callback(label, duration)
+        except Exception:
+            pass
+
     def _invalidate_render_cache(self):
         self._cached_projection_state = None
         self._cached_projection = None
         self._cached_projection_metrics = None
 
     def _build_projection_cache(self, filters: tuple[bool, bool, bool], max_draw: int | None):
-        segments = self.segments
-        total_segments = len(segments)
-        draw_segments = segments
-        if max_draw and total_segments > max_draw:
-            step = max(2, total_segments // max_draw)
-            draw_segments = segments[::step]
-        proj: list[tuple[float, float, float, float, str]] = []
-        minx = miny = float("inf")
-        maxx = maxy = float("-inf")
-        drawn = 0
-        for x1, y1, z1, x2, y2, z2, color in draw_segments:
-            if color == "rapid" and not filters[0]:
-                continue
-            if color == "feed" and not filters[1]:
-                continue
-            if color == "arc" and not filters[2]:
-                continue
-            px1, py1 = self._project(x1, y1, z1)
-            px2, py2 = self._project(x2, y2, z2)
-            minx = min(minx, px1, px2)
-            miny = min(miny, py1, py2)
-            maxx = max(maxx, px1, px2)
-            maxy = max(maxy, py1, py2)
-            proj.append((px1, py1, px2, py2, color))
-            drawn += 1
-        bounds = None
-        if proj and (minx < float("inf")):
-            bounds = (minx, maxx, miny, maxy)
-        return proj, bounds, drawn, total_segments
+        start = time.perf_counter()
+        try:
+            segments = self.segments
+            total_segments = len(segments)
+            draw_segments = segments
+            if max_draw and total_segments > max_draw:
+                step = max(2, total_segments // max_draw)
+                draw_segments = segments[::step]
+            proj: list[tuple[float, float, float, float, str]] = []
+            minx = miny = float("inf")
+            maxx = maxy = float("-inf")
+            drawn = 0
+            for x1, y1, z1, x2, y2, z2, color in draw_segments:
+                if color == "rapid" and not filters[0]:
+                    continue
+                if color == "feed" and not filters[1]:
+                    continue
+                if color == "arc" and not filters[2]:
+                    continue
+                px1, py1 = self._project(x1, y1, z1)
+                px2, py2 = self._project(x2, y2, z2)
+                minx = min(minx, px1, px2)
+                miny = min(miny, py1, py2)
+                maxx = max(maxx, px1, px2)
+                maxy = max(maxy, py1, py2)
+                proj.append((px1, py1, px2, py2, color))
+                drawn += 1
+            bounds = None
+            if proj and (minx < float("inf")):
+                bounds = (minx, maxx, miny, maxy)
+            return proj, bounds, drawn, total_segments
+        finally:
+            self._report_perf("build_projection", time.perf_counter() - start)
 
     def set_display_options(
         self,
@@ -416,6 +2024,11 @@ class Toolpath3D(ttk.Frame):
             segs, bnds = self._parse_gcode(lines, token)
             if segs is None:
                 return
+            if not self.winfo_exists():
+                return
+            root = self.winfo_toplevel()
+            if getattr(root, "_closing", False):
+                return
             self.after(0, lambda: self._apply_full_parse(token, segs, bnds, lines_hash))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -440,6 +2053,11 @@ class Toolpath3D(ttk.Frame):
 
 
     def _apply_full_parse(self, token, segments, bounds, parse_hash: str | None = None):
+        if not self.winfo_exists():
+            return
+        root = self.winfo_toplevel()
+        if getattr(root, "_closing", False):
+            return
         if token != self._parse_token:
             return
         if not self.enabled:
@@ -583,7 +2201,8 @@ class Toolpath3D(ttk.Frame):
             self.zoom = float(view.get("zoom", self.zoom))
             self.pan_x = float(view.get("pan_x", self.pan_x))
             self.pan_y = float(view.get("pan_y", self.pan_y))
-        except Exception:
+        except Exception as exc:
+            logger.exception("Failed to apply 3D view state: %s", exc)
             return
         self._schedule_render()
 
@@ -659,12 +2278,17 @@ class Toolpath3D(ttk.Frame):
         return minx, maxx, miny, maxy, minz, maxz
 
     def _parse_gcode(self, lines: list[str], token: int | None = None):
-        def keep_running() -> bool:
-            return token is None or token == self._parse_token
-        result = parse_gcode_lines(lines, self._arc_step_rad, keep_running=keep_running)
-        if result is None:
-            return None, None
-        return result.segments, result.bounds
+        start = time.perf_counter()
+        try:
+            def keep_running() -> bool:
+                return token is None or token == self._parse_token
+
+            result = parse_gcode_lines(lines, self._arc_step_rad, keep_running=keep_running)
+            if result is None:
+                return None, None
+            return result.segments, result.bounds
+        finally:
+            self._report_perf("parse_gcode", time.perf_counter() - start)
 
     def _render(self):
         self._render_pending = False
@@ -1073,6 +2697,7 @@ class App(tk.Tk):
         self.minsize(980, 620)
         self.settings_path = _resolve_settings_path()
         self.settings_dir = os.path.dirname(self.settings_path)
+        self._settings_store = Settings(self.settings_path)
         self.settings = self._load_settings()
         # Migrate jog feed defaults: keep legacy jog_feed for XY, force Z to its own default when absent.
         legacy_jog_feed = self.settings.get("jog_feed")
@@ -1091,6 +2716,8 @@ class App(tk.Tk):
 
         self.tooltip_enabled = tk.BooleanVar(value=self.settings.get("tooltips_enabled", True))
         self.gui_logging_enabled = tk.BooleanVar(value=self.settings.get("gui_logging_enabled", True))
+        self.error_dialogs_enabled = tk.BooleanVar(value=self.settings.get("error_dialogs_enabled", True))
+        self.macros_allow_python = tk.BooleanVar(value=self.settings.get("macros_allow_python", True))
         self.performance_mode = tk.BooleanVar(value=self.settings.get("performance_mode", False))
         self.render3d_enabled = tk.BooleanVar(value=self.settings.get("render3d_enabled", True))
         self.all_stop_mode = tk.StringVar(value=self.settings.get("all_stop_mode", "stop_reset"))
@@ -1165,23 +2792,61 @@ class App(tk.Tk):
         self._key_sequence_after_id = None
         self._kb_item_to_button = {}
         self._kb_edit = None
-        self._console_lines: list[tuple[str, str | None]] = []
-        self._console_filter = None
-        self._pending_console_entries: list[tuple[str, str | None]] = []
-        self._pending_console_trim = 0
-        self._console_after_id = None
-        self._console_render_pending = False
         self._closing = False
         self._connecting = False
         self._disconnecting = False
         self._connect_thread: threading.Thread | None = None
         self._disconnect_thread: threading.Thread | None = None
-
+        self._error_dialog_last_ts = 0.0
+        self._error_dialog_window_start = 0.0
+        self._error_dialog_count = 0
+        self._error_dialog_suppressed = False
+        try:
+            interval = float(self.settings.get("error_dialog_interval", 2.0))
+        except Exception:
+            interval = 2.0
+        try:
+            burst_window = float(self.settings.get("error_dialog_burst_window", 30.0))
+        except Exception:
+            burst_window = 30.0
+        try:
+            burst_limit = int(self.settings.get("error_dialog_burst_limit", 3))
+        except Exception:
+            burst_limit = 3
+        if interval <= 0:
+            interval = 2.0
+        if burst_window <= 0:
+            burst_window = 30.0
+        if burst_limit <= 0:
+            burst_limit = 3
+        self._error_dialog_interval = interval
+        self._error_dialog_burst_window = burst_window
+        self._error_dialog_burst_limit = burst_limit
+        self.error_dialog_interval_var = tk.DoubleVar(value=self._error_dialog_interval)
+        self.error_dialog_burst_window_var = tk.DoubleVar(value=self._error_dialog_burst_window)
+        self.error_dialog_burst_limit_var = tk.IntVar(value=self._error_dialog_burst_limit)
+        self.error_dialog_status_var = tk.StringVar(value="")
         self.ui_q: queue.Queue = queue.Queue()
         self.status_poll_interval = tk.DoubleVar(
             value=self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT)
         )
+        try:
+            failure_limit = int(self.settings.get("status_query_failure_limit", 3))
+        except Exception:
+            failure_limit = 3
+        if failure_limit < 1:
+            failure_limit = 1
+        if failure_limit > 10:
+            failure_limit = 10
+        self.status_query_failure_limit = tk.IntVar(value=failure_limit)
         self.grbl = GrblWorker(self.ui_q)
+        self.grbl.set_status_query_failure_limit(self.status_query_failure_limit.get())
+        self.macro_executor = MacroExecutor(self)
+        self.streaming_controller = StreamingController(self)
+        self.macro_panel = MacroPanel(self)
+        self.toolpath_panel = ToolpathPanel(self)
+        self.settings_controller = GRBLSettingsController(self)
+        self.report_callback_exception = self._tk_report_callback_exception
         self._apply_status_poll_profile()
 
         self.unit_mode = tk.StringVar(value=self.settings.get("unit_mode", "mm"))
@@ -1245,94 +2910,9 @@ class App(tk.Tk):
         self._spindle_override_slider_locked = False
         self._feed_override_slider_last_position = 100
         self._spindle_override_slider_last_position = 100
-        self._macro_lock = threading.Lock()
-        self._macro_vars_lock = threading.Lock()
-        self._macro_local_vars = {"app": self, "os": os}
-        self._macro_vars = {
-            "prbx": 0.0,
-            "prby": 0.0,
-            "prbz": 0.0,
-            "prbcmd": "G38.2",
-            "prbfeed": 10.0,
-            "errline": "",
-            "wx": 0.0,
-            "wy": 0.0,
-            "wz": 0.0,
-            "wa": 0.0,
-            "wb": 0.0,
-            "wc": 0.0,
-            "mx": 0.0,
-            "my": 0.0,
-            "mz": 0.0,
-            "ma": 0.0,
-            "mb": 0.0,
-            "mc": 0.0,
-            "wcox": 0.0,
-            "wcoy": 0.0,
-            "wcoz": 0.0,
-            "wcoa": 0.0,
-            "wcob": 0.0,
-            "wcoc": 0.0,
-            "curfeed": 0.0,
-            "curspindle": 0.0,
-            "_camwx": 0.0,
-            "_camwy": 0.0,
-            "G": [],
-            "TLO": 0.0,
-            "motion": "G0",
-            "WCS": "G54",
-            "plane": "G17",
-            "feedmode": "G94",
-            "distance": "G90",
-            "arc": "G91.1",
-            "units": "G21",
-            "cutter": "",
-            "tlo": "",
-            "program": "M0",
-            "spindle": "M5",
-            "coolant": "M9",
-            "tool": 0,
-            "feed": 0.0,
-            "rpm": 0.0,
-            "planner": 0,
-            "rxbytes": 0,
-            "OvFeed": 100,
-            "OvRapid": 100,
-            "OvSpindle": 100,
-            "_OvChanged": False,
-            "_OvFeed": 100,
-            "_OvRapid": 100,
-            "_OvSpindle": 100,
-            "diameter": 3.175,
-            "cutfeed": 1000.0,
-            "cutfeedz": 500.0,
-            "safe": 3.0,
-            "state": "",
-            "pins": "",
-            "msg": "",
-            "stepz": 1.0,
-            "surface": 0.0,
-            "thickness": 5.0,
-            "stepover": 40.0,
-            "PRB": None,
-            "version": "",
-            "controller": "",
-            "running": False,
-            "prompt_choice": "",
-            "prompt_index": -1,
-            "prompt_cancelled": False,
-        }
         self._machine_state_text = "DISCONNECTED"
-        self._settings_capture = False
-        self._settings_data = {}
-        self._settings_values = {}
-        self._settings_edited = {}
-        self._settings_edit_entry = None
-        self._settings_baseline = {}
-        self._settings_items = {}
         self._grbl_setting_info = {}
         self._grbl_setting_keys = []
-        self._settings_raw_lines = []
         self._last_sent_index = -1
         self._last_acked_index = -1
         self._confirm_last_time = {}
@@ -1346,13 +2926,6 @@ class App(tk.Tk):
         self._auto_reconnect_next_ts = 0.0
         self._user_disconnect = False
         self._ui_throttle_ms = 100
-        self._pending_sent_index = None
-        self._pending_acked_index = None
-        self._pending_marks_after_id = None
-        self._pending_progress = None
-        self._progress_after_id = None
-        self._pending_buffer = None
-        self._buffer_after_id = None
         self._state_flash_after_id = None
         self._state_flash_color = None
         self._state_flash_on = False
@@ -1373,7 +2946,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
         self._load_grbl_setting_info()
-        self._bind_button_logging()
+        self.streaming_controller.bind_button_logging()
         self._apply_keyboard_bindings()
 
     # ---------- UI ----------
@@ -1573,6 +3146,9 @@ class App(tk.Tk):
             return float(self.jog_feed_xy.get())
 
         def j(dx, dy, dz):
+            if not self.grbl.is_connected():
+                self.streaming_controller.log("Jog ignored – GRBL is not connected.")
+                return
             feed = _jog_feed_for_move(dx, dy, dz)
             self.grbl.jog(dx, dy, dz, feed, self.unit_mode.get())
 
@@ -1702,8 +3278,7 @@ class App(tk.Tk):
         macro_right = ttk.Frame(pad)
         macro_right.grid(row=5, column=0, columnspan=6, pady=(6, 0), sticky="ew")
 
-        self.macro_frames = {"left": macro_left, "right": macro_right}
-        self._load_macro_buttons()
+        self.macro_panel.attach_frames(macro_left, macro_right)
 
         self._set_unit_mode(self.unit_mode.get())
 
@@ -1761,15 +3336,15 @@ class App(tk.Tk):
         apply_tooltip(self.btn_console_clear, "Clear the console log.")
         self.console_filter_sep = ttk.Separator(entry_row, orient="vertical")
         self.console_filter_sep.grid(row=0, column=4, sticky="ns", padx=(8, 6))
-        self.btn_console_all = ttk.Button(entry_row, text="ALL", command=lambda: self._set_console_filter(None))
+        self.btn_console_all = ttk.Button(entry_row, text="ALL", command=lambda: self.streaming_controller.set_console_filter(None))
         set_kb_id(self.btn_console_all, "console_filter_all")
         self.btn_console_all.grid(row=0, column=5, padx=(0, 0))
         apply_tooltip(self.btn_console_all, "Show all console log entries.")
-        self.btn_console_errors = ttk.Button(entry_row, text="ERRORS", command=lambda: self._set_console_filter("errors"))
+        self.btn_console_errors = ttk.Button(entry_row, text="ERRORS", command=lambda: self.streaming_controller.set_console_filter("errors"))
         set_kb_id(self.btn_console_errors, "console_filter_errors")
         self.btn_console_errors.grid(row=0, column=6, padx=(1, 0))
         apply_tooltip(self.btn_console_errors, "Show only error entries in the console log.")
-        self.btn_console_alarms = ttk.Button(entry_row, text="ALARMS", command=lambda: self._set_console_filter("alarms"))
+        self.btn_console_alarms = ttk.Button(entry_row, text="ALARMS", command=lambda: self.streaming_controller.set_console_filter("alarms"))
         set_kb_id(self.btn_console_alarms, "console_filter_alarms")
         self.btn_console_alarms.grid(row=0, column=7, padx=(1, 0))
         apply_tooltip(self.btn_console_alarms, "Show only alarm entries in the console log.")
@@ -1786,63 +3361,19 @@ class App(tk.Tk):
         )
 
         self.cmd_entry.bind("<Return>", lambda e: self._send_console())
+        self.streaming_controller.attach_widgets(
+            console=self.console,
+            gview=self.gview,
+            progress_pct=self.progress_pct,
+            buffer_fill=self.buffer_fill,
+            buffer_fill_pct=self.buffer_fill_pct,
+            throughput_var=self.throughput_var,
+        )
 
         otab = ttk.Frame(nb, padding=6)
         nb.add(otab, text="Overdrive")
         self._build_overdrive_tab(otab)
-
-        # Raw $$ tab
-        rtab = ttk.Frame(nb, padding=6)
-        nb.add(rtab, text="Raw $$")
-        self.settings_raw_text = tk.Text(rtab, wrap="word", height=12, state="disabled")
-        rsb = ttk.Scrollbar(rtab, orient="vertical", command=self.settings_raw_text.yview)
-        self.settings_raw_text.configure(yscrollcommand=rsb.set)
-        self.settings_raw_text.grid(row=0, column=0, sticky="nsew")
-        rsb.grid(row=0, column=1, sticky="ns")
-        rtab.grid_rowconfigure(0, weight=1)
-        rtab.grid_columnconfigure(0, weight=1)
-
-        # Settings tab
-        stab = ttk.Frame(nb, padding=6)
-        nb.add(stab, text="GRBL Settings")
-
-        sbar = ttk.Frame(stab)
-        sbar.pack(fill="x", pady=(0, 6))
-        self.btn_settings_refresh = ttk.Button(sbar, text="Refresh $$", command=self._request_settings_dump)
-        set_kb_id(self.btn_settings_refresh, "grbl_settings_refresh")
-        self.btn_settings_refresh.pack(side="left")
-        apply_tooltip(self.btn_settings_refresh, "Request $$ settings from GRBL.")
-        attach_log_gcode(self.btn_settings_refresh, "$$")
-        self._manual_controls.append(self.btn_settings_refresh)
-        self.btn_settings_save = ttk.Button(sbar, text="Save Changes", command=self._save_settings_changes)
-        set_kb_id(self.btn_settings_save, "grbl_settings_save")
-        self.btn_settings_save.pack(side="left", padx=(8, 0))
-        apply_tooltip(self.btn_settings_save, "Send edited settings to GRBL.")
-        self._manual_controls.append(self.btn_settings_save)
-
-        self.settings_tree = ttk.Treeview(
-            stab,
-            columns=("setting", "name", "value", "units", "desc"),
-            show="headings",
-            height=12,
-        )
-        self.settings_tree.heading("setting", text="Setting")
-        self.settings_tree.heading("name", text="Name")
-        self.settings_tree.heading("value", text="Value")
-        self.settings_tree.heading("units", text="Units")
-        self.settings_tree.heading("desc", text="Description")
-        self.settings_tree.column("setting", width=80, anchor="w")
-        self.settings_tree.column("name", width=200, anchor="w")
-        self.settings_tree.column("value", width=120, anchor="w")
-        self.settings_tree.column("units", width=100, anchor="w")
-        self.settings_tree.column("desc", width=420, anchor="w")
-        self.settings_tree.pack(fill="both", expand=True)
-        self.settings_tree.bind("<Double-1>", self._edit_setting_value)
-        self.settings_tree.bind("<Motion>", self._settings_tooltip_motion)
-        self.settings_tree.bind("<Leave>", self._settings_tooltip_hide)
-        self._settings_tip = ToolTip(self.settings_tree, "")
-        self.settings_tree.tag_configure("edited", background="#fff5c2")
-        self.settings_tree.tag_configure("edited", background="#fff5c2")
+        self.settings_controller.build_tabs(nb)
 
         # App Settings tab
         sstab = ttk.Frame(nb, padding=8)
@@ -1940,9 +3471,97 @@ class App(tk.Tk):
             "Set how often GRBL status reports are requested (seconds).",
         )
         self._on_status_interval_change()
+        ttk.Label(status_frame, text="Disconnect after failures").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.status_fail_limit_entry = ttk.Entry(
+            status_frame, textvariable=self.status_query_failure_limit, width=12
+        )
+        self.status_fail_limit_entry.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(status_frame, text="(1-10)").grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self.status_fail_limit_entry.bind("<Return>", self._on_status_failure_limit_change)
+        self.status_fail_limit_entry.bind("<FocusOut>", self._on_status_failure_limit_change)
+        apply_tooltip(
+            self.status_fail_limit_entry,
+            "Consecutive status send failures before disconnecting (clamped to 1-10).",
+        )
+
+        dialog_frame = ttk.LabelFrame(self._app_settings_inner, text="Error dialogs", padding=8)
+        dialog_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        dialog_frame.grid_columnconfigure(1, weight=1)
+        self.error_dialogs_check = ttk.Checkbutton(
+            dialog_frame,
+            text="Enable error dialogs",
+            variable=self.error_dialogs_enabled,
+            command=self._on_error_dialogs_enabled_change,
+        )
+        self.error_dialogs_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        apply_tooltip(self.error_dialogs_check, "Show modal dialogs for errors (tracebacks still log to console).")
+        ttk.Label(dialog_frame, text="Minimum interval (seconds)").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.error_dialog_interval_entry = ttk.Entry(
+            dialog_frame, textvariable=self.error_dialog_interval_var, width=12
+        )
+        self.error_dialog_interval_entry.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(dialog_frame, text="sec").grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self.error_dialog_interval_entry.bind("<Return>", self._apply_error_dialog_settings)
+        self.error_dialog_interval_entry.bind("<FocusOut>", self._apply_error_dialog_settings)
+        ttk.Label(dialog_frame, text="Burst window (seconds)").grid(
+            row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.error_dialog_window_entry = ttk.Entry(
+            dialog_frame, textvariable=self.error_dialog_burst_window_var, width=12
+        )
+        self.error_dialog_window_entry.grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Label(dialog_frame, text="sec").grid(row=2, column=2, sticky="w", padx=(6, 0))
+        self.error_dialog_window_entry.bind("<Return>", self._apply_error_dialog_settings)
+        self.error_dialog_window_entry.bind("<FocusOut>", self._apply_error_dialog_settings)
+        ttk.Label(dialog_frame, text="Max dialogs per window").grid(
+            row=3, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.error_dialog_limit_entry = ttk.Entry(
+            dialog_frame, textvariable=self.error_dialog_burst_limit_var, width=12
+        )
+        self.error_dialog_limit_entry.grid(row=3, column=1, sticky="w", pady=4)
+        ttk.Label(dialog_frame, text="count").grid(row=3, column=2, sticky="w", padx=(6, 0))
+        self.error_dialog_limit_entry.bind("<Return>", self._apply_error_dialog_settings)
+        self.error_dialog_limit_entry.bind("<FocusOut>", self._apply_error_dialog_settings)
+        apply_tooltip(
+            self.error_dialog_interval_entry,
+            "Minimum seconds between modal error dialogs.",
+        )
+        apply_tooltip(
+            self.error_dialog_window_entry,
+            "Time window for counting dialog bursts.",
+        )
+        apply_tooltip(
+            self.error_dialog_limit_entry,
+            "Maximum dialogs allowed inside the burst window before suppressing.",
+        )
+
+        macro_frame = ttk.LabelFrame(self._app_settings_inner, text="Macros", padding=8)
+        macro_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        macro_frame.grid_columnconfigure(0, weight=1)
+        self.macros_allow_python_check = ttk.Checkbutton(
+            macro_frame,
+            text="Allow macro scripting (Python/eval)",
+            variable=self.macros_allow_python,
+        )
+        self.macros_allow_python_check.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        apply_tooltip(
+            self.macros_allow_python_check,
+            "Disable to allow only plain G-code lines in macros (no scripting or expressions).",
+        )
+        ttk.Label(
+            macro_frame,
+            text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
+            wraplength=560,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w")
 
         jog_frame = ttk.LabelFrame(self._app_settings_inner, text="Jogging", padding=8)
-        jog_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        jog_frame.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         jog_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -1977,7 +3596,7 @@ class App(tk.Tk):
         )
 
         kb_frame = ttk.LabelFrame(self._app_settings_inner, text="Keyboard shortcuts", padding=8)
-        kb_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
+        kb_frame.grid(row=6, column=0, sticky="nsew", pady=(0, 8))
         kb_frame.grid_columnconfigure(0, weight=1)
         kb_frame.grid_rowconfigure(1, weight=1)
         self.kb_enable_check = ttk.Checkbutton(
@@ -2016,7 +3635,7 @@ class App(tk.Tk):
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
 
         view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
-        view_frame.grid(row=5, column=0, sticky="ew")
+        view_frame.grid(row=7, column=0, sticky="ew")
         view_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(view_frame, text="Current line highlight").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -2043,7 +3662,7 @@ class App(tk.Tk):
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         toolpath_frame = ttk.LabelFrame(self._app_settings_inner, text="3D view quality", padding=8)
-        toolpath_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        toolpath_frame.grid(row=8, column=0, sticky="ew", pady=(0, 8))
         toolpath_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(toolpath_frame, text="Full draw limit (segments, 0=unlimited)").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -2103,7 +3722,7 @@ class App(tk.Tk):
         )
 
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
-        tw_frame.grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        tw_frame.grid(row=9, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
             tw_frame,
             text="Training Wheels (confirm top-bar actions)",
@@ -2121,7 +3740,7 @@ class App(tk.Tk):
         apply_tooltip(self.reconnect_check, "Auto-connect to the last used port when the app starts.")
 
         profile_frame = ttk.LabelFrame(self._app_settings_inner, text="Machine profile", padding=8)
-        profile_frame.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        profile_frame.grid(row=10, column=0, sticky="ew", pady=(8, 0))
         profile_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(profile_frame, text="Active profile").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -2196,7 +3815,7 @@ class App(tk.Tk):
             self._on_profile_select()
 
         interface_frame = ttk.LabelFrame(self._app_settings_inner, text="Interface", padding=8)
-        interface_frame.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        interface_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
         interface_frame.grid_columnconfigure(0, weight=1)
         self.resume_button_check = ttk.Checkbutton(
             interface_frame,
@@ -2232,24 +3851,7 @@ class App(tk.Tk):
         apply_tooltip(self.btn_performance_mode, "Enable performance mode (batch console updates).")
 
         # 3D tab
-        ttab = ttk.Frame(nb, padding=6)
-        nb.add(ttab, text="3D View")
-        self.toolpath_view = Toolpath3D(
-            ttab,
-            on_save_view=self._save_3d_view,
-            on_load_view=self._load_3d_view,
-        )
-        self.toolpath_view.pack(fill="both", expand=True)
-        self.toolpath_view.set_display_options(
-            rapid=bool(self.settings.get("toolpath_show_rapid", False)),
-            feed=bool(self.settings.get("toolpath_show_feed", True)),
-            arc=bool(self.settings.get("toolpath_show_arc", False)),
-        )
-        self.toolpath_view.set_enabled(bool(self.render3d_enabled.get()))
-        self.toolpath_view.set_lightweight_mode(bool(self.toolpath_lightweight.get()))
-        self._load_3d_view(show_status=False)
-        self._apply_toolpath_draw_limits()
-        self._apply_toolpath_arc_detail()
+        self.toolpath_panel.build_tab(nb)
 
         # Status bar
         status_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
@@ -2277,6 +3879,16 @@ class App(tk.Tk):
         self.buffer_bar.pack(side="right", padx=(6, 0))
         self.throughput_label = ttk.Label(status_bar, textvariable=self.throughput_var, anchor="e")
         self.throughput_label.pack(side="right", padx=(6, 0))
+        self.error_dialog_status_label = ttk.Label(
+            status_bar,
+            textvariable=self.error_dialog_status_var,
+            anchor="e",
+        )
+        self.error_dialog_status_label.pack(side="right", padx=(6, 0))
+        apply_tooltip(
+            self.error_dialog_status_label,
+            "Shows when error dialogs are disabled or suppressed.",
+        )
         ttk.Label(status_bar, textvariable=self.buffer_fill, anchor="e").pack(side="right")
         self._build_led_panel(status_bar)
         self.btn_toggle_tips = ttk.Button(
@@ -2300,6 +3912,17 @@ class App(tk.Tk):
             text="Logging: On" if self.gui_logging_enabled.get() else "Logging: Off"
         )
         apply_tooltip(self.btn_toggle_logging, "Toggle GUI button logging in the console.")
+        self.btn_toggle_error_dialogs = ttk.Button(
+            status_bar,
+            text="Error Dialogs: On",
+            command=self._toggle_error_dialogs,
+        )
+        set_kb_id(self.btn_toggle_error_dialogs, "toggle_error_dialogs")
+        self.btn_toggle_error_dialogs.pack(side="right", padx=(8, 0))
+        self.btn_toggle_error_dialogs.config(
+            text="Error Dialogs: On" if self.error_dialogs_enabled.get() else "Error Dialogs: Off"
+        )
+        apply_tooltip(self.btn_toggle_error_dialogs, "Toggle modal error dialogs.")
         self.btn_toggle_3d = ttk.Button(
             status_bar,
             text="3D Render: On",
@@ -2322,6 +3945,7 @@ class App(tk.Tk):
         self.btn_toggle_keybinds.config(
             text="Keybindings: On" if self.keyboard_bindings_enabled.get() else "Keybindings: Off"
         )
+        self._on_error_dialogs_enabled_change()
         self._state_default_fg = self.status.cget("foreground") or "#000000"
         self._apply_state_fg(None)
 
@@ -2532,10 +4156,10 @@ class App(tk.Tk):
         self._set_override_scale("spindle_override_scale", value, "_spindle_override_slider_locked")
 
     def _refresh_override_info(self):
-        with self._macro_vars_lock:
-            feed = self._macro_vars.get("OvFeed", 100)
-            rapid = self._macro_vars.get("OvRapid", 100)
-            spindle = self._macro_vars.get("OvSpindle", 100)
+        with self.macro_executor.macro_vars() as macro_vars:
+            feed = macro_vars.get("OvFeed", 100)
+            rapid = macro_vars.get("OvRapid", 100)
+            spindle = macro_vars.get("OvSpindle", 100)
         self.override_info_var.set(
             f"Overrides — Feed: {feed}% | Rapid: {rapid}% | Spindle: {spindle}%"
         )
@@ -2958,13 +4582,14 @@ class App(tk.Tk):
         self._last_sent_index = -1
         self._last_acked_index = -1
         self._update_gcode_stats(lines)
-        if hasattr(self, "toolpath_view"):
-            if bool(self.render3d_enabled.get()):
-                self.toolpath_view.set_gcode_async(lines)
-            else:
-                self.toolpath_view.set_enabled(False)
-            self.toolpath_view.set_job_name(os.path.basename(path))
+        if bool(self.render3d_enabled.get()):
+            self.toolpath_panel.set_gcode_lines(lines)
+        else:
+            self.toolpath_panel.set_enabled(False)
+        self.toolpath_panel.set_job_name(os.path.basename(path))
         self.status.config(text=f"Loaded: {os.path.basename(path)}  ({len(lines)} lines)")
+
+        name = os.path.basename(path)
 
         def on_done():
             self._gcode_loading = False
@@ -2983,15 +4608,22 @@ class App(tk.Tk):
                 self.btn_resume_from.config(state="disabled")
 
         def on_progress(done, total):
-            self._set_gcode_loading_progress(done, total, os.path.basename(path))
+            self._set_gcode_loading_progress(done, total, name)
 
-        if len(lines) > 2000:
-            self._set_gcode_loading_progress(0, len(lines), os.path.basename(path))
-            self.gview.set_lines_chunked(lines, chunk_size=300, on_done=on_done, on_progress=on_progress)
-        else:
-            self.gview.set_lines(lines)
-            self._set_gcode_loading_progress(len(lines), len(lines), os.path.basename(path))
+        if not lines:
+            self.gview.set_lines([])
+            self._set_gcode_loading_progress(0, 0, name)
             on_done()
+            return
+
+        chunk_size = 300 if len(lines) > 2000 else GCODE_VIEWER_CHUNK_SIZE_SMALL
+        self._set_gcode_loading_progress(0, len(lines), name)
+        self.gview.set_lines_chunked(
+            lines,
+            chunk_size=chunk_size,
+            on_done=on_done,
+            on_progress=on_progress,
+        )
 
     def _clear_gcode(self):
         if self.grbl.is_streaming():
@@ -3009,9 +4641,7 @@ class App(tk.Tk):
         self.btn_pause.config(state="disabled")
         self.btn_resume.config(state="disabled")
         self.btn_resume_from.config(state="disabled")
-        if hasattr(self, "toolpath_view"):
-            self.toolpath_view.set_gcode_async([])
-            self.toolpath_view.set_job_name("")
+        self.toolpath_panel.clear()
 
     def _show_gcode_loading(self):
         if not hasattr(self, "gcode_load_bar"):
@@ -3385,8 +5015,8 @@ class App(tk.Tk):
             self.console.tag_configure("console_status", background="#fff4d8", foreground=text_fg)   # light orange
             self.console.tag_configure("console_error", background="#ffe5e5", foreground=text_fg)    # light red
             self.console.tag_configure("console_alarm", background="#ffd8d8", foreground=text_fg)    # light red/darker
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("Failed to configure console tags: %s", exc)
 
     def _send_console(self):
         s = self.cmd_entry.get().strip()
@@ -3397,8 +5027,7 @@ class App(tk.Tk):
     def _clear_console_log(self):
         if not messagebox.askyesno("Clear console", "Clear the console log?"):
             return
-        self._console_lines = []
-        self._render_console()
+        self.streaming_controller.clear_console()
 
     def _save_console_log(self):
         path = filedialog.asksaveasfilename(
@@ -3411,8 +5040,9 @@ class App(tk.Tk):
         # Save from stored console lines (position reports are excluded)
         data_lines = [
             text
-            for text, tag in self._console_lines
-            if self._console_filter_match((text, tag), for_save=True) and (not self._is_position_line(text))
+            for text, tag in self.streaming_controller.get_console_lines()
+            if self.streaming_controller.matches_filter((text, tag), for_save=True)
+            and (not self.streaming_controller.is_position_line(text))
         ]
         data = "\n".join(data_lines)
         try:
@@ -3435,327 +5065,11 @@ class App(tk.Tk):
         if self._alarm_locked:
             messagebox.showwarning("Alarm", "Clear alarm before requesting settings.")
             return
-        self._log(f"[{time.strftime('%H:%M:%S')}] Settings refresh requested ($$).")
-        self._settings_capture = True
-        self._settings_data = {}
-        self._settings_edited = {}
-        self._settings_raw_lines = []
-        self._render_settings_raw("Requesting $$...")
+        self.streaming_controller.log(f"[{time.strftime('%H:%M:%S')}] Settings refresh requested ($$).")
+        self.settings_controller.start_capture("Requesting $$...")
         self.grbl.send_immediate("$$")
 
-    def _handle_settings_line(self, line: str):
-        if not self._settings_capture:
-            return
-        s = line.strip()
-        if s.startswith("<") and s.endswith(">"):
-            return
-        low = s.lower()
-        if low != "ok" and not low.startswith("error"):
-            self._settings_raw_lines.append(s)
-        if s.startswith("$") and "=" in s:
-            key, value = s.split("=", 1)
-            try:
-                idx = int(key[1:])
-            except Exception:
-                idx = None
-            self._settings_data[key] = (value.strip(), idx)
-            return
-        if low == "ok":
-            self._settings_capture = False
-            self._render_settings()
-            self._update_rapid_rates()
-            self._update_accel_rates()
-            if self._last_gcode_lines:
-                self._update_gcode_stats(self._last_gcode_lines)
-            self._render_settings_raw()
-        elif low.startswith("error"):
-            self._settings_capture = False
-            self.status.config(text=f"Settings error: {s}")
-            self._render_settings_raw()
 
-    def _render_settings(self):
-        self._settings_items = {}
-        for item in self.settings_tree.get_children():
-            self.settings_tree.delete(item)
-        items = []
-        self._settings_values = {}
-        for key, (value, idx) in self._settings_data.items():
-            self._settings_values[key] = value
-            info = self._grbl_setting_info.get(key, {})
-            name = info.get("name", "")
-            units = info.get("units", "")
-            desc = info.get("desc", "")
-            items.append((idx if idx is not None else 9999, key, name, value, units, desc))
-        for idx in self._grbl_setting_keys:
-            key = f"${idx}"
-            if key not in self._settings_values:
-                self._settings_values[key] = ""
-                info = self._grbl_setting_info.get(key, {})
-                name = info.get("name", "")
-                units = info.get("units", "")
-                desc = info.get("desc", "")
-                items.append((idx, key, name, "", units, desc))
-        for _, key, name, value, units, desc in sorted(items):
-            item_id = self.settings_tree.insert("", "end", values=(key, name, value, units, desc))
-            self._settings_items[key] = item_id
-        self._settings_baseline = dict(self._settings_values)
-        for key in self._settings_items:
-            self._update_setting_row_tags(key)
-        self.status.config(text=f"Settings: {len(items)} values")
-
-    def _update_rapid_rates(self):
-        try:
-            rx = float(self._settings_data.get("$110", ("", None))[0])
-            ry = float(self._settings_data.get("$111", ("", None))[0])
-            rz = float(self._settings_data.get("$112", ("", None))[0])
-            if rx > 0 and ry > 0 and rz > 0:
-                self._rapid_rates = (rx, ry, rz)
-                self._rapid_rates_source = "grbl"
-                return
-        except Exception:
-            pass
-        self._rapid_rates = None
-        self._rapid_rates_source = None
-
-    def _update_accel_rates(self):
-        try:
-            ax = float(self._settings_data.get("$120", ("", None))[0])
-            ay = float(self._settings_data.get("$121", ("", None))[0])
-            az = float(self._settings_data.get("$122", ("", None))[0])
-            if ax > 0 and ay > 0 and az > 0:
-                self._accel_rates = (ax, ay, az)
-                return
-        except Exception:
-            pass
-        self._accel_rates = None
-
-    def _render_settings_raw(self, header: str | None = None):
-        if not hasattr(self, "settings_raw_text"):
-            return
-        lines = []
-        if header:
-            lines.append(header)
-        if self._settings_raw_lines:
-            lines.extend(self._settings_raw_lines)
-        self.settings_raw_text.config(state="normal")
-        self.settings_raw_text.delete("1.0", "end")
-        self.settings_raw_text.insert("end", "\n".join(lines).strip() + "\n")
-        self.settings_raw_text.config(state="disabled")
-
-    def _edit_setting_value(self, event):
-        item = self.settings_tree.identify_row(event.y)
-        col = self.settings_tree.identify_column(event.x)
-        if not item or col != "#3":
-            return
-        bbox = self.settings_tree.bbox(item, column=col)
-        if not bbox:
-            return
-        x, y, w, h = bbox
-        values = self.settings_tree.item(item, "values")
-        if not values:
-            return
-        key = values[0]
-        current = values[2]
-
-        # Commit any existing in-place edit before starting a new one so multiple edits are preserved.
-        self._commit_pending_setting_edit()
-
-        entry = ttk.Entry(self.settings_tree)
-        entry.place(x=x, y=y, width=w, height=h)
-        entry.insert(0, current)
-        entry.focus_set()
-        entry._item = item
-        entry._key = key
-        self._settings_edit_entry = entry
-
-        def commit(_event=None):
-            self._commit_pending_setting_edit()
-
-        def cancel(_event=None):
-            self._cancel_pending_setting_edit()
-
-        entry.bind("<Return>", commit)
-        entry.bind("<FocusOut>", commit)
-        entry.bind("<Escape>", cancel)
-
-    def _commit_pending_setting_edit(self):
-        """Persist any active inline edit into the edited set."""
-        entry = getattr(self, "_settings_edit_entry", None)
-        if entry is None:
-            return
-        key = getattr(entry, "_key", None)
-        item = getattr(entry, "_item", None)
-        try:
-            if key and item:
-                new_val = entry.get().strip()
-                # Inline numeric validation; most GRBL settings are numeric.
-                if new_val:
-                    try:
-                        idx = int(key[1:]) if key.startswith("$") else None
-                    except Exception:
-                        idx = None
-                    if idx not in GRBL_NON_NUMERIC_SETTINGS:
-                        try:
-                            val_num = float(new_val)
-                        except Exception:
-                            messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
-                            return
-                        limits = GRBL_SETTING_LIMITS.get(idx, None)
-                        if limits:
-                            lo, hi = limits
-                            if lo is not None and val_num < lo:
-                                messagebox.showwarning("Out of range", f"Setting {key} must be >= {lo}.")
-                                return
-                            if hi is not None and val_num > hi:
-                                messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
-                                return
-                self.settings_tree.set(item, "value", new_val)
-                self._settings_values[key] = new_val
-                baseline = self._settings_baseline.get(key, "")
-                if new_val == baseline and key in self._settings_edited:
-                    self._settings_edited.pop(key, None)
-                else:
-                    self._settings_edited[key] = new_val
-                self._update_setting_row_tags(key)
-        finally:
-            try:
-                entry.destroy()
-            except Exception:
-                pass
-            self._settings_edit_entry = None
-
-    def _cancel_pending_setting_edit(self):
-        """Discard any active inline edit without saving."""
-        entry = getattr(self, "_settings_edit_entry", None)
-        if entry is None:
-            return
-        try:
-            entry.destroy()
-        except Exception:
-            pass
-        self._settings_edit_entry = None
-
-    def _save_settings_changes(self):
-        # Ensure any active cell edit is committed before saving.
-        self._commit_pending_setting_edit()
-        if not self.grbl.is_connected():
-            messagebox.showwarning("Not connected", "Connect to GRBL first.")
-            return
-        if self.grbl.is_streaming():
-            messagebox.showwarning("Busy", "Stop the stream before saving settings.")
-            return
-        if not self._settings_edited:
-            messagebox.showinfo("No changes", "No settings have been edited.")
-            return
-        if not messagebox.askyesno("Confirm save", "Send edited settings to GRBL?"):
-            return
-        # Collect edits, allowing zeros but skipping blank strings.
-        changes = []
-        for key, value in self._settings_edited.items():
-            val = "" if value is None else str(value).strip()
-            if val == "":
-                continue
-            changes.append((key, val))
-        if not changes:
-            messagebox.showinfo("No changes", "No non-empty settings to send.")
-            return
-
-        def worker():
-            sent = 0
-            for key, val in changes:
-                self.grbl.send_immediate(f"{key}={val}")
-                sent += 1
-                # Small spacing to avoid clobbering on noisy links.
-                time.sleep(0.05)
-            self._settings_edited = {}
-            self.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
-            try:
-                self.after(0, lambda: self._mark_settings_saved(changes, sent, refresh=True))
-            except Exception:
-                pass
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _mark_settings_saved(self, changes, sent_count: int, refresh: bool = False):
-        if refresh:
-            try:
-                self.status.config(text=f"Settings: sent {sent_count} change(s); refreshing $$ for confirmation")
-            except Exception:
-                pass
-            try:
-                self._request_settings_dump()
-            except Exception:
-                pass
-            return
-        for key, _ in changes:
-            if key in self._settings_values:
-                self._settings_baseline[key] = self._settings_values[key]
-                self._update_setting_row_tags(key)
-        try:
-            self.status.config(text=f"Settings: sent {sent_count} change(s)")
-        except Exception:
-            pass
-
-    def _settings_tooltip_motion(self, event):
-        item = self.settings_tree.identify_row(event.y)
-        if not item:
-            self._settings_tooltip_hide()
-            return
-        values = self.settings_tree.item(item, "values")
-        if not values:
-            self._settings_tooltip_hide()
-            return
-        key = values[0]
-        try:
-            idx = int(key[1:])
-        except Exception:
-            idx = None
-        info = self._grbl_setting_info.get(key, {})
-        desc = info.get("desc", "")
-        units = info.get("units", "")
-        tooltip = info.get("tooltip", "")
-        baseline_val = self._settings_baseline.get(key, "")
-        current_val = self._settings_values.get(key, "")
-        limits = None
-        try:
-            limits = GRBL_SETTING_LIMITS.get(int(key[1:]), None)
-        except Exception:
-            limits = None
-        allow_text = False
-        try:
-            allow_text = int(key[1:]) in GRBL_NON_NUMERIC_SETTINGS
-        except Exception:
-            allow_text = False
-        value_line = (
-            f"Pending: {current_val} (last saved: {baseline_val})"
-            if current_val != baseline_val
-            else f"Value: {baseline_val}"
-        )
-        parts = []
-        if tooltip:
-            parts.append(tooltip)
-        elif desc:
-            parts.append(desc)
-        if units:
-            parts.append(f"Units: {units}")
-        if allow_text:
-            parts.append("Allows text values")
-        if limits:
-            lo, hi = limits
-            if lo is not None and hi is not None:
-                parts.append(f"Allowed: {lo} .. {hi}")
-            elif lo is not None:
-                parts.append(f"Allowed: >= {lo}")
-            elif hi is not None:
-                parts.append(f"Allowed: <= {hi}")
-        parts.append(value_line)
-        parts.append("Typical: machine-specific")
-        self._settings_tip.set_text("\n".join([p for p in parts if p]))
-        self._settings_tip._schedule_show()
-
-    def _settings_tooltip_hide(self, _event=None):
-        if self._settings_tip:
-            self._settings_tip._hide()
 
     def _maybe_auto_reconnect(self):
         if self.connected or self._closing or (not self._auto_reconnect_pending):
@@ -3802,24 +5116,10 @@ class App(tk.Tk):
         self._auto_reconnect_next_ts = now + self._auto_reconnect_delay
         self._auto_reconnect_pending = True
 
-    def _update_setting_row_tags(self, key: str):
-        item = self._settings_items.get(key)
-        if not item:
-            return
-        current = self._settings_values.get(key, "")
-        baseline = self._settings_baseline.get(key, "")
-        tags = list(self.settings_tree.item(item, "tags"))
-        if current != baseline:
-            if "edited" not in tags:
-                tags.append("edited")
-        else:
-            tags = [t for t in tags if t != "edited"]
-        self.settings_tree.item(item, tags=tuple(tags))
-
     def _set_unit_mode(self, mode: str):
         self.unit_mode.set(mode)
-        with self._macro_vars_lock:
-            self._macro_vars["units"] = "G21" if mode == "mm" else "G20"
+        with self.macro_executor.macro_vars() as macro_vars:
+            macro_vars["units"] = "G21" if mode == "mm" else "G20"
         try:
             self.btn_unit_toggle.config(text="mm" if mode == "mm" else "inch")
         except Exception:
@@ -3980,12 +5280,12 @@ class App(tk.Tk):
         def run_and_close(action):
             try:
                 action()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.exception("Alarm recovery action failed: %s", exc)
             try:
                 dlg.destroy()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.exception("Failed to close alarm recovery dialog: %s", exc)
 
         ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(self.grbl.unlock)).pack(
             side="left", padx=(0, 6)
@@ -4525,13 +5825,13 @@ class App(tk.Tk):
             gcode = ""
         ts = time.strftime("%H:%M:%S")
         if tip and gcode:
-            self._log(f"[{ts}] Button: {label} | Tip: {tip} | GCode: {gcode}")
+            self.streaming_controller.log(f"[{ts}] Button: {label} | Tip: {tip} | GCode: {gcode}")
         elif tip:
-            self._log(f"[{ts}] Button: {label} | Tip: {tip}")
+            self.streaming_controller.log(f"[{ts}] Button: {label} | Tip: {tip}")
         elif gcode:
-            self._log(f"[{ts}] Button: {label} | GCode: {gcode}")
+            self.streaming_controller.log(f"[{ts}] Button: {label} | GCode: {gcode}")
         else:
-            self._log(f"[{ts}] Button: {label}")
+            self.streaming_controller.log(f"[{ts}] Button: {label}")
 
     def _update_current_highlight(self):
         mode = self.current_line_mode.get()
@@ -4600,6 +5900,51 @@ class App(tk.Tk):
             val = 0.05
         self.status_poll_interval.set(val)
         self._apply_status_poll_profile()
+
+    def _on_status_failure_limit_change(self, _event=None):
+        try:
+            limit = int(self.status_query_failure_limit.get())
+        except Exception:
+            limit = self.settings.get("status_query_failure_limit", 3)
+        if limit < 1:
+            limit = 1
+        if limit > 10:
+            limit = 10
+        self.status_query_failure_limit.set(limit)
+        try:
+            self.grbl.set_status_query_failure_limit(limit)
+        except Exception as exc:
+            logger.exception("Failed to set status failure limit: %s", exc)
+
+    def _apply_error_dialog_settings(self, _event=None):
+        def coerce_float(var, fallback):
+            try:
+                value = float(var.get())
+            except Exception:
+                value = fallback
+            if value <= 0:
+                value = fallback
+            return value
+
+        def coerce_int(var, fallback):
+            try:
+                value = int(var.get())
+            except Exception:
+                value = fallback
+            if value <= 0:
+                value = fallback
+            return value
+
+        interval = coerce_float(self.error_dialog_interval_var, self._error_dialog_interval)
+        burst_window = coerce_float(self.error_dialog_burst_window_var, self._error_dialog_burst_window)
+        burst_limit = coerce_int(self.error_dialog_burst_limit_var, self._error_dialog_burst_limit)
+        self._error_dialog_interval = interval
+        self._error_dialog_burst_window = burst_window
+        self._error_dialog_burst_limit = burst_limit
+        self.error_dialog_interval_var.set(interval)
+        self.error_dialog_burst_window_var.set(burst_window)
+        self.error_dialog_burst_limit_var.set(burst_limit)
+        self._reset_error_dialog_state()
 
     def _effective_status_poll_interval(self) -> float:
         try:
@@ -4837,66 +6182,6 @@ class App(tk.Tk):
             self._update_gcode_stats(self._last_gcode_lines)
         self.status.config(text=f"Profile deleted: {name}")
 
-    def _parse_macro_prompt(self, line: str):
-        title = "Macro Pause"
-        message = ""
-        buttons = []
-        show_resume = True
-        resume_label = "Resume"
-        cancel_label = "Cancel"
-
-        comment = re.search(r"\((.*?)\)", line)
-        if comment:
-            message = comment.group(1).strip()
-
-        try:
-            tokens = shlex.split(line)
-        except Exception:
-            tokens = line.split()
-        tokens = tokens[1:] if tokens else []
-        msg_parts = []
-        for tok in tokens:
-            low = tok.lower()
-            if low in ("noresume", "no-resume"):
-                show_resume = False
-                continue
-            if "=" in tok:
-                key, val = tok.split("=", 1)
-                key = key.lower()
-                if key in ("title", "t"):
-                    title = val
-                elif key in ("msg", "message", "text"):
-                    message = val
-                elif key in ("buttons", "btns"):
-                    raw = val.replace("|", ",")
-                    buttons = [b.strip() for b in raw.split(",") if b.strip()]
-                elif key in ("resume", "resumelabel"):
-                    if val.lower() in ("0", "false", "no", "off"):
-                        show_resume = False
-                    else:
-                        resume_label = val
-                elif key in ("cancel", "cancellabel"):
-                    cancel_label = val
-                continue
-            msg_parts.append(tok)
-
-        if not message and msg_parts:
-            message = " ".join(msg_parts)
-        if not message:
-            message = "Macro paused."
-
-        extras = []
-        for b in buttons:
-            if b and b not in (resume_label, cancel_label):
-                extras.append(b)
-
-        choices = []
-        if show_resume:
-            choices.append(resume_label)
-        choices.extend(extras)
-        choices.append(cancel_label)
-        return title, message, choices, cancel_label
-
     def _show_macro_prompt(
         self,
         title: str,
@@ -4937,7 +6222,7 @@ class App(tk.Tk):
             dlg.protocol("WM_DELETE_WINDOW", on_close)
         except Exception as exc:
             try:
-                self._log(f"[macro] Prompt failed: {exc}")
+                self.streaming_controller.log(f"[macro] Prompt failed: {exc}")
             except Exception:
                 pass
             if result_q.empty():
@@ -4961,238 +6246,18 @@ class App(tk.Tk):
         self.grbl.send_immediate("G0 X0 Y0")
 
     # ---------- UI event handling ----------
-    def _console_tag_for_line(self, s: str) -> str | None:
-        u = s.upper()
-        if "ALARM" in u:
-            return "console_alarm"
-        if "ERROR" in u:
-            return "console_error"
-        stripped = s.strip()
-        if stripped.upper() in ("<< OK", "OK"):
-            return "console_ok"
-        if stripped.startswith(">>"):
-            return "console_tx"
-        if stripped.startswith("<<") and "<" in stripped and ">" in stripped:
-            return "console_status"
-        return None
-
-    def _is_position_line(self, s: str) -> bool:
-        u = s.upper()
-        return ("WPOS:" in u) or ("MPOS:" in u)
-
-    def _is_status_line(self, s: str) -> bool:
-        stripped = s.strip()
-        return (stripped.startswith("<< <") or (stripped.startswith("<") and stripped.endswith(">")) or ("<" in stripped and ">" in stripped))
-
-    def _log(self, s: str, tag: str | None = None):
-        if tag is None:
-            tag = self._console_tag_for_line(s)
-        entry = (s, tag)
-        if self._should_skip_console_entry_for_toggles(entry):
-            return
-        self._console_lines.append(entry)
-        overflow = len(self._console_lines) - MAX_CONSOLE_LINES
-        if overflow > 0:
-            self._console_lines = self._console_lines[overflow:]
-            if self._console_filter is not None:
-                if bool(self.performance_mode.get()):
-                    self._queue_console_render()
-                    return
-                self._render_console()
-                return
-            if bool(self.performance_mode.get()):
-                self._pending_console_trim += overflow
-            else:
-                self._trim_console_widget(overflow)
-        if not self._console_filter_match(entry):
-            return
-        if bool(self.performance_mode.get()):
-            self._pending_console_entries.append(entry)
-            self._schedule_console_flush()
-            return
-        self.console.config(state="normal")
-        if tag:
-            self.console.insert("end", s + "\n", (tag,))
-        else:
-            self.console.insert("end", s + "\n")
-        self.console.see("end")
-        self.console.config(state="disabled")
-
-    def _queue_console_render(self):
-        self._console_render_pending = True
-        self._schedule_console_flush()
-
-    def _schedule_console_flush(self):
-        if self._console_after_id is not None:
-            return
-        self._console_after_id = self.after(self._ui_throttle_ms, self._flush_console_updates)
-
-    def _flush_console_updates(self):
-        self._console_after_id = None
-        if self._console_render_pending:
-            self._console_render_pending = False
-            self._pending_console_entries = []
-            self._pending_console_trim = 0
-            self._render_console()
-            return
-        if (not self._pending_console_entries) and (self._pending_console_trim <= 0):
-            return
-        self.console.config(state="normal")
-        if self._pending_console_trim > 0:
-            self._trim_console_widget_unlocked(self._pending_console_trim)
-            self._pending_console_trim = 0
-        for line, tag in self._pending_console_entries:
-            if tag:
-                self.console.insert("end", line + "\n", (tag,))
-            else:
-                self.console.insert("end", line + "\n")
-        self._pending_console_entries = []
-        self.console.see("end")
-        self.console.config(state="disabled")
-
-    def _console_filter_match(self, entry, for_save: bool = False) -> bool:
-        if isinstance(entry, tuple):
-            s, tag = entry
-        else:
-            s, tag = str(entry), None
-        upper = s.upper()
-        if self._console_filter == "alarms" and "ALARM" not in upper:
-            return False
-        if self._console_filter == "errors" and "ERROR" not in upper:
-            return False
-        if for_save and self._is_position_line(s):
-            return False
-        is_pos = self._is_position_line(s)
-        enabled = bool(self.console_positions_enabled.get())
-        is_status = self._is_status_line(s)
-        if (not for_save) and not enabled:
-            if is_pos:
-                return False
-            if is_status and ("ALARM" not in upper) and ("ERROR" not in upper):
-                return False
-        return True
-
-    def _should_skip_console_entry_for_toggles(self, entry) -> bool:
-        if isinstance(entry, tuple):
-            s, _ = entry
-        else:
-            s = str(entry)
-        enabled = bool(self.console_positions_enabled.get())
-        if not enabled and self._is_position_line(s):
-            return True
-        upper = s.upper()
-        if not enabled and self._is_status_line(s):
-            if ("ALARM" not in upper) and ("ERROR" not in upper):
-                return True
-        return False
-
-    def _should_suppress_rx_log(self, raw: str) -> bool:
-        if not bool(self.performance_mode.get()):
-            return False
-        if self._stream_state != "running":
-            return False
-        upper = raw.upper()
-        if ("ALARM" in upper) or ("ERROR" in upper):
-            return False
-        if "[MSG" in upper or "RESET TO CONTINUE" in upper:
-            return False
-        return True
-
-    def _render_console(self):
-        self.console.config(state="normal")
-        self.console.delete("1.0", "end")
-        for line, tag in self._console_lines:
-            if self._console_filter_match((line, tag)):
-                if tag:
-                    self.console.insert("end", line + "\n", (tag,))
-                else:
-                    self.console.insert("end", line + "\n")
-        self.console.see("end")
-        self.console.config(state="disabled")
-
-    def _trim_console_widget(self, count: int):
-        if count <= 0:
-            return
-        self.console.config(state="normal")
-        try:
-            self.console.delete("1.0", f"{count + 1}.0")
-        except Exception:
-            self.console.delete("1.0", "end")
-        self.console.config(state="disabled")
-
-    def _trim_console_widget_unlocked(self, count: int):
-        if count <= 0:
-            return
-        try:
-            self.console.delete("1.0", f"{count + 1}.0")
-        except Exception:
-            self.console.delete("1.0", "end")
-
-    def _set_console_filter(self, mode):
-        self._console_filter = mode
-        self._pending_console_entries = []
-        self._pending_console_trim = 0
-        self._console_render_pending = False
-        self._render_console()
-
-    def _bind_button_logging(self):
-        self.bind_class("TButton", "<Button-1>", self._on_button_press, add="+")
-        self.bind_class("Button", "<Button-1>", self._on_button_press, add="+")
-        self.bind_class("Canvas", "<Button-1>", self._on_button_press, add="+")
-
-    def _on_button_press(self, event):
-        w = event.widget
-        if isinstance(w, tk.Canvas) and not getattr(w, "_log_button", False):
-            return
-        try:
-            if w.cget("state") == "disabled":
-                return
-        except Exception:
-            pass
-        if not bool(self.gui_logging_enabled.get()):
-            return
-        label = ""
-        try:
-            label = w.cget("text")
-        except Exception:
-            pass
-        if not label:
-            label = w.winfo_name()
-        tip = ""
-        try:
-            tip = getattr(w, "_tooltip_text", "")
-        except Exception:
-            tip = ""
-        gcode = ""
-        try:
-            getter = getattr(w, "_log_gcode_get", None)
-            if callable(getter):
-                gcode = getter()
-            elif isinstance(getter, str):
-                gcode = getter
-        except Exception:
-            gcode = ""
-        ts = time.strftime("%H:%M:%S")
-        if tip and gcode:
-            self._log(f"[{ts}] Button: {label} | Tip: {tip} | GCode: {gcode}")
-        elif tip:
-            self._log(f"[{ts}] Button: {label} | Tip: {tip}")
-        elif gcode:
-            self._log(f"[{ts}] Button: {label} | GCode: {gcode}")
-        else:
-            self._log(f"[{ts}] Button: {label}")
-
     def _update_tab_visibility(self, nb=None):
         if nb is None:
             nb = getattr(self, "notebook", None)
-        if not nb or not hasattr(self, "toolpath_view"):
+        if not nb or not self.toolpath_panel.view:
             return
         try:
             tab_id = nb.select()
             label = nb.tab(tab_id, "text")
-        except Exception:
+        except Exception as exc:
+            logger.exception("Failed to update tab visibility: %s", exc)
             return
-        self.toolpath_view.set_visible(label == "3D View")
+        self.toolpath_panel.set_visible(label == "3D View")
 
     def _update_app_settings_scrollregion(self):
         if not hasattr(self, "app_settings_canvas"):
@@ -5239,7 +6304,7 @@ class App(tk.Tk):
         if not label:
             return
         ts = time.strftime("%H:%M:%S")
-        self._log(f"[{ts}] Tab: {label}")
+        self.streaming_controller.log(f"[{ts}] Tab: {label}")
 
     def _build_led_panel(self, parent):
         frame = ttk.Frame(parent)
@@ -5336,10 +6401,7 @@ class App(tk.Tk):
             try:
                 self._handle_evt(evt)
             except Exception as exc:
-                try:
-                    self._log(f"[ui] Event error: {exc}")
-                except Exception:
-                    pass
+                self._log_exception("UI event error", exc)
         if self._closing:
             return
         self._maybe_auto_reconnect()
@@ -5357,6 +6419,21 @@ class App(tk.Tk):
         self.gui_logging_enabled.set(new_val)
         self.btn_toggle_logging.config(text="Logging: On" if new_val else "Logging: Off")
 
+    def _toggle_error_dialogs(self):
+        self.error_dialogs_enabled.set(not bool(self.error_dialogs_enabled.get()))
+        self._on_error_dialogs_enabled_change()
+
+    def _on_error_dialogs_enabled_change(self):
+        enabled = bool(self.error_dialogs_enabled.get())
+        if enabled:
+            self._reset_error_dialog_state()
+        else:
+            self._set_error_dialog_status("Dialogs: Off")
+        if hasattr(self, "btn_toggle_error_dialogs"):
+            self.btn_toggle_error_dialogs.config(
+                text="Error Dialogs: On" if enabled else "Error Dialogs: Off"
+            )
+
     def _toggle_performance(self):
         current = bool(self.performance_mode.get())
         new_val = not current
@@ -5368,7 +6445,7 @@ class App(tk.Tk):
         except Exception:
             pass
         if not new_val:
-            self._flush_console_updates()
+            self.streaming_controller.flush_console()
         self._apply_status_poll_profile()
 
     def _toggle_console_pos_status(self):
@@ -5378,17 +6455,16 @@ class App(tk.Tk):
         self.console_status_enabled.set(new_val)
         if hasattr(self, "btn_console_pos"):
             self.btn_console_pos.config(text="Pos/Status: On" if new_val else "Pos/Status: Off")
-        self._render_console()
+        self.streaming_controller.render_console()
 
     def _toggle_render_3d(self):
         current = bool(self.render3d_enabled.get())
         new_val = not current
         self.render3d_enabled.set(new_val)
         self.btn_toggle_3d.config(text="3D Render: On" if new_val else "3D Render: Off")
-        if hasattr(self, "toolpath_view"):
-            self.toolpath_view.set_enabled(new_val)
-            if new_val and self._last_gcode_lines:
-                self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+        self.toolpath_panel.set_enabled(new_val)
+        if new_val and self._last_gcode_lines:
+            self.toolpath_panel.set_gcode_lines(self._last_gcode_lines)
 
     def _toolpath_limit_value(self, raw, fallback):
         try:
@@ -5406,8 +6482,7 @@ class App(tk.Tk):
         )
         self.toolpath_full_limit.set(str(full))
         self.toolpath_interactive_limit.set(str(interactive))
-        if hasattr(self, "toolpath_view"):
-            self.toolpath_view.set_draw_limits(full, interactive)
+        self.toolpath_panel.set_draw_limits(full, interactive)
 
     def _on_arc_detail_scale_move(self, value):
         try:
@@ -5432,9 +6507,8 @@ class App(tk.Tk):
         deg = self._clamp_arc_detail(self.toolpath_arc_detail.get())
         self.toolpath_arc_detail.set(deg)
         self._toolpath_arc_detail_value.set(f"{deg:.1f}°")
-        if hasattr(self, "toolpath_view"):
-            self.toolpath_view.set_arc_detail_override(math.radians(deg))
-            self._schedule_toolpath_arc_detail_reparse()
+        self.toolpath_panel.set_arc_detail(deg)
+        self._schedule_toolpath_arc_detail_reparse()
 
     def _schedule_toolpath_arc_detail_reparse(self):
         if self._toolpath_arc_detail_reparse_after_id:
@@ -5448,14 +6522,13 @@ class App(tk.Tk):
 
     def _run_toolpath_arc_detail_reparse(self):
         self._toolpath_arc_detail_reparse_after_id = None
-        if hasattr(self, "toolpath_view") and self._last_gcode_lines:
-            self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+        if self._last_gcode_lines:
+            self.toolpath_panel.reparse_lines(self._last_gcode_lines)
 
     def _on_toolpath_lightweight_change(self):
-        if hasattr(self, "toolpath_view"):
-            self.toolpath_view.set_lightweight_mode(bool(self.toolpath_lightweight.get()))
-            if self._last_gcode_lines:
-                self.toolpath_view.set_gcode_async(self._last_gcode_lines)
+        self.toolpath_panel.set_lightweight(bool(self.toolpath_lightweight.get()))
+        if self._last_gcode_lines:
+            self.toolpath_panel.set_gcode_lines(self._last_gcode_lines)
 
     def _toggle_unit_mode(self):
         new_mode = "inch" if self.unit_mode.get() == "mm" else "mm"
@@ -5515,89 +6588,22 @@ class App(tk.Tk):
         func()
 
     def _save_3d_view(self):
-        if not hasattr(self, "toolpath_view"):
+        view = self.toolpath_panel.get_view_state()
+        if not view:
             return
-        self.settings["view_3d"] = self.toolpath_view.get_view()
+        self.settings["view_3d"] = view
         self.status.config(text="3D view saved")
 
     def _load_3d_view(self, show_status: bool = True):
         view = self.settings.get("view_3d")
-        if not view or not hasattr(self, "toolpath_view"):
+        if not view:
             return
-        self.toolpath_view.apply_view(view)
+        self.toolpath_panel.apply_view_state(view)
         if show_status:
             self.status.config(text="3D view loaded")
 
-    def _schedule_gcode_mark_flush(self):
-        if self._pending_marks_after_id is not None:
-            return
-        self._pending_marks_after_id = self.after(self._ui_throttle_ms, self._flush_gcode_marks)
-
-    def _flush_gcode_marks(self):
-        self._pending_marks_after_id = None
-        sent_idx = self._pending_sent_index
-        acked_idx = self._pending_acked_index
-        self._pending_sent_index = None
-        self._pending_acked_index = None
-        if sent_idx is not None:
-            self.gview.mark_sent_upto(sent_idx)
-            self._last_sent_index = sent_idx
-        if acked_idx is not None:
-            self.gview.mark_acked_upto(acked_idx)
-            self._last_acked_index = acked_idx
-            if sent_idx is None and acked_idx > self._last_sent_index:
-                self._last_sent_index = acked_idx
-        if sent_idx is not None or acked_idx is not None:
-            self._update_current_highlight()
-
-    def _schedule_progress_flush(self):
-        if self._progress_after_id is not None:
-            return
-        self._progress_after_id = self.after(self._ui_throttle_ms, self._flush_progress)
-
-    def _flush_progress(self):
-        self._progress_after_id = None
-        if not self._pending_progress:
-            return
-        done, total = self._pending_progress
-        self._pending_progress = None
-        self.status.config(text=f"Progress: {done}/{total}")
-        if total:
-            self.progress_pct.set(int(round((done / total) * 100)))
-        if done and total:
-            self._update_live_estimate(done, total)
-
-    def _schedule_buffer_flush(self):
-        if self._buffer_after_id is not None:
-            return
-        self._buffer_after_id = self.after(self._ui_throttle_ms, self._flush_buffer_fill)
-
-    def _flush_buffer_fill(self):
-        self._buffer_after_id = None
-        if not self._pending_buffer:
-            return
-        pct, used, window = self._pending_buffer
-        self._pending_buffer = None
-        self.buffer_fill.set(f"Buffer: {pct}% ({used}/{window})")
-        self.buffer_fill_pct.set(pct)
-
     def _clear_pending_ui_updates(self):
-        for attr in ("_pending_marks_after_id", "_progress_after_id", "_buffer_after_id", "_console_after_id"):
-            after_id = getattr(self, attr, None)
-            if after_id is None:
-                continue
-            try:
-                self.after_cancel(after_id)
-            except Exception:
-                pass
-            setattr(self, attr, None)
-        self._pending_sent_index = None
-        self._pending_acked_index = None
-        self._pending_progress = None
-        self._pending_buffer = None
-        self._pending_console_entries = []
-        self._pending_console_trim = 0
-        self._console_render_pending = False
+        self.streaming_controller.clear_pending_ui_updates()
 
     def _handle_evt(self, evt):
         kind = evt[0]
@@ -5669,7 +6675,14 @@ class App(tk.Tk):
             try:
                 result_q.put((True, func(*args, **kwargs)))
             except Exception as exc:
+                self._log_exception("UI action failed", exc)
                 result_q.put((False, exc))
+        elif kind == "ui_post":
+            func, args, kwargs = evt[1], evt[2], evt[3]
+            try:
+                func(*args, **kwargs)
+            except Exception as exc:
+                self._log_exception("UI action failed", exc)
 
         elif kind == "macro_prompt":
             title, message, choices, cancel_label, result_q = evt[1], evt[2], evt[3], evt[4], evt[5]
@@ -5677,7 +6690,7 @@ class App(tk.Tk):
                 self._show_macro_prompt(title, message, choices, cancel_label, result_q)
             except Exception as exc:
                 try:
-                    self._log(f"[macro] Prompt failed: {exc}")
+                    self.streaming_controller.log(f"[macro] Prompt failed: {exc}")
                 except Exception:
                     pass
                 if result_q.empty():
@@ -5700,18 +6713,15 @@ class App(tk.Tk):
             self.status.config(text="G-code load failed")
 
         elif kind == "log":
-            self._log(evt[1])
+            self.streaming_controller.handle_log(evt[1])
 
         elif kind == "log_tx":
-            self._log(f">> {evt[1]}")
+            self.streaming_controller.handle_log_tx(evt[1])
 
         elif kind == "log_rx":
             raw = evt[1]
-            self._handle_settings_line(evt[1])
-            if self._should_suppress_rx_log(raw):
-                return
-            msg = f"<< {raw}"
-            self._log(msg, self._console_tag_for_line(msg))
+            self.settings_controller.handle_line(raw)
+            self.streaming_controller.handle_log_rx(raw)
 
         elif kind == "ready":
             self._grbl_ready = bool(evt[1])
@@ -5805,8 +6815,8 @@ class App(tk.Tk):
                 if self.gview.lines_count:
                     self.btn_run.config(state="normal")
                     self.btn_resume_from.config(state="normal")
-            with self._macro_vars_lock:
-                self._macro_vars["state"] = state
+            with self.macro_executor.macro_vars() as macro_vars:
+                macro_vars["state"] = state
             def parse_xyz(text: str):
                 parts = text.split(",")
                 if len(parts) < 3:
@@ -5841,10 +6851,10 @@ class App(tk.Tk):
                     self.mpos_x.set(x)
                     self.mpos_y.set(y)
                     self.mpos_z.set(z)
-                    with self._macro_vars_lock:
-                        self._macro_vars["mx"] = float(x)
-                        self._macro_vars["my"] = float(y)
-                        self._macro_vars["mz"] = float(z)
+                    with self.macro_executor.macro_vars() as macro_vars:
+                        macro_vars["mx"] = float(x)
+                        macro_vars["my"] = float(y)
+                        macro_vars["mz"] = float(z)
                 except Exception:
                     pass
             if wpos:
@@ -5853,53 +6863,52 @@ class App(tk.Tk):
                     self.wpos_x.set(x)
                     self.wpos_y.set(y)
                     self.wpos_z.set(z)
-                    with self._macro_vars_lock:
-                        self._macro_vars["wx"] = float(x)
-                        self._macro_vars["wy"] = float(y)
-                        self._macro_vars["wz"] = float(z)
+                    with self.macro_executor.macro_vars() as macro_vars:
+                        macro_vars["wx"] = float(x)
+                        macro_vars["wy"] = float(y)
+                        macro_vars["wz"] = float(z)
                     try:
-                        if hasattr(self, "toolpath_view"):
-                            self.toolpath_view.set_position(float(x), float(y), float(z))
+                        self.toolpath_panel.set_position(float(x), float(y), float(z))
                     except Exception:
                         pass
                 except Exception:
                     pass
             if feed is not None:
-                with self._macro_vars_lock:
-                    self._macro_vars["curfeed"] = feed
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["curfeed"] = feed
             if spindle is not None:
-                with self._macro_vars_lock:
-                    self._macro_vars["curspindle"] = spindle
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["curspindle"] = spindle
             if planner is not None:
-                with self._macro_vars_lock:
-                    self._macro_vars["planner"] = planner
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["planner"] = planner
             if rxbytes is not None:
-                with self._macro_vars_lock:
-                    self._macro_vars["rxbytes"] = rxbytes
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["rxbytes"] = rxbytes
             if wco_vals:
-                with self._macro_vars_lock:
-                    self._macro_vars["wcox"] = wco_vals[0]
-                    self._macro_vars["wcoy"] = wco_vals[1]
-                    self._macro_vars["wcoz"] = wco_vals[2]
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["wcox"] = wco_vals[0]
+                    macro_vars["wcoy"] = wco_vals[1]
+                    macro_vars["wcoz"] = wco_vals[2]
             if pins is not None:
-                with self._macro_vars_lock:
-                    self._macro_vars["pins"] = pins
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["pins"] = pins
             if ov:
                 feed_val = spindle_val = None
                 try:
                     ov_parts = [int(float(v)) for v in ov.split(",")]
                     if len(ov_parts) >= 3:
                         feed_val, spindle_val = ov_parts[0], ov_parts[2]
-                        with self._macro_vars_lock:
+                        with self.macro_executor.macro_vars() as macro_vars:
                             changed = (
-                                self._macro_vars.get("OvFeed") != ov_parts[0]
-                                or self._macro_vars.get("OvRapid") != ov_parts[1]
-                                or self._macro_vars.get("OvSpindle") != ov_parts[2]
+                                macro_vars.get("OvFeed") != ov_parts[0]
+                                or macro_vars.get("OvRapid") != ov_parts[1]
+                                or macro_vars.get("OvSpindle") != ov_parts[2]
                             )
-                            self._macro_vars["OvFeed"] = ov_parts[0]
-                            self._macro_vars["OvRapid"] = ov_parts[1]
-                            self._macro_vars["OvSpindle"] = ov_parts[2]
-                            self._macro_vars["_OvChanged"] = bool(changed)
+                            macro_vars["OvFeed"] = ov_parts[0]
+                            macro_vars["OvRapid"] = ov_parts[1]
+                            macro_vars["OvSpindle"] = ov_parts[2]
+                            macro_vars["_OvChanged"] = bool(changed)
                 except Exception:
                     pass
                 else:
@@ -5910,17 +6919,18 @@ class App(tk.Tk):
                     self._refresh_override_info()
             pin_state = {c for c in (pins or "").upper() if c.isalpha()}
             endstop_active = bool(pin_state & {"X", "Y", "Z"})
-            probe_active = bool(pin_state & {"P"}) or bool(self._macro_vars.get("PRB"))
+            with self.macro_executor.macro_vars() as macro_vars:
+                prb_value = macro_vars.get("PRB")
+            probe_active = bool(pin_state & {"P"}) or bool(prb_value)
             hold_active = bool(pin_state & {"H"}) or "hold" in str(state).lower()
             self._update_led_panel(endstop_active, probe_active, hold_active)
         elif kind == "buffer_fill":
             pct, used, window = evt[1], evt[2], evt[3]
-            self._pending_buffer = (pct, used, window)
-            self._schedule_buffer_flush()
+            self.streaming_controller.handle_buffer_fill(pct, used, window)
 
         elif kind == "throughput":
             bps = evt[1] if len(evt) > 1 else 0.0
-            self.throughput_var.set(self._format_throughput(float(bps)))
+            self.streaming_controller.handle_throughput(float(bps))
 
         elif kind == "stream_state":
             st = evt[1]
@@ -5952,8 +6962,8 @@ class App(tk.Tk):
             if st == "loaded":
                 self.progress_pct.set(0)
                 total = evt[2]
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = False
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = False
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
                 if (
@@ -5971,8 +6981,8 @@ class App(tk.Tk):
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
             elif st == "running":
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = True
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = True
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="normal")
                 self.btn_resume.config(state="disabled")
@@ -5980,16 +6990,16 @@ class App(tk.Tk):
                 self._set_manual_controls_enabled(False)
                 self._set_streaming_lock(True)
             elif st == "paused":
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = True
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = True
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="normal")
                 self.btn_resume_from.config(state="disabled")
                 self._set_manual_controls_enabled(False)
                 self._set_streaming_lock(True)
             elif st in ("done", "stopped"):
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = False
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = False
                 if st == "done":
                     self.progress_pct.set(100)
                 else:
@@ -6021,8 +7031,8 @@ class App(tk.Tk):
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
             elif st == "error":
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = False
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = False
                 self.progress_pct.set(0)
                 self.btn_run.config(
                     state="normal"
@@ -6052,8 +7062,8 @@ class App(tk.Tk):
                 self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
                 self._set_streaming_lock(False)
             elif st == "alarm":
-                with self._macro_vars_lock:
-                    self._macro_vars["running"] = False
+                with self.macro_executor.macro_vars() as macro_vars:
+                    macro_vars["running"] = False
                 self.progress_pct.set(0)
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="disabled")
@@ -6064,369 +7074,30 @@ class App(tk.Tk):
             self._apply_status_poll_profile()
 
         elif kind == "gcode_sent":
-            idx = evt[1]
-            if self._pending_sent_index is None or idx > self._pending_sent_index:
-                self._pending_sent_index = idx
-            self._schedule_gcode_mark_flush()
+            self.streaming_controller.handle_gcode_sent(evt[1])
 
         elif kind == "gcode_acked":
-            idx = evt[1]
-            if self._pending_acked_index is None or idx > self._pending_acked_index:
-                self._pending_acked_index = idx
-            self._schedule_gcode_mark_flush()
+            self.streaming_controller.handle_gcode_acked(evt[1])
 
         elif kind == "progress":
             done, total = evt[1], evt[2]
-            self._pending_progress = (done, total)
-            self._schedule_progress_flush()
+            self.streaming_controller.handle_progress(done, total)
 
     def _on_close(self):
         self._closing = True
         try:
             self._save_settings()
             self.grbl.disconnect()
-        except Exception:
-            pass
-        self.destroy()
-
-    def _macro_path(self, index: int) -> str | None:
-        for macro_dir in _MACRO_SEARCH_DIRS:
-            for prefix in MACRO_PREFIXES:
-                for ext in MACRO_EXTS:
-                    candidate = os.path.join(macro_dir, f"{prefix}{index}{ext}")
-                    if os.path.isfile(candidate):
-                        return candidate
-        return None
-
-    def _load_macro_buttons(self):
-        # Drop previously registered macro buttons from manual controls to avoid holding destroyed widgets.
-        old_macro_buttons = getattr(self, "_macro_buttons", [])
-        if old_macro_buttons:
-            self._manual_controls = [w for w in self._manual_controls if w not in old_macro_buttons]
-        self._macro_buttons = []
-
-        left = self.macro_frames["left"]
-        right = self.macro_frames["right"]
-        for w in left.winfo_children():
-            w.destroy()
-        for w in right.winfo_children():
-            w.destroy()
-
-        for idx in (1, 2, 3):
-            path = self._macro_path(idx)
-            if not path:
-                continue
-            name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(left, text=name, command=lambda i=idx: self._run_macro(i))
-            btn._kb_id = f"macro_{idx}"
-            btn.pack(fill="x", pady=(0, 4))
-            apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
-            self._manual_controls.append(btn)
-            self._macro_buttons.append(btn)
-
-        col = 0
-        row = 0
-        for idx in (4, 5, 6, 7):
-            path = self._macro_path(idx)
-            if not path:
-                continue
-            name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(right, text=name, command=lambda i=idx: self._run_macro(i))
-            btn._kb_id = f"macro_{idx}"
-            btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
-            right.grid_columnconfigure(col, weight=1)
-            apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
-            self._manual_controls.append(btn)
-            self._macro_buttons.append(btn)
-            col += 1
-            if col > 1:
-                col = 0
-                row += 1
-        self._refresh_keyboard_table()
-
-    def _read_macro_header(self, path: str, index: int) -> tuple[str, str]:
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                name = f.readline().strip()
-                tip = f.readline().strip()
-            if not name:
-                name = f"Macro {index}"
-            return name, tip
-        except Exception:
-            return f"Macro {index}", ""
-
-    def _show_macro_preview(self, name: str, lines: list[str]) -> None:
-        """Modal preview of macro contents (view-only)."""
-        body = "".join(lines[2:]) if len(lines) > 2 else ""
-        dlg = tk.Toplevel(self)
-        dlg.title(f"Macro Preview - {name}")
-        dlg.transient(self)
-        dlg.grab_set()
-        dlg.resizable(True, True)
-        frame = ttk.Frame(dlg, padding=8)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text=name, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 6))
-        text = tk.Text(frame, wrap="word", height=14, width=80, state="normal")
-        text.insert("end", body)
-        text.config(state="disabled")
-        text.pack(fill="both", expand=True)
-        btns = ttk.Frame(frame)
-        btns.pack(fill="x", pady=(8, 0))
-        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="left", padx=(0, 6))
-        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
-        dlg.wait_window()
-
-    def _preview_macro(self, index: int):
-        path = self._macro_path(index)
-        if not path:
-            return
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except Exception as e:
-            messagebox.showerror("Macro error", str(e))
-            return
-        name = lines[0].strip() if lines else f"Macro {index}"
-        self._show_macro_preview(name, lines)
-
-    def _run_macro(self, index: int):
-        if self.grbl.is_streaming():
-            messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
-            return
-        path = self._macro_path(index)
-        if not path:
-            return
-
-        if not self._macro_lock.acquire(blocking=False):
-            messagebox.showwarning("Macro busy", "Another macro is running.")
-            return
-
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except Exception as e:
-            messagebox.showerror("Macro error", str(e))
-            self._macro_lock.release()
-            return
-
-        name = lines[0].strip() if lines else f"Macro {index}"
-        tip = lines[1].strip() if len(lines) > 1 else ""
-        ts = time.strftime("%H:%M:%S")
-        if bool(self.gui_logging_enabled.get()):
-            if tip:
-                self._log(f"[{ts}] Macro: {name} | Tip: {tip}")
-            else:
-                self._log(f"[{ts}] Macro: {name}")
-            self._log(f"[{ts}] Macro contents:")
-            for raw in lines[2:]:
-                self._log(f"[{ts}]   {raw.rstrip()}")
-
-        t = threading.Thread(target=self._run_macro_worker, args=(lines,), daemon=True)
-        t.start()
-
-    def _run_macro_worker(self, lines: list[str]):
-        try:
-            with self._macro_vars_lock:
-                self._macro_local_vars["app"] = self
-                self._macro_local_vars["os"] = os
-            for raw in lines[2:]:
-                line = raw.strip()
-                if not line:
-                    continue
-                compiled = self._bcnc_compile_line(line)
-                if compiled is None:
-                    self.ui_q.put(("log", f"[macro] Skipping line (compile error): {line}"))
-                    continue
-                if isinstance(compiled, tuple):
-                    kind = compiled[0]
-                    if kind == "WAIT":
-                        self._macro_wait_for_idle()
-                    elif kind == "MSG":
-                        msg = compiled[1] if len(compiled) > 1 else ""
-                        if msg:
-                            self.ui_q.put(("log", f"[macro] {msg}"))
-                    elif kind == "UPDATE":
-                        self.grbl.send_realtime(RT_STATUS)
-                    continue
-
-                evaluated = self._bcnc_evaluate_line(compiled)
-                if evaluated is None:
-                    continue
-                if not self._execute_bcnc_command(evaluated):
-                    break
         except Exception as exc:
-            self.ui_q.put(("log", f"[macro] Exception: {exc}"))
-            for ln in traceback.format_exc().splitlines():
-                self.ui_q.put(("log", ln))
-        finally:
-            self._macro_lock.release()
-
-    def _macro_wait_for_idle(self, timeout_s: float = 30.0):
-        if not self.grbl.is_connected():
-            return
-        start = time.time()
-        while True:
-            if not self.grbl.is_connected():
-                return
-            if not self.grbl.is_streaming() and str(self._machine_state_text).startswith("Idle"):
-                return
-            if timeout_s and (time.time() - start) > timeout_s:
-                self.ui_q.put(("log", "[macro] %wait timeout"))
-                return
-            time.sleep(0.1)
-
-    def _bcnc_compile_line(self, line: str):
-        line = line.strip()
-        if not line:
-            return None
-        if line[0] == "$":
-            return line
-
-        line = line.replace("#", "_")
-
-        if line[0] == "%":
-            pat = MACRO_AUXPAT.match(line.strip())
-            if pat:
-                cmd = pat.group(1)
-                args = pat.group(2)
-            else:
-                cmd = None
-                args = None
-            if cmd == "%wait":
-                return ("WAIT",)
-            if cmd == "%msg":
-                return ("MSG", args if args else "")
-            if cmd == "%update":
-                return ("UPDATE", args if args else "")
-            if line.startswith("%if running"):
-                with self._macro_vars_lock:
-                    if not self._macro_vars.get("running"):
-                        return None
-            try:
-                return compile(line[1:], "", "exec")
-            except Exception:
-                return None
-
-        if line[0] == "_":
-            try:
-                return compile(line, "", "exec")
-            except Exception:
-                return None
-
-        if line[0] == ";":
-            return None
-
-        out = []
-        bracket = 0
-        paren = 0
-        expr = ""
-        cmd = ""
-        in_comment = False
-        for i, ch in enumerate(line):
-            if ch == "(":
-                paren += 1
-                in_comment = bracket == 0
-                if not in_comment:
-                    expr += ch
-            elif ch == ")":
-                paren -= 1
-                if not in_comment:
-                    expr += ch
-                if paren == 0 and in_comment:
-                    in_comment = False
-            elif ch == "[":
-                if not in_comment:
-                    if MACRO_STDEXPR:
-                        ch = "("
-                    bracket += 1
-                    if bracket == 1:
-                        if cmd:
-                            out.append(cmd)
-                            cmd = ""
-                    else:
-                        expr += ch
-                else:
-                    pass
-            elif ch == "]":
-                if not in_comment:
-                    if MACRO_STDEXPR:
-                        ch = ")"
-                    bracket -= 1
-                    if bracket == 0:
-                        try:
-                            out.append(compile(expr, "", "eval"))
-                        except Exception:
-                            pass
-                        expr = ""
-                    else:
-                        expr += ch
-            elif ch == "=":
-                if not out and bracket == 0 and paren == 0:
-                    for t in " ()-+*/^$":
-                        if t in cmd:
-                            cmd += ch
-                            break
-                    else:
-                        try:
-                            return compile(line, "", "exec")
-                        except Exception:
-                            return None
-                else:
-                    cmd += ch
-            elif ch == ";":
-                if not in_comment and paren == 0 and bracket == 0:
-                    break
-                else:
-                    expr += ch
-            elif bracket > 0:
-                expr += ch
-            elif not in_comment:
-                cmd += ch
-            else:
-                pass
-
-        if cmd:
-            out.append(cmd)
-        if not out:
-            return None
-        if len(out) > 1:
-            return out
-        return out[0]
-
-    def _bcnc_evaluate_line(self, compiled):
-        if isinstance(compiled, int):
-            return None
-        if isinstance(compiled, list):
-            for i, expr in enumerate(compiled):
-                if isinstance(expr, types.CodeType):
-                    with self._macro_vars_lock:
-                        globals_ctx = self._macro_eval_globals()
-                        result = eval(expr, globals_ctx, self._macro_local_vars)
-                    if isinstance(result, float):
-                        compiled[i] = str(round(result, 4))
-                    else:
-                        compiled[i] = str(result)
-            return "".join(compiled)
-        if isinstance(compiled, types.CodeType):
-            with self._macro_vars_lock:
-                globals_ctx = self._macro_exec_globals()
-                return eval(compiled, globals_ctx, self._macro_local_vars)
-        return compiled
-
-    def _macro_eval_globals(self) -> dict:
-        return self._macro_vars
-
-    def _macro_exec_globals(self) -> dict:
-        return self._macro_vars
+            self._log_exception("Shutdown failed", exc)
+        self.destroy()
 
     def _call_on_ui_thread(self, func, *args, timeout: float | None = 5.0, **kwargs):
         if threading.current_thread() is threading.main_thread():
             try:
                 return func(*args, **kwargs)
             except Exception as exc:
-                self.ui_q.put(("log", f"[ui] Action failed: {exc}"))
+                self._log_exception("UI action failed", exc)
                 return None
         result_q: queue.Queue = queue.Queue()
         self.ui_q.put(("ui_call", func, args, kwargs, result_q))
@@ -6450,169 +7121,108 @@ class App(tk.Tk):
         self.ui_q.put(("log", f"[ui] Action failed: {value}"))
         return None
 
-    def _execute_bcnc_command(self, line: str):
-        if line is None:
-            return True
-        if isinstance(line, tuple):
-            return True
-        s = str(line).strip()
-        if not s:
-            return True
-        cmd_parts = s.replace(",", " ").split()
-        cmd = cmd_parts[0].upper()
+    def _post_ui_thread(self, func, *args, **kwargs):
+        self.ui_q.put(("ui_post", func, args, kwargs))
 
-        if cmd in ("M0", "M00", "PROMPT"):
-            title, message, choices, cancel_label = self._parse_macro_prompt(s)
-            result_q: queue.Queue[str] = queue.Queue()
-            self.ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
-            while True:
-                try:
-                    choice = result_q.get(timeout=0.2)
-                    break
-                except queue.Empty:
-                    if self._closing:
-                        choice = cancel_label
-                        break
-            if choice not in choices:
-                choice = cancel_label
-            with self._macro_vars_lock:
-                self._macro_vars["prompt_choice"] = choice
-                self._macro_vars["prompt_index"] = choices.index(choice) if choice in choices else -1
-                self._macro_vars["prompt_cancelled"] = (choice == cancel_label)
-            self.ui_q.put(("log", f"[macro] Prompt: {message} | Selected: {choice}"))
-            if choice == cancel_label:
-                self.ui_q.put(("log", "[macro] Prompt canceled; macro aborted."))
-                return False
-            return True
-
-        if cmd in ("ABSOLUTE", "ABS"):
-            self.grbl.send_immediate("G90")
-            return True
-        if cmd in ("RELATIVE", "REL"):
-            self.grbl.send_immediate("G91")
-            return True
-        if cmd == "HOME":
-            self.grbl.home()
-            return True
-        if cmd == "OPEN":
-            if not self.connected:
-                self._call_on_ui_thread(self.toggle_connect)
-            return True
-        if cmd == "CLOSE":
-            if self.connected:
-                self._call_on_ui_thread(self.toggle_connect)
-            return True
-        if cmd == "HELP":
-            self._call_on_ui_thread(
-                messagebox.showinfo,
-                "Macro",
-                "Help is not available in this sender.",
-                timeout=None,
-            )
-            return True
-        if cmd in ("QUIT", "EXIT"):
-            self._call_on_ui_thread(self._on_close)
-            return True
-        if cmd == "LOAD" and len(cmd_parts) > 1:
-            self._call_on_ui_thread(
-                self._load_gcode_from_path,
-                " ".join(cmd_parts[1:]),
-                timeout=None,
-            )
-            return True
-        if cmd == "UNLOCK":
-            self.grbl.unlock()
-            return True
-        if cmd == "RESET":
-            self.grbl.reset()
-            return True
-        if cmd == "PAUSE":
-            self.grbl.hold()
-            return True
-        if cmd == "RESUME":
-            self.grbl.resume()
-            return True
-        if cmd == "FEEDHOLD":
-            self.grbl.hold()
-            return True
-        if cmd == "STOP":
-            self.grbl.stop_stream()
-            return True
-        if cmd == "RUN":
-            self.grbl.start_stream()
-            return True
-        if cmd == "SAVE":
-            self.ui_q.put(("log", "[macro] SAVE is not supported."))
-            return True
-        if cmd == "SENDHEX" and len(cmd_parts) > 1:
+    def _log_exception(
+        self,
+        context: str,
+        exc: BaseException,
+        *,
+        show_dialog: bool = False,
+        dialog_title: str = "Error",
+        traceback_text: str | None = None,
+    ):
+        tb = traceback_text or _format_exception(exc)
+        header = f"[error] {context}: {exc}"
+        if threading.current_thread() is threading.main_thread():
             try:
-                b = bytes([int(cmd_parts[1], 16)])
-                self.grbl.send_realtime(b)
+                self.streaming_controller.handle_log(header)
+                for ln in tb.splitlines():
+                    self.streaming_controller.handle_log(ln)
             except Exception:
                 pass
-            return True
-        if cmd == "SAFE" and len(cmd_parts) > 1:
+        else:
             try:
-                with self._macro_vars_lock:
-                    self._macro_vars["safe"] = float(cmd_parts[1])
+                self.ui_q.put(("log", header))
+                for ln in tb.splitlines():
+                    self.ui_q.put(("log", ln))
             except Exception:
                 pass
-            return True
-        if cmd == "SET0":
-            self.grbl.send_immediate("G92 X0 Y0 Z0")
-            return True
-        if cmd == "SETX" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 X{cmd_parts[1]}")
-            return True
-        if cmd == "SETY" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 Y{cmd_parts[1]}")
-            return True
-        if cmd == "SETZ" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 Z{cmd_parts[1]}")
-            return True
-        if cmd == "SET":
-            parts = []
-            if len(cmd_parts) > 1:
-                parts.append(f"X{cmd_parts[1]}")
-            if len(cmd_parts) > 2:
-                parts.append(f"Y{cmd_parts[2]}")
-            if len(cmd_parts) > 3:
-                parts.append(f"Z{cmd_parts[3]}")
-            if parts:
-                self.grbl.send_immediate("G92 " + " ".join(parts))
-            return True
+        if show_dialog:
+            if self._should_show_error_dialog():
+                self._post_ui_thread(messagebox.showerror, dialog_title, tb)
 
-        if s.startswith("!"):
-            self.grbl.hold()
-            return True
-        if s.startswith("~"):
-            self.grbl.resume()
-            return True
-        if s.startswith("?"):
-            self.grbl.send_realtime(RT_STATUS)
-            return True
-        if s.startswith("\x18"):
-            self.grbl.reset()
-            return True
+    def _tk_report_callback_exception(self, exc, val, tb):
+        try:
+            text = "".join(traceback.format_exception(exc, val, tb))
+        except Exception:
+            text = f"{val}"
+        self._log_exception(
+            "Unhandled UI exception",
+            val or RuntimeError("Unknown UI exception"),
+            show_dialog=True,
+            dialog_title="Application error",
+            traceback_text=text,
+        )
 
-        if s.startswith("$") or s.startswith("@") or s.startswith("{"):
-            self.grbl.send_immediate(s)
-            return True
-        if s.startswith("(") or MACRO_GPAT.match(s):
-            self.grbl.send_immediate(s)
-            return True
-        self.grbl.send_immediate(s)
+    def _should_show_error_dialog(self) -> bool:
+        if not bool(self.error_dialogs_enabled.get()):
+            return False
+        if self._closing:
+            return False
+        if self._error_dialog_suppressed:
+            return False
+        now = time.monotonic()
+        if (now - self._error_dialog_last_ts) < self._error_dialog_interval:
+            return False
+        if (now - self._error_dialog_window_start) > self._error_dialog_burst_window:
+            self._error_dialog_window_start = now
+            self._error_dialog_count = 0
+        self._error_dialog_count += 1
+        self._error_dialog_last_ts = now
+        if self._error_dialog_count > self._error_dialog_burst_limit:
+            self._error_dialog_suppressed = True
+            msg = "[error] Too many errors; suppressing dialogs for this session."
+            try:
+                if threading.current_thread() is threading.main_thread():
+                    self.streaming_controller.handle_log(msg)
+                else:
+                    self.ui_q.put(("log", msg))
+            except Exception:
+                pass
+            self._set_error_dialog_status("Dialogs: Suppressed")
+            return False
         return True
+
+    def _reset_error_dialog_state(self):
+        self._error_dialog_last_ts = 0.0
+        self._error_dialog_window_start = 0.0
+        self._error_dialog_count = 0
+        self._error_dialog_suppressed = False
+        self._set_error_dialog_status("")
+
+    def _set_error_dialog_status(self, text: str):
+        def update():
+            if hasattr(self, "error_dialog_status_var"):
+                self.error_dialog_status_var.set(text)
+        if threading.current_thread() is threading.main_thread():
+            update()
+        else:
+            self._post_ui_thread(update)
 
     def _load_settings(self) -> dict:
         try:
-            with open(self.settings_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-        return {}
+            loaded = self._settings_store.load()
+            if not loaded:
+                logger.info("No settings file found; using defaults.")
+        except SettingsLoadError as exc:
+            logger.error(f"Failed to load settings: {exc}")
+            self._settings_store.reset_to_defaults()
+        except Exception as exc:
+            logger.error(f"Unexpected error loading settings: {exc}")
+            self._settings_store.reset_to_defaults()
+        return self._settings_store.data
 
     def _save_settings(self):
         def safe_float(var, default, label):
@@ -6626,11 +7236,18 @@ class App(tk.Tk):
                 self.ui_q.put(("log", f"[settings] Invalid {label}; using {fallback}."))
                 return fallback
 
-        show_rapid = False
-        show_feed = True
-        show_arc = False
-        if hasattr(self, "toolpath_view") and self.toolpath_view is not None:
-            show_rapid, show_feed, show_arc = self.toolpath_view.get_display_options()
+        def safe_int(var, default, label):
+            try:
+                return int(var.get())
+            except Exception:
+                try:
+                    fallback = int(default)
+                except Exception:
+                    fallback = 0
+                self.ui_q.put(("log", f"[settings] Invalid {label}; using {fallback}."))
+                return fallback
+
+        show_rapid, show_feed, show_arc = self.toolpath_panel.get_display_options()
 
         full_limit = self._toolpath_limit_value(
             self.toolpath_full_limit.get(), self._toolpath_full_limit_default
@@ -6639,15 +7256,18 @@ class App(tk.Tk):
             self.toolpath_interactive_limit.get(), self._toolpath_interactive_limit_default
         )
         arc_detail_deg = self._clamp_arc_detail(self.toolpath_arc_detail.get())
+        self._apply_error_dialog_settings()
+        self._on_status_failure_limit_change()
 
         try:
             os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("Failed to create settings directory: %s", exc)
 
         pos_status_enabled = bool(self.console_positions_enabled.get())
 
-        data = {
+        data = dict(self.settings) if isinstance(self.settings, dict) else {}
+        data.update({
             "last_port": self.current_port.get(),
             "unit_mode": self.unit_mode.get(),
             "step_xy": safe_float(self.step_xy, self.settings.get("step_xy", 1.0), "step XY"),
@@ -6662,12 +7282,18 @@ class App(tk.Tk):
             "window_geometry": self.geometry(),
             "tooltips_enabled": bool(self.tooltip_enabled.get()),
             "gui_logging_enabled": bool(self.gui_logging_enabled.get()),
+            "error_dialogs_enabled": bool(self.error_dialogs_enabled.get()),
             "performance_mode": bool(self.performance_mode.get()),
             "render3d_enabled": bool(self.render3d_enabled.get()),
             "status_poll_interval": safe_float(
                 self.status_poll_interval,
                 self.settings.get("status_poll_interval", STATUS_POLL_DEFAULT),
                 "status interval",
+            ),
+            "status_query_failure_limit": safe_int(
+                self.status_query_failure_limit,
+                self.settings.get("status_query_failure_limit", 3),
+                "status failure limit",
             ),
             "view_3d": self.settings.get("view_3d"),
             "all_stop_mode": self.all_stop_mode.get(),
@@ -6691,11 +7317,21 @@ class App(tk.Tk):
             "toolpath_show_rapid": show_rapid,
             "toolpath_show_feed": show_feed,
             "toolpath_show_arc": show_arc,
-        }
+            "error_dialog_interval": self._error_dialog_interval,
+            "error_dialog_burst_window": self._error_dialog_burst_window,
+            "error_dialog_burst_limit": self._error_dialog_burst_limit,
+            "macros_allow_python": bool(self.macros_allow_python.get()),
+        })
         self.settings = data
+        self._settings_store.data = self.settings
         try:
-            with open(self.settings_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, sort_keys=True)
+            self._settings_store.save()
+        except SettingsSaveError as exc:
+            try:
+                self.ui_q.put(("log", f"[settings] Save failed: {exc}"))
+                self.status.config(text="Settings save failed")
+            except Exception:
+                pass
         except Exception as exc:
             try:
                 self.ui_q.put(("log", f"[settings] Save failed: {exc}"))

@@ -1,0 +1,3 @@
+Spindle On
+Turns spindle on at 12000 RPM
+M3 S12000

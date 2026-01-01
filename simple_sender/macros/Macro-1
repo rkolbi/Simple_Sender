@@ -1,0 +1,4 @@
+Go to Work Zero
+Moves to WCS zero with G0
+G90
+G0 X0 Y0

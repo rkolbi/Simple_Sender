@@ -109,6 +109,7 @@ class Settings:
             "last_port": None,
             "baud_rate": 115200,
             "status_poll_interval": 0.2,
+            "status_query_failure_limit": 3,
             "auto_reconnect": False,
             "training_wheels": True,
             "all_stop_mode": "stop_reset",
@@ -138,6 +139,11 @@ class Settings:
             "window_geometry": None,
             "recent_files": [],
             "max_recent_files": 10,
+            "error_dialog_interval": 2.0,
+            "error_dialog_burst_window": 30.0,
+            "error_dialog_burst_limit": 3,
+            "error_dialogs_enabled": True,
+            "macros_allow_python": False,
         }
     
     def load(self) -> bool:
