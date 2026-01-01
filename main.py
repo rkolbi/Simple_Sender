@@ -86,6 +86,26 @@ def _resolve_settings_path() -> str:
     return os.path.join(base_dir, "settings.json")
 
 
+def _discover_macro_dirs() -> tuple[str, ...]:
+    dirs: list[str] = []
+    pkg = sys.modules.get("simple_sender")
+    if pkg and getattr(pkg, "__file__", None):
+        pkg_dir = os.path.dirname(pkg.__file__)
+        macros_dir = os.path.join(pkg_dir, "macros")
+        if os.path.isdir(macros_dir):
+            dirs.append(macros_dir)
+    script_dir = os.path.dirname(__file__)
+    root_macros = os.path.join(script_dir, "macros")
+    if os.path.isdir(root_macros) and root_macros not in dirs:
+        dirs.append(root_macros)
+    if script_dir not in dirs:
+        dirs.append(script_dir)
+    return tuple(dirs)
+
+
+_MACRO_SEARCH_DIRS = _discover_macro_dirs()
+
+
 def compute_gcode_stats(
     lines: list[str],
     rapid_rates: tuple[float, float, float] | None = None,
@@ -1681,6 +1701,9 @@ class App(tk.Tk):
 
         macro_right = ttk.Frame(pad)
         macro_right.grid(row=5, column=0, columnspan=6, pady=(6, 0), sticky="ew")
+
+        self.macro_frames = {"left": macro_left, "right": macro_right}
+        self._load_macro_buttons()
 
         self._set_unit_mode(self.unit_mode.get())
 
@@ -6067,12 +6090,12 @@ class App(tk.Tk):
         self.destroy()
 
     def _macro_path(self, index: int) -> str | None:
-        base_dir = os.path.dirname(__file__)
-        for prefix in MACRO_PREFIXES:
-            for ext in MACRO_EXTS:
-                candidate = os.path.join(base_dir, f"{prefix}{index}{ext}")
-                if os.path.isfile(candidate):
-                    return candidate
+        for macro_dir in _MACRO_SEARCH_DIRS:
+            for prefix in MACRO_PREFIXES:
+                for ext in MACRO_EXTS:
+                    candidate = os.path.join(macro_dir, f"{prefix}{index}{ext}")
+                    if os.path.isfile(candidate):
+                        return candidate
         return None
 
     def _load_macro_buttons(self):
