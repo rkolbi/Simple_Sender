@@ -2798,6 +2798,8 @@ class App(tk.Tk):
         self.keyboard_bindings_enabled = tk.BooleanVar(
             value=self.settings.get("keyboard_bindings_enabled", True)
         )
+        self.job_completion_popup = tk.BooleanVar(value=self.settings.get("job_completion_popup", True))
+        self.job_completion_beep = tk.BooleanVar(value=self.settings.get("job_completion_beep", False))
         pos_enabled = bool(self.settings.get("console_positions_enabled", True))
         status_enabled = bool(self.settings.get("console_status_enabled", True))
         combined_console_enabled = pos_enabled or status_enabled
@@ -3655,6 +3657,26 @@ class App(tk.Tk):
             self.error_dialog_limit_entry,
             "Maximum dialogs allowed inside the burst window before suppressing.",
         )
+        self.job_completion_popup_check = ttk.Checkbutton(
+            dialog_frame,
+            text="Show job completion dialog",
+            variable=self.job_completion_popup,
+        )
+        self.job_completion_popup_check.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 2))
+        apply_tooltip(
+            self.job_completion_popup_check,
+            "Pop up an alert when a job completes, summarizing start/finish/elapsed times.",
+        )
+        self.job_completion_beep_check = ttk.Checkbutton(
+            dialog_frame,
+            text="Play reminder beep on completion",
+            variable=self.job_completion_beep,
+        )
+        self.job_completion_beep_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        apply_tooltip(
+            self.job_completion_beep_check,
+            "Ring the system bell when a job has finished streaming.",
+        )
 
         macro_frame = ttk.LabelFrame(self._app_settings_inner, text="Macros", padding=8)
         macro_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
@@ -3769,7 +3791,8 @@ class App(tk.Tk):
         self.current_line_desc = ttk.Label(
             view_frame,
             text=(
-                "Processing highlights the last line accepted by GRBL. "
+                "Processing highlights the line currently executing "
+                "(the next line queued after the last ack). "
                 "Sent highlights the most recently queued line."
             ),
             wraplength=560,
@@ -4878,10 +4901,16 @@ class App(tk.Tk):
             f"Finished: {finish_text}\n"
             f"Elapsed: {elapsed_str}"
         )
-        try:
-            messagebox.showinfo("Job completed", message)
-        except Exception:
-            pass
+        if bool(self.job_completion_popup.get()):
+            try:
+                messagebox.showinfo("Job completed", message)
+            except Exception:
+                pass
+        if bool(self.job_completion_beep.get()):
+            try:
+                self.bell()
+            except Exception:
+                pass
 
     def _format_gcode_stats_text(self, stats: dict, rate_source: str | None) -> str:
         bounds = stats.get("bounds")
@@ -5992,20 +6021,24 @@ class App(tk.Tk):
             self.streaming_controller.log(f"[{ts}] Button: {label}")
 
     def _update_current_highlight(self):
+        if not hasattr(self, "gview") or self.gview is None or self.gview.lines_count <= 0:
+            return
+        max_idx = self.gview.lines_count - 1
         mode = self.current_line_mode.get()
-        idx = None
+        target_idx = None
         if mode == "acked":
-            if self._last_acked_index >= 0:
-                idx = self._last_acked_index
-            elif self._last_sent_index >= 0:
-                idx = self._last_sent_index
+            desired = self._last_acked_index + 1
+            if desired < 0:
+                desired = 0
+            target_idx = min(desired, max_idx)
         else:
             if self._last_sent_index >= 0:
-                idx = self._last_sent_index
+                target_idx = min(self._last_sent_index, max_idx)
             elif self._last_acked_index >= 0:
-                idx = self._last_acked_index
-        if idx is not None:
-            self.gview.highlight_current(idx)
+                candidate = self._last_acked_index + 1
+                target_idx = min(candidate, max_idx)
+        if target_idx is not None:
+            self.gview.highlight_current(target_idx)
 
     def _all_stop_action(self):
         mode = self.all_stop_mode.get()
@@ -7529,6 +7562,8 @@ class App(tk.Tk):
             "error_dialog_interval": self._error_dialog_interval,
             "error_dialog_burst_window": self._error_dialog_burst_window,
             "error_dialog_burst_limit": self._error_dialog_burst_limit,
+            "job_completion_popup": bool(self.job_completion_popup.get()),
+            "job_completion_beep": bool(self.job_completion_beep.get()),
             "macros_allow_python": bool(self.macros_allow_python.get()),
         })
         self.settings = data

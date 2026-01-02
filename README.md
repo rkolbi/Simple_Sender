@@ -115,7 +115,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - Console (log + manual command entry; filters).
   - Raw $$ (captured settings dump).
   - GRBL Settings (editable table, tooltips, pending-change highlight).
-  - App Settings (banner showing `Simple Sender – Version: v0.1.0`, Theme picker for ttk styles, ALL STOP mode, estimation factor/fallback, status polling interval + disconnect threshold, error dialog settings, jogging feed defaults, macro scripting toggle, keybindings, current-line highlight mode, 3D view quality, Training Wheels, auto-reconnect, machine profiles, and the Interface block for toggling Performance mode plus resume/recover button visibility—logging/error-dialog toggles also live here).
+  - App Settings (banner showing `Simple Sender – Version: v0.1.0`, Theme picker for ttk styles, ALL STOP mode, estimation factor/fallback, status polling interval + disconnect threshold, error dialog settings with job completion dialog/beep toggles, jogging feed defaults, macro scripting toggle, keybindings, current-line highlight mode, 3D view quality, Training Wheels, auto-reconnect, machine profiles, and the Interface block for toggling Performance mode plus resume/recover button visibility—logging/error-dialog controls also live here).
   - Overdrive (Spindle ON/OFF plus feed/spindle override sliders with nice sliding controls, +/-/reset shortcuts, and a live override summary that follows GRBL's Ov* values while slider moves send the matching 10% real-time override bytes).
   - 3D View (Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view).
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
@@ -138,7 +138,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
-- **Progress:** Sent/acked/current highlighting; status/progress bar; live estimate while running.
+- **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
 - **Completion alert:** When a job finishes streaming, a dialog summarizes the start/finish/elapsed wallclock so you know the file completed without monitoring the logs.
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
