@@ -167,9 +167,9 @@ class GcodeViewer(ttk.Frame):
         
         start_line = self._sent_upto + 1 + LINE_NUMBER_OFFSET
         end_line = idx + LINE_NUMBER_OFFSET
-        
+
         self.text.config(state="normal")
-        self.text.tag_add("sent", f"{start_line}.0", f"{end_line}.end")
+        self.text.tag_add("sent", f"{start_line}.0", f"{end_line + 1}.0")
         self.text.config(state="disabled")
         self._sent_upto = idx
     
@@ -190,10 +190,10 @@ class GcodeViewer(ttk.Frame):
         
         start_line = self._acked_upto + 1 + LINE_NUMBER_OFFSET
         end_line = idx + LINE_NUMBER_OFFSET
-        
+
         self.text.config(state="normal")
-        self.text.tag_remove("sent", f"{start_line}.0", f"{end_line}.end")
-        self.text.tag_add("acked", f"{start_line}.0", f"{end_line}.end")
+        self.text.tag_remove("sent", f"{start_line}.0", f"{end_line + 1}.0")
+        self.text.tag_add("acked", f"{start_line}.0", f"{end_line + 1}.0")
         self.text.config(state="disabled")
         
         self._acked_upto = idx
@@ -261,7 +261,7 @@ class GcodeViewer(ttk.Frame):
         """
         line_no = idx + LINE_NUMBER_OFFSET
         start = f"{line_no}.0"
-        end = f"{line_no}.end"
+        end = f"{line_no + 1}.0"
         return start, end
     
     def _cancel_chunk_insert(self) -> None:

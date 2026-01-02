@@ -139,6 +139,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting; status/progress bar; live estimate while running.
+- **Completion alert:** When a job finishes streaming, a dialog summarizes the start/finish/elapsed wallclock so you know the file completed without monitoring the logs.
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
 - Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.

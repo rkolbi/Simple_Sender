@@ -25,6 +25,7 @@ import os
 import sys
 import time
 import threading
+from datetime import datetime
 import queue
 import re
 import types
@@ -1010,6 +1011,7 @@ class StreamingController:
             self.progress_pct.set(int(round((done / total) * 100)) if total else 0)
         if done and total:
             self.app._update_live_estimate(done, total)
+        self.app._maybe_notify_job_completion(done, total)
 
     def _schedule_buffer_flush(self):
         if self._buffer_after_id is not None:
@@ -2964,6 +2966,8 @@ class App(tk.Tk):
         self._stream_start_ts = None
         self._stream_pause_total = 0.0
         self._stream_paused_at = None
+        self._job_started_at: datetime | None = None
+        self._job_completion_notified = False
         self._grbl_ready = False
         self._alarm_locked = False
         self._alarm_message = ""
@@ -3047,16 +3051,16 @@ class App(tk.Tk):
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_open = ttk.Button(bar, text="Read G-code", command=self.open_gcode)
+        self.btn_open = ttk.Button(bar, text="Read Job", command=self.open_gcode)
         set_kb_id(self.btn_open, "gcode_open")
         self.btn_open.pack(side="left")
         self._manual_controls.append(self.btn_open)
-        apply_tooltip(self.btn_open, "Load a G-code file for streaming (read-only).")
-        self.btn_clear = ttk.Button(bar, text="Clear G-code", command=lambda: self._confirm_and_run("Clear G-code", self._clear_gcode))
+        apply_tooltip(self.btn_open, "Load a G-code job for streaming (read-only).")
+        self.btn_clear = ttk.Button(bar, text="Clear Job", command=lambda: self._confirm_and_run("Clear Job", self._clear_gcode))
         set_kb_id(self.btn_clear, "gcode_clear")
         self.btn_clear.pack(side="left", padx=(6, 0))
         self._manual_controls.append(self.btn_clear)
-        apply_tooltip(self.btn_clear, "Unload the current G-code and reset the viewer.")
+        apply_tooltip(self.btn_clear, "Unload the current job and reset the viewer.")
         self.btn_run = ttk.Button(bar, text="Run", command=lambda: self._confirm_and_run("Run job", self.run_job), state="disabled")
         set_kb_id(self.btn_run, "job_run")
         self.btn_run.pack(side="left", padx=(8, 0))
@@ -3111,8 +3115,6 @@ class App(tk.Tk):
         self.btn_unit_toggle.pack(side="left", padx=(0, 0))
         self._manual_controls.append(self.btn_unit_toggle)
         apply_tooltip(self.btn_unit_toggle, "Toggle units between mm and inch.")
-
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
         # right side status
         self.machine_state_label = ttk.Label(bar, textvariable=self.machine_state)
@@ -4400,6 +4402,8 @@ class App(tk.Tk):
 
     def run_job(self):
         self._reset_gcode_view_for_run()
+        self._job_started_at = datetime.now()
+        self._job_completion_notified = False
         self.grbl.start_stream()
 
     def pause_job(self):
@@ -4752,6 +4756,8 @@ class App(tk.Tk):
         self.btn_resume.config(state="disabled")
         self.btn_resume_from.config(state="disabled")
         self.toolpath_panel.clear()
+        self._job_started_at = None
+        self._job_completion_notified = False
 
     def _show_gcode_loading(self):
         if not hasattr(self, "gcode_load_bar"):
@@ -4841,6 +4847,41 @@ class App(tk.Tk):
             remaining = 0.0
         self._live_estimate_min = remaining / 60.0
         self._refresh_gcode_stats_display()
+
+    def _maybe_notify_job_completion(self, done: int, total: int) -> None:
+        if (
+            self._job_started_at is None
+            or self._job_completion_notified
+            or total <= 0
+            or done < total
+        ):
+            return
+        start_time = self._job_started_at
+        finish_time = datetime.now()
+        elapsed = finish_time - start_time
+        elapsed_str = str(elapsed).split(".")[0]
+        self._job_completion_notified = True
+        self._job_started_at = None
+        start_text = start_time.strftime("%Y-%m-%d %H:%M:%S")
+        finish_text = finish_time.strftime("%Y-%m-%d %H:%M:%S")
+        summary = (
+            f"Job completed in {elapsed_str} "
+            f"(started {start_text}, finished {finish_text})."
+        )
+        try:
+            self.streaming_controller.handle_log(f"[job] {summary}")
+        except Exception:
+            pass
+        message = (
+            "Job completed.\n\n"
+            f"Started: {start_text}\n"
+            f"Finished: {finish_text}\n"
+            f"Elapsed: {elapsed_str}"
+        )
+        try:
+            messagebox.showinfo("Job completed", message)
+        except Exception:
+            pass
 
     def _format_gcode_stats_text(self, stats: dict, rate_source: str | None) -> str:
         bounds = stats.get("bounds")
