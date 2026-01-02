@@ -58,6 +58,26 @@ APP_VERSION = "0.1.0"
 
 SERIAL_IMPORT_ERROR = ""
 
+ICON_REFRESH = "⟳"
+ICON_CONNECT = "🔌"
+ICON_JOB_READ = "📂"
+ICON_JOB_CLEAR = "🗑"
+ICON_RUN = "▶"
+ICON_PAUSE = "⏸"
+ICON_RESUME = "⏵"
+ICON_STOP = "⏹"
+ICON_RESUME_FROM = "⤴"
+ICON_UNLOCK = "🔓"
+ICON_RECOVER = "🛠"
+ICON_HOME = "⌂"
+ICON_HOLD = "⏸"
+ICON_UNITS = "↔"
+
+
+def _icon_label(icon: str, label: str) -> str:
+    """Render a button label with a leading icon."""
+    return f"{icon} {label}"
+
 # Serial imports
 try:
     import serial
@@ -2806,6 +2826,20 @@ class App(tk.Tk):
         self.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
         self.console_status_enabled = tk.BooleanVar(value=combined_console_enabled)
         self.style = ttk.Style()
+        default_font = tkfont.nametofont("TkDefaultFont")
+        self.icon_button_font = tkfont.Font(
+            family=default_font.cget("family"),
+            size=default_font.cget("size"),
+            weight=default_font.cget("weight"),
+        )
+        self.icon_button_style = "SimpleSender.IconButton.TButton"
+        self.style.configure(
+            self.icon_button_style,
+            anchor="center",
+            justify="center",
+            padding=(8, 4),
+            font=self.icon_button_font,
+        )
         self.available_themes = list(self.style.theme_names())
         theme_choice = self.settings.get("theme", self.style.theme_use())
         self.selected_theme = tk.StringVar(value=theme_choice)
@@ -3032,6 +3066,11 @@ class App(tk.Tk):
         self.streaming_controller.bind_button_logging()
         self._apply_keyboard_bindings()
 
+    def _unit_toggle_label(self, mode: str | None = None) -> str:
+        if mode is None:
+            mode = self.unit_mode.get()
+        return _icon_label(ICON_UNITS, mode)
+
     # ---------- UI ----------
     def _build_toolbar(self):
         bar = ttk.Frame(self, padding=(8, 6))
@@ -3041,11 +3080,21 @@ class App(tk.Tk):
         self.port_combo = ttk.Combobox(bar, width=18, textvariable=self.current_port, state="readonly")
         self.port_combo.pack(side="left", padx=(6, 4))
 
-        self.btn_refresh = ttk.Button(bar, text="Refresh", command=self.refresh_ports)
+        self.btn_refresh = ttk.Button(
+            bar,
+            text=_icon_label(ICON_REFRESH, "Refresh"),
+            style=self.icon_button_style,
+            command=self.refresh_ports,
+        )
         set_kb_id(self.btn_refresh, "port_refresh")
         self.btn_refresh.pack(side="left", padx=(0, 10))
         apply_tooltip(self.btn_refresh, "Refresh the list of serial ports.")
-        self.btn_conn = ttk.Button(bar, text="Connect", command=lambda: self._confirm_and_run("Connect/Disconnect", self.toggle_connect))
+        self.btn_conn = ttk.Button(
+            bar,
+            text=_icon_label(ICON_CONNECT, "Connect"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Connect/Disconnect", self.toggle_connect),
+        )
         set_kb_id(self.btn_conn, "port_connect")
         self.btn_conn.pack(side="left")
         apply_tooltip(self.btn_conn, "Connect or disconnect from the selected serial port.")
@@ -3053,52 +3102,94 @@ class App(tk.Tk):
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        self.btn_open = ttk.Button(bar, text="Read Job", command=self.open_gcode)
+        self.btn_open = ttk.Button(
+            bar,
+            text=_icon_label(ICON_JOB_READ, "Read Job"),
+            style=self.icon_button_style,
+            command=self.open_gcode,
+        )
         set_kb_id(self.btn_open, "gcode_open")
         self.btn_open.pack(side="left")
         self._manual_controls.append(self.btn_open)
         apply_tooltip(self.btn_open, "Load a G-code job for streaming (read-only).")
-        self.btn_clear = ttk.Button(bar, text="Clear Job", command=lambda: self._confirm_and_run("Clear Job", self._clear_gcode))
+        self.btn_clear = ttk.Button(
+            bar,
+            text=_icon_label(ICON_JOB_CLEAR, "Clear Job"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Clear Job", self._clear_gcode),
+        )
         set_kb_id(self.btn_clear, "gcode_clear")
         self.btn_clear.pack(side="left", padx=(6, 0))
         self._manual_controls.append(self.btn_clear)
         apply_tooltip(self.btn_clear, "Unload the current job and reset the viewer.")
-        self.btn_run = ttk.Button(bar, text="Run", command=lambda: self._confirm_and_run("Run job", self.run_job), state="disabled")
+        self.btn_run = ttk.Button(
+            bar,
+            text=_icon_label(ICON_RUN, "Run"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Run job", self.run_job),
+            state="disabled",
+        )
         set_kb_id(self.btn_run, "job_run")
         self.btn_run.pack(side="left", padx=(8, 0))
         apply_tooltip(self.btn_run, "Start streaming the loaded G-code.")
         attach_log_gcode(self.btn_run, "Cycle Start")
-        self.btn_pause = ttk.Button(bar, text="Pause", command=lambda: self._confirm_and_run("Pause job", self.pause_job), state="disabled")
+        self.btn_pause = ttk.Button(
+            bar,
+            text=_icon_label(ICON_PAUSE, "Pause"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Pause job", self.pause_job),
+            state="disabled",
+        )
         set_kb_id(self.btn_pause, "job_pause")
         self.btn_pause.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_pause, "Feed hold the running job.")
         attach_log_gcode(self.btn_pause, "!")
-        self.btn_resume = ttk.Button(bar, text="Resume", command=lambda: self._confirm_and_run("Resume job", self.resume_job), state="disabled")
+        self.btn_resume = ttk.Button(
+            bar,
+            text=_icon_label(ICON_RESUME, "Resume"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Resume job", self.resume_job),
+            state="disabled",
+        )
         set_kb_id(self.btn_resume, "job_resume")
         self.btn_resume.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_resume, "Resume a paused job.")
         attach_log_gcode(self.btn_resume, "~")
-        self.btn_stop = ttk.Button(bar, text="Stop/Reset", command=lambda: self._confirm_and_run("Stop/Reset", self.stop_job), state="disabled")
+        self.btn_stop = ttk.Button(
+            bar,
+            text=_icon_label(ICON_STOP, "Stop/Reset"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Stop/Reset", self.stop_job),
+            state="disabled",
+        )
         set_kb_id(self.btn_stop, "job_stop_reset")
         self.btn_stop.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_stop, "Stop the job and soft reset GRBL.")
         attach_log_gcode(self.btn_stop, "Ctrl-X")
         self.btn_resume_from = ttk.Button(
             bar,
-            text="Resume From...",
+            text=_icon_label(ICON_RESUME_FROM, "Resume From..."),
+            style=self.icon_button_style,
             command=lambda: self._confirm_and_run("Resume from line", self._show_resume_dialog),
             state="disabled",
         )
         set_kb_id(self.btn_resume_from, "job_resume_from")
         self.btn_resume_from.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_resume_from, "Resume from a specific line with modal re-sync.")
-        self.btn_unlock_top = ttk.Button(bar, text="Unlock", command=lambda: self._confirm_and_run("Unlock ($X)", self.grbl.unlock), state="disabled")
+        self.btn_unlock_top = ttk.Button(
+            bar,
+            text=_icon_label(ICON_UNLOCK, "Unlock"),
+            style=self.icon_button_style,
+            command=lambda: self._confirm_and_run("Unlock ($X)", self.grbl.unlock),
+            state="disabled",
+        )
         set_kb_id(self.btn_unlock_top, "unlock_top")
         self.btn_unlock_top.pack(side="left", padx=(6, 0))
         apply_tooltip(self.btn_unlock_top, "Send $X to clear alarm (top-bar).")
         self.btn_alarm_recover = ttk.Button(
             bar,
-            text="Recover",
+            text=_icon_label(ICON_RECOVER, "Recover"),
+            style=self.icon_button_style,
             command=self._show_alarm_recovery,
             state="disabled",
         )
@@ -3112,7 +3203,12 @@ class App(tk.Tk):
         self._update_resume_button_visibility()
         self._update_recover_button_visibility()
 
-        self.btn_unit_toggle = ttk.Button(bar, text="mm", command=self._toggle_unit_mode)
+        self.btn_unit_toggle = ttk.Button(
+            bar,
+            text=self._unit_toggle_label(),
+            style=self.icon_button_style,
+            command=self._toggle_unit_mode,
+        )
         set_kb_id(self.btn_unit_toggle, "unit_toggle")
         self.btn_unit_toggle.pack(side="left", padx=(0, 0))
         self._manual_controls.append(self.btn_unit_toggle)
@@ -3169,25 +3265,45 @@ class App(tk.Tk):
         self._dro_value_row(mpos, "X", self.mpos_x)
         self._dro_value_row(mpos, "Y", self.mpos_y)
         self._dro_value_row(mpos, "Z", self.mpos_z)
-        self.btn_home_mpos = ttk.Button(mpos, text="Home", command=self.grbl.home)
+        self.btn_home_mpos = ttk.Button(
+            mpos,
+            text=_icon_label(ICON_HOME, "Home"),
+            style=self.icon_button_style,
+            command=self.grbl.home,
+        )
         set_kb_id(self.btn_home_mpos, "home")
         self.btn_home_mpos.pack(fill="x", pady=(6, 0))
         self._manual_controls.append(self.btn_home_mpos)
         apply_tooltip(self.btn_home_mpos, "Run the homing cycle.")
         attach_log_gcode(self.btn_home_mpos, "$H")
-        self.btn_unlock_mpos = ttk.Button(mpos, text="Unlock", command=self.grbl.unlock)
+        self.btn_unlock_mpos = ttk.Button(
+            mpos,
+            text=_icon_label(ICON_UNLOCK, "Unlock"),
+            style=self.icon_button_style,
+            command=self.grbl.unlock,
+        )
         set_kb_id(self.btn_unlock_mpos, "unlock")
         self.btn_unlock_mpos.pack(fill="x", pady=(6, 0))
         self._manual_controls.append(self.btn_unlock_mpos)
         apply_tooltip(self.btn_unlock_mpos, "Clear alarm lock ($X).")
         attach_log_gcode(self.btn_unlock_mpos, "$X")
-        self.btn_hold_mpos = ttk.Button(mpos, text="Hold", command=self.grbl.hold)
+        self.btn_hold_mpos = ttk.Button(
+            mpos,
+            text=_icon_label(ICON_HOLD, "Hold"),
+            style=self.icon_button_style,
+            command=self.grbl.hold,
+        )
         set_kb_id(self.btn_hold_mpos, "feed_hold")
         self.btn_hold_mpos.pack(fill="x", pady=(6, 0))
         self._manual_controls.append(self.btn_hold_mpos)
         apply_tooltip(self.btn_hold_mpos, "Feed hold.")
         attach_log_gcode(self.btn_hold_mpos, "!")
-        self.btn_resume_mpos = ttk.Button(mpos, text="Resume", command=self.grbl.resume)
+        self.btn_resume_mpos = ttk.Button(
+            mpos,
+            text=_icon_label(ICON_RESUME, "Resume"),
+            style=self.icon_button_style,
+            command=self.grbl.resume,
+        )
         set_kb_id(self.btn_resume_mpos, "feed_resume")
         self.btn_resume_mpos.pack(fill="x", pady=(6, 0))
         self._manual_controls.append(self.btn_resume_mpos)
@@ -5301,7 +5417,7 @@ class App(tk.Tk):
         with self.macro_executor.macro_vars() as macro_vars:
             macro_vars["units"] = "G21" if mode == "mm" else "G20"
         try:
-            self.btn_unit_toggle.config(text="mm" if mode == "mm" else "inch")
+            self.btn_unit_toggle.config(text=self._unit_toggle_label(mode))
         except Exception:
             pass
 
@@ -6861,7 +6977,7 @@ class App(tk.Tk):
                 self._auto_reconnect_retry = 0
                 self._auto_reconnect_delay = 3.0
                 self._auto_reconnect_next_ts = 0.0
-                self.btn_conn.config(text="Disconnect")
+                self.btn_conn.config(text=_icon_label(ICON_CONNECT, "Disconnect"))
                 self._connected_port = port
                 self._grbl_ready = False
                 self._alarm_locked = False
@@ -6880,7 +6996,7 @@ class App(tk.Tk):
                 self._set_manual_controls_enabled(False)
                 self.throughput_var.set("TX: 0 B/s")
             else:
-                self.btn_conn.config(text="Connect")
+                self.btn_conn.config(text=_icon_label(ICON_CONNECT, "Connect"))
                 self._connected_port = None
                 self._grbl_ready = False
                 self._alarm_locked = False
