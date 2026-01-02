@@ -1,3 +1,91 @@
-Spindle Off
-Stops the spindle
+XYZ Touch Plate & Reference Tool Setup
+Probes XYZ on the touch plate, then captures the reference tool height at the fixed sensor.
+
+; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe distance/feed).
+%macro.state.SAFE_HEIGHT = -5
+%macro.state.PROBE_X_LOCATION = -1.5
+%macro.state.PROBE_Y_LOCATION = -1224
+%macro.state.PROBE_Z_LOCATION = -5
+%macro.state.PROBE_DISTANCE = 150
+%macro.state.PROBE_RAPID_FEEDRATE = 200
+%macro.state.PLATE_THICKNESS = 11.95
+%macro.state.Z_FAST_PROBE_DISTANCE = 50
+%macro.state.X_PLATE_OFFSET = -13.175
+%macro.state.Y_PLATE_OFFSET = -13.175
+
+%wait
+M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
+G90
+G21
+G92 X0 Y0
+
+; Probe Z (touch plate)
+G91
+G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150
+G90
+G92 Z[macro.state.PLATE_THICKNESS]
+G1 Z14
+G91
+G38.2 Z-15 F40
+G0 Z2
+G4 P0.25
+G38.2 Z-3 F20
+G90
+G92 Z[macro.state.PLATE_THICKNESS]
+G0 Z16
+
+; Probe X (touch plate)
+G0 X-70 F800
+G0 Z4
+G38.2 X0 F170
+G92 X[macro.state.X_PLATE_OFFSET]
+G1 X-14
+G38.2 X0 F60
+G92 X[macro.state.X_PLATE_OFFSET]
+G0 X-15
+
+; Probe Y (touch plate)
+G0 Z16
+G0 X30 Y-70 F800
+G0 Z4
+G38.2 Y0 F170
+G92 Y[macro.state.Y_PLATE_OFFSET]
+G1 Y-14
+G38.2 Y0 F60
+G92 Y[macro.state.Y_PLATE_OFFSET]
+
+G0 Y-15
+G0 Z20
+G0 X0 Y0
+M0 (Stow the touch plate and clip; tool height will be measured next.)
+%wait
+
+G21
 M5
+G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+%wait
+G53 Z[macro.state.PROBE_Z_LOCATION]
+
+G91
+G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
+G0 Z2
+G4 P0.25
+G38.2 Z-5 F40
+G4 P0.25
+G38.4 Z10 F20
+G4 P0.25
+G38.2 Z-2 F5
+G4 P0.25
+G38.4 Z10 F5
+G90
+%wait
+%macro.state.TOOL_REFERENCE = mz
+%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE])
+G91
+G0 Z5
+G90
+G53 Z[macro.state.SAFE_HEIGHT]
+%wait
+G0 X0 Y0

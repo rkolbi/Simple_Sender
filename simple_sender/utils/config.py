@@ -117,7 +117,7 @@ class Settings:
             "performance_mode": False,
             "gui_logging_enabled": True,
             "tooltips_enabled": True,
-            "keybindings_enabled": True,
+            "keyboard_bindings_enabled": True,
             "unit_mode": "mm",
             "jog_step": 1.0,
             "jog_feed": 1000.0,

@@ -1,3 +1,14 @@
-Jog Cancel
-Stops jogging immediately
-SENDHEX 85
+Park Spindle over Tool Sensor
+Moves to the tool-height sensor so you can clean, inspect, or stage without altering offsets.
+
+; Match the safe height and sensor coordinates to the other macros so you always park in a consistent spot.
+%macro.state.SAFE_HEIGHT = -5
+%macro.state.PROBE_X_LOCATION = -1.5
+%macro.state.PROBE_Y_LOCATION = -1224
+
+M5
+G21
+G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+%wait

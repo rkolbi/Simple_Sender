@@ -678,6 +678,8 @@ class GrblWorker:
         self._reset_stream_buffer()
         self._clear_outgoing()
         try:
+            self.ui_q.put(("ready", False))
+            self.ui_q.put(("stream_state", "stopped", reason))
             self.ui_q.put(("conn", False, None))
         except Exception:
             pass
@@ -1010,6 +1012,18 @@ class GrblWorker:
             self.ui_q.put(("log_tx", line))
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
+
+    def wait_for_manual_completion(self, timeout_s: float = 30.0) -> bool:
+        """Block until manual/immediate commands finish."""
+        start = time.time()
+        while True:
+            with self._stream_lock:
+                pending = bool(self._stream_line_queue) or self._manual_pending_item is not None or bool(self._resume_preamble)
+            if not pending:
+                return True
+            if timeout_s and (time.time() - start) > timeout_s:
+                return False
+            time.sleep(0.01)
     
     def _rx_loop(self, stop_evt: threading.Event) -> None:
         """Receive thread - reads from GRBL and processes responses.

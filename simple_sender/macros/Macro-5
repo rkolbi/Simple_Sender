@@ -1,3 +1,46 @@
-Home Machine
-Runs homing cycle
-HOME
+Tool Change (Preserve Reference Tool Height)
+Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.
+
+; Keep these values aligned with Macro 1/2 so the tool sensor remains consistent; adjust SAFE_HEIGHT if clamps differ.
+%macro.state.SAFE_HEIGHT = -5
+%macro.state.PROBE_X_LOCATION = -1.5
+%macro.state.PROBE_Y_LOCATION = -1224
+%macro.state.PROBE_Z_LOCATION = -5
+%macro.state.PROBE_DISTANCE = 150
+%macro.state.PROBE_RAPID_FEEDRATE = 200
+
+%if getattr(macro.state, "TOOL_REFERENCE", None) is None:
+    %msg (Macro-5 requires TOOL_REFERENCE from Macro 1 or Macro 2.)
+    PROMPT title=MissingReference msg=Tool reference is missing; run Macro 1 or Macro 2 before Macro 5. buttons=Restart|Cancel resumelabel=Restart cancellabel=Cancel
+    %if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 1 or Macro 2 first.")
+
+%wait
+G21
+M5
+G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+%wait
+M0 (Change the tool and press Resume when done.)
+G53 Z[macro.state.PROBE_Z_LOCATION]
+G91
+G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
+G0 Z2
+G4 P0.25
+G38.2 Z-5 F40
+G4 P0.25
+G38.4 Z10 F20
+G4 P0.25
+G38.2 Z-2 F5
+G4 P0.25
+G38.4 Z10 F5
+G90
+%wait
+G10 L20 Z[macro.state.TOOL_REFERENCE]
+%wait
+G91
+G0 Z5
+G90
+G53 Z[macro.state.SAFE_HEIGHT]
+%wait
+G0 X0 Y0

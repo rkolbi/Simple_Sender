@@ -1,4 +1,12 @@
-Go to Work Zero
-Moves to WCS zero with G0
+Return to Work X & Y Zero (Safe Height)
+Raises to the safe height and then re-centers on the WCS origin without changing offsets.
+
+; SAFE_HEIGHT should match the other macros so the return path clears all fixtures.
+%macro.state.SAFE_HEIGHT = -5
+
+M5
+G21
 G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+%wait
 G0 X0 Y0

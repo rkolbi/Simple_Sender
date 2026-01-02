@@ -36,7 +36,7 @@ import traceback
 import hashlib
 import logging
 from collections import deque
-from typing import Callable
+from typing import Any, Callable
 from contextlib import contextmanager
 
 # GUI imports
@@ -126,6 +126,7 @@ def _resolve_settings_path() -> str:
     except Exception as exc:
         logger.exception("Failed to create settings directory '%s': %s", base_dir, exc)
         fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
+        self._alarm_notified = False
         try:
             os.makedirs(fallback_dir, exist_ok=True)
             base_dir = fallback_dir
@@ -163,6 +164,12 @@ class MacroExecutor:
         self._macro_lock = threading.Lock()
         self._macro_vars_lock = threading.Lock()
         self._macro_local_vars = {"app": app, "os": os}
+        self._current_macro_line: str = ""
+        self._alarm_event = threading.Event()
+        self._alarm_notified = False
+        self._current_macro_line: str = ""
+        self._alarm_notified = False
+        macro_namespace = types.SimpleNamespace(state=types.SimpleNamespace())
         self._macro_vars = {
             "prbx": 0.0,
             "prby": 0.0,
@@ -236,6 +243,7 @@ class MacroExecutor:
             "prompt_choice": "",
             "prompt_index": -1,
             "prompt_cancelled": False,
+            "macro": macro_namespace,
         }
 
     @contextmanager
@@ -255,6 +263,9 @@ class MacroExecutor:
     def run_macro(self, index: int):
         if self.grbl.is_streaming():
             messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
+            return
+        if bool(getattr(self.app, "_alarm_locked", False)):
+            messagebox.showwarning("Macro blocked", "Clear the alarm before running a macro.")
             return
         path = self.macro_path(index)
         if not path:
@@ -280,25 +291,33 @@ class MacroExecutor:
             self.app.streaming_controller.log(f"[{ts}] Macro contents:")
             for raw in lines[2:]:
                 self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
-        t = threading.Thread(target=self._run_macro_worker, args=(lines,), daemon=True)
+        t = threading.Thread(target=self._run_macro_worker, args=(lines, path), daemon=True)
         t.start()
 
-    def _run_macro_worker(self, lines: list[str]):
+    def _run_macro_worker(self, lines: list[str], path: str | None):
         start = time.perf_counter()
         executed = 0
+        self._alarm_event.clear()
+        self._alarm_notified = False
         try:
             with self._macro_vars_lock:
                 self._macro_local_vars = {"app": self.app, "os": os}
                 self._macro_vars["app"] = self.app
                 self._macro_vars["os"] = os
-            for raw in lines[2:]:
-                line = raw.strip()
+            for idx in range(2, len(lines)):
+                raw = lines[idx]
+                raw_line = raw.rstrip("\r\n")
+                line = raw_line.strip()
+                self._current_macro_line = raw_line
+                if self._alarm_event.is_set():
+                    break
                 if not line:
                     continue
                 executed += 1
-                compiled = self._bcnc_compile_line(line)
+                compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
                 if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
                     self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
+                    self._notify_macro_compile_error(path, raw_line, idx + 1, compiled[1])
                     break
                 if compiled is None:
                     continue
@@ -316,7 +335,10 @@ class MacroExecutor:
                 evaluated = self._bcnc_evaluate_line(compiled)
                 if evaluated is None:
                     continue
-                if not self._execute_bcnc_command(evaluated):
+                if not self._execute_bcnc_command(evaluated, raw_line):
+                    break
+                if getattr(self.app, "_alarm_locked", False):
+                    self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
                     break
         except Exception as exc:
             self.app._log_exception("Macro error", exc, show_dialog=True, dialog_title="Macro error")
@@ -330,35 +352,106 @@ class MacroExecutor:
                     f"[macro] Executed {executed} line(s) in {duration:.2f}s ({avg:.3f}s/line)",
                 ))
 
+    def _notify_macro_compile_error(
+        self,
+        path: str | None,
+        raw_line: str,
+        line_no: int,
+        message: str,
+    ):
+        if not message:
+            message = "Unknown compile error"
+        location = f"File: {path or 'Unknown macro file'}\nLine {line_no}: {raw_line.strip() or '<empty line>'}"
+        text = f"{message}\n\n{location}"
+        self.app._post_ui_thread(messagebox.showerror, "Macro compile error", text)
+
     def _macro_wait_for_idle(self, timeout_s: float = 30.0):
         if not self.grbl.is_connected():
             return
         start = time.time()
+        seen_busy = False
         while True:
             if not self.grbl.is_connected():
                 return
-            if not self.grbl.is_streaming() and str(self.app._machine_state_text).startswith("Idle"):
-                return
+            state = str(self.app._machine_state_text).strip()
+            is_idle = state.upper().startswith("IDLE")
+            if not self.grbl.is_streaming():
+                if not is_idle:
+                    seen_busy = True
+                elif is_idle and (seen_busy or (time.time() - start) > 0.2):
+                    return
             if timeout_s and (time.time() - start) > timeout_s:
                 self.ui_q.put(("log", "[macro] %wait timeout"))
                 return
             time.sleep(0.1)
 
-    def _parse_macro_prompt(self, line: str):
+    def notify_alarm(self, message: str | None):
+        if self._alarm_notified:
+            return
+        self._alarm_notified = True
+        snippet = self._current_macro_line.strip()
+        desc = f"[macro] Alarm during '{snippet}'" if snippet else "[macro] Alarm occurred"
+        self.ui_q.put(("log", f"{desc}: {message or 'alarm'}"))
+        self._alarm_event.set()
+
+    def clear_alarm_notification(self):
+        if self._alarm_event.is_set():
+            self._alarm_event.clear()
+        self._alarm_notified = False
+
+    PROMPT_BRACKET_PAT = re.compile(
+        r"\s*\[(?:title\([^]]*\)|btn\([^]]*\)\s*[A-Za-z0-9]?)\]\s*", re.IGNORECASE
+    )
+
+    def _parse_macro_prompt(
+        self,
+        line: str,
+        macro_vars: dict[str, Any] | None = None,
+    ):
         title = "Macro Pause"
         message = ""
         buttons: list[str] = []
         show_resume = True
         resume_label = "Resume"
         cancel_label = "Cancel"
+        custom_btns: list[tuple[str, str | None]] = []
+        button_keys: dict[str, str | None] = {}
 
-        match = re.search(r"\((.*?)\)", line)
+        fragments = []
+        bracket_matches = []
+        last = 0
+        for match in re.finditer(r"\[(.*?)\]", line):
+            bracket_text = match.group(0)
+            if self.PROMPT_BRACKET_PAT.fullmatch(bracket_text):
+                fragments.append(line[last : match.start()])
+                fragments.append(" ")
+                bracket_matches.append(match.group(1).strip())
+                last = match.end()
+            else:
+                fragments.append(line[last : match.end()])
+                last = match.end()
+        fragments.append(line[last:])
+        parsed_line = "".join(fragments)
+
+        for token in bracket_matches:
+            if not token:
+                continue
+            title_match = re.fullmatch(r"title\((.*?)\)", token, re.IGNORECASE)
+            if title_match:
+                title = title_match.group(1).strip() or title
+                continue
+            btn_match = re.fullmatch(r"btn\((.*?)\)\s*([A-Za-z0-9])?", token, re.IGNORECASE)
+            if btn_match:
+                custom_btns.append((btn_match.group(1).strip(), btn_match.group(2)))
+                continue
+
+        match = re.search(r"\((.*?)\)", parsed_line)
         if match:
             message = match.group(1).strip()
         try:
-            tokens = shlex.split(line)
+            tokens = shlex.split(parsed_line)
         except Exception:
-            tokens = line.split()
+            tokens = parsed_line.split()
         tokens = tokens[1:] if tokens else []
         msg_parts: list[str] = []
         for tok in tokens:
@@ -383,21 +476,69 @@ class MacroExecutor:
                         resume_label = val
                 elif key in ("cancel", "cancellabel"):
                     cancel_label = val
-                continue
+                    continue
             msg_parts.append(tok)
         if not message and msg_parts:
             message = " ".join(msg_parts)
         if not message:
             message = "Macro paused."
+        if macro_vars:
+            message = self._format_prompt_macros(message, macro_vars)
         extras = [b for b in buttons if b and b not in (resume_label, cancel_label)]
-        choices = []
-        if show_resume:
-            choices.append(resume_label)
-        choices.extend(extras)
+        choices: list[str] = []
+        if custom_btns:
+            for label, key in custom_btns:
+                if not label:
+                    continue
+                choices.append(label)
+                button_keys[label] = key
+        else:
+            if show_resume:
+                choices.append(resume_label)
+            choices.extend(extras)
         choices.append(cancel_label)
-        return title, message, choices, cancel_label
+        return title, message, choices, cancel_label, button_keys
 
-    def _execute_bcnc_command(self, line: str):
+    def _format_prompt_macros(self, text: str, macro_vars: dict[str, Any]) -> str:
+        def replace(match: re.Match[str]) -> str:
+            attr = match.group(1)
+            parts = attr.split(".", 1)
+            if len(parts) == 2 and parts[0] == "macro":
+                macro_ns = macro_vars.get("macro")
+                if isinstance(macro_ns, types.SimpleNamespace):
+                    value = getattr(macro_ns, parts[1], None)
+                else:
+                    value = None
+            else:
+                value = macro_vars.get(attr)
+            if value is None:
+                return ""
+            return str(value)
+
+        return re.sub(r"\[macro\.([A-Za-z_]\w*)\]", replace, text)
+
+    def notify_alarm(self, message: str | None):
+        if self._alarm_notified:
+            return
+        self._alarm_notified = True
+        snippet = self._current_macro_line.strip()
+        if snippet:
+            desc = f"[macro] Alarm during '{snippet}': {message or 'alarm'}"
+        else:
+            desc = f"[macro] Alarm triggered: {message or 'alarm'}"
+        self.ui_q.put(("log", desc))
+    def _strip_prompt_tokens(self, line: str) -> str:
+        return self.PROMPT_BRACKET_PAT.sub(" ", line).strip()
+
+    def _macro_send(self, command: str, *, wait_for_idle: bool = True):
+        self.grbl.send_immediate(command)
+        if wait_for_idle:
+            completed = self.grbl.wait_for_manual_completion()
+            if not completed:
+                self.ui_q.put(("log", "[macro] Command completion timed out"))
+            self._macro_wait_for_idle()
+
+    def _execute_bcnc_command(self, line: str, raw_line: str | None = None):
         if line is None:
             return True
         if isinstance(line, tuple):
@@ -409,7 +550,13 @@ class MacroExecutor:
         cmd = cmd_parts[0].upper()
 
         if cmd in ("M0", "M00", "PROMPT"):
-            title, message, choices, cancel_label = self._parse_macro_prompt(s)
+            prompt_source = raw_line or s
+            with self._macro_vars_lock:
+                macro_snapshot = dict(self._macro_vars)
+            title, message, choices, cancel_label, button_keys = self._parse_macro_prompt(
+                prompt_source,
+                macro_snapshot,
+            )
             result_q: queue.Queue[str] = queue.Queue()
             self.ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
             while True:
@@ -422,10 +569,20 @@ class MacroExecutor:
                         break
             if choice not in choices:
                 choice = cancel_label
+            button_key = button_keys.get(choice) if choice in button_keys else None
             with self._macro_vars_lock:
                 self._macro_vars["prompt_choice"] = choice
+                self._macro_vars["prompt_choice_key"] = button_key
+                self._macro_vars["prompt_choice_label"] = choice
                 self._macro_vars["prompt_index"] = choices.index(choice) if choice in choices else -1
                 self._macro_vars["prompt_cancelled"] = (choice == cancel_label)
+                macro_ns = self._macro_vars.get("macro")
+                if isinstance(macro_ns, types.SimpleNamespace):
+                    setattr(macro_ns, "prompt_choice", choice)
+                    setattr(macro_ns, "prompt_choice_key", button_key)
+                    setattr(macro_ns, "prompt_choice_label", choice)
+                    setattr(macro_ns, "prompt_index", self._macro_vars["prompt_index"])
+                    setattr(macro_ns, "prompt_cancelled", self._macro_vars["prompt_cancelled"])
             self.ui_q.put(("log", f"[macro] Prompt: {message} | Selected: {choice}"))
             if choice == cancel_label:
                 self.ui_q.put(("log", "[macro] Prompt canceled; macro aborted."))
@@ -433,10 +590,10 @@ class MacroExecutor:
             return True
 
         if cmd in ("ABSOLUTE", "ABS"):
-            self.grbl.send_immediate("G90")
+            self._macro_send("G90")
             return True
         if cmd in ("RELATIVE", "REL"):
-            self.grbl.send_immediate("G91")
+            self._macro_send("G91")
             return True
         if cmd == "HOME":
             self.grbl.home()
@@ -508,16 +665,16 @@ class MacroExecutor:
                 self.ui_q.put(("log", f"[macro] SAFE failed: {exc}"))
             return True
         if cmd == "SET0":
-            self.grbl.send_immediate("G92 X0 Y0 Z0")
+            self._macro_send("G92 X0 Y0 Z0")
             return True
         if cmd == "SETX" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 X{cmd_parts[1]}")
+            self._macro_send(f"G92 X{cmd_parts[1]}")
             return True
         if cmd == "SETY" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 Y{cmd_parts[1]}")
+            self._macro_send(f"G92 Y{cmd_parts[1]}")
             return True
         if cmd == "SETZ" and len(cmd_parts) > 1:
-            self.grbl.send_immediate(f"G92 Z{cmd_parts[1]}")
+            self._macro_send(f"G92 Z{cmd_parts[1]}")
             return True
         if cmd == "SET":
             parts = []
@@ -528,7 +685,7 @@ class MacroExecutor:
             if len(cmd_parts) > 3:
                 parts.append(f"Z{cmd_parts[3]}")
             if parts:
-                self.grbl.send_immediate("G92 " + " ".join(parts))
+                self._macro_send("G92 " + " ".join(parts))
             return True
 
         if s.startswith("!"):
@@ -545,23 +702,24 @@ class MacroExecutor:
             return True
 
         if s.startswith("$") or s.startswith("@") or s.startswith("{"):
-            self.grbl.send_immediate(s)
+            self._macro_send(s)
             return True
         if s.startswith("(") or MACRO_GPAT.match(s):
-            self.grbl.send_immediate(s)
+            self._macro_send(s)
             return True
-        self.grbl.send_immediate(s)
+        self._macro_send(s)
         return True
 
     def _bcnc_compile_line(self, line: str):
         line = line.strip()
         if not line:
             return None
+        # Always allow raw GRBL $-commands (including $J=...) even when macro scripting is disabled.
+        if line[0] == "$":
+            return line
         if not bool(self.app.macros_allow_python.get()):
             if line.startswith(("%", "_")) or ("[" in line) or ("]" in line) or ("=" in line):
                 return ("COMPILE_ERROR", "Macro scripting disabled in settings.")
-        if line[0] == "$":
-            return line
         line = line.replace("#", "_")
         if line[0] == "%":
             pat = MACRO_AUXPAT.match(line.strip())
@@ -671,6 +829,8 @@ class MacroExecutor:
     def _bcnc_evaluate_line(self, compiled):
         if isinstance(compiled, int):
             return None
+        if isinstance(compiled, str):
+            return compiled
         if isinstance(compiled, list):
             for i, expr in enumerate(compiled):
                 if isinstance(expr, types.CodeType):
@@ -2785,12 +2945,15 @@ class App(tk.Tk):
     HIDDEN_MPOS_BUTTON_STYLE = "SimpleSender.HiddenMpos.TButton"
     def __init__(self):
         super().__init__()
-        self.title("Simple Streamer")
+        self.title("Simple Sender")
         self.minsize(980, 620)
         self.settings_path = _resolve_settings_path()
         self.settings_dir = os.path.dirname(self.settings_path)
         self._settings_store = Settings(self.settings_path)
         self.settings = self._load_settings()
+        # Backward compat: older builds stored this as "keybindings_enabled".
+        if "keyboard_bindings_enabled" not in self.settings and "keybindings_enabled" in self.settings:
+            self.settings["keyboard_bindings_enabled"] = bool(self.settings.get("keybindings_enabled", True))
         # Migrate jog feed defaults: keep legacy jog_feed for XY, force Z to its own default when absent.
         legacy_jog_feed = self.settings.get("jog_feed")
         has_jog_xy = "jog_feed_xy" in self.settings
@@ -2809,7 +2972,7 @@ class App(tk.Tk):
         self.tooltip_enabled = tk.BooleanVar(value=self.settings.get("tooltips_enabled", True))
         self.gui_logging_enabled = tk.BooleanVar(value=self.settings.get("gui_logging_enabled", True))
         self.error_dialogs_enabled = tk.BooleanVar(value=self.settings.get("error_dialogs_enabled", True))
-        self.macros_allow_python = tk.BooleanVar(value=self.settings.get("macros_allow_python", True))
+        self.macros_allow_python = tk.BooleanVar(value=self.settings.get("macros_allow_python", False))
         self.performance_mode = tk.BooleanVar(value=self.settings.get("performance_mode", False))
         self.render3d_enabled = tk.BooleanVar(value=self.settings.get("render3d_enabled", True))
         self.all_stop_mode = tk.StringVar(value=self.settings.get("all_stop_mode", "stop_reset"))
@@ -3338,8 +3501,25 @@ class App(tk.Tk):
         self._manual_controls.append(self.btn_goto_zero)
         apply_tooltip(self.btn_goto_zero, "Rapid move to WCS X0 Y0.")
         attach_log_gcode(self.btn_goto_zero, "G0 X0 Y0")
+
+        style = ttk.Style()
+        sep_color = style.lookup("TLabelframe", "bordercolor") or style.lookup("TSeparator", "background") or "#a0a0a0"
+        bg_color = _resolve_widget_bg(dro)
+        try:
+            r1, g1, b1 = dro.winfo_rgb(sep_color)
+            r2, g2, b2 = dro.winfo_rgb(bg_color)
+            t = 0.65
+            sep_color = "#{:02x}{:02x}{:02x}".format(
+                int((r1 + (r2 - r1) * t) / 256),
+                int((g1 + (g2 - g1) * t) / 256),
+                int((b1 + (b2 - b1) * t) / 256),
+            )
+        except tk.TclError:
+            sep_color = "#dcdcdc"
+
+        tk.Frame(dro, height=1, bg=sep_color, bd=0, highlightthickness=0).pack(fill="x", pady=(8, 6))
         macro_left = ttk.Frame(dro)
-        macro_left.pack(fill="x", pady=(6, 0))
+        macro_left.pack(fill="x")
 
         # Center: Jog
         jog = ttk.Labelframe(top, text="Jog", padding=8)
@@ -5522,6 +5702,7 @@ class App(tk.Tk):
             return
         self._alarm_locked = False
         self._alarm_message = ""
+        self.macro_executor.clear_alarm_notification()
         try:
             self.btn_alarm_recover.config(state="disabled")
         except Exception:
@@ -6527,6 +6708,20 @@ class App(tk.Tk):
                 choose(cancel_label)
 
             dlg.protocol("WM_DELETE_WINDOW", on_close)
+            try:
+                dlg.update_idletasks()
+                self.update_idletasks()
+                dlg_width = dlg.winfo_reqwidth()
+                dlg_height = dlg.winfo_reqheight()
+                parent_width = max(self.winfo_width(), 1)
+                parent_height = max(self.winfo_height(), 1)
+                parent_x = self.winfo_rootx()
+                parent_y = self.winfo_rooty()
+                x = parent_x + (parent_width - dlg_width) // 2
+                y = parent_y + (parent_height - dlg_height) // 2
+                dlg.geometry(f"+{x}+{y}")
+            except Exception:
+                pass
         except Exception as exc:
             try:
                 self.streaming_controller.log(f"[macro] Prompt failed: {exc}")
@@ -7105,6 +7300,7 @@ class App(tk.Tk):
         elif kind == "alarm":
             msg = evt[1] if len(evt) > 1 else ""
             self._set_alarm_lock(True, msg)
+            self.macro_executor.notify_alarm(msg)
             self._apply_status_poll_profile()
 
         elif kind == "status":
@@ -7624,6 +7820,7 @@ class App(tk.Tk):
         pos_status_enabled = bool(self.console_positions_enabled.get())
 
         data = dict(self.settings) if isinstance(self.settings, dict) else {}
+        data.pop("keybindings_enabled", None)
         data.update({
             "last_port": self.current_port.get(),
             "unit_mode": self.unit_mode.get(),
