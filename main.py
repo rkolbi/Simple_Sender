@@ -261,6 +261,9 @@ class MacroExecutor:
         return None
 
     def run_macro(self, index: int):
+        if not self.grbl.is_connected():
+            messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
+            return
         if self.grbl.is_streaming():
             messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
             return
@@ -1339,6 +1342,8 @@ class MacroPanel:
             w.destroy()
         for w in self._right_frame.winfo_children():
             w.destroy()
+        for col in range(2):
+            self._right_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
 
         for idx in (1, 2, 3):
             path = self._macro_path(idx)
@@ -1363,7 +1368,6 @@ class MacroPanel:
             btn = ttk.Button(self._right_frame, text=name, command=lambda i=idx: self._run_macro(i))
             btn._kb_id = f"macro_{idx}"
             btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
-            self._right_frame.grid_columnconfigure(col, weight=1)
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
             self.app._manual_controls.append(btn)
@@ -1380,6 +1384,7 @@ class ToolpathPanel:
         self.app = app
         self.view: Toolpath3D | None = None
         self.tab: ttk.Frame | None = None
+        self._streaming = False
 
     def build_tab(self, notebook: ttk.Notebook):
         tab = ttk.Frame(notebook, padding=6)
@@ -1393,6 +1398,7 @@ class ToolpathPanel:
         )
         self.view.pack(fill="both", expand=True)
         self._configure_view()
+        self.view.set_streaming_mode(self._streaming)
         self.app._load_3d_view(show_status=False)
 
     def _configure_view(self):
@@ -1403,12 +1409,24 @@ class ToolpathPanel:
             feed=bool(self.app.settings.get("toolpath_show_feed", True)),
             arc=bool(self.app.settings.get("toolpath_show_arc", False)),
         )
+        self.view.set_performance_controls(
+            self.app.toolpath_performance,
+            self.app._toolpath_performance_value,
+            self.app._on_toolpath_performance_move,
+            self.app._apply_toolpath_performance,
+            self.app._on_toolpath_performance_key_release,
+        )
         self.view.set_enabled(bool(self.app.render3d_enabled.get()))
         self.view.set_lightweight_mode(bool(self.app.toolpath_lightweight.get()))
         self.view.set_draw_limits(
             self.app._toolpath_limit_value(self.app.toolpath_full_limit.get(), self.app._toolpath_full_limit_default),
             self.app._toolpath_limit_value(self.app.toolpath_interactive_limit.get(), self.app._toolpath_interactive_limit_default),
         )
+        draw_percent = getattr(self.app, "_toolpath_draw_percent", None)
+        if draw_percent is None:
+            draw_percent = self.app.settings.get("toolpath_draw_percent", 50)
+        self.view.set_draw_percent(draw_percent)
+        self.view.set_streaming_render_interval(self.app.toolpath_streaming_render_interval.get())
         self.view.set_arc_detail_override(math.radians(self.app.toolpath_arc_detail.get()))
 
     def _toolpath_perf_logger(self, label: str, duration: float):
@@ -1452,6 +1470,19 @@ class ToolpathPanel:
         if self.view:
             self.view.set_arc_detail_override(math.radians(deg))
 
+    def set_draw_percent(self, percent: int):
+        if self.view:
+            self.view.set_draw_percent(percent)
+
+    def set_streaming_render_interval(self, interval: float):
+        if self.view:
+            self.view.set_streaming_render_interval(interval)
+
+    def set_streaming(self, streaming: bool):
+        self._streaming = bool(streaming)
+        if self.view:
+            self.view.set_streaming_mode(self._streaming)
+
     def reparse_lines(self, lines: list[str]):
         if self.view:
             self.view.set_gcode_async(lines)
@@ -1468,6 +1499,11 @@ class ToolpathPanel:
     def apply_view_state(self, state):
         if self.view and state:
             self.view.apply_view(state)
+
+    def get_draw_percent(self):
+        if self.view:
+            return self.view.get_draw_percent()
+        return getattr(self.app, "_toolpath_draw_percent", 50)
 
     def get_display_options(self):
         if self.view:
@@ -2003,12 +2039,19 @@ class Toolpath3D(ttk.Frame):
         self.show_rapid = tk.BooleanVar(value=False)
         self.show_feed = tk.BooleanVar(value=True)
         self.show_arc = tk.BooleanVar(value=False)
+        self._draw_percent_default = 50
+        self._draw_percent = self._draw_percent_default
+        self._draw_percent_text = tk.StringVar(value=f"{self._draw_percent}%")
 
         self.on_save_view = on_save_view
         self.on_load_view = on_load_view
 
         legend = ttk.Frame(self)
         legend.pack(side="top", fill="x")
+        self._legend_frame = legend
+        self._perf_frame = None
+        self._perf_scale = None
+        self._perf_value_label = None
         self._legend_label(legend, "#8a8a8a", "Rapid", self.show_rapid)
         self._legend_label(legend, "#2c6dd2", "Feed", self.show_feed)
         self._legend_label(legend, "#2aa876", "Arc", self.show_arc)
@@ -2053,6 +2096,7 @@ class Toolpath3D(ttk.Frame):
         self._parse_token = 0
         self._render_pending = False
         self._render_interval = 0.1
+        self._streaming_render_interval = 0.25
         self._last_render_ts = 0.0
         self._visible = True
         self._colors = {
@@ -2085,12 +2129,55 @@ class Toolpath3D(ttk.Frame):
         self._cached_projection_metrics = None
         self._perf_callback = perf_callback
         self._perf_threshold = 0.05
+        self._last_gcode_lines = None
+        self._full_parse_skipped = False
+        self._streaming_mode = False
+        self._streaming_prev_render_interval = None
+        self._deferred_full_parse = False
 
     def _legend_label(self, parent, color, text, var):
         swatch = tk.Label(parent, width=2, background=color)
         swatch.pack(side="left", padx=(0, 4), pady=(2, 2))
         chk = ttk.Checkbutton(parent, text=text, variable=var, command=self._schedule_render)
         chk.pack(side="left", padx=(0, 10))
+
+    def set_performance_controls(
+        self,
+        perf_var,
+        perf_value_var,
+        on_move=None,
+        on_commit=None,
+        on_key_release=None,
+    ):
+        if self._perf_frame is None:
+            frame = ttk.Frame(self._legend_frame)
+            frame.pack(side="left", padx=(8, 0))
+            ttk.Label(frame, text="3D Performance").pack(side="left")
+            ttk.Label(frame, text="Min").pack(side="left", padx=(6, 2))
+            scale = ttk.Scale(
+                frame,
+                from_=0,
+                to=100,
+                orient="horizontal",
+                length=140,
+                variable=perf_var,
+                command=on_move,
+            )
+            scale.pack(side="left", padx=(4, 4))
+            ttk.Label(frame, text="Max").pack(side="left", padx=(2, 6))
+            if on_commit:
+                scale.bind("<ButtonRelease-1>", on_commit)
+            if on_key_release:
+                scale.bind("<KeyRelease>", on_key_release)
+            value_label = ttk.Label(frame, textvariable=perf_value_var, width=4)
+            value_label.pack(side="left")
+            apply_tooltip(scale, "Adjust 3D preview quality vs speed.")
+            self._perf_frame = frame
+            self._perf_scale = scale
+            self._perf_value_label = value_label
+        else:
+            self._perf_scale.configure(variable=perf_var, command=on_move)
+            self._perf_value_label.configure(textvariable=perf_value_var)
 
     def _report_perf(self, label: str, duration: float):
         if not self._perf_callback:
@@ -2107,15 +2194,78 @@ class Toolpath3D(ttk.Frame):
         self._cached_projection = None
         self._cached_projection_metrics = None
 
+    def _clamp_draw_percent(self, value) -> int:
+        try:
+            percent = int(round(float(value)))
+        except Exception:
+            percent = self._draw_percent_default
+        return max(0, min(100, percent))
+
+    def _apply_draw_percent(self, percent: int, update_scale: bool):
+        if percent == self._draw_percent:
+            return
+        self._draw_percent = percent
+        self._draw_percent_text.set(f"{percent}%")
+        if update_scale:
+            scale = getattr(self, "draw_percent_scale", None)
+            if scale is not None:
+                try:
+                    scale.set(percent)
+                except Exception:
+                    pass
+        self._invalidate_render_cache()
+        self._schedule_render()
+        if (
+            percent >= 100
+            and self._full_parse_skipped
+            and self._last_gcode_lines
+            and len(self._last_gcode_lines) > self._full_parse_limit
+        ):
+            if self._streaming_mode:
+                self._deferred_full_parse = True
+            else:
+                self.set_gcode_async(self._last_gcode_lines)
+
+    def _draw_target(self, total_segments: int, max_draw: int | None) -> int:
+        if total_segments <= 0:
+            return 0
+        if self._draw_percent <= 0:
+            return 0
+        if self._draw_percent >= 100:
+            return total_segments
+        target = int(round(total_segments * (self._draw_percent / 100.0)))
+        if target <= 0:
+            target = 1
+        if max_draw:
+            target = min(target, max_draw)
+        return min(target, total_segments)
+
+    def _sample_segments(self, segments, target: int):
+        total_segments = len(segments)
+        if target <= 0 or total_segments <= 0:
+            return []
+        if target >= total_segments:
+            return segments
+        step = total_segments / float(target)
+        sampled = []
+        pos = 0.0
+        for _ in range(target):
+            idx = int(pos)
+            if idx >= total_segments:
+                idx = total_segments - 1
+            sampled.append(segments[idx])
+            pos += step
+        return sampled
+
     def _build_projection_cache(self, filters: tuple[bool, bool, bool], max_draw: int | None):
         start = time.perf_counter()
         try:
             segments = self.segments
             total_segments = len(segments)
-            draw_segments = segments
-            if max_draw and total_segments > max_draw:
-                step = max(2, total_segments // max_draw)
-                draw_segments = segments[::step]
+            target = self._draw_target(total_segments, max_draw)
+            if target <= 0:
+                return [], None, 0, total_segments
+            draw_segments = self._sample_segments(segments, target)
             proj: list[tuple[float, float, float, float, str]] = []
             minx = miny = float("inf")
             maxx = maxy = float("-inf")
@@ -2179,8 +2329,14 @@ class Toolpath3D(ttk.Frame):
     def set_gcode_async(self, lines: list[str]):
         self._parse_token += 1
         token = self._parse_token
+        self._last_gcode_lines = lines
         lines_hash = _hash_lines(lines)
-        if lines_hash and (lines_hash == self._last_lines_hash) and self._last_segments is not None:
+        if (
+            lines_hash
+            and (lines_hash == self._last_lines_hash)
+            and self._last_segments is not None
+            and not self._full_parse_skipped
+        ):
             self.segments = self._last_segments
             self.bounds = self._last_bounds
             self._schedule_render()
@@ -2203,9 +2359,14 @@ class Toolpath3D(ttk.Frame):
         if not lines:
             self.segments = []
             self.bounds = None
+            self._full_parse_skipped = False
             self._schedule_render()
             return
-        preview_target = self._lightweight_preview_target if self._lightweight_mode else self._preview_target
+        preview_target = (
+            self._lightweight_preview_target
+            if (self._lightweight_mode or self._streaming_mode)
+            else self._preview_target
+        )
         quick_lines = lines
         if len(lines) > preview_target:
             step = max(2, len(lines) // preview_target)
@@ -2218,7 +2379,16 @@ class Toolpath3D(ttk.Frame):
             self._cache_parse_results(lines_hash, self.segments, self.bounds)
         self._schedule_render()
         if len(lines) > self._full_parse_limit:
+            allow_full_parse = self._draw_percent >= 100 or self._max_draw_segments is None
+            if self._streaming_mode:
+                allow_full_parse = False
+            if not allow_full_parse:
+                self._full_parse_skipped = True
+                return
+        if self._streaming_mode:
+            self._full_parse_skipped = quick_lines is not lines
             return
+        self._full_parse_skipped = False
         def worker():
             segs, bnds = self._parse_gcode(lines, token)
             if segs is None:
@@ -2262,6 +2432,7 @@ class Toolpath3D(ttk.Frame):
         if not self.enabled:
             self._pending_lines = None
             return
+        self._full_parse_skipped = False
         self._cache_parse_results(parse_hash, segments, bounds)
         self.segments = segments
         self.bounds = bounds
@@ -2429,12 +2600,55 @@ class Toolpath3D(ttk.Frame):
         self._invalidate_render_cache()
         self._schedule_render()
 
+    def set_draw_percent(self, percent):
+        percent = self._clamp_draw_percent(percent)
+        self._apply_draw_percent(percent, update_scale=True)
+
+    def get_draw_percent(self) -> int:
+        return int(self._draw_percent)
+
     def set_arc_detail_override(self, step_rad: float | None):
         if step_rad is None or step_rad <= 0:
             self._arc_step_override_rad = None
         else:
             self._arc_step_override_rad = float(step_rad)
         self._schedule_render()
+
+    def set_streaming_render_interval(self, interval: float):
+        try:
+            value = float(interval)
+        except Exception:
+            return
+        value = max(0.05, min(2.0, value))
+        self._streaming_render_interval = value
+        if self._streaming_mode:
+            base_interval = (
+                self._streaming_prev_render_interval
+                if self._streaming_prev_render_interval is not None
+                else self._render_interval
+            )
+            self._render_interval = max(base_interval, self._streaming_render_interval)
+            self._schedule_render()
+
+    def set_streaming_mode(self, streaming: bool):
+        streaming = bool(streaming)
+        if self._streaming_mode == streaming:
+            return
+        self._streaming_mode = streaming
+        if streaming:
+            self._streaming_prev_render_interval = self._render_interval
+            self._render_interval = max(self._render_interval, self._streaming_render_interval)
+        else:
+            if self._streaming_prev_render_interval is not None:
+                self._render_interval = self._streaming_prev_render_interval
+            if self._deferred_full_parse and self._last_gcode_lines:
+                self._deferred_full_parse = False
+                self.set_gcode_async(self._last_gcode_lines)
+        self._schedule_render()
+
+    def _on_draw_percent_slider(self, value):
+        percent = self._clamp_draw_percent(value)
+        self._apply_draw_percent(percent, update_scale=False)
 
     def _enter_fast_mode(self):
         self._fast_mode = True
@@ -2541,9 +2755,29 @@ class Toolpath3D(ttk.Frame):
                 max_draw = min(max_draw, self._interactive_max_draw_segments)
             else:
                 max_draw = self._interactive_max_draw_segments
-        if max_draw and total_segments > max_draw:
-            step = max(2, total_segments // max_draw)
-            segments = segments[::step]
+        if self._streaming_mode and self._interactive_max_draw_segments:
+            if max_draw:
+                max_draw = min(max_draw, self._interactive_max_draw_segments)
+            else:
+                max_draw = self._interactive_max_draw_segments
+        target = self._draw_target(total_segments, max_draw)
+        if target <= 0:
+            self.canvas.create_text(
+                w / 2,
+                h / 2 - 10,
+                text="Draw percent set to 0%",
+                fill="#666666",
+            )
+            if self._job_name:
+                self.canvas.create_text(
+                    w / 2,
+                    h / 2 + 10,
+                    text=f"Last job: {self._job_name}",
+                    fill="#666666",
+                )
+            return
+        if target < total_segments:
+            segments = self._sample_segments(segments, target)
         proj = []
         minx = miny = float("inf")
         maxx = maxy = float("-inf")
@@ -2603,6 +2837,7 @@ class Toolpath3D(ttk.Frame):
 
         eps = 1e-6
         for px1, py1, px2, py2, color in proj:
+            color_hex = self._colors.get(color, "#2c6dd2")
             x1, y1 = to_canvas(px1, py1)
             x2, y2 = to_canvas(px2, py2)
             continuous = (
@@ -2659,6 +2894,7 @@ class Toolpath3D(ttk.Frame):
         overlay = "\n".join(
             [
                 f"Segments: {drawn:,}/{total_segments:,}",
+                f"Draw: {self._draw_percent}%",
                 f"View: Az {az_deg:.0f}° El {el_deg:.0f}° Zoom {self.zoom:.2f}x",
                 f"Filters: {filters_text}",
                 f"Mode: {mode_text}",
@@ -3003,6 +3239,22 @@ class App(tk.Tk):
             padding=(8, 4),
             font=self.icon_button_font,
         )
+        dro_size = default_font.cget("size")
+        if not isinstance(dro_size, int):
+            try:
+                dro_size = int(dro_size)
+            except Exception:
+                dro_size = 10
+        self.dro_value_font = tkfont.Font(
+            family="Courier New",
+            size=dro_size * 2,
+            weight="bold",
+        )
+        self.console_font = tkfont.Font(
+            family="Consolas",
+            size=default_font.cget("size"),
+            weight=default_font.cget("weight"),
+        )
         self.available_themes = list(self.style.theme_names())
         theme_choice = self.settings.get("theme", self.style.theme_use())
         self.selected_theme = tk.StringVar(value=theme_choice)
@@ -3015,9 +3267,13 @@ class App(tk.Tk):
         )
         self._toolpath_full_limit_default = 40000
         self._toolpath_interactive_limit_default = 5000
-        self._toolpath_arc_detail_min = 2.0
+        self._toolpath_full_limit_min = 5000
+        self._toolpath_interactive_limit_min = 1000
+        self._toolpath_performance_default = 50.0
+        self._toolpath_arc_detail_min = 1.0
         self._toolpath_arc_detail_max = 45.0
         self._toolpath_arc_detail_default = math.degrees(math.pi / 18)
+        self._toolpath_streaming_render_interval_default = 0.25
         try:
             saved_full = int(self.settings.get("toolpath_full_limit", self._toolpath_full_limit_default))
         except Exception:
@@ -3037,7 +3293,62 @@ class App(tk.Tk):
         self.toolpath_interactive_limit = tk.StringVar(value=str(saved_interactive))
         self.toolpath_arc_detail = tk.DoubleVar(value=saved_arc)
         self.toolpath_lightweight = tk.BooleanVar(value=self.settings.get("toolpath_lightweight", False))
+        try:
+            streaming_interval = float(
+                self.settings.get(
+                    "toolpath_streaming_render_interval",
+                    self._toolpath_streaming_render_interval_default,
+                )
+            )
+        except Exception:
+            streaming_interval = self._toolpath_streaming_render_interval_default
+        streaming_interval = max(0.05, min(2.0, streaming_interval))
+        self.toolpath_streaming_render_interval = tk.DoubleVar(value=streaming_interval)
         self._toolpath_arc_detail_value = tk.StringVar(value=f"{saved_arc:.1f}°")
+        saved_draw_percent = self.settings.get("toolpath_draw_percent", None)
+        saved_perf = self.settings.get("toolpath_performance", None)
+        if saved_perf is None:
+            perf_candidates = []
+            if saved_draw_percent is not None:
+                try:
+                    perf_candidates.append(float(saved_draw_percent))
+                except Exception:
+                    pass
+            if saved_full == 0 or saved_interactive == 0:
+                perf_candidates.append(100.0)
+            else:
+                denom_full = self._toolpath_full_limit_default - self._toolpath_full_limit_min
+                if denom_full > 0:
+                    perf_candidates.append(
+                        (saved_full - self._toolpath_full_limit_min) / denom_full * 100.0
+                    )
+                denom_interactive = (
+                    self._toolpath_interactive_limit_default - self._toolpath_interactive_limit_min
+                )
+                if denom_interactive > 0:
+                    perf_candidates.append(
+                        (saved_interactive - self._toolpath_interactive_limit_min)
+                        / denom_interactive * 100.0
+                    )
+            denom_arc = self._toolpath_arc_detail_max - self._toolpath_arc_detail_min
+            if denom_arc > 0:
+                perf_candidates.append(
+                    (self._toolpath_arc_detail_max - saved_arc) / denom_arc * 100.0
+                )
+            if perf_candidates:
+                saved_perf = sum(perf_candidates) / len(perf_candidates)
+            else:
+                saved_perf = self._toolpath_performance_default
+        perf = self._clamp_toolpath_performance(saved_perf)
+        self.toolpath_performance = tk.DoubleVar(value=perf)
+        self._toolpath_performance_value = tk.StringVar(value=f"{perf:.0f}%")
+        full_limit, interactive_limit, arc_detail, lightweight, draw_percent = self._toolpath_perf_values(perf)
+        self._toolpath_draw_percent = draw_percent
+        self.toolpath_full_limit = tk.StringVar(value=str(full_limit))
+        self.toolpath_interactive_limit = tk.StringVar(value=str(interactive_limit))
+        self.toolpath_arc_detail = tk.DoubleVar(value=arc_detail)
+        self.toolpath_lightweight = tk.BooleanVar(value=lightweight)
+        self._toolpath_arc_detail_value = tk.StringVar(value=f"{arc_detail:.1f}°")
         self._toolpath_arc_detail_reparse_after_id = None
         self._toolpath_arc_detail_reparse_delay = 300
         raw_bindings = self.settings.get("key_bindings", {})
@@ -3150,6 +3461,9 @@ class App(tk.Tk):
         self._gcode_load_token = 0
         self.gcode_stats_var = tk.StringVar(value="No file loaded")
         self.gcode_load_var = tk.StringVar(value="")
+        self._gcode_load_popup = None
+        self._gcode_load_popup_label = None
+        self._gcode_load_popup_bar = None
         self._rapid_rates = None
         self._rapid_rates_source = None
         self.fallback_rapid_rate = tk.StringVar(value=self.settings.get("fallback_rapid_rate", ""))
@@ -3165,6 +3479,7 @@ class App(tk.Tk):
         self._stream_start_ts = None
         self._stream_pause_total = 0.0
         self._stream_paused_at = None
+        self._toolpath_reparse_deferred = False
         self._job_started_at: datetime | None = None
         self._job_completion_notified = False
         self._grbl_ready = False
@@ -3178,6 +3493,7 @@ class App(tk.Tk):
         self.throughput_var = tk.StringVar(value="TX: 0 B/s")
         self.buffer_fill_pct = tk.IntVar(value=0)
         self._manual_controls = []
+        self._offline_controls = set()
         self._override_controls = []
         self._xy_step_buttons = []
         self._z_step_buttons = []
@@ -3214,6 +3530,7 @@ class App(tk.Tk):
         # Top + main layout
         self._build_toolbar()
         self._build_main()
+        self._set_manual_controls_enabled(False)
 
         self.after(50, self._drain_ui_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -3274,6 +3591,7 @@ class App(tk.Tk):
         set_kb_id(self.btn_open, "gcode_open")
         self.btn_open.pack(side="left")
         self._manual_controls.append(self.btn_open)
+        self._offline_controls.add(self.btn_open)
         apply_tooltip(self.btn_open, "Load a G-code job for streaming (read-only).")
         self.btn_clear = ttk.Button(
             bar,
@@ -3284,6 +3602,7 @@ class App(tk.Tk):
         set_kb_id(self.btn_clear, "gcode_clear")
         self.btn_clear.pack(side="left", padx=(6, 0))
         self._manual_controls.append(self.btn_clear)
+        self._offline_controls.add(self.btn_clear)
         apply_tooltip(self.btn_clear, "Unload the current job and reset the viewer.")
         self.btn_run = ttk.Button(
             bar,
@@ -3343,7 +3662,9 @@ class App(tk.Tk):
             bar,
             text=_icon_label(ICON_UNLOCK, "Unlock"),
             style=self.icon_button_style,
-            command=lambda: self._confirm_and_run("Unlock ($X)", self.grbl.unlock),
+            command=lambda: self._confirm_and_run(
+                "Unlock ($X)", lambda: self._run_if_connected(self.grbl.unlock)
+            ),
             state="disabled",
         )
         set_kb_id(self.btn_unlock_top, "unlock_top")
@@ -3365,17 +3686,6 @@ class App(tk.Tk):
 
         self._update_resume_button_visibility()
         self._update_recover_button_visibility()
-
-        self.btn_unit_toggle = ttk.Button(
-            bar,
-            text=self._unit_toggle_label(),
-            style=self.icon_button_style,
-            command=self._toggle_unit_mode,
-        )
-        set_kb_id(self.btn_unit_toggle, "unit_toggle")
-        self.btn_unit_toggle.pack(side="left", padx=(0, 0))
-        self._manual_controls.append(self.btn_unit_toggle)
-        apply_tooltip(self.btn_unit_toggle, "Toggle units between mm and inch.")
 
         # right side status
         self.machine_state_label = ttk.Label(bar, textvariable=self.machine_state)
@@ -3432,29 +3742,29 @@ class App(tk.Tk):
             mpos,
             text=_icon_label(ICON_HOME, "Home"),
             style=self.icon_button_style,
-            command=self.grbl.home,
+            command=lambda: self._run_if_connected(self.grbl.home),
         )
         set_kb_id(self.btn_home_mpos, "home")
         self.btn_home_mpos.pack(fill="x", pady=(6, 0))
         self._manual_controls.append(self.btn_home_mpos)
         apply_tooltip(self.btn_home_mpos, "Run the homing cycle.")
         attach_log_gcode(self.btn_home_mpos, "$H")
-        self.btn_unlock_mpos = ttk.Button(
+        self.btn_unit_toggle = ttk.Button(
             mpos,
-            text=_icon_label(ICON_UNLOCK, "Unlock"),
+            text=self._unit_toggle_label(),
             style=self.icon_button_style,
-            command=self.grbl.unlock,
+            command=self._toggle_unit_mode,
         )
-        set_kb_id(self.btn_unlock_mpos, "unlock")
-        self.btn_unlock_mpos.pack(fill="x", pady=(6, 0))
-        self._manual_controls.append(self.btn_unlock_mpos)
-        apply_tooltip(self.btn_unlock_mpos, "Clear alarm lock ($X).")
-        attach_log_gcode(self.btn_unlock_mpos, "$X")
+        set_kb_id(self.btn_unit_toggle, "unit_toggle")
+        self.btn_unit_toggle.pack(fill="x", pady=(6, 0))
+        self._manual_controls.append(self.btn_unit_toggle)
+        self._offline_controls.add(self.btn_unit_toggle)
+        apply_tooltip(self.btn_unit_toggle, "Toggle units between mm and inch.")
         self.btn_hold_mpos = ttk.Button(
             mpos,
             text=_icon_label(ICON_HOLD, "Hold"),
             style=self.icon_button_style,
-            command=self.grbl.hold,
+            command=lambda: self._run_if_connected(self.grbl.hold),
         )
         set_kb_id(self.btn_hold_mpos, "feed_hold")
         self.btn_hold_mpos.pack(fill="x", pady=(6, 0))
@@ -3465,7 +3775,7 @@ class App(tk.Tk):
             mpos,
             text=_icon_label(ICON_RESUME, "Resume"),
             style=self.icon_button_style,
-            command=self.grbl.resume,
+            command=lambda: self._run_if_connected(self.grbl.resume),
         )
         set_kb_id(self.btn_resume_mpos, "feed_resume")
         self.btn_resume_mpos.pack(fill="x", pady=(6, 0))
@@ -3587,7 +3897,8 @@ class App(tk.Tk):
         attach_log_gcode(self.btn_jog_cancel, "RT 0x85")
 
         sep = ttk.Separator(pad, orient="vertical", style="JogSeparator.TSeparator")
-        sep.grid(row=0, column=4, rowspan=5, sticky="ns", padx=(6, 6))
+        # Align the jog tab separator with the macro panel spacing by nudging it right.
+        sep.grid(row=0, column=4, rowspan=5, sticky="ns", padx=(10, 2))
 
         self.btn_jog_z_plus = ttk.Button(pad, text="Z+", width=6, command=lambda: j(0, 0, self.step_z.get()))
         set_kb_id(self.btn_jog_z_plus, "jog_z_plus")
@@ -3600,6 +3911,11 @@ class App(tk.Tk):
         attach_log_gcode(self.btn_jog_z_plus, lambda: jog_cmd(0, 0, self.step_z.get()))
         attach_log_gcode(self.btn_jog_z_minus, lambda: jog_cmd(0, 0, -self.step_z.get()))
 
+        all_stop_size = 60
+        self._all_stop_offset_px = int(self.winfo_fpixels("0.7i"))
+        self._all_stop_slot = ttk.Frame(pad, width=all_stop_size, height=all_stop_size)
+        self._all_stop_slot.grid(row=0, column=6, rowspan=3, padx=(6, 0), pady=2, sticky="ns")
+        self._all_stop_slot.grid_propagate(False)
         self.btn_all_stop = StopSignButton(
             pad,
             text="ALL\nSTOP",
@@ -3607,11 +3923,13 @@ class App(tk.Tk):
             text_color="#ffffff",
             command=self._all_stop_action,
             bg=pad_bg,
+            size=all_stop_size,
         )
         set_kb_id(self.btn_all_stop, "all_stop")
-        self.btn_all_stop.grid(row=0, column=6, rowspan=3, padx=(6, 0), pady=2, sticky="ns")
         apply_tooltip(self.btn_all_stop, "Immediate stop (behavior from App Settings).")
         attach_log_gcode(self.btn_all_stop, self._all_stop_gcode_label)
+        pad.bind("<Configure>", self._position_all_stop_offset, add="+")
+        self.after(0, self._position_all_stop_offset)
 
         self._manual_controls.extend([
             self.btn_jog_y_plus,
@@ -3684,9 +4002,6 @@ class App(tk.Tk):
         stats_row.pack(fill="x", pady=(0, 6))
         self.gcode_stats_label = ttk.Label(stats_row, textvariable=self.gcode_stats_var, anchor="w")
         self.gcode_stats_label.pack(side="left", fill="x", expand=True)
-        self.gcode_load_bar = ttk.Progressbar(stats_row, length=140, mode="determinate")
-        self.gcode_load_label = ttk.Label(stats_row, textvariable=self.gcode_load_var, anchor="e")
-        self._hide_gcode_loading()
         self.gview = GcodeViewer(gtab)  # Using refactored GcodeViewer
         self.gview.pack(fill="both", expand=True)
 
@@ -3694,7 +4009,7 @@ class App(tk.Tk):
         ctab = ttk.Frame(nb, padding=6)
         nb.add(ctab, text="Console")
 
-        self.console = tk.Text(ctab, wrap="word", height=12, state="disabled")
+        self.console = tk.Text(ctab, wrap="word", height=12, state="disabled", font=self.console_font)
         csb = ttk.Scrollbar(ctab, orient="vertical", command=self.console.yview)
         self.console.configure(yscrollcommand=csb.set)
         self.console.grid(row=0, column=0, sticky="nsew")
@@ -4096,66 +4411,6 @@ class App(tk.Tk):
         )
         self.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        toolpath_frame = ttk.LabelFrame(self._app_settings_inner, text="3D view quality", padding=8)
-        toolpath_frame.grid(row=10, column=0, sticky="ew", pady=(0, 8))
-        toolpath_frame.grid_columnconfigure(1, weight=1)
-        ttk.Label(toolpath_frame, text="Full draw limit (segments, 0=unlimited)").grid(
-            row=0, column=0, sticky="w", padx=(0, 10), pady=4
-        )
-        full_limit_entry = ttk.Entry(toolpath_frame, textvariable=self.toolpath_full_limit, width=14)
-        full_limit_entry.grid(row=0, column=1, sticky="w", pady=4)
-        full_limit_entry.bind("<Return>", self._apply_toolpath_draw_limits)
-        full_limit_entry.bind("<FocusOut>", self._apply_toolpath_draw_limits)
-        apply_tooltip(
-            full_limit_entry,
-            "Sets the maximum number of segments drawn when the view is static (0 = unlimited).",
-        )
-        ttk.Label(toolpath_frame, text="Interactive draw limit (segments, 0=unlimited)").grid(
-            row=1, column=0, sticky="w", padx=(0, 10), pady=4
-        )
-        interactive_limit_entry = ttk.Entry(
-            toolpath_frame, textvariable=self.toolpath_interactive_limit, width=14
-        )
-        interactive_limit_entry.grid(row=1, column=1, sticky="w", pady=4)
-        interactive_limit_entry.bind("<Return>", self._apply_toolpath_draw_limits)
-        interactive_limit_entry.bind("<FocusOut>", self._apply_toolpath_draw_limits)
-        apply_tooltip(
-            interactive_limit_entry,
-            "Limits segment count during drags/pans (0 = unlimited, but may be slower).",
-        )
-        ttk.Label(toolpath_frame, text="Arc detail (degrees per step)").grid(
-            row=2, column=0, sticky="w", padx=(0, 10), pady=4
-        )
-        arc_scale = ttk.Scale(
-            toolpath_frame,
-            from_=self._toolpath_arc_detail_min,
-            to=self._toolpath_arc_detail_max,
-            orient="horizontal",
-            variable=self.toolpath_arc_detail,
-            command=self._on_arc_detail_scale_move,
-        )
-        arc_scale.grid(row=2, column=1, sticky="ew", pady=4)
-        arc_scale.bind("<ButtonRelease-1>", self._apply_toolpath_arc_detail)
-        arc_scale.bind("<KeyRelease>", self._on_arc_detail_scale_key_release)
-        ttk.Label(toolpath_frame, textvariable=self._toolpath_arc_detail_value).grid(
-            row=2, column=2, sticky="w", padx=(8, 0)
-        )
-        apply_tooltip(
-            arc_scale,
-            "Use smaller degrees when you want smoother arcs (more segments); larger values are faster.",
-        )
-        lightweight_chk = ttk.Checkbutton(
-            toolpath_frame,
-            text="Use lightweight preview (faster)",
-            variable=self.toolpath_lightweight,
-            command=self._on_toolpath_lightweight_change,
-        )
-        lightweight_chk.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        apply_tooltip(
-            lightweight_chk,
-            "Render a smaller preview (fewer segments) to keep the view responsive on weaker hardware.",
-        )
-
         tw_frame = ttk.LabelFrame(self._app_settings_inner, text="Safety Aids", padding=8)
         tw_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
         self.training_wheels_check = ttk.Checkbutton(
@@ -4208,7 +4463,7 @@ class App(tk.Tk):
             textvariable=self.profile_units_var,
             state="readonly",
             values=("mm", "inch"),
-            width=8,
+            width=7,
         )
         self.profile_units_combo.grid(row=1, column=3, sticky="w", pady=4)
         self.profile_units_combo.bind("<<ComboboxSelected>>", self._on_profile_units_change)
@@ -4297,6 +4552,32 @@ class App(tk.Tk):
             "Record GUI button actions in the console log when enabled.",
         )
 
+        toolpath_settings = ttk.LabelFrame(self._app_settings_inner, text="3D View", padding=8)
+        toolpath_settings.grid(row=14, column=0, sticky="ew", pady=(8, 0))
+        toolpath_settings.grid_columnconfigure(1, weight=1)
+        ttk.Label(toolpath_settings, text="Streaming refresh (sec)").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        self.toolpath_streaming_interval_entry = ttk.Entry(
+            toolpath_settings,
+            textvariable=self.toolpath_streaming_render_interval,
+            width=10,
+        )
+        self.toolpath_streaming_interval_entry.grid(row=0, column=1, sticky="w", pady=4)
+        self.toolpath_streaming_interval_entry.bind(
+            "<Return>", self._apply_toolpath_streaming_render_interval
+        )
+        self.toolpath_streaming_interval_entry.bind(
+            "<FocusOut>", self._apply_toolpath_streaming_render_interval
+        )
+        ttk.Label(toolpath_settings, text="(0.05 - 2.0)").grid(
+            row=0, column=2, sticky="w", padx=(6, 0), pady=4
+        )
+        apply_tooltip(
+            self.toolpath_streaming_interval_entry,
+            "Minimum time between 3D redraws while streaming.",
+        )
+
         # 3D tab
         self.toolpath_panel.build_tab(nb)
 
@@ -4379,6 +4660,31 @@ class App(tk.Tk):
         self._on_error_dialogs_enabled_change()
         self._state_default_fg = self.status.cget("foreground") or "#000000"
         self._apply_state_fg(None)
+
+    def _position_all_stop_offset(self, event=None):
+        slot = getattr(self, "_all_stop_slot", None)
+        btn = getattr(self, "btn_all_stop", None)
+        if not slot or not btn:
+            return
+        if not slot.winfo_ismapped():
+            self.after(50, self._position_all_stop_offset)
+            return
+        offset = getattr(self, "_all_stop_offset_px", None)
+        if offset is None:
+            try:
+                offset = int(self.winfo_fpixels("0.7i"))
+            except tk.TclError:
+                offset = 96
+            self._all_stop_offset_px = offset
+        x = slot.winfo_x() - offset
+        if x < 0:
+            x = 0
+        y = slot.winfo_y()
+        btn.place(in_=slot.master, x=x, y=y)
+        try:
+            btn.tk.call("raise", btn._w)
+        except tk.TclError:
+            pass
 
     def _build_overdrive_tab(self, parent):
         container = ttk.Frame(parent)
@@ -4598,8 +4904,13 @@ class App(tk.Tk):
     def _dro_value_row(self, parent, axis, var):
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=2)
-        ttk.Label(row, text=f"{axis}:", width=3).pack(side="left")
-        ttk.Label(row, textvariable=var, width=10).pack(side="left")
+        ttk.Label(row, text=f"{axis}:", width=3).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            row,
+            textvariable=var,
+            width=7,
+            font=self.dro_value_font,
+        ).grid(row=0, column=1, sticky="w")
         # Keep a hidden button area so the MPos rows mirror the WPos layout.
         btn = ttk.Button(
             row,
@@ -4609,15 +4920,20 @@ class App(tk.Tk):
             width=9,
             takefocus=False,
         )
-        btn.pack(side="right")
+        btn.grid(row=0, column=2, sticky="w")
 
     def _dro_row(self, parent, axis, var, zero_cmd):
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=2)
-        ttk.Label(row, text=f"{axis}:", width=3).pack(side="left")
-        ttk.Label(row, textvariable=var, width=10).pack(side="left")
+        ttk.Label(row, text=f"{axis}:", width=3).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            row,
+            textvariable=var,
+            width=8,
+            font=self.dro_value_font,
+        ).grid(row=0, column=1, sticky="w")
         btn = ttk.Button(row, text=f"Zero {axis}", command=zero_cmd)
-        btn.pack(side="right")
+        btn.grid(row=0, column=2, sticky="w")
         set_kb_id(btn, f"zero_{axis.lower()}")
         return btn
 
@@ -4720,26 +5036,36 @@ class App(tk.Tk):
         self._load_gcode_from_path(path)
 
     def run_job(self):
+        if not self._require_grbl_connection():
+            return
         self._reset_gcode_view_for_run()
         self._job_started_at = datetime.now()
         self._job_completion_notified = False
         self.grbl.start_stream()
 
     def pause_job(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.pause_stream()
 
     def resume_job(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.resume_stream()
 
     def stop_job(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.stop_stream()
 
     def _show_resume_dialog(self):
         if self.grbl.is_streaming():
             messagebox.showwarning("Busy", "Stop the stream before resuming from a line.")
             return
-        if not self.connected or not self._grbl_ready:
-            messagebox.showwarning("Not ready", "Connect to GRBL before resuming.")
+        if not self._require_grbl_connection():
+            return
+        if not self._grbl_ready:
+            messagebox.showwarning("Not ready", "Wait for GRBL to be ready.")
             return
         if self._alarm_locked:
             messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
@@ -4930,8 +5256,10 @@ class App(tk.Tk):
         if self.grbl.is_streaming():
             messagebox.showwarning("Busy", "Stop the stream before resuming.")
             return
-        if not self.connected or not self._grbl_ready:
-            messagebox.showwarning("Not ready", "Connect to GRBL before resuming.")
+        if not self._require_grbl_connection():
+            return
+        if not self._grbl_ready:
+            messagebox.showwarning("Not ready", "Wait for GRBL to be ready.")
             return
         if self._alarm_locked:
             messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
@@ -5078,37 +5406,75 @@ class App(tk.Tk):
         self._job_started_at = None
         self._job_completion_notified = False
 
+    def _ensure_gcode_loading_popup(self):
+        if self._gcode_load_popup is not None:
+            try:
+                if self._gcode_load_popup.winfo_exists():
+                    return
+            except Exception:
+                pass
+        popup = tk.Toplevel(self)
+        popup.title("Loading G-code")
+        popup.transient(self)
+        popup.resizable(False, False)
+        popup.protocol("WM_DELETE_WINDOW", lambda: None)
+        frame = ttk.Frame(popup, padding=12)
+        frame.pack(fill="both", expand=True)
+        label = ttk.Label(frame, textvariable=self.gcode_load_var, anchor="w")
+        label.pack(fill="x", padx=4, pady=(0, 8))
+        bar = ttk.Progressbar(frame, length=320, mode="determinate")
+        bar.pack(fill="x", padx=4)
+        self._gcode_load_popup = popup
+        self._gcode_load_popup_label = label
+        self._gcode_load_popup_bar = bar
+        popup.update_idletasks()
+        try:
+            x = self.winfo_rootx() + (self.winfo_width() // 2) - (popup.winfo_width() // 2)
+            y = self.winfo_rooty() + (self.winfo_height() // 2) - (popup.winfo_height() // 2)
+            popup.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
     def _show_gcode_loading(self):
-        if not hasattr(self, "gcode_load_bar"):
+        self._ensure_gcode_loading_popup()
+        popup = self._gcode_load_popup
+        if popup is None:
             return
-        if self.gcode_load_bar.winfo_ismapped():
-            return
-        self.gcode_load_label.pack(side="right", padx=(6, 0))
-        self.gcode_load_bar.pack(side="right")
+        try:
+            if not popup.winfo_viewable():
+                popup.deiconify()
+            popup.lift()
+        except Exception:
+            pass
 
     def _hide_gcode_loading(self):
-        if not hasattr(self, "gcode_load_bar"):
-            return
-        if self.gcode_load_bar.winfo_ismapped():
-            self.gcode_load_bar.stop()
-            self.gcode_load_bar.pack_forget()
-            self.gcode_load_label.pack_forget()
+        popup = self._gcode_load_popup
+        if popup is not None:
+            try:
+                if self._gcode_load_popup_bar is not None:
+                    self._gcode_load_popup_bar.stop()
+                popup.withdraw()
+            except Exception:
+                pass
         self.gcode_load_var.set("")
 
     def _set_gcode_loading_indeterminate(self, text: str):
         self._show_gcode_loading()
         self.gcode_load_var.set(text)
-        self.gcode_load_bar.config(mode="indeterminate")
-        self.gcode_load_bar.start(10)
+        if self._gcode_load_popup_bar is not None:
+            self._gcode_load_popup_bar.config(mode="indeterminate")
+            self._gcode_load_popup_bar.start(10)
 
     def _set_gcode_loading_progress(self, done: int, total: int, name: str = ""):
         self._show_gcode_loading()
-        self.gcode_load_bar.stop()
+        if self._gcode_load_popup_bar is not None:
+            self._gcode_load_popup_bar.stop()
         display_total = int(total)
         bar_total = max(1, display_total)
         done = max(0, min(int(done), bar_total))
         display_done = min(int(done), display_total) if display_total > 0 else 0
-        self.gcode_load_bar.config(mode="determinate", maximum=bar_total, value=done)
+        if self._gcode_load_popup_bar is not None:
+            self._gcode_load_popup_bar.config(mode="determinate", maximum=bar_total, value=done)
         if name:
             self.gcode_load_var.set(f"Loading {name}: {display_done}/{display_total}")
         else:
@@ -5121,7 +5487,7 @@ class App(tk.Tk):
         total_minutes = int(round(seconds / 60)) if seconds else 0
         hours = total_minutes // 60
         minutes = total_minutes % 60
-        return f"Hours:{hours:02d} Minutes:{minutes:02d}"
+        return f"{hours:02d}:{minutes:02d}"
 
     def _format_throughput(self, bps: float) -> str:
         if bps <= 0:
@@ -5630,17 +5996,26 @@ class App(tk.Tk):
                 except tk.TclError:
                     pass
             return
+        connected = bool(getattr(self, "connected", False))
         state = "normal" if enabled else "disabled"
         for w in self._manual_controls:
             try:
+                if not connected:
+                    if w in self._offline_controls:
+                        w.config(state="normal")
+                    else:
+                        w.config(state="disabled")
+                    continue
                 if not enabled and w is getattr(self, "btn_all_stop", None):
+                    w.config(state="normal")
                     continue
                 if not enabled and w in self._override_controls:
+                    w.config(state="normal")
                     continue
                 w.config(state=state)
             except tk.TclError:
                 pass
-        if enabled:
+        if enabled and connected:
             self._set_unit_mode(self.unit_mode.get())
             self._set_step_xy(self.step_xy.get())
             self._set_step_z(self.step_z.get())
@@ -5755,6 +6130,8 @@ class App(tk.Tk):
         btn_row.pack(fill="x")
 
         def run_and_close(action):
+            if not self._require_grbl_connection():
+                return
             try:
                 action()
             except Exception as exc:
@@ -6338,6 +6715,8 @@ class App(tk.Tk):
             self.gview.highlight_current(target_idx)
 
     def _all_stop_action(self):
+        if not self._require_grbl_connection():
+            return
         mode = self.all_stop_mode.get()
         if mode == "reset":
             self.grbl.reset()
@@ -6733,18 +7112,28 @@ class App(tk.Tk):
     # ---------- Zeroing (simple G92-based) ----------
     # If you prefer G10 L20 (persistent work offset), say so and Iâ€™ll swap these.
     def zero_x(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.send_immediate("G92 X0")
 
     def zero_y(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.send_immediate("G92 Y0")
 
     def zero_z(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.send_immediate("G92 Z0")
 
     def zero_all(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.send_immediate("G92 X0 Y0 Z0")
 
     def goto_zero(self):
+        if not self._require_grbl_connection():
+            return
         self.grbl.send_immediate("G0 X0 Y0")
 
     # ---------- UI event handling ----------
@@ -7027,6 +7416,84 @@ class App(tk.Tk):
             value = 0
         return value
 
+    def _clamp_toolpath_performance(self, value):
+        try:
+            perf = float(value)
+        except Exception:
+            perf = self._toolpath_performance_default
+        return max(0.0, min(100.0, perf))
+
+    def _clamp_toolpath_streaming_render_interval(self, value):
+        try:
+            interval = float(value)
+        except Exception:
+            interval = self._toolpath_streaming_render_interval_default
+        return max(0.05, min(2.0, interval))
+
+    def _apply_toolpath_streaming_render_interval(self, _event=None):
+        interval = self._clamp_toolpath_streaming_render_interval(
+            self.toolpath_streaming_render_interval.get()
+        )
+        self.toolpath_streaming_render_interval.set(interval)
+        self.toolpath_panel.set_streaming_render_interval(interval)
+
+    def _toolpath_perf_values(self, perf: float):
+        perf = self._clamp_toolpath_performance(perf)
+        if perf >= 100.0:
+            full_limit = 0
+            interactive_limit = 0
+        else:
+            full_limit = int(round(
+                self._toolpath_full_limit_min
+                + (self._toolpath_full_limit_default - self._toolpath_full_limit_min) * (perf / 100.0)
+            ))
+            interactive_limit = int(round(
+                self._toolpath_interactive_limit_min
+                + (
+                    self._toolpath_interactive_limit_default - self._toolpath_interactive_limit_min
+                ) * (perf / 100.0)
+            ))
+        arc_detail = (
+            self._toolpath_arc_detail_max
+            - (self._toolpath_arc_detail_max - self._toolpath_arc_detail_min) * (perf / 100.0)
+        )
+        lightweight = perf < 40.0
+        draw_percent = max(5, int(round(perf)))
+        return full_limit, interactive_limit, arc_detail, lightweight, draw_percent
+
+    def _on_toolpath_performance_move(self, value):
+        try:
+            perf = float(value)
+        except Exception:
+            perf = self.toolpath_performance.get()
+        perf = self._clamp_toolpath_performance(perf)
+        self._toolpath_performance_value.set(f"{perf:.0f}%")
+
+    def _on_toolpath_performance_key_release(self, event):
+        if event.keysym in ("Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next"):
+            self._apply_toolpath_performance()
+
+    def _apply_toolpath_performance(self, _event=None):
+        perf = self._clamp_toolpath_performance(self.toolpath_performance.get())
+        self.toolpath_performance.set(perf)
+        self._toolpath_performance_value.set(f"{perf:.0f}%")
+        full_limit, interactive_limit, arc_detail, lightweight, draw_percent = self._toolpath_perf_values(perf)
+        self._toolpath_draw_percent = draw_percent
+        self.toolpath_full_limit.set(str(full_limit))
+        self.toolpath_interactive_limit.set(str(interactive_limit))
+        self.toolpath_arc_detail.set(arc_detail)
+        self._toolpath_arc_detail_value.set(f"{arc_detail:.1f}°")
+        self.toolpath_lightweight.set(lightweight)
+        self.toolpath_panel.set_draw_limits(full_limit, interactive_limit)
+        self.toolpath_panel.set_arc_detail(arc_detail)
+        self.toolpath_panel.set_lightweight(lightweight)
+        self.toolpath_panel.set_draw_percent(draw_percent)
+        if self._last_gcode_lines:
+            if self._stream_state in ("running", "paused"):
+                self._toolpath_reparse_deferred = True
+            else:
+                self.toolpath_panel.reparse_lines(self._last_gcode_lines)
+
     def _apply_toolpath_draw_limits(self, _event=None):
         full = self._toolpath_limit_value(self.toolpath_full_limit.get(), self._toolpath_full_limit_default)
         interactive = self._toolpath_limit_value(
@@ -7075,11 +7542,17 @@ class App(tk.Tk):
     def _run_toolpath_arc_detail_reparse(self):
         self._toolpath_arc_detail_reparse_after_id = None
         if self._last_gcode_lines:
+            if self._stream_state in ("running", "paused"):
+                self._toolpath_reparse_deferred = True
+                return
             self.toolpath_panel.reparse_lines(self._last_gcode_lines)
 
     def _on_toolpath_lightweight_change(self):
         self.toolpath_panel.set_lightweight(bool(self.toolpath_lightweight.get()))
         if self._last_gcode_lines:
+            if self._stream_state in ("running", "paused"):
+                self._toolpath_reparse_deferred = True
+                return
             self.toolpath_panel.set_gcode_lines(self._last_gcode_lines)
 
     def _toggle_unit_mode(self):
@@ -7137,6 +7610,17 @@ class App(tk.Tk):
             if not messagebox.askyesno("Confirm", f"{label}?"):
                 return
         self._confirm_last_time[label] = now
+        func()
+
+    def _require_grbl_connection(self) -> bool:
+        if not self.grbl.is_connected():
+            messagebox.showwarning("Not connected", "Connect to GRBL first.")
+            return False
+        return True
+
+    def _run_if_connected(self, func):
+        if not self._require_grbl_connection():
+            return
         func()
 
     def _save_3d_view(self):
@@ -7207,7 +7691,7 @@ class App(tk.Tk):
                 self.btn_stop.config(state="disabled")
                 self.btn_resume_from.config(state="disabled")
                 self.btn_alarm_recover.config(state="disabled")
-                self._set_manual_controls_enabled(True)
+                self._set_manual_controls_enabled(False)
                 self._rapid_rates = None
                 self._rapid_rates_source = None
                 self._accel_rates = None
@@ -7531,7 +8015,9 @@ class App(tk.Tk):
                 else:
                     self.btn_run.config(state="disabled")
                     self.btn_resume_from.config(state="disabled")
-                self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
+                self._set_manual_controls_enabled(
+                    self.connected and self._grbl_ready and self._status_seen and not self._alarm_locked
+                )
                 self._set_streaming_lock(False)
             elif st == "running":
                 with self.macro_executor.macro_vars() as macro_vars:
@@ -7581,7 +8067,9 @@ class App(tk.Tk):
                     )
                     else "disabled"
                 )
-                self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
+                self._set_manual_controls_enabled(
+                    self.connected and self._grbl_ready and self._status_seen and not self._alarm_locked
+                )
                 self._set_streaming_lock(False)
             elif st == "error":
                 with self.macro_executor.macro_vars() as macro_vars:
@@ -7612,7 +8100,9 @@ class App(tk.Tk):
                     else "disabled"
                 )
                 self.status.config(text=f"Stream error: {evt[2]}")
-                self._set_manual_controls_enabled((not self.connected) or (self._grbl_ready and self._status_seen))
+                self._set_manual_controls_enabled(
+                    self.connected and self._grbl_ready and self._status_seen and not self._alarm_locked
+                )
                 self._set_streaming_lock(False)
             elif st == "alarm":
                 with self.macro_executor.macro_vars() as macro_vars:
@@ -7624,6 +8114,13 @@ class App(tk.Tk):
                 self.btn_resume_from.config(state="disabled")
                 self._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
                 self._set_streaming_lock(False)
+            if st in ("running", "paused"):
+                self.toolpath_panel.set_streaming(True)
+            else:
+                self.toolpath_panel.set_streaming(False)
+                if self._toolpath_reparse_deferred and self._last_gcode_lines:
+                    self._toolpath_reparse_deferred = False
+                    self.toolpath_panel.reparse_lines(self._last_gcode_lines)
             self._apply_status_poll_profile()
 
         elif kind == "gcode_sent":
@@ -7801,6 +8298,8 @@ class App(tk.Tk):
                 return fallback
 
         show_rapid, show_feed, show_arc = self.toolpath_panel.get_display_options()
+        draw_percent = self.toolpath_panel.get_draw_percent()
+        performance = self._clamp_toolpath_performance(self.toolpath_performance.get())
 
         full_limit = self._toolpath_limit_value(
             self.toolpath_full_limit.get(), self._toolpath_full_limit_default
@@ -7869,6 +8368,16 @@ class App(tk.Tk):
             "toolpath_interactive_limit": interactive_limit,
             "toolpath_arc_detail_deg": arc_detail_deg,
             "toolpath_lightweight": bool(self.toolpath_lightweight.get()),
+            "toolpath_draw_percent": draw_percent,
+            "toolpath_performance": performance,
+            "toolpath_streaming_render_interval": safe_float(
+                self.toolpath_streaming_render_interval,
+                self.settings.get(
+                    "toolpath_streaming_render_interval",
+                    self._toolpath_streaming_render_interval_default,
+                ),
+                "3D streaming refresh interval",
+            ),
             "toolpath_show_rapid": show_rapid,
             "toolpath_show_feed": show_feed,
             "toolpath_show_arc": show_arc,
