@@ -4777,6 +4777,33 @@ class App(tk.Tk):
             "Record GUI button actions in the console log when enabled.",
         )
 
+        toggle_btn_row = ttk.Frame(interface_frame)
+        toggle_btn_row.grid(row=4, column=0, sticky="w", pady=(10, 0))
+        self.btn_toggle_tips_settings = ttk.Button(
+            toggle_btn_row,
+            text="Tool Tips: On",
+            command=self._toggle_tooltips,
+        )
+        set_kb_id(self.btn_toggle_tips_settings, "toggle_tooltips_settings")
+        self.btn_toggle_tips_settings.pack(side="left")
+        apply_tooltip(self.btn_toggle_tips_settings, "Toggle tool tips.")
+        self.btn_toggle_3d_settings = ttk.Button(
+            toggle_btn_row,
+            text="3D Render: On",
+            command=self._toggle_render_3d,
+        )
+        set_kb_id(self.btn_toggle_3d_settings, "toggle_render_3d_settings")
+        self.btn_toggle_3d_settings.pack(side="left", padx=(8, 0))
+        apply_tooltip(self.btn_toggle_3d_settings, "Toggle 3D toolpath rendering.")
+        self.btn_toggle_keybinds_settings = ttk.Button(
+            toggle_btn_row,
+            text="Keybindings: On",
+            command=self._toggle_keyboard_bindings,
+        )
+        set_kb_id(self.btn_toggle_keybinds_settings, "toggle_keybindings_settings")
+        self.btn_toggle_keybinds_settings.pack(side="left", padx=(8, 0))
+        apply_tooltip(self.btn_toggle_keybinds_settings, "Toggle keyboard shortcuts.")
+
         toolpath_settings = ttk.LabelFrame(self._app_settings_inner, text="3D View", padding=8)
         toolpath_settings.grid(row=14, column=0, sticky="ew", pady=(8, 0))
         toolpath_settings.grid_columnconfigure(1, weight=1)
@@ -4857,9 +4884,6 @@ class App(tk.Tk):
         )
         set_kb_id(self.btn_toggle_tips, "toggle_tooltips")
         self.btn_toggle_tips.pack(side="right", padx=(8, 0))
-        self.btn_toggle_tips.config(
-            text="Tool Tips: On" if self.tooltip_enabled.get() else "Tool Tips: Off"
-        )
         self.btn_toggle_3d = ttk.Button(
             status_bar,
             text="3D Render: On",
@@ -4868,9 +4892,6 @@ class App(tk.Tk):
         set_kb_id(self.btn_toggle_3d, "toggle_render_3d")
         self.btn_toggle_3d.pack(side="right", padx=(8, 0))
         apply_tooltip(self.btn_toggle_3d, "Toggle 3D toolpath rendering.")
-        self.btn_toggle_3d.config(
-            text="3D Render: On" if self.render3d_enabled.get() else "3D Render: Off"
-        )
         self.btn_toggle_keybinds = ttk.Button(
             status_bar,
             text="Keybindings: On",
@@ -4879,9 +4900,9 @@ class App(tk.Tk):
         set_kb_id(self.btn_toggle_keybinds, "toggle_keybindings")
         self.btn_toggle_keybinds.pack(side="right", padx=(8, 0))
         apply_tooltip(self.btn_toggle_keybinds, "Toggle keyboard shortcuts.")
-        self.btn_toggle_keybinds.config(
-            text="Keybindings: On" if self.keyboard_bindings_enabled.get() else "Keybindings: Off"
-        )
+        self._refresh_tooltips_toggle_text()
+        self._refresh_render_3d_toggle_text()
+        self._refresh_keybindings_toggle_text()
         self._on_error_dialogs_enabled_change()
         self._state_default_fg = self.status.cget("foreground") or "#000000"
         self._apply_state_fg(None)
@@ -6432,14 +6453,12 @@ class App(tk.Tk):
         current = bool(self.keyboard_bindings_enabled.get())
         new_val = not current
         self.keyboard_bindings_enabled.set(new_val)
-        if hasattr(self, "btn_toggle_keybinds"):
-            self.btn_toggle_keybinds.config(text="Keybindings: On" if new_val else "Keybindings: Off")
+        self._refresh_keybindings_toggle_text()
         self._apply_keyboard_bindings()
 
     def _on_keyboard_bindings_check(self):
         new_val = bool(self.keyboard_bindings_enabled.get())
-        if hasattr(self, "btn_toggle_keybinds"):
-            self.btn_toggle_keybinds.config(text="Keybindings: On" if new_val else "Keybindings: Off")
+        self._refresh_keybindings_toggle_text()
         self._apply_keyboard_bindings()
 
     def _apply_keyboard_bindings(self):
@@ -7551,11 +7570,32 @@ class App(tk.Tk):
         self._maybe_auto_reconnect()
         self.after(50, self._drain_ui_queue)
 
+    def _refresh_tooltips_toggle_text(self):
+        text = "Tool Tips: On" if self.tooltip_enabled.get() else "Tool Tips: Off"
+        for attr in ("btn_toggle_tips", "btn_toggle_tips_settings"):
+            btn = getattr(self, attr, None)
+            if btn:
+                btn.config(text=text)
+
+    def _refresh_render_3d_toggle_text(self):
+        text = "3D Render: On" if self.render3d_enabled.get() else "3D Render: Off"
+        for attr in ("btn_toggle_3d", "btn_toggle_3d_settings"):
+            btn = getattr(self, attr, None)
+            if btn:
+                btn.config(text=text)
+
+    def _refresh_keybindings_toggle_text(self):
+        text = "Keybindings: On" if self.keyboard_bindings_enabled.get() else "Keybindings: Off"
+        for attr in ("btn_toggle_keybinds", "btn_toggle_keybinds_settings"):
+            btn = getattr(self, attr, None)
+            if btn:
+                btn.config(text=text)
+
     def _toggle_tooltips(self):
         current = bool(self.tooltip_enabled.get())
         new_val = not current
         self.tooltip_enabled.set(new_val)
-        self.btn_toggle_tips.config(text="Tool Tips: On" if new_val else "Tool Tips: Off")
+        self._refresh_tooltips_toggle_text()
 
     def _apply_theme(self, theme: str):
         try:
@@ -7645,7 +7685,7 @@ class App(tk.Tk):
         current = bool(self.render3d_enabled.get())
         new_val = not current
         self.render3d_enabled.set(new_val)
-        self.btn_toggle_3d.config(text="3D Render: On" if new_val else "3D Render: Off")
+        self._refresh_render_3d_toggle_text()
         self.toolpath_panel.set_enabled(new_val)
         if new_val and self._last_gcode_lines:
             self.toolpath_panel.set_gcode_lines(self._last_gcode_lines)
