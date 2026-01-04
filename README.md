@@ -119,28 +119,28 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
 
-    ![G-code tab screenshot](pics/Slide1.JPG)
+    ![Alt text for the image](pics/Slide1.JPG)
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
 
-    ![Console tab screenshot](pics/Slide2.JPG)
+    ![Alt text for the image](pics/Slide2.JPG)
   - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders with +/-/reset shortcuts and a live override summary that mirrors GRBL's Ov* values while each slider move emits the matching 10% real-time byte.
 
-    ![Overdrive tab screenshot](pics/Slide3.JPG)
+    ![Alt text for the image](pics/Slide3.JPG)
   - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
 
-    ![Raw $$ tab screenshot](pics/Slide4.JPG)
+    ![Alt text for the image](pics/Slide4.JPG)
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
-    ![GRBL Settings tab screenshot](pics/Slide5.JPG)
+    ![Alt text for the image](pics/Slide5.JPG)
   - **App Settings:** Banner showing `Simple Sender – Version: v0.1.0`, theme picker, ALL STOP mode, estimation factors/fallbacks, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, machine profiles, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
 
-    ![App Settings tab screenshot](pics/Slide6.JPG)
+    ![Alt text for the image](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
 
-    ![Top View tab screenshot](pics/Slide7.JPG)
+    ![Alt text for the image](pics/Slide7.JPG)
   - **3D View:** Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
 
-    ![3D View tab screenshot](pics/Slide8.JPG)
+    ![Alt text for the image](pics/Slide8.JPG)
 
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
 
