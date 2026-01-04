@@ -25,6 +25,7 @@ Safety: Alpha software. Test in air with spindle off.
 - [FAQ](#faq)
 - [Appendix A: GRBL 1.1h Commands](#appendix-a-grbl-11h-commands)
 - [Appendix B: GRBL 1.1h Settings](#appendix-b-grbl-11h-settings)
+- [Appendix C: Macro Reference](#appendix-c-macro-reference)
 
 ## Overview
 - Target: GRBL 1.1h, 3-axis.
@@ -99,7 +100,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
    - Raw $$ tab keeps the text capture.
 10) **Macros**
-    - Left-click to run; right-click to preview contents. Macros blocked during streaming/alarms; `%wait/%msg/%update` supported.
+     - Left-click to run; right-click to preview contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
 ## Quick Start Workflow
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
@@ -119,9 +120,10 @@ This is a practical, end-to-end flow with rationale for key options.
   - Overdrive (Spindle ON/OFF plus feed/spindle override sliders with nice sliding controls, +/-/reset shortcuts, and a live override summary that follows GRBL's Ov* values while slider moves send the matching 10% real-time override bytes).
   - 3D View (Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view).
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
+
 ## Status Lights
 - **Placement:** The LEDs sit inline with the status bar so they stay next to the logging/3D/keybinding toggles and provide a quick glance of machine triggers.
-- **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). We mirror gSender's approach:
+- **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). The indicators derive their state directly from those flags:
   - `X`, `Y`, `Z` light the **Endstops** indicator whenever those limit pins feed a high signal.
   - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
   - `H` or the textual **Hold** state lights the **Hold** LED while GRBL is paused/feed-hold.
@@ -152,69 +154,129 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-- **File format & placement.** Macros are discovered in `simple_sender/macros`, `macros/` next to `main.py`, or the folder containing `main.py`, using names `Macro-1` through `Macro-7`; legacy `Maccro-*` files and optional `.txt` extensions remain compatible. The first line is the button label, the second line is the tooltip, and every subsequent line is the body that executes when you left-click the macro button. Right-click opens a modal preview so you can inspect the contents without running them. Macros are blocked while streaming or when the controller is in an alarm state.
-- **Macro scripting toggle.** In App Settings > Macros, disable scripting to allow only plain G-code lines (no `%` directives, `_` Python lines, or `[...]` expressions).
-- **Why bCNC macros inspired this section.** The macro subsystem mirrors the flexibility of bCNC's macros: you can interleave GRBL commands, real-time bytes, directives like `%wait`, expressions, and Python snippets. Like bCNC, the sender maintains `_macro_vars`, emulates `$J=` jog semantics, and exposes helper macros (print, prompt, etc.) so that you can stitch together familiar motion flows from a single file without building a separate script.
-- **Supported directives & commands.** The macro interpreter blends GRBL motion with helper directives:
-  - `%wait`, `%msg`, and `%update` behave like their bCNC counterparts: pause until idle, log operator-facing text, or request a status update.
-  - `%if running` skips the current line when a job is already in progress.
-  - Control keywords (`M0/M00/PROMPT`, `ABSOLUTE/ABS`, `RELATIVE/REL`, `HOME`, `UNLOCK`, `RESET`, `PAUSE`, `RESUME`, `FEEDHOLD`, `STOP`, `RUN`, `SAFE`, `SET0/SETX/SETY/SETZ/SET`, `LOAD <path>`, `OPEN`, `CLOSE`, `HELP`, `QUIT/EXIT`, `SENDHEX`, and more) invoke the sender's helpers, so you can open/close the machine, toggle offsets, or trigger custom logic without writing raw G-code.
-  - Prefixing a line with `!`, `~`, `?`, or the Ctrl-X byte (`\x18`) sends the equivalent real-time command; lines starting with `$`, `@`, `{`, comments in `(...)` or `;...`, or those matching the `MACRO_GPAT` regex are forwarded verbatim.
-  - Pure G-code lines (e.g., `G0`, `G1`, `M3`, `M5`, `G92`, and any other GRBL commands) are sent directly to the controller.
-  - **Prompt customization & state tracking.** `M0`, `M00`, and `PROMPT` lines present the modal built in `_show_macro_prompt`. Text can come from a trailing comment (e.g., `M0 (What's next?)`), from tokens such as `title=`, `msg=`/`message=`/`text=`, and `buttons=` (comma- or pipe-separated), or from the newer bracket syntax like `[title(My Title)] Pick an option… [btn(Choice 1)a] [btn(Choice 2)b]`. Custom buttons replace the default Resume button and remain available alongside Cancel, and you can hide Resume with `noresume` or rename the default buttons with `resume=`/`resumelabel=` and `cancel=`/`cancellabel=`. When the user picks a choice, the macro stores it in `_macro_vars["prompt_choice"]`, `_macro_vars["prompt_choice_label"]`, `_macro_vars["prompt_choice_key"]`, `_macro_vars["prompt_index"]`, and `_macro_vars["prompt_cancelled"]`, which you can also read inside macros via `macro.prompt_choice*` before/after subsequent prompts.
-  - **Compile errors now surface immediately.** If the macro parser hits invalid syntax (for example malformed bracket metadata), the runner pops up a dialog with the file name, line number, and offending text so you know exactly which line failed instead of only seeing a console log.
-  - **Blocking & alarm safety.** Every macro-issued GRBL command now waits for completion before the next line executes, preventing prompt transitions, `%wait`, or reprobes from racing ahead of motion. If GRBL reports an alarm mid-macro, the executor immediately cancels the rest of the macro, logs which line was running, and waits for you to clear the alarm before retrying.
-  - **Logging, threading, and safety.** Macros run on a background worker (`_run_macro_worker`), log their name/tip/contents when GUI logging is enabled, and respect the streaming/alarm gate and Training Wheels confirmations so they only run when it is safe. `_macro_lock` serializes macro execution, is always released (even on exceptions), and the runner flips `_macro_vars["running"]` so `%wait`/`_macro_wait_for_idle()` stream updates know when to block or resume.
-- **Mixing Python & GRBL.** Lines that begin with `_` run as Python (`_safe_height = ...`). You can reference live variables in `_macro_vars` (e.g., `wx`, `wy`, `wz`, `OvFeed`, `safe`), call the UI via `app`/`os`, or log with `app._log(...)`. Wrap Python expressions in square brackets (`G0 Z[_safe_height]`), and the expression is evaluated before the line is streamed. Use `%msg`/`%update` inside macros for progress updates or for prompting the operator mid-sequence.
-- **Example macro (raise Z and park).**
-  ```text
-  Park & lift
-  Raise to a safe height, then move to X0 Y0.
-  _safe_height = max(5.0, float(_macro_vars.get("safe", 5.0)))
-  %msg Raising to Z[_safe_height] before parking.
-  G90
-  G0 Z[_safe_height]
-  G0 X0 Y0
-  %msg Parked and ready.
-  ```
-  This macro illustrates how to:
-  1. Use a Python helper to compute `_safe_height` (leveraging the pre-populated `_macro_vars` dictionary).
-  2. Emit `%msg` notifications before and after motion.
-  3. Mix G-code with embedded expressions (`[...]`), send absolute moves (`G90`/`G0`), and park at a known location.
-  You can expand this template with `%wait`, conditional Python (`if _safe_height < 10.0: ...`), or macros that interact with `app` (e.g., `app._log(...)`) before/after sending commands. Macros always release `_macro_lock`, so even a raised exception won't hang the UI.
-- **Variable math + GRBL example.**
-  ```text
-  Offset jog
-  Compute a dynamic X offset and move there with mixed Python/math.
-  _step = float(_macro_vars.get("stepz", 1.0))
-  _target = float(_macro_vars.get("wx", 0.0)) + _step * 3
-  %msg Moving to computed X[_target] (wx=[_macro_vars.get("wx",0.0)], step=[_step]).
-  G90
-  G0 X[_target] Y0
-  ```
-  This illustrates setting a variable, performing math against live data, and passing that result straight into a GRBL move (`G0 X[_target]`). Use `_macro_vars["wx"]`, `wx`, or any custom variables paired with macros that update them (`%update`, status parsing, or previous lines) to build macros that adapt to the current machine state.
+Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations.
 
-- **Available machine information.** When macros run they can read (and modify) `_macro_vars`. The list below shows the values collected by the sender so you know what data is available for conditional logic, math, or logging:
-   | Variable | Meaning |
-   | --- | --- |
-   | `wx`, `wy`, `wz` | Most recent work position from GRBL (WPos). |
-   | `mx`, `my`, `mz` | Most recent machine position (MPos). |
-   | `wcox`, `wcoy`, `wcoz` | Work coordinate offsets (WCO). |
-   | `wa`/`wb`/`wc` | Auxiliary axis positions when available (also mirrored as `_macro_vars`). |
-   | `prbx`/`prby`/`prbz`/`prbcmd`/`prbfeed` | Probe-related placeholders (mirrors typical bCNC macros). |
-   | `curfeed`, `curspindle` | Live feed/speed values from the status report (`FS` field). |
-   | `rpm` | Current spindle RPM estimate. |
-   | `planner`, `rxbytes` | Planner buffer usage and remaining RX bytes from `Bf:`.
-   | `OvFeed`, `OvRapid`, `OvSpindle` (plus `_Ov*` mirror flags) | Override percentages for feed/rapid/spindle (set by override buttons). |
-   | `state` | Latest GRBL state string (Idle, Run, Hold, Alarm, etc.). |
-   | `_macro_vars["running"]` | Boolean flag that flips when a stream is running/paused/done. |
-   | `motion`, `distance`, `plane`, `feedmode`, `arc`, `units`, `WCS`, `cutter`, `tool`, `program`, `spindle`, `coolant` | Internal state placeholders that mirror the current G-code tokens processed by macros (same keys bCNC uses). |
-   | `diameter`, `cutfeed`, `cutfeedz`, `safe`, `stepz`, `stepover`, `surface`, `thickness` | User-defined helper numbers that can be tweaked in macros for tooling choices. |
-   | `PRB`, `version`, `controller`, `pins`, `msg`, `prompt_choice`/`prompt_index`/`prompt_cancelled` | Misc helpers used by macros and log dialogs; `PRB` holds last probe result, `pins` stores pin summary, and `prompt_*` track modal prompt outcomes.
-   | `_camwx`, `_camwy` | Camera or CAM coordinates that can be reused in macros (mirrors non-GRBL data). |
+### Execution & safety
+Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
 
-  Use this table as your cheat sheet when composing macros - every variable above can be referenced directly inside `[ ... ]` expressions or Python lines to make decisions, guard moves, or report helpful messages.
+`App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, any line that begins with `%` or `_`, contains `[`/`]`, or includes `=` raises a compile error, though raw GRBL commands still stream. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
+### Macro directives
+| Directive | What it does | Example usage |
+| --- | --- | --- |
+| `%wait` | Pause until GRBL reports Idle before continuing; useful after long G1 moves so macros resume only when the controller is ready. | `G1 F3000 X10 Y10`<br>`%wait` |
+| `%msg <text>` | Log `<text>` with the `[macro]` prefix so operators see status updates without sending unrelated G-code. | `%msg retracting to safe height` |
+| `%update` | Request a status report (`?`) to refresh WPos/FS, letting `[wx]`, `[wy]`, `[curfeed]`, etc., read the live values before the next line. | `%update` |
+| `%if running` | Skip the current line unless a stream is already running (the app sets `_macro_vars["running"]` true for active or paused jobs). | `%if running G0 Z5` |
+| `%if paused` | Execute the line only while streaming is paused, so recovery steps (e.g., retracting Z) stay blocked during active runs. | `%if paused G0 Z10` |
+| `%if not running` | Skip the current line while a stream is active so setup steps only run when the controller is idle. | `%if not running G0 Z0` |
+
+All directives above operate through the modal interpreter implemented in `main.py` and work with GRBL 1.1h because they merely gate G-code streaming or request standard status bytes (`?`). `%wait` relies on the GRBL Idle state reported by `<Idle|...>` lines, `%update` sends the conventional real-time status command, and `%msg` logs without touching the controller.
+
+### Helper commands
+| Command | Description | Example usage |
+| --- | --- | --- |
+| `M0`, `M00`, `PROMPT` | Show the macro prompt dialog. Customize `title=`, `msg=`/`message=`/`text=`, `buttons=`, `[btn(...)]`, `resume=`, `cancellabel=`, etc., and read `prompt_choice*` afterward. | `PROMPT message=Pause before X0 Y0? buttons=Continue|Abort` |
+| `ABSOLUTE`, `ABS` | Send `G90` so the next moves use machine coordinates. | `ABSOLUTE` |
+| `RELATIVE`, `REL` | Send `G91` for incremental jog sequences. | `REL` |
+| `HOME` | Run homing, which issues the same `$H` or homing cycle as the UI buttons. | `HOME` |
+| `OPEN` | Connect if disconnected (calls `toggle_connect`). Useful for macros that need GRBL before streaming commands. | `OPEN` |
+| `CLOSE` | Disconnect when connected. | `CLOSE` |
+| `HELP` | Show a fixed macro help dialog (no GRBL interaction). | `HELP` |
+| `QUIT`, `EXIT` | Close the application cleanly. | `QUIT` |
+| `LOAD <path>` | Load a specific G-code file (`app._load_gcode_from_path`), then let the macro stream it. | `LOAD C:\jobs\test.nc` |
+| `UNLOCK` | Send `$X` to clear alarms, the same command used in the UI. | `UNLOCK` |
+| `RESET` | Send soft reset (`Ctrl-X`). | `RESET` |
+| `PAUSE`, `FEEDHOLD` | Hold the stream (`!`). | `PAUSE` |
+| `RESUME`, `RUN` | Resume or start streaming (`~`). | `RUN` |
+| `STOP` | Stop streaming and clear the queue (`stop_stream`). | `STOP` |
+| `SAVE` | Unsupported; logs `[macro] SAVE is not supported.`. | `SAVE` |
+| `SENDHEX <xx>` | Send raw real-time byte `0xXX`. | `SENDHEX 91` |
+| `SAFE <value>` | Update `_macro_vars["safe"]`, a helper the UI uses for safe heights. | `SAFE 10` |
+| `SET0` | Send `G92 X0 Y0 Z0`. | `SET0` |
+| `SETX`, `SETY`, `SETZ` | Zero a single axis with `G92`. | `SETZ 2` |
+| `SET <X> <Y> <Z>` | Zero only the axes you specify. | `SET 0 50` |
+| `!`, `~`, `?`, `Ctrl-X` | Send feed hold, cycle start, status request, or soft reset as real-time bytes. | `!` |
+
+Each helper command forwards the equivalent GRBL real-time or `$` command, so they behave exactly as the buttons and manual console inputs do when connected to a GRBL 1.1h controller.
+
+Lines that begin with `$`, `@`, `{`, `(`, or `;`, or that match `MACRO_GPAT` (`[A-Za-z]\s*[-+]?\d+.*`), stream verbatim as raw GRBL commands or comments, so you can reuse existing G-code without modification.
+
+### System variables
+Every macro shares access to `_macro_vars`. The following keys hold live data you can read or update in Python lines, `%msg`, or `[expression]` blocks:
+
+| Variable | Meaning & example |
+| --- | --- |
+| `prbx`, `prby`, `prbz` | Last probe coordinates; retract with `G0 Z[prbz]` after a `G38.2` probe. |
+| `prbcmd` | Probe command (`G38.2` by default); change it before sending custom probes. |
+| `prbfeed` | Probe feed rate; use `[prbfeed]` inside a `G38.2 F[prbfeed]` line. |
+| `errline` | Last macro line that triggered a compile/runtime failure; log it for diagnostics. |
+| `wx`, `wy`, `wz` | Work coordinates (WPos); refer to them as `[wx]`, `[wy]`, `[wz]` when building expressions. |
+| `mx`, `my`, `mz` | Machine coordinates (MPos); compare them against WPos to detect offsets. |
+| `wa`, `wb`, `wc` | Auxiliary G-code axes (if the controller reports them). |
+| `ma`, `mb`, `mc` | Auxiliary machine axes mirrors. |
+| `wcox`, `wcoy`, `wcoz`, `wcoa`, `wcob`, `wcoc` | Work coordinate offsets (WCO); rebuild a move with `G0 X[wcox] Y[wcoy]`. |
+| `curfeed`, `curspindle` | Feed/spindle from the `FS:` field; log `%msg FS=[curfeed]/[curspindle]`. |
+| `_camwx`, `_camwy` | Camera/CAM coordinates from non-GRBL sources; helpful for vision-assisted macros. |
+| `G` | List of modal G-code words the parser has seen; read it after hacks that change modal states. |
+| `TLO` | Tool length offset; use `[TLO]` during touch-plate moves. |
+| `motion`, `distance`, `plane`, `feedmode`, `arc`, `units`, `WCS`, `cutter`, `tlo`, `program`, `spindle`, `coolant` | Tokens that mirror the current modal context; include them in `%msg` for auditing. |
+| `tool` | Current tool number; branch macros before a tool change. |
+| `feed` | Last feed rate; log `%msg feed=[feed]` before altering overrides. |
+| `rpm` | Estimated spindle RPM, derived from `FS` or override sliders. |
+| `planner`, `rxbytes` | Planner buffer usage and remaining `Bf:` bytes; guard long moves with `if rxbytes < 30: %wait`. |
+| `OvFeed`, `OvRapid`, `OvSpindle`, `_OvFeed`, `_OvRapid`, `_OvSpindle`, `_OvChanged` | Override values plus a flag that flips when sliders move; read them to slow macros when the user dials overrides down. |
+| `diameter`, `cutfeed`, `cutfeedz`, `surface`, `thickness`, `stepz`, `stepover`, `safe` | Helper constants for tooling; update them from macros (`safe = 6`). |
+| `state` | Latest GRBL state (`Idle`, `Run`, `Hold`, `Alarm`); `%if running` uses this indirectly. |
+| `pins` | Pin summary from GRBL; check it before probing to ensure the probe pin is ready. |
+| `msg` | Last `MSG` block; common after `G38` probes or startup messages. |
+| `PRB` | Last structured probe report (mirrors `_macro_vars["PRB"]`). |
+| `version`, `controller` | Firmware metadata; include it in logs for traceability. |
+| `running` | `True` while a stream runs or is paused; `%if running` checks this state. |
+| `paused` | `True` only while streaming is paused; `%if paused` gates lines that should execute during interruptions. |
+| `prompt_choice`, `prompt_choice_label`, `prompt_choice_key`, `prompt_index`, `prompt_cancelled` | Results after `M0/M00/PROMPT`; branch logic accordingly. |
+| `macro` | `types.SimpleNamespace(state=SimpleNamespace())`; store persistent values with `macro.state.last_probe = ...`. |
+
+Add your own entries (e.g., `_macro_vars["my_flag"] = True`) when you want data to survive between lines or macros.
+
+### Python expressions, loops, and new variables
+When scripting is enabled, prefix a line with `_` or simply write a Python statement (`=`) to run it. The interpreter injects `app` and `os` so you can call `app._log(...)`, `app._call_on_ui_thread(...)`, or inspect `app.connected`. Square brackets evaluate Python expressions before streaming, such as `G0 Z[_macro_vars["safe"] + pass_num * 0.5]`.
+
+Python loops behave like any other Python code:
+
+```text
+_safe_height = max(float(_macro_vars.get("safe", 3.0)), 4.0)
+for pass_num in range(3):
+    target = _safe_height + pass_num * 2.0
+    _macro_vars["last_target"] = target
+    %msg Pass [pass_num + 1]: raising to Z[target]
+    G0 Z[target]
+    %wait
+```
+
+This snippet shows math helpers, storing custom variables, logging with `%msg`, and waiting for each pass to complete.
+
+### GUI prompts & blocking
+`M0`, `M00`, and `PROMPT` block the macro until the operator chooses a button. Prompt tokens such as `buttons=Resume|Cancel`, `[btn(Continue)c]`, `resume=Go`, or `noresume` control which buttons appear, and the choice is stored in `_macro_vars`/`macro.prompt_choice*`. `%wait` blocks until Idle, `_macro_send` waits for completion plus `_macro_wait_for_idle()`, and the executor aborts if GRBL reports an alarm (logging the line) or a stream appears unexpectedly.
+
+### Example macro (loop + prompt + GUI hooks)
+```text
+Safe park
+Raise, loop, and prompt before parking at X0 Y0.
+_safe_height = max(float(_macro_vars.get("safe", 3.0)), 5.0)
+for index in range(2):
+    target = _safe_height + index * 1.5
+    _macro_vars["park_pass"] = index + 1
+    %msg Pass [index + 1] moving to Z[target]
+    G90
+    G0 Z[target]
+    %wait
+PROMPT title=Continue buttons=Next Pass|Abort message=Run another pass?
+G0 X0 Y0
+%msg Parked after pass [prompt_choice_index + 1].
+```
+
+This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI prompt, and stores the pass number so later macros can inspect `park_pass`.
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
@@ -239,12 +301,14 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
-- **Why $$ deferred?** Avoids startup interleaving; mirrors cncjs/gSender.
+- **Why $$ deferred?** Avoids startup interleaving so the connection handshake completes before we refresh the settings table.
 - **Why strict alarms?** Safety; matches ref senders.
 - **Persistent offsets (G10)?** Swap zero commands if desired.
 
 ## License
 GPL-3.0-or-later © 2026 Bob Kolbasowski
+
+
 
 ## Appendix A: GRBL 1.1h Commands
 The sender exposes a curated subset of GRBL's real-time, system, and motion commands. Below is the syntax and an example for each group.
@@ -288,19 +352,10 @@ The sender exposes a curated subset of GRBL's real-time, system, and motion comm
 
 Use the console or macros whenever you need a command that is not exposed via buttons - every `G` current GRBL command can be typed manually. The tables above capture the commands that the UI, macros, and override controls leverage most heavily.
 
-## Appendix C: Macro Reference
 
-| Macro | Purpose | When to use | When to avoid | Code notes |
-| --- | --- | --- | --- | --- |
-| Macro-1: Return to Work X & Y Zero (Safe Height) | Raises to a safe Z before moving to X0 Y0 so you can reset work coordinates without crashing. | When you need a quick safe return to the origin before setting offsets. | Avoid while actively executing a job; use only when motion is paused. | Defines `%macro.state.SAFE_HEIGHT` and uses `M5`, `G53 G0`, and `%wait` so moves execute away from the workpiece. |
-| Macro-2: Park over Tool Sensor | Drives to the fixed probe location so you can clean the sensor or stage fixtures. | Park the spindle for maintenance or measurement after a job finishes. | Don’t use while cutting or while the spindle is still rotating. | Stores `PROBE_X/Y_LOCATION` in `%macro.state` and issues `G53 G0` so the coordinates ignore any applied offsets. |
-| Macro-3: Reference Tool Recovery | Re-probes the reference tool when the stored `TOOL_REFERENCE` is missing, then saves the result. | Run after a crash or failed recovery to restore the reference measurement. | Skip if `macro.state.TOOL_REFERENCE` already exists; the macro exits early if the reference is present. | Guards with `%if getattr(macro.state, "TOOL_REFERENCE", None) is not None` and logs the recovered value with `%msg`. |
-| Macro-4: XYZ Touch Plate & Reference Tool Setup | Probes the touch plate (Z/X/Y) and captures the reference tool height for later restorations. | Use during initial calibration or whenever the touch plate setup changes. | Don’t run during a production cycle; the routine assumes the tool is free to move to the plate. | Mixes fast and slow probing commands with `G92` offsets before updating `%macro.state.TOOL_REFERENCE`. |
-| Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn’t been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
-| Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don’t run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE`, and logs the new height. |
-| Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it’s purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
 
 ## Appendix B: GRBL 1.1h Settings (selected)
+
 - $0 Step pulse, us
 - $1 Step idle delay, ms
 - $2 Step port invert mask
@@ -329,3 +384,18 @@ Use the console or macros whenever you need a command that is not exposed via bu
 - $130/$131/$132 Max travel, mm (X/Y/Z)
 
 Use the Settings tab to edit; pending edits highlight in yellow until sent. Numeric validation and broad ranges are enforced; adjust as needed for your machine. 
+
+
+
+## Appendix C: Macro Reference
+
+| Macro | Purpose | When to use | When to avoid | Code notes |
+| --- | --- | --- | --- | --- |
+| Macro-1: Return to Work X & Y Zero (Safe Height) | Raises to a safe Z before moving to X0 Y0 so you can reset work coordinates without crashing. | When you need a quick safe return to the origin before setting offsets. | Avoid while actively executing a job; use only when motion is paused. | Defines `%macro.state.SAFE_HEIGHT` and uses `M5`, `G53 G0`, and `%wait` so moves execute away from the workpiece. |
+| Macro-2: Park over Tool Sensor | Drives to the fixed probe location so you can clean the sensor or stage fixtures. | Park the spindle for maintenance or measurement after a job finishes. | Don’t use while cutting or while the spindle is still rotating. | Stores `PROBE_X/Y_LOCATION` in `%macro.state` and issues `G53 G0` so the coordinates ignore any applied offsets. |
+| Macro-3: Reference Tool Recovery | Re-probes the reference tool when the stored `TOOL_REFERENCE` is missing, then saves the result. | Run after a crash or failed recovery to restore the reference measurement. | Skip if `macro.state.TOOL_REFERENCE` already exists; the macro exits early if the reference is present. | Guards with `%if getattr(macro.state, "TOOL_REFERENCE", None) is not None` and logs the recovered value with `%msg`. |
+| Macro-4: XYZ Touch Plate & Reference Tool Setup | Probes the touch plate (Z/X/Y) and captures the reference tool height for later restorations. | Use during initial calibration or whenever the touch plate setup changes. | Don’t run during a production cycle; the routine assumes the tool is free to move to the plate. | Mixes fast and slow probing commands with `G92` offsets before updating `%macro.state.TOOL_REFERENCE`. |
+| Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn’t been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
+| Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don’t run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE`, and logs the new height. |
+| Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it’s purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
+

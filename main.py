@@ -244,6 +244,7 @@ class MacroExecutor:
             "version": "",
             "controller": "",
             "running": False,
+            "paused": False,
             "prompt_choice": "",
             "prompt_index": -1,
             "prompt_cancelled": False,
@@ -735,6 +736,14 @@ class MacroExecutor:
             if line.startswith("%if running"):
                 with self._macro_vars_lock:
                     if not self._macro_vars.get("running"):
+                        return None
+            if line.startswith("%if not running"):
+                with self._macro_vars_lock:
+                    if self._macro_vars.get("running"):
+                        return None
+            if line.startswith("%if paused"):
+                with self._macro_vars_lock:
+                    if not self._macro_vars.get("paused"):
                         return None
             try:
                 return compile(line[1:], "", "exec")
@@ -8025,11 +8034,12 @@ class App(tk.Tk):
                 self._live_estimate_min = None
                 self._refresh_gcode_stats_display()
                 self.throughput_var.set("TX: 0 B/s")
-            if st == "loaded":
-                self.progress_pct.set(0)
-                total = evt[2]
-                with self.macro_executor.macro_vars() as macro_vars:
-                    macro_vars["running"] = False
+                if st == "loaded":
+                    self.progress_pct.set(0)
+                    total = evt[2]
+                    with self.macro_executor.macro_vars() as macro_vars:
+                        macro_vars["running"] = False
+                        macro_vars["paused"] = False
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="disabled")
                 if (
@@ -8051,6 +8061,7 @@ class App(tk.Tk):
             elif st == "running":
                 with self.macro_executor.macro_vars() as macro_vars:
                     macro_vars["running"] = True
+                    macro_vars["paused"] = False
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="normal")
                 self.btn_resume.config(state="disabled")
@@ -8060,6 +8071,7 @@ class App(tk.Tk):
             elif st == "paused":
                 with self.macro_executor.macro_vars() as macro_vars:
                     macro_vars["running"] = True
+                    macro_vars["paused"] = True
                 self.btn_pause.config(state="disabled")
                 self.btn_resume.config(state="normal")
                 self.btn_resume_from.config(state="disabled")
@@ -8068,6 +8080,7 @@ class App(tk.Tk):
             elif st in ("done", "stopped"):
                 with self.macro_executor.macro_vars() as macro_vars:
                     macro_vars["running"] = False
+                    macro_vars["paused"] = False
                 if st == "done":
                     self.progress_pct.set(100)
                 else:
@@ -8103,6 +8116,7 @@ class App(tk.Tk):
             elif st == "error":
                 with self.macro_executor.macro_vars() as macro_vars:
                     macro_vars["running"] = False
+                    macro_vars["paused"] = False
                 self.progress_pct.set(0)
                 self.btn_run.config(
                     state="normal"
@@ -8136,6 +8150,7 @@ class App(tk.Tk):
             elif st == "alarm":
                 with self.macro_executor.macro_vars() as macro_vars:
                     macro_vars["running"] = False
+                    macro_vars["paused"] = False
                 self.progress_pct.set(0)
                 self.btn_run.config(state="disabled")
                 self.btn_pause.config(state="disabled")
