@@ -232,6 +232,11 @@ This is a practical, end-to-end flow with rationale for key options.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - 3D slow: toggle 3D render off.
 
+## Pre-release Notes
+1. `main.py:122` – `_resolve_settings_path` now avoids the stray `self._alarm_notified` assignment when creating its fallback directory, so the helper no longer raises `NameError` and the settings path can fall back to `~/.simple_sender` cleanly when `%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` creation fails.
+2. `main.py:391` – There is a single `MacroExecutor.notify_alarm` implementation again, which continues to set `_alarm_event` and log the contextual alarm snippet so macros unblock and the log shows which line triggered the alarm.
+3. `main.py:4938` – `last_port` defaults to `None`, so the new `(self.settings.get("last_port") or "").strip()` guard ensures auto-reconnect processing no longer calls `.strip()` on `None` when no prior port has been saved yet.
+
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
 - **Why $$ deferred?** Avoids startup interleaving; mirrors cncjs/gSender.

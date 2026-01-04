@@ -126,7 +126,6 @@ def _resolve_settings_path() -> str:
     except Exception as exc:
         logger.exception("Failed to create settings directory '%s': %s", base_dir, exc)
         fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
-        self._alarm_notified = False
         try:
             os.makedirs(fallback_dir, exist_ok=True)
             base_dir = fallback_dir
@@ -520,16 +519,6 @@ class MacroExecutor:
 
         return re.sub(r"\[macro\.([A-Za-z_]\w*)\]", replace, text)
 
-    def notify_alarm(self, message: str | None):
-        if self._alarm_notified:
-            return
-        self._alarm_notified = True
-        snippet = self._current_macro_line.strip()
-        if snippet:
-            desc = f"[macro] Alarm during '{snippet}': {message or 'alarm'}"
-        else:
-            desc = f"[macro] Alarm triggered: {message or 'alarm'}"
-        self.ui_q.put(("log", desc))
     def _strip_prompt_tokens(self, line: str) -> str:
         return self.PROMPT_BRACKET_PAT.sub(" ", line).strip()
 
@@ -4946,7 +4935,7 @@ class App(tk.Tk):
         if not ports:
             self.current_port.set("")
         if auto_connect and (not self.connected):
-            last = self.settings.get("last_port", "").strip()
+            last = (self.settings.get("last_port") or "").strip()
             if last and last in ports:
                 self.current_port.set(last)
                 try:
