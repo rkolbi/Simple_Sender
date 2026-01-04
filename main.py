@@ -74,6 +74,10 @@ ICON_HOLD = "⏸"
 ICON_UNITS = "↔"
 
 
+_SCRIPT_FILE = __file__ if __file__ is not None else os.path.abspath(sys.argv[0])
+_SCRIPT_DIR = os.path.dirname(_SCRIPT_FILE)
+
+
 def _icon_label(icon: str, label: str) -> str:
     """Render a button label with a leading icon."""
     return f"{icon} {label}"
@@ -131,19 +135,20 @@ def _resolve_settings_path() -> str:
             base_dir = fallback_dir
         except Exception as exc:
             logger.exception("Failed to create fallback settings directory '%s': %s", fallback_dir, exc)
-            base_dir = os.path.dirname(__file__)
+            base_dir = _SCRIPT_DIR
     return os.path.join(base_dir, "settings.json")
 
 
 def _discover_macro_dirs() -> tuple[str, ...]:
     dirs: list[str] = []
     pkg = sys.modules.get("simple_sender")
-    if pkg and getattr(pkg, "__file__", None):
-        pkg_dir = os.path.dirname(pkg.__file__)
+    pkg_file = getattr(pkg, "__file__", None) if pkg else None
+    if pkg_file:
+        pkg_dir = os.path.dirname(pkg_file)
         macros_dir = os.path.join(pkg_dir, "macros")
         if os.path.isdir(macros_dir):
             dirs.append(macros_dir)
-    script_dir = os.path.dirname(__file__)
+    script_dir = _SCRIPT_DIR
     root_macros = os.path.join(script_dir, "macros")
     if os.path.isdir(root_macros) and root_macros not in dirs:
         dirs.append(root_macros)
@@ -742,7 +747,7 @@ class MacroExecutor:
                 return ("COMPILE_ERROR", f"{line} ({exc})")
         if line[0] == ";":
             return None
-        out: list[str] = []
+        out: list[str | types.CodeType] = []
         bracket = 0
         paren = 0
         expr = ""
@@ -1340,7 +1345,7 @@ class MacroPanel:
                 continue
             name, tip = self._read_macro_header(path, idx)
             btn = ttk.Button(self._left_frame, text=name, command=lambda i=idx: self._run_macro(i))
-            btn._kb_id = f"macro_{idx}"
+            set_kb_id(btn, f"macro_{idx}")
             btn.pack(fill="x", pady=(0, 4))
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
@@ -1355,7 +1360,7 @@ class MacroPanel:
                 continue
             name, tip = self._read_macro_header(path, idx)
             btn = ttk.Button(self._right_frame, text=name, command=lambda i=idx: self._run_macro(i))
-            btn._kb_id = f"macro_{idx}"
+            set_kb_id(btn, f"macro_{idx}")
             btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
@@ -1516,6 +1521,7 @@ class GRBLSettingsController:
         self._settings_baseline: dict[str, str] = {}
         self._settings_items: dict[str, str] = {}
         self._settings_raw_lines: list[str] = []
+        self._settings_entry_meta: dict[ttk.Entry, tuple[str, str]] = {}
 
     def build_tabs(self, notebook: ttk.Notebook):
         rtab = ttk.Frame(notebook, padding=6)
@@ -1769,8 +1775,7 @@ class GRBLSettingsController:
         entry.place(x=x, y=y, width=w, height=h)
         entry.insert(0, current)
         entry.focus_set()
-        entry._item = item
-        entry._key = key
+        self._settings_entry_meta[entry] = (key, item)
         self._settings_edit_entry = entry
 
         def commit(_event=None):
@@ -1784,26 +1789,26 @@ class GRBLSettingsController:
         entry.bind("<Escape>", cancel)
 
     def _commit_pending_setting_edit(self):
-        entry = getattr(self, "_settings_edit_entry", None)
+        entry = self._settings_edit_entry
         if entry is None:
             return
-        key = getattr(entry, "_key", None)
-        item = getattr(entry, "_item", None)
+        key, item = self._settings_entry_meta.pop(entry, (None, None))
+        tree = self.settings_tree
         try:
-            if key and item:
+            if key and item and tree:
                 new_val = entry.get().strip()
                 if new_val:
                     try:
                         idx = int(key[1:]) if key.startswith("$") else None
                     except Exception:
                         idx = None
-                    if idx not in GRBL_NON_NUMERIC_SETTINGS:
+                    if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
                         try:
                             val_num = float(new_val)
                         except Exception:
                             messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
                             return
-                        limits = GRBL_SETTING_LIMITS.get(idx, None)
+                        limits = GRBL_SETTING_LIMITS.get(idx)
                         if limits:
                             lo, hi = limits
                             if lo is not None and val_num < lo:
@@ -1812,7 +1817,7 @@ class GRBLSettingsController:
                             if hi is not None and val_num > hi:
                                 messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
                                 return
-                self.settings_tree.set(item, "value", new_val)
+                tree.set(item, "value", new_val)
                 self._settings_values[key] = new_val
                 baseline = self._settings_baseline.get(key, "")
                 if new_val == baseline and key in self._settings_edited:
@@ -1821,6 +1826,7 @@ class GRBLSettingsController:
                     self._settings_edited[key] = new_val
                 self._update_setting_row_tags(key)
         finally:
+            self._settings_entry_meta.pop(entry, None)
             try:
                 entry.destroy()
             except Exception:
@@ -1831,6 +1837,7 @@ class GRBLSettingsController:
         entry = getattr(self, "_settings_edit_entry", None)
         if entry is None:
             return
+        self._settings_entry_meta.pop(entry, None)
         try:
             entry.destroy()
         except Exception:
@@ -2134,24 +2141,26 @@ class Toolpath3D(ttk.Frame):
         self,
         perf_var,
         perf_value_var,
-        on_move=None,
-        on_commit=None,
-        on_key_release=None,
+        on_move: Callable[[str], Any] | None = None,
+        on_commit: Callable[[tk.Event], Any] | None = None,
+        on_key_release: Callable[[tk.Event], Any] | None = None,
     ):
         if self._perf_frame is None:
             frame = ttk.Frame(self._legend_frame)
             frame.pack(side="left", padx=(8, 0))
             ttk.Label(frame, text="3D Performance").pack(side="left")
             ttk.Label(frame, text="Min").pack(side="left", padx=(6, 2))
-            scale = ttk.Scale(
-                frame,
-                from_=0,
-                to=100,
-                orient="horizontal",
-                length=140,
-                variable=perf_var,
-                command=on_move,
-            )
+            scale_kwargs: dict[str, Any] = {
+                "master": frame,
+                "from_": 0,
+                "to": 100,
+                "orient": "horizontal",
+                "length": 140,
+                "variable": perf_var,
+            }
+            if on_move:
+                scale_kwargs["command"] = on_move
+            scale = ttk.Scale(**scale_kwargs)
             scale.pack(side="left", padx=(4, 4))
             ttk.Label(frame, text="Max").pack(side="left", padx=(2, 6))
             if on_commit:
@@ -2165,8 +2174,13 @@ class Toolpath3D(ttk.Frame):
             self._perf_scale = scale
             self._perf_value_label = value_label
         else:
-            self._perf_scale.configure(variable=perf_var, command=on_move)
-            self._perf_value_label.configure(textvariable=perf_value_var)
+            if self._perf_scale is not None:
+                scale_kwargs = {"variable": perf_var}
+                if on_move:
+                    scale_kwargs["command"] = on_move
+                self._perf_scale.configure(**scale_kwargs)
+            if self._perf_value_label is not None:
+                self._perf_value_label.configure(textvariable=perf_value_var)
 
     def _report_perf(self, label: str, duration: float):
         if not self._perf_callback:
@@ -3115,17 +3129,26 @@ class StopSignButton(tk.Canvas):
         if callable(self._command):
             self._command()
 
-    def configure(self, **kwargs):
-        if "text" in kwargs:
-            self._text = kwargs.pop("text")
+    def configure(self, cnf=None, **kwargs):
+        config_options: dict[str, Any] = {}
+        if cnf:
+            if isinstance(cnf, dict):
+                config_options.update(cnf)
+            else:
+                for item in cnf:
+                    if isinstance(item, tuple) and len(item) == 2:
+                        config_options[item[0]] = item[1]
+        config_options.update(kwargs)
+        if "text" in config_options:
+            self._text = config_options.pop("text")
             if self._text_id is not None:
                 self.itemconfig(self._text_id, text=self._text)
-        if "command" in kwargs:
-            self._command = kwargs.pop("command")
-        if "state" in kwargs:
-            self._state = kwargs.pop("state")
+        if "command" in config_options:
+            self._command = config_options.pop("command")
+        if "state" in config_options:
+            self._state = config_options.pop("state")
             self._apply_state()
-        return super().configure(**kwargs)
+        return super().configure(**config_options)
 
     def config(self, **kwargs):
         return self.configure(**kwargs)
@@ -3369,6 +3392,7 @@ class App(tk.Tk):
         self._key_sequence_after_id = None
         self._kb_item_to_button = {}
         self._kb_edit = None
+        self._kb_edit_state: dict[ttk.Entry, dict[str, Any]] = {}
         self._closing = False
         self._connecting = False
         self._disconnecting = False
@@ -3946,7 +3970,7 @@ class App(tk.Tk):
                 command=lambda value=v: self._set_step_xy(value),
             )
             btn.grid(row=r, column=c, padx=2, pady=2, sticky="w")
-            btn._kb_id = f"step_xy_{v:g}"
+            set_kb_id(btn, f"step_xy_{v:g}")
             self._xy_step_buttons.append((v, btn))
             apply_tooltip(btn, f"Set XY step to {v:g}.")
 
@@ -3962,7 +3986,7 @@ class App(tk.Tk):
                 command=lambda value=v: self._set_step_z(value),
             )
             btn.grid(row=r, column=c, padx=2, pady=2, sticky="w")
-            btn._kb_id = f"step_z_{v:g}"
+            set_kb_id(btn, f"step_z_{v:g}")
             self._z_step_buttons.append((v, btn))
             apply_tooltip(btn, f"Set Z step to {v:g}.")
 
@@ -4960,7 +4984,13 @@ class App(tk.Tk):
             return
         self._start_connect_worker(port)
 
-    def _start_connect_worker(self, port: str, *, show_error: bool = True, on_failure=None):
+    def _start_connect_worker(
+        self,
+        port: str,
+        *,
+        show_error: bool = True,
+        on_failure: Callable[[Exception], Any] | None = None,
+    ):
         if self._connecting:
             return
         def worker():
@@ -4972,9 +5002,10 @@ class App(tk.Tk):
                         self.after(0, lambda: messagebox.showerror("Connect failed", str(exc)))
                     except Exception:
                         pass
-                if on_failure:
+                callback = on_failure
+                if callback is not None:
                     try:
-                        self.after(0, lambda exc=exc: on_failure(exc))
+                        self.after(0, lambda exc=exc: callback(exc))
                     except Exception:
                         pass
             finally:
@@ -5694,7 +5725,7 @@ class App(tk.Tk):
     def _load_grbl_setting_info(self):
         info = {}
         keys = []
-        base_dir = os.path.dirname(__file__)
+        base_dir = _SCRIPT_DIR
         csv_path = os.path.join(
             base_dir,
             "ref",
@@ -6386,21 +6417,27 @@ class App(tk.Tk):
         entry = ttk.Entry(self.kb_table)
         entry.place(x=x, y=y, width=w, height=h)
         entry.insert(0, "Press keys...")
-        entry._kb_prev = "" if value == "None" else value
-        entry._kb_placeholder = True
-        entry._kb_seq = []
-        entry._kb_after_id = None
+        self._kb_edit_state[entry] = {
+            "prev": "" if value == "None" else value,
+            "placeholder": True,
+            "seq": [],
+            "after_id": None,
+        }
         entry.focus()
         entry.bind("<KeyPress>", lambda e: self._kb_capture_key(e, row, entry))
         entry.bind("<FocusOut>", lambda e: self._commit_kb_edit(row, entry))
         self._kb_edit = entry
 
     def _kb_capture_key(self, event, row, entry):
+        state = self._kb_edit_state.get(entry)
+        if state is None:
+            return "break"
         if event.keysym in ("Escape",):
             try:
                 entry.destroy()
             except Exception:
                 pass
+            self._kb_edit_state.pop(entry, None)
             self._kb_edit = None
             return "break"
         if event.keysym in ("BackSpace", "Delete"):
@@ -6409,20 +6446,20 @@ class App(tk.Tk):
         label = self._event_to_binding_label(event)
         if not label:
             return "break"
-        seq = getattr(entry, "_kb_seq", [])
+        seq = state["seq"]
         if len(seq) >= 3:
             return "break"
         seq.append(label)
-        entry._kb_seq = seq
-        entry._kb_placeholder = False
+        state["placeholder"] = False
         entry.delete(0, "end")
         entry.insert(0, " ".join(seq))
-        if entry._kb_after_id is not None:
-            entry.after_cancel(entry._kb_after_id)
+        after_id = state.get("after_id")
+        if after_id is not None:
+            entry.after_cancel(after_id)
         if len(seq) >= 3:
             self._commit_kb_edit(row, entry, label_override=" ".join(seq))
             return "break"
-        entry._kb_after_id = entry.after(
+        state["after_id"] = entry.after(
             int(self._key_sequence_timeout * 1000),
             lambda: self._commit_kb_edit(row, entry, label_override=" ".join(seq)),
         )
@@ -6431,6 +6468,7 @@ class App(tk.Tk):
     def _commit_kb_edit(self, row, entry, label_override: str | None = None):
         if self._kb_edit is None:
             return
+        state = self._kb_edit_state.pop(entry, None)
         if label_override is None:
             try:
                 new_val = entry.get()
@@ -6439,13 +6477,15 @@ class App(tk.Tk):
         else:
             new_val = label_override
         try:
-            if hasattr(entry, "_kb_after_id") and entry._kb_after_id is not None:
-                entry.after_cancel(entry._kb_after_id)
+            after_id = state.get("after_id") if state else None
+            if after_id is not None:
+                entry.after_cancel(after_id)
             entry.destroy()
         except Exception:
             pass
         self._kb_edit = None
-        if label_override is None and getattr(entry, "_kb_placeholder", False):
+        placeholder = state.get("placeholder") if state else False
+        if label_override is None and placeholder:
             if new_val.strip() == "Press keys...":
                 return
         btn = self._kb_item_to_button.get(row)
