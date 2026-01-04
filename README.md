@@ -1,8 +1,8 @@
-# Simple Sender - Full Manual
+# Simple Sender — Full Manual
 
-Minimal, reliable GRBL 1.1h sender for 3-axis controllers. Python + Tkinter + pyserial. This manual is the single place to learn, use, and troubleshoot the app.
+A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-Safety: Alpha software. Test in air with spindle off.
+> **Safety notice:** This is **alpha** software. Always test “in the air” with the spindle **off** before cutting material.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -40,8 +40,10 @@ Safety: Alpha software. Test in air with spindle off.
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Macros: left-click to run, right-click to preview.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
+
 ## Requirements & Installation
 - Python 3.x, Tkinter (bundled), pyserial.
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -81,15 +83,15 @@ This is a practical, end-to-end flow with rationale for key options.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
- 5) **App safety options**
-    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
-    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
-    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
-    - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
- 6) **Prepare the machine**
-    - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
-    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-    - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts; each slider move nudges GRBL in 10% steps while the override summary mirrors the current Ov* values.
+5) **App safety options**
+   - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
+   - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
+   - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
+   - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
+6) **Prepare the machine**
+   - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
+   - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
+   - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts; each slider move nudges GRBL in 10% steps while the override summary mirrors the current Ov* values.
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
@@ -100,7 +102,8 @@ This is a practical, end-to-end flow with rationale for key options.
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
    - Raw $$ tab keeps the text capture.
 10) **Macros**
-     - Left-click to run; right-click to preview contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
+   - Left-click to run; right-click to preview contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
+
 ## Quick Start Workflow
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
@@ -128,6 +131,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
   - `H` or the textual **Hold** state lights the **Hold** LED while GRBL is paused/feed-hold.
 - **How to use them:** Watch them before you jog to confirm no limits are stuck, rely on the Probe LED during probing macros, and note Hold when you issue `!`/`~`. They are purely informational; the rest of the UI still enforces streaming locks, alarms, and macro gating.
+
 ## Core Behaviors
 - **Handshake:** Waits for GRBL banner or status + first status report before enabling controls/$$.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
@@ -136,12 +140,14 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Performance mode:** Batches console updates, suppresses per-line RX logging during streaming, and adapts status polling by state.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
+
 ## Jobs, Files, and Streaming
 - **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
 - **Completion alert:** When a job finishes streaming, a dialog summarizes the start/finish/elapsed wallclock so you know the file completed without monitoring the logs.
+
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
 - Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.
@@ -150,6 +156,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
 - Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
 - Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
+
 ## GRBL Settings UI
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
@@ -281,11 +288,13 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
 - 3D View: Rapid/Feed/Arc legend toggles, rotate/pan/zoom, live position marker, save/load/reset view; quality controls (draw limits, arc detail, lightweight preview) live in App Settings.
+
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
+
 ## Troubleshooting
 - No ports: install driver, try another cable/port.
 - Connect fails: verify port/baud 115200; close other apps.
@@ -398,4 +407,3 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 | Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn’t been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
 | Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don’t run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE`, and logs the new height. |
 | Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it’s purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
-

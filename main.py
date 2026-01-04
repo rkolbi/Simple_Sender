@@ -36,7 +36,7 @@ import traceback
 import hashlib
 import logging
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from contextlib import contextmanager
 
 # GUI imports
@@ -60,7 +60,7 @@ SERIAL_IMPORT_ERROR = ""
 
 ICON_REFRESH = "⟳"
 ICON_CONNECT = "⚡"
-ICON_JOB_READ = "📥"
+ICON_JOB_READ = "⏺"
 ICON_JOB_CLEAR = "⏏"
 ICON_RUN = "▶"
 ICON_PAUSE = "⏸"
@@ -76,6 +76,12 @@ ICON_UNITS = "↔"
 
 _SCRIPT_FILE = __file__ if __file__ is not None else os.path.abspath(sys.argv[0])
 _SCRIPT_DIR = os.path.dirname(_SCRIPT_FILE)
+
+_TOOLPATH_SEGMENT_COLORS = {
+    "rapid": "#8a8a8a",
+    "feed": "#2c6dd2",
+    "arc": "#2aa876",
+}
 
 
 def _icon_label(icon: str, label: str) -> str:
@@ -1386,10 +1392,16 @@ class ToolpathPanel:
     def __init__(self, app):
         self.app = app
         self.view: Toolpath3D | None = None
+        self.top_view: Optional["TopViewPanel"] = None
         self.tab: ttk.Frame | None = None
         self._streaming = False
 
     def build_tab(self, notebook: ttk.Notebook):
+        top_tab = ttk.Frame(notebook, padding=6)
+        notebook.add(top_tab, text="Top View")
+        self.top_view = TopViewPanel(top_tab)
+        self.top_view.pack(fill="both", expand=True)
+
         tab = ttk.Frame(notebook, padding=6)
         notebook.add(tab, text="3D View")
         self.tab = tab
@@ -1444,18 +1456,31 @@ class ToolpathPanel:
         if self.view:
             self.view.set_gcode_async(lines)
 
+    def set_top_view_lines(self, lines: list[str] | None):
+        if self.top_view:
+            self.top_view.set_lines(lines)
+
     def clear(self):
         if self.view:
             self.view.set_gcode_async([])
             self.view.set_job_name("")
+        if self.top_view:
+            self.top_view.clear()
 
     def set_job_name(self, name: str):
         if self.view:
             self.view.set_job_name(name)
+        if self.top_view:
+            self.top_view.set_job_name(name)
 
     def set_visible(self, visible: bool):
         if self.view:
             self.view.set_visible(visible)
+        # Keep the top view hidden only when its tab is not selected.
+
+    def set_top_view_visible(self, visible: bool):
+        if self.top_view:
+            self.top_view.set_visible(visible)
 
     def set_enabled(self, enabled: bool):
         if self.view:
@@ -2922,6 +2947,184 @@ class Toolpath3D(ttk.Frame):
         )
 
         self._update_position_marker()
+
+
+class TopViewPanel(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.canvas = tk.Canvas(self, background=_resolve_widget_bg(self), highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda event: self._schedule_render())
+        self.segments: list[tuple[float, float, float, float, float, float, str]] = []
+        self.bounds: tuple[float, float, float, float, float, float] | None = None
+        self._job_name = ""
+        self._visible = True
+        self._render_pending = False
+        self._parse_token = 0
+        self._arc_step_rad = math.pi / 18
+        self._colors = _TOOLPATH_SEGMENT_COLORS
+
+    def set_lines(self, lines: list[str] | None):
+        self._parse_token += 1
+        token = self._parse_token
+        if not lines:
+            self.segments = []
+            self.bounds = None
+            self._schedule_render()
+            return
+        snapshot = tuple(lines)
+
+        def worker(parse_lines=snapshot, parse_token=token):
+            result = parse_gcode_lines(parse_lines, self._arc_step_rad)
+            if result is None:
+                return
+            self.after(0, lambda res=result, tok=parse_token: self._apply_parse_result(tok, res))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_parse_result(self, token: int, result):
+        if token != self._parse_token or result is None:
+            return
+        self.segments = result.segments
+        self.bounds = result.bounds
+        self._schedule_render()
+
+    def clear(self):
+        self._parse_token += 1
+        self.segments = []
+        self.bounds = None
+        self._job_name = ""
+        self._schedule_render()
+
+    def set_job_name(self, name: str | None):
+        self._job_name = str(name) if name else ""
+        self._schedule_render()
+
+    def set_visible(self, visible: bool):
+        visible = bool(visible)
+        if self._visible == visible:
+            return
+        self._visible = visible
+        if self._visible:
+            self._schedule_render()
+
+    def _segments_bounds(self, segments):
+        if not segments:
+            return None
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        for x1, y1, _, x2, y2, _, _ in segments:
+            minx = min(minx, x1, x2)
+            miny = min(miny, y1, y2)
+            maxx = max(maxx, x1, x2)
+            maxy = max(maxy, y1, y2)
+        return minx, maxx, miny, maxy, 0.0, 0.0
+
+    def _schedule_render(self):
+        if not self._visible or self._render_pending:
+            return
+        self._render_pending = True
+        self.after_idle(self._render)
+
+    def _render(self):
+        self._render_pending = False
+        if not self.winfo_exists():
+            return
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        self.canvas.delete("all")
+        if not self.segments:
+            msg = "No G-code loaded"
+            if self._job_name:
+                msg = f"{self._job_name}\n{msg}"
+            self.canvas.create_text(w / 2, h / 2, text=msg, fill="#666666", justify="center")
+            return
+        bounds = self.bounds or self._segments_bounds(self.segments)
+        if not bounds:
+            return
+        minx, maxx, miny, maxy, _, _ = bounds
+        dx = max(maxx - minx, 1e-6)
+        dy = max(maxy - miny, 1e-6)
+        margin = 20
+        scale_x = max(w - margin * 2, 1) / dx
+        scale_y = max(h - margin * 2, 1) / dy
+        scale = min(scale_x, scale_y)
+        offset_x = (w - dx * scale) / 2
+        offset_y = (h - dy * scale) / 2
+
+        def to_canvas(x, y):
+            cx = (x - minx) * scale + offset_x
+            cy = h - ((y - miny) * scale + offset_y)
+            return cx, cy
+
+        runs: dict[str, list[list[float]]] = {}
+        cur_color = None
+        cur_pts: list[float] = []
+        last_end = None
+
+        def flush_run():
+            nonlocal cur_color, cur_pts, last_end
+            if cur_color and len(cur_pts) >= 4:
+                runs.setdefault(cur_color, []).append(cur_pts)
+            cur_color = None
+            cur_pts = []
+            last_end = None
+
+        eps = 1e-6
+        for x1, y1, _, x2, y2, _, color in self.segments:
+            px1, py1 = to_canvas(x1, y1)
+            px2, py2 = to_canvas(x2, y2)
+            continuous = (
+                cur_color == color
+                and last_end is not None
+                and abs(px1 - last_end[0]) <= eps
+                and abs(py1 - last_end[1]) <= eps
+            )
+            if not continuous:
+                flush_run()
+                cur_color = color
+                cur_pts = [px1, py1, px2, py2]
+            else:
+                cur_pts.extend([px2, py2])
+            last_end = (px2, py2)
+        flush_run()
+
+        for color, polylines in runs.items():
+            color_hex = self._colors.get(color, "#2c6dd2")
+            for pts in polylines:
+                self.canvas.create_line(*pts, fill=color_hex)
+
+        x0, y0 = to_canvas(minx, miny)
+        x1, y1 = to_canvas(maxx, maxy)
+        self.canvas.create_rectangle(
+            min(x0, x1),
+            min(y0, y1),
+            max(x0, x1),
+            max(y0, y1),
+            outline="#ffffff",
+            width=1,
+        )
+
+        if minx <= 0 <= maxx and miny <= 0 <= maxy:
+            ox, oy = to_canvas(0.0, 0.0)
+            cross = 6
+            self.canvas.create_line(ox - cross, oy, ox + cross, oy, fill="#ffffff")
+            self.canvas.create_line(ox, oy - cross, ox, oy + cross, fill="#ffffff")
+
+        overlay = [f"Segments: {len(self.segments):,}", "View: Top"]
+        if self._job_name:
+            overlay.insert(0, f"Job: {self._job_name}")
+        self.canvas.create_text(
+            12,
+            12,
+            text="\n".join(overlay),
+            fill="#ffffff",
+            anchor="nw",
+            justify="left",
+        )
+
 
 class ToolTip:
     def __init__(self, widget, text: str, delay_ms: int = 1000):
@@ -5376,6 +5579,7 @@ class App(tk.Tk):
             self.toolpath_panel.set_gcode_lines(lines)
         else:
             self.toolpath_panel.set_enabled(False)
+        self.toolpath_panel.set_top_view_lines(lines)
         self.toolpath_panel.set_job_name(os.path.basename(path))
         self.status.config(text=f"Loaded: {os.path.basename(path)}  ({len(lines)} lines)")
 
@@ -7178,7 +7382,7 @@ class App(tk.Tk):
     def _update_tab_visibility(self, nb=None):
         if nb is None:
             nb = getattr(self, "notebook", None)
-        if not nb or not self.toolpath_panel.view:
+        if not nb:
             return
         try:
             tab_id = nb.select()
@@ -7187,6 +7391,7 @@ class App(tk.Tk):
             logger.exception("Failed to update tab visibility: %s", exc)
             return
         self.toolpath_panel.set_visible(label == "3D View")
+        self.toolpath_panel.set_top_view_visible(label == "Top View")
 
     def _update_app_settings_scrollregion(self):
         if not hasattr(self, "app_settings_canvas"):
@@ -8034,6 +8239,7 @@ class App(tk.Tk):
                 self._live_estimate_min = None
                 self._refresh_gcode_stats_display()
                 self.throughput_var.set("TX: 0 B/s")
+                total = None
                 if st == "loaded":
                     self.progress_pct.set(0)
                     total = evt[2]
