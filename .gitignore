@@ -10,5 +10,3 @@ venv/
 *.sqlite3
 .env
 settings.json
-.vscode
-.vscode/
