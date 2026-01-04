@@ -2,7 +2,7 @@
 
 A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-![Alt text for the image](pics/Slide8.JPG)
+![-](pics/Slide8.JPG)
 
 > **Safety notice:** This is **alpha** software. Always test “in the air” with the spindle **off** before cutting material.
 
@@ -119,28 +119,28 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
 
-    ![Alt text for the image](pics/Slide1.JPG)
+    ![-](pics/Slide1.JPG)
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
 
-    ![Alt text for the image](pics/Slide2.JPG)
+    ![-](pics/Slide2.JPG)
   - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders with +/-/reset shortcuts and a live override summary that mirrors GRBL's Ov* values while each slider move emits the matching 10% real-time byte.
 
-    ![Alt text for the image](pics/Slide3.JPG)
+    ![-](pics/Slide3.JPG)
   - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
 
-    ![Alt text for the image](pics/Slide4.JPG)
+    ![-](pics/Slide4.JPG)
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
-    ![Alt text for the image](pics/Slide5.JPG)
+    ![-](pics/Slide5.JPG)
   - **App Settings:** Banner showing `Simple Sender – Version: v0.1.0`, theme picker, ALL STOP mode, estimation factors/fallbacks, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, machine profiles, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
 
-    ![Alt text for the image](pics/Slide6.JPG)
+    ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
 
-    ![Alt text for the image](pics/Slide7.JPG)
+    ![-](pics/Slide7.JPG)
   - **3D View:** Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
 
-    ![Alt text for the image](pics/Slide8.JPG)
+    ![-](pics/Slide8.JPG)
 
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
 
@@ -182,6 +182,8 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Macros
 Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations.
+
+![-](pics/Slide9.JPG)
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
