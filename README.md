@@ -2,6 +2,8 @@
 
 A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
+![](D:\simple_sender_refactored\pics\Slide8.JPG)
+
 > **Safety notice:** This is **alpha** software. Always test “in the air” with the spindle **off** before cutting material.
 
 ## Table of Contents
@@ -115,13 +117,31 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
 - **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Macro buttons (if Macro-1..Macro-7 files exist).
 - **Tabs:**
-  - G-code viewer (highlights sent/acked/current; light colors).
-  - Console (log + manual command entry; filters).
-  - Raw $$ (captured settings dump).
-  - GRBL Settings (editable table, tooltips, pending-change highlight).
-  - App Settings (banner showing `Simple Sender – Version: v0.1.0`, Theme picker for ttk styles, ALL STOP mode, estimation factor/fallback, status polling interval + disconnect threshold, error dialog settings with job completion dialog/beep toggles, jogging feed defaults, macro scripting toggle, keybindings, current-line highlight mode, 3D view quality, Training Wheels, auto-reconnect, machine profiles, and the Interface block for toggling Performance mode plus resume/recover button visibility—logging/error-dialog controls also live here).
-  - Overdrive (Spindle ON/OFF plus feed/spindle override sliders with nice sliding controls, +/-/reset shortcuts, and a live override summary that follows GRBL's Ov* values while slider moves send the matching 10% real-time override bytes).
-  - 3D View (Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view).
+  - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
+
+    ![G-code tab screenshot](pics/Slide1.JPG)
+  - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
+
+    ![Console tab screenshot](pics/Slide2.JPG)
+  - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders with +/-/reset shortcuts and a live override summary that mirrors GRBL's Ov* values while each slider move emits the matching 10% real-time byte.
+
+    ![Overdrive tab screenshot](pics/Slide3.JPG)
+  - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
+
+    ![Raw $$ tab screenshot](pics/Slide4.JPG)
+  - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
+
+    ![GRBL Settings tab screenshot](pics/Slide5.JPG)
+  - **App Settings:** Banner showing `Simple Sender – Version: v0.1.0`, theme picker, ALL STOP mode, estimation factors/fallbacks, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, machine profiles, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
+
+    ![App Settings tab screenshot](pics/Slide6.JPG)
+  - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
+
+    ![Top View tab screenshot](pics/Slide7.JPG)
+  - **3D View:** Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
+
+    ![3D View tab screenshot](pics/Slide8.JPG)
+
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
 
 ## Status Lights
