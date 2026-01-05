@@ -36,6 +36,7 @@ import traceback
 import hashlib
 import logging
 from collections import deque
+from types import ModuleType
 from typing import Any, Callable, Optional
 from contextlib import contextmanager
 
@@ -43,6 +44,18 @@ from contextlib import contextmanager
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
+
+PYGAME_IMPORT_ERROR = ""
+pygame: ModuleType | None = None
+PYGAME_AVAILABLE = False
+try:
+    import pygame as _pygame_module
+except ImportError as exc:
+    pygame = None
+    PYGAME_IMPORT_ERROR = str(exc)
+else:
+    pygame = _pygame_module
+    PYGAME_AVAILABLE = True
 
 # Refactored module imports
 from simple_sender.grbl_worker import GrblWorker
@@ -82,6 +95,23 @@ _TOOLPATH_SEGMENT_COLORS = {
     "feed": "#2c6dd2",
     "arc": "#2aa876",
 }
+
+
+JOYSTICK_AXIS_THRESHOLD = 0.7
+JOYSTICK_POLL_INTERVAL_MS = 50
+JOYSTICK_CAPTURE_TIMEOUT_MS = 15000
+JOYSTICK_HOLD_REPEAT_MS = 150
+JOYSTICK_LISTENING_TEXT = "Listening for joystick input..."
+
+JOYSTICK_HOLD_DEFINITIONS: list[tuple[str, str, str, int]] = [
+    ("X-", "jog_hold_x_minus", "X", -1),
+    ("X+", "jog_hold_x_plus", "X", 1),
+    ("Y-", "jog_hold_y_minus", "Y", -1),
+    ("Y+", "jog_hold_y_plus", "Y", 1),
+    ("Z-", "jog_hold_z_minus", "Z", -1),
+    ("Z+", "jog_hold_z_plus", "Z", 1),
+]
+JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
 
 
 def _icon_label(icon: str, label: str) -> str:
@@ -3401,6 +3431,30 @@ def set_kb_id(widget, kb_id: str):
     return widget
 
 
+class VirtualHoldButton:
+    def __init__(self, label: str, kb_id: str, axis: str, direction: int):
+        self._text = label
+        self._kb_id = kb_id
+        self._hold_axis = axis
+        self._hold_direction = direction
+        self._tooltip_text = ""
+
+    def cget(self, key: str):
+        if key == "text":
+            return self._text
+        if key == "state":
+            return "normal"
+        if key == "command":
+            return None
+        raise KeyError(key)
+
+    def winfo_name(self):
+        return f"virtual_{self._kb_id}"
+
+    def winfo_class(self):
+        return "VirtualHoldButton"
+
+
 class App(tk.Tk):
     HIDDEN_MPOS_BUTTON_STYLE = "SimpleSender.HiddenMpos.TButton"
     def __init__(self):
@@ -3441,6 +3495,12 @@ class App(tk.Tk):
         self.keyboard_bindings_enabled = tk.BooleanVar(
             value=self.settings.get("keyboard_bindings_enabled", True)
         )
+        self.joystick_bindings_enabled = tk.BooleanVar(
+            value=self.settings.get("joystick_bindings_enabled", False)
+        )
+        if self.joystick_bindings_enabled.get() and not PYGAME_AVAILABLE:
+            self.joystick_bindings_enabled.set(False)
+        self._joystick_auto_enable_requested = bool(self.joystick_bindings_enabled.get())
         self.job_completion_popup = tk.BooleanVar(value=self.settings.get("job_completion_popup", True))
         self.job_completion_beep = tk.BooleanVar(value=self.settings.get("job_completion_beep", False))
         pos_enabled = bool(self.settings.get("console_positions_enabled", True))
@@ -3582,6 +3642,13 @@ class App(tk.Tk):
                 self._key_bindings[str(k)] = self._normalize_key_label(str(v))
         else:
             self._key_bindings = {}
+        raw_joystick_bindings = self.settings.get("joystick_bindings", {})
+        normalized_joystick_bindings: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_joystick_bindings, dict):
+            for key, binding in raw_joystick_bindings.items():
+                if isinstance(binding, dict):
+                    normalized_joystick_bindings[str(key)] = dict(binding)
+        self._joystick_bindings: dict[str, dict[str, Any]] = normalized_joystick_bindings
         self._machine_profiles = self._load_machine_profiles()
         active_profile = self.settings.get("active_profile", "")
         if active_profile and not self._get_profile_by_name(active_profile):
@@ -3605,6 +3672,26 @@ class App(tk.Tk):
         self._kb_item_to_button = {}
         self._kb_edit = None
         self._kb_edit_state: dict[ttk.Entry, dict[str, Any]] = {}
+        self._joystick_binding_map: dict[tuple, Any] = {}
+        self._joystick_capture_state: dict[str, Any] | None = None
+        self._joystick_poll_id: Any = None
+        self._joystick_backend_ready = False
+        self._joystick_names: dict[int, str] = {}
+        self._joystick_instances: dict[int, Any] = {}
+        self._joystick_button_poll_state: dict[tuple[int, int], bool] = {}
+        self._joystick_axis_poll_state: dict[tuple[int, int], float] = {}
+        self._joystick_hat_poll_state: dict[tuple[int, int], tuple[int, int]] = {}
+        self._joystick_axis_active: set[tuple[int, int, int]] = set()
+        self._joystick_hat_active: set[tuple[int, int, tuple[int, int]]] = set()
+        self._virtual_hold_buttons: list[VirtualHoldButton] = []
+        self._active_joystick_hold_binding: str | None = None
+        self._joystick_hold_after_id: Any = None
+        self.joystick_test_status = tk.StringVar(
+            value="Press 'Refresh joystick list' to discover controllers."
+        )
+        self.joystick_event_status = tk.StringVar(
+            value="Joystick events appear here while listening."
+        )
         self._closing = False
         self._connecting = False
         self._disconnecting = False
@@ -3758,6 +3845,7 @@ class App(tk.Tk):
         self._set_manual_controls_enabled(False)
 
         self.after(50, self._drain_ui_queue)
+        self.after(0, self._restore_joystick_bindings_on_start)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.refresh_ports(auto_connect=bool(self.reconnect_on_open.get()))
@@ -3769,6 +3857,7 @@ class App(tk.Tk):
                 pass
         self._load_grbl_setting_info()
         self.streaming_controller.bind_button_logging()
+        self._virtual_hold_buttons = self._create_virtual_hold_buttons()
         self._apply_keyboard_bindings()
 
     def _unit_toggle_label(self, mode: str | None = None) -> str:
@@ -4579,20 +4668,22 @@ class App(tk.Tk):
             variable=self.keyboard_bindings_enabled,
             command=self._on_keyboard_bindings_check,
         )
-        self.kb_enable_check.grid(row=0, column=0, columnspan=2, sticky="w", padx=(6, 10), pady=(4, 2))
+        self.kb_enable_check.grid(row=0, column=0, sticky="w", padx=(6, 10), pady=(4, 2))
         apply_tooltip(self.kb_enable_check, "Toggle keyboard shortcuts.")
 
         self.kb_table = ttk.Treeview(
-            kb_frame, columns=("button", "axis", "key", "clear"), show="headings", height=6
+            kb_frame, columns=("button", "axis", "key", "joystick", "clear"), show="headings", height=6
         )
         self.kb_table.heading("button", text="Button")
         self.kb_table.heading("axis", text="Axis")
         self.kb_table.heading("key", text="Key")
+        self.kb_table.heading("joystick", text="Joystick")
         self.kb_table.heading("clear", text="")
         self.kb_table.column("button", width=220, anchor="w")
         self.kb_table.column("axis", width=50, anchor="center")
-        self.kb_table.column("key", width=140, anchor="w")
-        self.kb_table.column("clear", width=160, anchor="w")
+        self.kb_table.column("key", width=140, anchor="center")
+        self.kb_table.column("joystick", width=180, anchor="center")
+        self.kb_table.column("clear", width=160, anchor="e")
         self.kb_table.grid(row=1, column=0, sticky="nsew", padx=(6, 0), pady=(0, 6))
         self.kb_table_scroll = ttk.Scrollbar(kb_frame, orient="vertical", command=self.kb_table.yview)
         self.kb_table.configure(yscrollcommand=self.kb_table_scroll.set)
@@ -4607,6 +4698,42 @@ class App(tk.Tk):
             justify="left",
         )
         self.kb_note.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
+
+        joystick_test_frame = ttk.LabelFrame(kb_frame, text="Joystick testing", padding=8)
+        joystick_test_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=6, pady=(0, 6))
+        joystick_test_frame.grid_columnconfigure(0, weight=1)
+        joystick_test_frame.grid_columnconfigure(1, weight=0)
+        self.joystick_test_label = ttk.Label(
+            joystick_test_frame,
+            textvariable=self.joystick_test_status,
+            wraplength=520,
+            justify="left",
+        )
+        self.joystick_test_label.grid(row=0, column=0, sticky="w")
+        self.btn_refresh_joysticks = ttk.Button(
+            joystick_test_frame,
+            text="Refresh joystick list",
+            command=self._refresh_joystick_test_info,
+        )
+        self.btn_refresh_joysticks.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.btn_toggle_joystick_bindings = ttk.Button(
+            joystick_test_frame,
+            text="Enable USB Joystick Bindings",
+            command=self._toggle_joystick_bindings,
+        )
+        set_kb_id(self.btn_toggle_joystick_bindings, "toggle_joystick_bindings")
+        self.btn_toggle_joystick_bindings.grid(row=1, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+        apply_tooltip(
+            self.btn_toggle_joystick_bindings,
+            "Enable or disable joystick shortcuts and capture new bindings from a USB joystick.",
+        )
+        self.joystick_event_label = ttk.Label(
+            joystick_test_frame,
+            textvariable=self.joystick_event_status,
+            wraplength=520,
+            justify="left",
+        )
+        self.joystick_event_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         view_frame = ttk.LabelFrame(self._app_settings_inner, text="G-code view", padding=8)
         view_frame.grid(row=9, column=0, sticky="ew")
@@ -6456,10 +6583,416 @@ class App(tk.Tk):
         self._refresh_keybindings_toggle_text()
         self._apply_keyboard_bindings()
 
+    def _toggle_joystick_bindings(self):
+        if not PYGAME_AVAILABLE:
+            messagebox.showwarning(
+                "Joystick bindings",
+                "USB joystick support requires pygame. Install pygame and restart the application.",
+            )
+            return
+        new_state = not bool(self.joystick_bindings_enabled.get())
+        self.joystick_bindings_enabled.set(new_state)
+        self._refresh_joystick_toggle_text()
+        self._update_joystick_polling_state()
+
     def _on_keyboard_bindings_check(self):
         new_val = bool(self.keyboard_bindings_enabled.get())
         self._refresh_keybindings_toggle_text()
         self._apply_keyboard_bindings()
+
+    def _refresh_joystick_toggle_text(self):
+        if not hasattr(self, "btn_toggle_joystick_bindings"):
+            return
+        if not PYGAME_AVAILABLE:
+            self.btn_toggle_joystick_bindings.config(text="Joystick support requires pygame", state="disabled")
+            return
+        text = (
+            "Disable USB Joystick Bindings"
+            if self.joystick_bindings_enabled.get()
+            else "Enable USB Joystick Bindings"
+        )
+        self.btn_toggle_joystick_bindings.config(text=text, state="normal")
+        self._refresh_joystick_test_info()
+
+    def _update_joystick_polling_state(self):
+        self._refresh_joystick_toggle_text()
+        if not self.joystick_bindings_enabled.get():
+            self._cancel_joystick_capture()
+            self._stop_joystick_polling()
+            self._stop_joystick_hold()
+            return
+        if not self._ensure_joystick_backend():
+            messagebox.showwarning(
+                "Joystick bindings",
+                "Failed to initialize the joystick backend. Check that pygame is installed and a joystick is connected.",
+            )
+            self.joystick_bindings_enabled.set(False)
+            self._refresh_joystick_toggle_text()
+            self._stop_joystick_polling()
+            return
+        self._start_joystick_polling()
+
+    def _restore_joystick_bindings_on_start(self):
+        if not getattr(self, "_joystick_auto_enable_requested", False):
+            return
+        if not hasattr(self, "btn_toggle_joystick_bindings"):
+            self.after(100, self._restore_joystick_bindings_on_start)
+            return
+        self._joystick_auto_enable_requested = False
+        if not self.joystick_bindings_enabled.get():
+            return
+        self._refresh_joystick_toggle_text()
+        self._update_joystick_polling_state()
+
+    def _get_pygame_module(self) -> ModuleType | None:
+        if not PYGAME_AVAILABLE or pygame is None:
+            return None
+        return pygame
+
+    def _discover_joysticks(self, py, count: int) -> list[str]:
+        names: list[str] = []
+        instances: dict[int, Any] = {}
+        if count < 0:
+            count = 0
+        for idx in range(count):
+            try:
+                joy = py.joystick.Joystick(idx)
+                joy.init()
+                name = joy.get_name()
+                instances[idx] = joy
+            except Exception:
+                name = f"Joystick {idx}"
+            names.append(name)
+        self._joystick_instances = instances
+        self._joystick_button_poll_state.clear()
+        self._joystick_axis_poll_state.clear()
+        self._joystick_hat_poll_state.clear()
+        return names
+
+    def _refresh_joystick_test_info(self):
+        if not hasattr(self, "joystick_test_status"):
+            return
+        py = self._get_pygame_module()
+        if py is None:
+            self.joystick_test_status.set("pygame is not installed. Install it to detect USB joysticks.")
+            return
+        try:
+            py.init()
+            py.joystick.init()
+            count = py.joystick.get_count()
+        except Exception as exc:
+            self.joystick_test_status.set(f"Joystick init failed: {exc}")
+            return
+        if count <= 0:
+            self._joystick_names = {}
+            self._joystick_instances = {}
+            self.joystick_test_status.set(
+                "No joysticks detected. Plug in a controller and click Refresh."
+            )
+            return
+        lines = [f"{count} joystick(s) detected:"]
+        names = self._discover_joysticks(py, count)
+        for idx, name in enumerate(names):
+            lines.append(f"• #{idx}: {name}")
+        self._joystick_names = {idx: name for idx, name in enumerate(names)}
+        lines.append("Enable USB joystick bindings and press a button/axis/hat to map it.")
+        self.joystick_test_status.set("\n".join(lines))
+
+    def _ensure_joystick_backend(self):
+        py = self._get_pygame_module()
+        if py is None:
+            return False
+        if self._joystick_backend_ready:
+            return True
+        try:
+            py.init()
+            py.joystick.init()
+            count = py.joystick.get_count()
+            names = self._discover_joysticks(py, count)
+            self._joystick_names = {idx: name for idx, name in enumerate(names)}
+            self._joystick_backend_ready = True
+            return True
+        except Exception as exc:
+            logger.exception("Joystick backend initialization failed: %s", exc)
+            return False
+
+    def _start_joystick_polling(self):
+        if self._joystick_poll_id is not None:
+            return
+        self._poll_joystick_events()
+
+    def _stop_joystick_polling(self):
+        if self._joystick_poll_id is not None:
+            try:
+                self.after_cancel(self._joystick_poll_id)
+            except Exception:
+                pass
+            self._joystick_poll_id = None
+
+    def _ensure_joystick_polling_running(self):
+        if self._joystick_poll_id is None:
+            self._start_joystick_polling()
+
+    def _poll_joystick_events(self):
+        self._joystick_poll_id = None
+        py = self._get_pygame_module()
+        if py is None or not self._ensure_joystick_backend():
+            return
+        try:
+            py.event.pump()
+            events = list(py.event.get())
+            for event in events:
+                self._handle_joystick_event(event)
+            if self._joystick_capture_state and not events:
+                if self._poll_joystick_states_from_hardware(py):
+                    # ensure we still schedule next poll immediately after capturing
+                    pass
+        except Exception as exc:
+            logger.exception("Joystick polling failed: %s", exc)
+        finally:
+            if self.joystick_bindings_enabled.get() or self._joystick_capture_state:
+                self._joystick_poll_id = self.after(JOYSTICK_POLL_INTERVAL_MS, self._poll_joystick_events)
+
+    def _describe_joystick_event(self, event) -> str | None:
+        py = self._get_pygame_module()
+        if py is None:
+            return None
+        kind = py.event.event_name(event.type)
+        parts = [f"{kind}: joy={getattr(event, 'joy', None)}"]
+        if hasattr(event, "button"):
+            parts.append(f"button={event.button}")
+        if hasattr(event, "axis"):
+            parts.append(f"axis={event.axis} value={event.value:.3f}")
+        if hasattr(event, "hat"):
+            parts.append(f"hat={event.hat} value={event.value}")
+        return " ".join(parts)
+
+    def _set_joystick_event_status(self, text: str):
+        if hasattr(self, "joystick_event_status"):
+            self.joystick_event_status.set(text)
+
+    def _handle_joystick_event(self, event):
+        py = self._get_pygame_module()
+        if py is None:
+            return
+        desc = self._describe_joystick_event(event)
+        if desc:
+            self._set_joystick_event_status(desc)
+        key = None
+        button_down_event = False
+        if event.type == py.JOYBUTTONUP:
+            joy = getattr(event, "joy", None)
+            button = getattr(event, "button", None)
+            if joy is not None and button is not None:
+                self._handle_joystick_button_release(("button", joy, button))
+            return
+        if event.type == py.JOYBUTTONDOWN:
+            key = ("button", event.joy, event.button)
+            button_down_event = True
+        elif event.type == py.JOYAXISMOTION:
+            axis_value = getattr(event, "value", 0.0)
+            joy = getattr(event, "joy", None)
+            axis = getattr(event, "axis", None)
+            if joy is None or axis is None:
+                return
+            if axis_value >= JOYSTICK_AXIS_THRESHOLD:
+                direction = 1
+            elif axis_value <= -JOYSTICK_AXIS_THRESHOLD:
+                direction = -1
+            else:
+                self._reset_joystick_axis_state(joy, axis)
+                return
+            key = ("axis", joy, axis, direction)
+            axis_state_key = (joy, axis, direction)
+            if axis_state_key in self._joystick_axis_active:
+                return
+            self._joystick_axis_active.add(axis_state_key)
+            button_down_event = True
+        elif event.type == py.JOYHATMOTION:
+            joy = getattr(event, "joy", None)
+            hat_index = getattr(event, "hat", None)
+            raw_value = getattr(event, "value", (0, 0))
+            if joy is None or hat_index is None:
+                return
+            hat_tuple = tuple(raw_value) if isinstance(raw_value, (list, tuple)) else (raw_value,)
+            if len(hat_tuple) < 2:
+                if hat_tuple:
+                    hat_tuple = (hat_tuple[0], 0)
+                else:
+                    hat_tuple = (0, 0)
+            hat_value = (int(hat_tuple[0]), int(hat_tuple[1]))
+            if hat_value == (0, 0):
+                self._reset_joystick_hat_state(joy, hat_index)
+                return
+            hat_state_key = (joy, hat_index, hat_value)
+            key = ("hat", joy, hat_index, hat_value)
+            if hat_state_key in self._joystick_hat_active:
+                return
+            self._joystick_hat_active.add(hat_state_key)
+            button_down_event = True
+        if key is None:
+            return
+        capture_state = self._joystick_capture_state
+        if capture_state:
+            timer_id = capture_state.get("timer")
+            if timer_id is not None:
+                try:
+                    self.after_cancel(timer_id)
+                except Exception:
+                    pass
+            binding = self._joystick_binding_from_event(key)
+            if binding:
+                self._joystick_bindings[capture_state["binding_id"]] = binding
+                self._clear_duplicate_joystick_binding(key, capture_state["binding_id"])
+            if key[0] == "axis":
+                self._reset_joystick_axis_state(key[1], key[2])
+            if key[0] == "hat":
+                self._reset_joystick_hat_state(key[1], key[2])
+            self._joystick_capture_state = None
+            self._apply_keyboard_bindings()
+            return
+        if not self.joystick_bindings_enabled.get():
+            return
+        if not button_down_event:
+            return
+        btn = self._joystick_binding_map.get(key)
+        if btn:
+            if self._is_virtual_hold_button(btn):
+                self._log_button_action(btn)
+                self._start_joystick_hold(self._button_binding_id(btn))
+                return
+            self._on_key_binding(btn)
+
+    def _is_virtual_hold_button(self, btn) -> bool:
+        return getattr(btn, "_hold_axis", None) is not None
+
+    def _handle_joystick_button_release(self, key: tuple):
+        btn = self._joystick_binding_map.get(key)
+        if not btn or not self._is_virtual_hold_button(btn):
+            return
+        binding_id = self._button_binding_id(btn)
+        self._stop_joystick_hold(binding_id)
+
+    def _start_joystick_hold(self, binding_id: str):
+        if not binding_id:
+            return
+        self._stop_joystick_hold()
+        vector = self._hold_vector_for_binding(binding_id)
+        if vector is None:
+            return
+        self._active_joystick_hold_binding = binding_id
+        self._send_hold_jog()
+
+    def _send_hold_jog(self):
+        binding_id = self._active_joystick_hold_binding
+        if not binding_id:
+            return
+        vector = self._hold_vector_for_binding(binding_id)
+        if vector is None:
+            self._stop_joystick_hold()
+            return
+        dx, dy, dz = vector
+        feed = self._jog_feed_for_vector(dx, dy, dz)
+        try:
+            self.grbl.jog(dx, dy, dz, feed, self.unit_mode.get())
+        except Exception:
+            pass
+        self._joystick_hold_after_id = self.after(JOYSTICK_HOLD_REPEAT_MS, self._send_hold_jog)
+
+    def _stop_joystick_hold(self, binding_id: str | None = None):
+        if binding_id and self._active_joystick_hold_binding and binding_id != self._active_joystick_hold_binding:
+            return
+        if self._joystick_hold_after_id is not None:
+            try:
+                self.after_cancel(self._joystick_hold_after_id)
+            except Exception:
+                pass
+            self._joystick_hold_after_id = None
+        if self._active_joystick_hold_binding:
+            try:
+                self.grbl.jog_cancel()
+            except Exception:
+                pass
+        self._active_joystick_hold_binding = None
+
+    def _clear_duplicate_joystick_binding(self, key: tuple, keep_binding_id: str):
+        if not key:
+            return
+        for binding_id, binding in list(self._joystick_bindings.items()):
+            if binding_id == keep_binding_id:
+                continue
+            tuple_key = self._joystick_binding_key(binding)
+            if tuple_key == key:
+                self._joystick_bindings.pop(binding_id, None)
+
+    def _hold_vector_for_binding(self, binding_id: str) -> tuple[float, float, float] | None:
+        info = JOYSTICK_HOLD_MAP.get(binding_id)
+        if not info:
+            return None
+        axis, direction = info
+        dx = dy = dz = 0.0
+        if axis == "X":
+            dx = direction * float(self.step_xy.get())
+        elif axis == "Y":
+            dy = direction * float(self.step_xy.get())
+        elif axis == "Z":
+            dz = direction * float(self.step_z.get())
+        return dx, dy, dz
+
+    def _jog_feed_for_vector(self, dx: float, dy: float, dz: float) -> float:
+        feed = self.jog_feed_z.get() if abs(dz) > 0 else self.jog_feed_xy.get()
+        try:
+            return float(feed)
+        except Exception:
+            return 0.0
+
+    def _poll_joystick_states_from_hardware(self, py) -> bool:
+        if not self._joystick_capture_state:
+            return False
+        for joy_id, joy in self._joystick_instances.items():
+            for btn_idx in range(getattr(joy, "get_numbuttons", lambda: 0)()):
+                pressed = bool(joy.get_button(btn_idx))
+                prev = self._joystick_button_poll_state.get((joy_id, btn_idx), False)
+                self._joystick_button_poll_state[(joy_id, btn_idx)] = pressed
+                if pressed and not prev:
+                    event = types.SimpleNamespace(type=py.JOYBUTTONDOWN, joy=joy_id, button=btn_idx)
+                    self._handle_joystick_event(event)
+                    return True
+                if not pressed and prev:
+                    self._handle_joystick_button_release(("button", joy_id, btn_idx))
+            for axis_idx in range(getattr(joy, "get_numaxes", lambda: 0)()):
+                value = float(joy.get_axis(axis_idx))
+                prev = self._joystick_axis_poll_state.get((joy_id, axis_idx), 0.0)
+                self._joystick_axis_poll_state[(joy_id, axis_idx)] = value
+                if value >= JOYSTICK_AXIS_THRESHOLD and prev < JOYSTICK_AXIS_THRESHOLD:
+                    event = types.SimpleNamespace(type=py.JOYAXISMOTION, joy=joy_id, axis=axis_idx, value=value)
+                    self._handle_joystick_event(event)
+                    return True
+            for hat_idx in range(getattr(joy, "get_numhats", lambda: 0)()):
+                value = joy.get_hat(hat_idx)
+                prev = self._joystick_hat_poll_state.get((joy_id, hat_idx), (0, 0))
+                if not isinstance(value, tuple):
+                    value = tuple(value) if isinstance(value, (list, tuple)) else (value, 0)
+                self._joystick_hat_poll_state[(joy_id, hat_idx)] = value
+                if value != (0, 0) and value != prev:
+                    event = types.SimpleNamespace(type=py.JOYHATMOTION, joy=joy_id, hat=hat_idx, value=value)
+                    self._handle_joystick_event(event)
+                    return True
+        return False
+
+    def _reset_joystick_axis_state(self, joy_id, axis):
+        to_remove = [entry for entry in self._joystick_axis_active if entry[0] == joy_id and entry[1] == axis]
+        for entry in to_remove:
+            self._joystick_axis_active.discard(entry)
+
+    def _reset_joystick_hat_state(self, joy_id, hat_index):
+        to_remove = [
+            entry
+            for entry in self._joystick_hat_active
+            if (entry[0] == joy_id and entry[1] == hat_index)
+        ]
+        for entry in to_remove:
+            self._joystick_hat_active.discard(entry)
 
     def _apply_keyboard_bindings(self):
         if "<KeyPress>" in self._bound_key_sequences:
@@ -6509,6 +7042,7 @@ class App(tk.Tk):
         self.kb_table.delete(*self.kb_table.get_children())
         self.kb_table.tag_configure("conflict", background="#f7d6d6")
         self._kb_item_to_button = {}
+        self._joystick_binding_map.clear()
         for btn in self._collect_buttons():
             binding_id = self._button_binding_id(btn)
             label = self._button_label(btn)
@@ -6519,14 +7053,29 @@ class App(tk.Tk):
             key = self._keyboard_key_for_button(btn)
             if not key:
                 key = "None"
+            joystick_label = "None"
+            binding = self._joystick_bindings.get(binding_id)
+            if binding:
+                display = self._joystick_binding_display(binding)
+                if display:
+                    joystick_label = display
+                tuple_key = self._joystick_binding_key(binding)
+                if tuple_key:
+                    self._joystick_binding_map[tuple_key] = btn
             tags = ("conflict",) if binding_id in self._kb_conflicts else ()
             item = self.kb_table.insert(
                 "",
                 "end",
-                values=(label, axis, key, f"{CLEAR_ICON}  Remove/Clear Binding"),
+                values=(label, axis, key, joystick_label, f"{CLEAR_ICON}  Remove/Clear Binding"),
                 tags=tags,
             )
             self._kb_item_to_button[item] = btn
+
+    def _create_virtual_hold_buttons(self) -> list[VirtualHoldButton]:
+        buttons: list[VirtualHoldButton] = []
+        for label, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS:
+            buttons.append(VirtualHoldButton(f"{label} (Hold)", binding_id, axis, direction))
+        return buttons
 
     def _collect_buttons(self) -> list:
         buttons = []
@@ -6541,6 +7090,8 @@ class App(tk.Tk):
                 walk(child)
 
         walk(self)
+        if self._virtual_hold_buttons:
+            buttons.extend(self._virtual_hold_buttons)
         buttons.sort(key=self._button_label)
         return buttons
 
@@ -6572,9 +7123,53 @@ class App(tk.Tk):
             return self._normalize_key_label(str(self._key_bindings.get(binding_id, "")).strip())
         return self._default_key_for_button(btn)
 
+    def _joystick_binding_display(self, binding: dict[str, Any]) -> str:
+        joy_id = binding.get("joy_id")
+        if isinstance(joy_id, int):
+            name = self._joystick_names.get(joy_id, f"Joystick {joy_id}")
+        else:
+            name = "Joystick"
+        kind = binding.get("kind")
+        if kind == "button":
+            idx = binding.get("index")
+            return f"{name} Button {idx}"
+        if kind == "axis":
+            direction = binding.get("direction")
+            suffix = "+" if direction == 1 else "-" if direction == -1 else ""
+            return f"{name} Axis {binding.get('index')}{suffix}"
+        if kind == "hat":
+            value = binding.get("value")
+            if isinstance(value, (list, tuple)):
+                value = tuple(value)
+            if value:
+                return f"{name} Hat {binding.get('index')} ({value[0]}, {value[1]})"
+            return f"{name} Hat {binding.get('index')}"
+        return ""
+
+    def _joystick_binding_key(self, binding: dict[str, Any]):
+        if not isinstance(binding, dict):
+            return None
+        kind = binding.get("kind")
+        joy_id = binding.get("joy_id")
+        if kind == "button":
+            return ("button", joy_id, binding.get("index"))
+        if kind == "axis":
+            return ("axis", joy_id, binding.get("index"), binding.get("direction"))
+        if kind == "hat":
+            value = binding.get("value")
+            if isinstance(value, (list, tuple)):
+                value = tuple(value)
+            return ("hat", joy_id, binding.get("index"), value)
+        return None
+
     def _button_axis_name(self, btn) -> str:
         xy_buttons = {b for _, b in self._xy_step_buttons}
         z_buttons = {b for _, b in self._z_step_buttons}
+        hold_axis = getattr(btn, "_hold_axis", None)
+        if hold_axis in ("X", "Y"):
+            return "XY"
+        if hold_axis == "Z":
+            return "Z"
         if btn in xy_buttons:
             return "XY"
         if btn in z_buttons:
@@ -6623,15 +7218,23 @@ class App(tk.Tk):
             return
         row = self.kb_table.identify_row(event.y)
         col = self.kb_table.identify_column(event.x)
-        if not row or col != "#4":
-            if row and col == "#3":
-                self._start_kb_edit(row, col)
+        if not row:
+            return
+        if col == "#3":
+            self._start_kb_edit(row, col)
+            return
+        if col == "#4":
+            self._start_joystick_capture(row)
+            return
+        if col != "#5":
             return
         btn = self._kb_item_to_button.get(row)
         if btn is None:
             return
         binding_id = self._button_binding_id(btn)
         self._key_bindings[binding_id] = ""
+        if binding_id in self._joystick_bindings:
+            self._joystick_bindings.pop(binding_id, None)
         self._apply_keyboard_bindings()
 
     def _start_kb_edit(self, row, col):
@@ -6659,6 +7262,80 @@ class App(tk.Tk):
         entry.bind("<KeyPress>", lambda e: self._kb_capture_key(e, row, entry))
         entry.bind("<FocusOut>", lambda e: self._commit_kb_edit(row, entry))
         self._kb_edit = entry
+
+    def _start_joystick_capture(self, row):
+        if not bool(self.joystick_bindings_enabled.get()):
+            messagebox.showinfo(
+                "Joystick bindings",
+                "Enable USB joystick bindings before configuring joystick shortcuts.",
+            )
+            return
+        if not self._ensure_joystick_backend():
+            messagebox.showwarning(
+                "Joystick bindings",
+                "Failed to initialize the joystick backend. Verify that pygame is installed and joysticks are available.",
+            )
+            self.joystick_bindings_enabled.set(False)
+            self._refresh_joystick_toggle_text()
+            return
+        btn = self._kb_item_to_button.get(row)
+        if btn is None:
+            return
+        self._cancel_joystick_capture()
+        state = {
+            "row": row,
+            "binding_id": self._button_binding_id(btn),
+            "original": self.kb_table.set(row, "joystick"),
+            "timer": None,
+        }
+        timer_id = self.after(JOYSTICK_CAPTURE_TIMEOUT_MS, self._cancel_joystick_capture)
+        state["timer"] = timer_id
+        self._joystick_capture_state = state
+        try:
+            self.kb_table.set(row, "joystick", JOYSTICK_LISTENING_TEXT)
+        except Exception:
+            pass
+        self._ensure_joystick_polling_running()
+
+    def _cancel_joystick_capture(self):
+        state = self._joystick_capture_state
+        if not state:
+            return
+        timer_id = state.get("timer")
+        if timer_id is not None:
+            try:
+                self.after_cancel(timer_id)
+            except Exception:
+                pass
+        row = state.get("row")
+        original = state.get("original", "None")
+        if row and hasattr(self, "kb_table") and self.kb_table.exists(row):
+            try:
+                self.kb_table.set(row, "joystick", original)
+            except Exception:
+                pass
+        self._joystick_capture_state = None
+
+    def _joystick_binding_from_event(self, key):
+        if not key:
+            return None
+        kind = key[0]
+        joy_id = key[1]
+        if kind == "button":
+            return {"kind": "button", "joy_id": joy_id, "index": key[2]}
+        if kind == "axis":
+            return {
+                "kind": "axis",
+                "joy_id": joy_id,
+                "index": key[2],
+                "direction": key[3],
+            }
+        if kind == "hat":
+            value = key[3]
+            if isinstance(value, (list, tuple)):
+                value = tuple(value)
+            return {"kind": "hat", "joy_id": joy_id, "index": key[2], "value": value}
+        return None
 
     def _kb_capture_key(self, event, row, entry):
         state = self._kb_edit_state.get(entry)
@@ -8430,6 +9107,14 @@ class App(tk.Tk):
             self.grbl.disconnect()
         except Exception as exc:
             self._log_exception("Shutdown failed", exc)
+        self._stop_joystick_hold()
+        self._stop_joystick_polling()
+        py = self._get_pygame_module()
+        if py is not None:
+            try:
+                py.quit()
+            except Exception:
+                pass
         self.destroy()
 
     def _call_on_ui_thread(self, func, *args, timeout: float | None = 5.0, **kwargs):
@@ -8650,6 +9335,8 @@ class App(tk.Tk):
             "fallback_rapid_rate": self.fallback_rapid_rate.get().strip(),
             "estimate_factor": safe_float(self.estimate_factor, self.settings.get("estimate_factor", 1.0), "estimate factor"),
             "keyboard_bindings_enabled": bool(self.keyboard_bindings_enabled.get()),
+            "joystick_bindings_enabled": bool(self.joystick_bindings_enabled.get()),
+            "joystick_bindings": dict(self._joystick_bindings),
             "current_line_mode": self.current_line_mode.get(),
             "key_bindings": dict(self._key_bindings),
             "machine_profiles": list(self._machine_profiles),

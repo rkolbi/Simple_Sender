@@ -22,6 +22,7 @@ A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built wit
 - [Macros](#macros)
 - [Estimation & 3D View](#estimation--3d-view)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Joystick Bindings](#joystick-bindings)
 - [Logs & Filters](#logs--filters)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
@@ -313,6 +314,16 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
+
+## Joystick Bindings
+- Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install it with `python -m pip install pygame`, then start the sender from a console so you can watch the status messages while configuring bindings.
+- App Settings → Keyboard Shortcuts now has a Joystick testing frame above the table: it reports the detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right so you can rediscover devices before enabling capture.
+- Click a row's `Joystick` column to listen (it momentarily shows “Listening for joystick input…”); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
+- While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
+- When the toggle is left on before closing, the app now reopens with joystick capturing enabled automatically (just like auto-reconnecting to the last serial port), so you can pick up where you left off without another click.
+- The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When you bind a joystick button to one of them and hold the button, the matching axis jogs continuously (the same feed rates as the jog buttons); the motion stops as soon as the button is released, giving you a “jog-to-hold” behavior from the joystick.
+- The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control – binding it again to another action automatically clears the prior assignment so there’s no ambiguity in the list.
+- Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
