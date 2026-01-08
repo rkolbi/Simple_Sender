@@ -88,6 +88,19 @@ def init_basic_preferences(app, app_version: str):
         size=default_font.cget("size"),
         weight=default_font.cget("weight"),
     )
+    try:
+        tab_size = int(default_font.cget("size"))
+    except Exception:
+        tab_size = 10
+    if tab_size < 0:
+        tab_size -= 1
+    else:
+        tab_size += 1
+    app.tab_font = tkfont.Font(
+        family=default_font.cget("family"),
+        size=tab_size,
+        weight=default_font.cget("weight"),
+    )
     app.icon_button_style = "SimpleSender.IconButton.TButton"
     app.style.configure(
         app.icon_button_style,

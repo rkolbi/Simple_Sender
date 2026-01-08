@@ -53,6 +53,14 @@ def apply_theme(app, theme: str):
                     pass
             else:
                 app.theme_palette = {}
+            try:
+                app.style.configure("TNotebook.Tab", font=app.tab_font)
+            except Exception:
+                pass
+            try:
+                app.style.configure("TNotebook.Tab", padding=(10, 4))
+            except Exception:
+                pass
             refresh_stop_button_backgrounds(app)
             refresh_led_backgrounds(app)
     except tk.TclError:

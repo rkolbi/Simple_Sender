@@ -29,6 +29,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._status_seen = False
         app.machine_state.set(f"CONNECTED ({port})")
         app._machine_state_text = f"CONNECTED ({port})"
+        app._update_state_highlight(app._machine_state_text)
         app.status.config(text=f"Connected: {port} (waiting for Grbl)")
         app.btn_stop.config(state="normal")
         app.btn_run.config(state="disabled")
@@ -53,6 +54,7 @@ def handle_connection_event(app, is_on: bool, port):
             pass
         app.machine_state.set("DISCONNECTED")
         app._machine_state_text = "DISCONNECTED"
+        app._update_state_highlight(app._machine_state_text)
         app.status.config(text="Disconnected")
         app.btn_run.config(state="disabled")
         app.btn_pause.config(state="disabled")

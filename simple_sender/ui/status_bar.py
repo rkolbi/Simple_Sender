@@ -80,5 +80,5 @@ def build_status_bar(app, before):
             app._state_default_bg = app.machine_state_label.cget("background")
         except Exception:
             app._state_default_bg = app.status.cget("background") if app.status else None
-    app._apply_state_fg(None)
+    app._update_state_highlight(app._machine_state_text)
 

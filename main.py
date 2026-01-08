@@ -876,8 +876,8 @@ class App(tk.Tk):
     def _update_led_panel(self, endstop: bool, probe: bool, hold: bool):
         update_led_panel(self, endstop, probe, hold)
 
-    def _apply_state_fg(self, color: str | None):
-        apply_state_fg(self, color)
+    def _apply_state_fg(self, color: str | None, fg: str | None = None):
+        apply_state_fg(self, color, fg=fg)
 
     def _cancel_state_flash(self):
         cancel_state_flash(self)

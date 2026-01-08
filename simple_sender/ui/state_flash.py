@@ -1,13 +1,14 @@
 import tkinter as tk
 
 
-def apply_state_fg(app, color: str | None):
+def apply_state_fg(app, color: str | None, fg: str | None = None):
     target = color if color else (app._state_default_bg or "#f0f0f0")
+    text_color = fg or "#000000"
     lbl = getattr(app, "machine_state_label", None)
     if not lbl:
         return
     try:
-        lbl.config(background=target, foreground="#000000")
+        lbl.config(background=target, foreground=text_color)
     except tk.TclError:
         pass
 
@@ -50,6 +51,9 @@ def update_state_highlight(app, state: str | None):
     elif text.startswith("idle"):
         cancel_state_flash(app)
         apply_state_fg(app, "#2196f3")
+    elif text.startswith("disconnected"):
+        cancel_state_flash(app)
+        apply_state_fg(app, "#2b2b2b", fg="#ffffff")
     elif text.startswith(("home", "homing")):
         cancel_state_flash(app)
         apply_state_fg(app, "#26c6da")
