@@ -9,10 +9,7 @@ Moves to the fixed sensor, lets you swap the tool, then re-applies the stored re
 %macro.state.PROBE_DISTANCE = 150
 %macro.state.PROBE_RAPID_FEEDRATE = 200
 
-%if getattr(macro.state, "TOOL_REFERENCE", None) is None:
-    %msg (Macro-5 requires TOOL_REFERENCE from Macro 1 or Macro 2.)
-    PROMPT title=MissingReference msg=Tool reference is missing; run Macro 1 or Macro 2 before Macro 5. buttons=Restart|Cancel resumelabel=Restart cancellabel=Cancel
-    %if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 1 or Macro 2 first.")
+%if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 1 or Macro 2 first.")
 
 %wait
 G21
