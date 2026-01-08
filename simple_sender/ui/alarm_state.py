@@ -1,0 +1,71 @@
+def format_alarm_message(message: str | None) -> str:
+    if not message:
+        return "ALARM"
+    text = str(message).strip()
+    if text.lower().startswith("alarm"):
+        return text
+    if "reset to continue" in text.lower():
+        return "ALARM: Reset to continue"
+    if text.startswith("[MSG:"):
+        return f"ALARM: {text}"
+    return f"ALARM: {text}"
+
+
+def set_alarm_lock(app, locked: bool, message: str | None = None):
+    if locked:
+        app._alarm_locked = True
+        if message:
+            app._alarm_message = message
+        app.btn_run.config(state="disabled")
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        try:
+            app.btn_resume_from.config(state="disabled")
+        except Exception:
+            pass
+        try:
+            app.btn_alarm_recover.config(state="normal")
+        except Exception:
+            pass
+        app._set_manual_controls_enabled(True)
+        try:
+            app.status.config(text=format_alarm_message(message or app._alarm_message))
+        except Exception:
+            pass
+        app._machine_state_text = "Alarm"
+        app.machine_state.set("Alarm")
+        app._start_state_flash("#ff5252")
+        return
+
+    if not app._alarm_locked:
+        return
+    app._alarm_locked = False
+    app._alarm_message = ""
+    app.macro_executor.clear_alarm_notification()
+    try:
+        app.btn_alarm_recover.config(state="disabled")
+    except Exception:
+        pass
+    if (
+        app.connected
+        and app._grbl_ready
+        and app._status_seen
+        and app._stream_state not in ("running", "paused")
+    ):
+        app._set_manual_controls_enabled(True)
+        if app.gview.lines_count:
+            app.btn_run.config(state="normal")
+            app.btn_resume_from.config(state="normal")
+    status_text = ""
+    try:
+        status_text = app.status.cget("text")
+    except Exception:
+        pass
+    if app.connected and status_text.startswith("ALARM"):
+        app.status.config(text=f"Connected: {app._connected_port}")
+    if app._pending_settings_refresh and app._grbl_ready:
+        app._pending_settings_refresh = False
+        app._request_settings_dump()
+    app.machine_state.set(app._machine_state_text)
+    app._update_state_highlight(app._machine_state_text)
+    app._apply_status_poll_profile()

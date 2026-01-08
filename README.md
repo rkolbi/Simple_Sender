@@ -32,7 +32,7 @@ A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built wit
 
 ## Overview
 - Target: GRBL 1.1h, 3-axis.
-- Character-count streaming with Bf-informed RX window; live buffer fill and TX throughput.
+- Character-count streaming with Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read G-code), clear/unload button, inline status/progress.
@@ -45,12 +45,12 @@ A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built wit
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
-- Python 3.x, Tkinter (bundled), pyserial.
+- Python 3.x, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install pyserial
+pip install -r requirements.txt
 ```
 
 Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` on Windows or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender` or the app folder.
@@ -82,7 +82,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Use the unit toggle (mm/inch); jog commands insert the proper G20/G21.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
 4) **Load G-code**
-   - Click **Read G-code**; file is read-only, comments/% lines stripped, chunked if large. Use **Clear G-code** to unload if needed.
+   - Click **Read G-code**; file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). Use **Clear G-code** to unload if needed.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
@@ -133,7 +133,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender – Version: v0.1.0`, theme picker, ALL STOP mode, estimation factors/fallbacks, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, machine profiles, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
+  - **App Settings:** Banner showing `Simple Sender – Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -163,11 +163,18 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 
 ## Jobs, Files, and Streaming
-- **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads.
-- **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown.
+- **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. Lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified.
+- **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting.
+- **Line length safety:** The loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected.
+- **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
 - **Completion alert:** When a job finishes streaming, a dialog summarizes the start/finish/elapsed wallclock so you know the file completed without monitoring the logs.
+
+### Line length limitations and CAM guidance
+- Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
+- Recommended CAM post settings: disable line numbers if possible, reduce decimal places on coordinates (3-4 is usually enough for GRBL work), and avoid emitting long comment blocks or tool names inline with motion.
+- If your CAM insists on long arc lines, consider switching to small linear segments (arc-to-line approximation) or reduce arc detail so each line fits under the limit.
 
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
@@ -177,6 +184,10 @@ This is a practical, end-to-end flow with rationale for key options.
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
 - Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
 - Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
+- Manual command errors (e.g., from the console or settings writes) update the status bar with a source label and do not flip the stream state.
+- Line-length errors include the original file line count and the non-empty cleaned line count; counts are reported as non-empty lines over the limit.
+- Streaming errors pause the job (gSender-style) and report the file name, line number, and line text in the error status.
+- Program pauses (M0/M1) and tool changes (M6) automatically pause the stream after the line is acknowledged.
 
 ## GRBL Settings UI
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
@@ -316,7 +327,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
 
 ## Joystick Bindings
-- Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install it with `python -m pip install pygame`, then start the sender from a console so you can watch the status messages while configuring bindings.
+- Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
 - App Settings → Keyboard Shortcuts now has a Joystick testing frame above the table: it reports the detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right so you can rediscover devices before enabling capture.
 - Click a row's `Joystick` column to listen (it momentarily shows “Listening for joystick input…”); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
@@ -334,10 +345,11 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - No $$: wait for ready/status; clear alarms; stop streaming.
 - Alarm: use $X/$H; reset + re-home if needed.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
+- Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
 
 ## Pre-release Notes
-1. `main.py:122` – `_resolve_settings_path` now avoids the stray `self._alarm_notified` assignment when creating its fallback directory, so the helper no longer raises `NameError` and the settings path can fall back to `~/.simple_sender` cleanly when `%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` creation fails.
+1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` → `~/.simple_sender`).
 2. `main.py:391` – There is a single `MacroExecutor.notify_alarm` implementation again, which continues to set `_alarm_event` and log the contextual alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. `main.py:4938` – `last_port` defaults to `None`, so the new `(self.settings.get("last_port") or "").strip()` guard ensures auto-reconnect processing no longer calls `.strip()` on `None` when no prior port has been saved yet.
 

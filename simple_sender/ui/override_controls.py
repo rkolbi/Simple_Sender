@@ -1,0 +1,116 @@
+from simple_sender.utils.constants import (
+    RT_FO_MINUS_10,
+    RT_FO_PLUS_10,
+    RT_SO_MINUS_10,
+    RT_SO_PLUS_10,
+)
+
+
+def normalize_override_slider_value(raw_value, minimum=50, maximum=150):
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    value = max(minimum, min(maximum, value))
+    rounded = int(round(value / 10.0)) * 10
+    if rounded < minimum:
+        rounded = minimum
+    if rounded > maximum:
+        rounded = maximum
+    return rounded
+
+
+def set_override_scale(app, scale_attr, value, lock_attr):
+    scale = getattr(app, scale_attr, None)
+    if not scale:
+        return
+    setattr(app, lock_attr, True)
+    try:
+        scale.set(value)
+    finally:
+        setattr(app, lock_attr, False)
+
+
+def handle_override_slider_change(
+    app,
+    raw_value,
+    last_attr,
+    scale_attr,
+    lock_attr,
+    display_var,
+    plus_cmd,
+    minus_cmd,
+):
+    if getattr(app, lock_attr):
+        return
+    target = normalize_override_slider_value(raw_value)
+    if target is None:
+        return
+    last = getattr(app, last_attr, 100)
+    if target == last:
+        return
+    delta = target - last
+    send_override_delta(app, delta, plus_cmd, minus_cmd)
+    setattr(app, last_attr, target)
+    display_var.set(f"{target}%")
+    set_override_scale(app, scale_attr, target, lock_attr)
+
+
+def on_feed_override_slider(app, raw_value):
+    handle_override_slider_change(
+        app,
+        raw_value,
+        "_feed_override_slider_last_position",
+        "feed_override_scale",
+        "_feed_override_slider_locked",
+        app.feed_override_display,
+        RT_FO_PLUS_10,
+        RT_FO_MINUS_10,
+    )
+
+
+def on_spindle_override_slider(app, raw_value):
+    handle_override_slider_change(
+        app,
+        raw_value,
+        "_spindle_override_slider_last_position",
+        "spindle_override_scale",
+        "_spindle_override_slider_locked",
+        app.spindle_override_display,
+        RT_SO_PLUS_10,
+        RT_SO_MINUS_10,
+    )
+
+
+def send_override_delta(app, delta, plus_cmd, minus_cmd):
+    if not app.grbl.is_connected() or delta == 0:
+        return
+    step = 10
+    while delta >= step:
+        app.grbl.send_realtime(plus_cmd)
+        delta -= step
+    while delta <= -step:
+        app.grbl.send_realtime(minus_cmd)
+        delta += step
+
+
+def set_feed_override_slider_value(app, value):
+    app.feed_override_display.set(f"{value}%")
+    app._feed_override_slider_last_position = value
+    set_override_scale(app, "feed_override_scale", value, "_feed_override_slider_locked")
+
+
+def set_spindle_override_slider_value(app, value):
+    app.spindle_override_display.set(f"{value}%")
+    app._spindle_override_slider_last_position = value
+    set_override_scale(app, "spindle_override_scale", value, "_spindle_override_slider_locked")
+
+
+def refresh_override_info(app):
+    with app.macro_executor.macro_vars() as macro_vars:
+        feed = macro_vars.get("OvFeed", 100)
+        rapid = macro_vars.get("OvRapid", 100)
+        spindle = macro_vars.get("OvSpindle", 100)
+    app.override_info_var.set(
+        f"Overrides \u2014 Feed: {feed}% | Rapid: {rapid}% | Spindle: {spindle}%"
+    )

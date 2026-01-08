@@ -1,0 +1,18 @@
+def icon_label(icon: str, label: str) -> str:
+    """Render a button label with a leading icon."""
+    return f"{icon} {label}"
+
+ICON_REFRESH = "⟳"
+ICON_CONNECT = "⚡"
+ICON_JOB_READ = "⏺"
+ICON_JOB_CLEAR = "⏏"
+ICON_RUN = "▶"
+ICON_PAUSE = "⏸"
+ICON_RESUME = "⏵"
+ICON_STOP = "⏹"
+ICON_RESUME_FROM = "⤴"
+ICON_UNLOCK = "🔓"
+ICON_RECOVER = "🛠"
+ICON_HOME = "⌂"
+ICON_HOLD = "⏸"
+ICON_UNITS = "↔"

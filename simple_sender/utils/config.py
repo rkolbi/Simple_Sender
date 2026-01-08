@@ -25,6 +25,106 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SETTINGS: Dict[str, Any] = {
+    "3d_view_enabled": True,
+    "3d_view_settings": {
+        "azimuth": 0.7853981633974483,
+        "elevation": 0.5235987755982988,
+        "pan_x": 0.0,
+        "pan_y": 0.0,
+        "show_arc": False,
+        "show_feed": True,
+        "show_rapid": False,
+        "zoom": 1.0,
+    },
+    "view_3d": {
+        "azimuth": -5.87460183660256,
+        "elevation": -1.1307963267948968,
+        "pan_x": 0.0,
+        "pan_y": 0.0,
+        "zoom": 0.9999999999999998,
+    },
+    "active_profile": "",
+    "all_stop_mode": "stop_reset",
+    "auto_reconnect": False,
+    "baud_rate": 115200,
+    "console_positions_enabled": False,
+    "console_status_enabled": False,
+    "current_line_mode": "sent",
+    "default_spindle_rpm": 12000,
+    "error_dialog_burst_limit": 3,
+    "error_dialog_burst_window": 30.0,
+    "error_dialog_interval": 2.0,
+    "error_dialogs_enabled": True,
+    "estimate_factor": 1.1257575757575757,
+    "estimate_fallback_rapid": 5000.0,
+    "estimate_rate_x": "",
+    "estimate_rate_y": "",
+    "estimate_rate_z": "",
+    "fallback_rapid_rate": "5000.0",
+    "gui_logging_enabled": True,
+    "job_completion_beep": False,
+    "job_completion_popup": True,
+    "joystick_safety_binding": None,
+    "joystick_safety_enabled": False,
+    "jog_feed": 1000.0,
+    "jog_feed_xy": 4000.0,
+    "jog_feed_z": 500.0,
+    "jog_step": 1.0,
+    "key_bindings": {},
+    "keyboard_bindings_enabled": True,
+    "last_gcode_dir": "",
+    "last_port": "",
+    "machine_profiles": [],
+    "macros_allow_python": False,
+    "max_recent_files": 10,
+    "performance_mode": True,
+    "recent_files": [],
+    "reconnect_on_open": True,
+    "render3d_enabled": True,
+    "show_recover_button": False,
+    "show_resume_from_button": False,
+    "status_poll_interval": 0.2,
+    "status_query_failure_limit": 3,
+    "step_xy": 400.0,
+    "step_z": 1.0,
+    "theme": "vista",
+    "toolpath_arc_detail_deg": 9.031746031746032,
+    "toolpath_draw_percent": 82,
+    "toolpath_full_limit": 33611,
+    "toolpath_full_parse_limit": 0,
+    "toolpath_interactive_limit": 4270,
+    "toolpath_lightweight": False,
+    "toolpath_low_power": False,
+    "toolpath_performance": 81.74603174603175,
+    "toolpath_quality": 100.0,
+    "toolpath_renderer": "opengl",
+    "toolpath_show_arc": True,
+    "toolpath_show_feed": True,
+    "toolpath_show_rapid": False,
+    "toolpath_streaming_render_interval": 0.25,
+    "tooltips_enabled": True,
+    "training_wheels": True,
+    "unit_mode": "mm",
+    "window_geometry": "1194x864+261+83",
+}
+
+def _deep_merge_defaults(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for key, default_val in defaults.items():
+        if key in loaded:
+            loaded_val = loaded[key]
+            if isinstance(default_val, dict) and isinstance(loaded_val, dict):
+                merged[key] = _deep_merge_defaults(default_val, loaded_val)
+            else:
+                merged[key] = loaded_val
+        else:
+            merged[key] = default_val
+    for key, loaded_val in loaded.items():
+        if key not in merged:
+            merged[key] = loaded_val
+    return merged
+
 
 def get_default_settings_dir() -> str:
     """Get default directory for settings storage.
@@ -105,84 +205,7 @@ class Settings:
         Returns:
             Dictionary of default settings
         """
-        return {
-            "3d_view_enabled": True,
-            "3d_view_settings": {
-                "azimuth": 0.7853981633974483,
-                "elevation": 0.5235987755982988,
-                "pan_x": 0.0,
-                "pan_y": 0.0,
-                "show_arc": False,
-                "show_feed": True,
-                "show_rapid": False,
-                "zoom": 1.0,
-            },
-            "view_3d": {
-                "azimuth": -5.87460183660256,
-                "elevation": -1.1307963267948968,
-                "pan_x": 0.0,
-                "pan_y": 0.0,
-                "zoom": 0.9999999999999998,
-            },
-            "active_profile": "",
-            "all_stop_mode": "stop_reset",
-            "auto_reconnect": False,
-            "baud_rate": 115200,
-            "console_positions_enabled": False,
-            "console_status_enabled": False,
-            "current_line_mode": "sent",
-            "default_spindle_rpm": 12000,
-            "error_dialog_burst_limit": 3,
-            "error_dialog_burst_window": 30.0,
-            "error_dialog_interval": 2.0,
-            "error_dialogs_enabled": True,
-            "estimate_factor": 1.1257575757575757,
-            "estimate_fallback_rapid": 5000.0,
-            "fallback_rapid_rate": "5000.0",
-            "gui_logging_enabled": True,
-            "job_completion_beep": False,
-            "job_completion_popup": True,
-            "jog_feed": 1000.0,
-            "jog_feed_xy": 4000.0,
-            "jog_feed_z": 500.0,
-            "jog_step": 1.0,
-            "key_bindings": {},
-            "keyboard_bindings_enabled": True,
-            "last_gcode_dir": "//192.168.1.251/milly/CNC-CUT-FILES/Carl",
-            "last_port": "",
-            "machine_profiles": [],
-            "macros_allow_python": True,
-            "max_recent_files": 10,
-            "performance_mode": True,
-            "recent_files": [],
-            "reconnect_on_open": True,
-            "render3d_enabled": True,
-            "show_recover_button": False,
-            "show_resume_from_button": False,
-            "status_poll_interval": 0.2,
-            "status_query_failure_limit": 3,
-            "step_xy": 400.0,
-            "step_z": 1.0,
-            "theme": "vista",
-            "toolpath_arc_detail_deg": 9.031746031746032,
-            "toolpath_draw_percent": 82,
-            "toolpath_full_limit": 33611,
-            "toolpath_full_parse_limit": 0,
-            "toolpath_interactive_limit": 4270,
-            "toolpath_lightweight": False,
-            "toolpath_low_power": False,
-            "toolpath_performance": 81.74603174603175,
-            "toolpath_quality": 100.0,
-            "toolpath_renderer": "opengl",
-            "toolpath_show_arc": True,
-            "toolpath_show_feed": True,
-            "toolpath_show_rapid": False,
-            "toolpath_streaming_render_interval": 0.25,
-            "tooltips_enabled": True,
-            "training_wheels": True,
-            "unit_mode": "mm",
-            "window_geometry": "1194x864+261+83",
-        }
+        return dict(DEFAULT_SETTINGS)
     
     def load(self) -> bool:
         """Load settings from file.
@@ -203,8 +226,7 @@ class Settings:
             
             # Merge with defaults (in case new settings were added)
             defaults = self._get_defaults()
-            defaults.update(loaded_data)
-            self.data = defaults
+            self.data = _deep_merge_defaults(defaults, loaded_data)
             
             logger.info("Settings loaded successfully")
             return True
@@ -428,8 +450,7 @@ class Settings:
             
             # Merge with defaults
             defaults = self._get_defaults()
-            defaults.update(imported_data)
-            self.data = defaults
+            self.data = _deep_merge_defaults(defaults, imported_data)
             
             logger.info(f"Settings imported from {filepath}")
             

@@ -37,8 +37,8 @@ RX_BUFFER_SAFETY = 8
 RX_BUFFER_WINDOW = RX_BUFFER_SIZE - RX_BUFFER_SAFETY
 """Usable buffer window for streaming."""
 
-MAX_LINE_LENGTH = 128
-"""Maximum G-code line length (including newline)."""
+MAX_LINE_LENGTH = 80
+"""Maximum G-code line length for GRBL 1.1h (including newline)."""
 
 # ============================================================================
 # GRBL REAL-TIME COMMAND BYTES
