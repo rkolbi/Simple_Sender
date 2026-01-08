@@ -6,7 +6,7 @@ from simple_sender.utils.constants import (
 )
 
 
-def normalize_override_slider_value(raw_value, minimum=50, maximum=150):
+def normalize_override_slider_value(raw_value, minimum=10, maximum=200):
     try:
         value = float(raw_value)
     except (TypeError, ValueError):
@@ -109,8 +109,5 @@ def set_spindle_override_slider_value(app, value):
 def refresh_override_info(app):
     with app.macro_executor.macro_vars() as macro_vars:
         feed = macro_vars.get("OvFeed", 100)
-        rapid = macro_vars.get("OvRapid", 100)
         spindle = macro_vars.get("OvSpindle", 100)
-    app.override_info_var.set(
-        f"Overrides \u2014 Feed: {feed}% | Rapid: {rapid}% | Spindle: {spindle}%"
-    )
+    app.override_info_var.set(f"Overrides: Feed {feed}% | Spindle {spindle}%")

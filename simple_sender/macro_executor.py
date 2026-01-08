@@ -258,6 +258,27 @@ class MacroExecutor:
                 return
             time.sleep(0.1)
 
+    def _parse_timeout(self, cmd_parts: list[str], default: float) -> float:
+        if len(cmd_parts) > 1:
+            try:
+                value = float(cmd_parts[1])
+            except Exception:
+                value = default
+            if value > 0:
+                return value
+        return default
+
+    def _wait_for_connection_state(self, target: bool, timeout_s: float = 10.0) -> bool:
+        start = time.time()
+        while True:
+            if getattr(self.app, "_closing", False):
+                return False
+            if bool(getattr(self.app, "connected", False)) is target:
+                return True
+            if timeout_s and (time.time() - start) > timeout_s:
+                return False
+            time.sleep(0.1)
+
     def notify_alarm(self, message: str | None):
         if self._alarm_notified:
             return
@@ -467,10 +488,18 @@ class MacroExecutor:
         if cmd == "OPEN":
             if not self.app.connected:
                 self.app._call_on_ui_thread(self.app.toggle_connect)
+                timeout_s = self._parse_timeout(cmd_parts, 10.0)
+                if not self._wait_for_connection_state(True, timeout_s):
+                    self.ui_q.put(("log", f"[macro] OPEN timed out after {timeout_s:.1f}s"))
+                    return False
             return True
         if cmd == "CLOSE":
             if self.app.connected:
                 self.app._call_on_ui_thread(self.app.toggle_connect)
+                timeout_s = self._parse_timeout(cmd_parts, 10.0)
+                if not self._wait_for_connection_state(False, timeout_s):
+                    self.ui_q.put(("log", f"[macro] CLOSE timed out after {timeout_s:.1f}s"))
+                    return False
             return True
         if cmd == "HELP":
             self.app._call_on_ui_thread(

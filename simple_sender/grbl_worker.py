@@ -26,6 +26,7 @@ from .utils.constants import (
     BAUD_DEFAULT,
     RX_BUFFER_SIZE,
     RX_BUFFER_SAFETY,
+    MAX_LINE_LENGTH,
     RT_RESET,
     RT_STATUS,
     RT_HOLD,
@@ -744,6 +745,7 @@ class GrblWorker:
 
     def _signal_disconnect(self, reason: str | None = None) -> None:
         """Signal an unexpected disconnect and reset internal state."""
+        self._stop_evt.set()
         try:
             if self.ser is not None:
                 try:
@@ -1176,17 +1178,38 @@ class GrblWorker:
                 payload = self._encode_line_payload(line)
                 line_len = len(payload)
 
+            if line_len > MAX_LINE_LENGTH:
+                self.ui_q.put((
+                    "log",
+                    f"[manual] Line too long ({line_len} > {MAX_LINE_LENGTH}): {line}",
+                ))
+                self._manual_pending_item = None
+                continue
+
+            drop_for_buffer = False
+            usable = None
             with self._stream_lock:
                 usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                can_fit = (self._stream_buf_used + line_len) <= usable
+                if line_len > usable and self._stream_buf_used <= 0:
+                    self._manual_pending_item = None
+                    drop_for_buffer = True
+                else:
+                    can_fit = (self._stream_buf_used + line_len) <= usable
 
-                if not can_fit and self._stream_buf_used > 0:
-                    self._manual_pending_item = (line, payload, line_len)
-                    break
+                    if not can_fit and self._stream_buf_used > 0:
+                        self._manual_pending_item = (line, payload, line_len)
+                        break
 
-                self._manual_pending_item = None
-                self._stream_buf_used += line_len
-                self._stream_line_queue.append((line_len, False, None, line))
+                    self._manual_pending_item = None
+                    self._stream_buf_used += line_len
+                    self._stream_line_queue.append((line_len, False, None, line))
+
+            if drop_for_buffer:
+                self.ui_q.put((
+                    "log",
+                    f"[manual] Line too long for buffer ({line_len} > {usable}): {line}",
+                ))
+                continue
 
             if self._abort_writes.is_set():
                 with self._stream_lock:

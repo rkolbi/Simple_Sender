@@ -41,7 +41,14 @@ def build_overdrive_tab(app, parent):
     attach_log_gcode(app.btn_spindle_off, "M5")
 
     info_label = ttk.Label(container, textvariable=app.override_info_var, anchor="center")
-    info_label.pack(fill="x", pady=(0, 10))
+    info_label.pack(fill="x", pady=(0, 4))
+    note_label = ttk.Label(
+        container,
+        text="Note: GRBL 1.1h feed/spindle overrides move in 10% steps.",
+        anchor="center",
+        wraplength=520,
+    )
+    note_label.pack(fill="x", pady=(0, 10))
 
     feed_frame = ttk.Labelframe(container, text="Feed Override", padding=8)
     feed_frame.pack(fill="x", pady=(0, 10))
@@ -49,8 +56,8 @@ def build_overdrive_tab(app, parent):
     feed_slider_row.pack(fill="x", pady=(0, 6))
     app.feed_override_scale = ttk.Scale(
         feed_slider_row,
-        from_=50,
-        to=150,
+        from_=10,
+        to=200,
         orient="horizontal",
         command=app._on_feed_override_slider,
     )
@@ -90,8 +97,8 @@ def build_overdrive_tab(app, parent):
     spindle_slider_row.pack(fill="x", pady=(0, 6))
     app.spindle_override_scale = ttk.Scale(
         spindle_slider_row,
-        from_=50,
-        to=150,
+        from_=10,
+        to=200,
         orient="horizontal",
         command=app._on_spindle_override_slider,
     )

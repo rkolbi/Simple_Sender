@@ -9,7 +9,7 @@ CHECKLIST_ITEMS = [
     "Load G-code: file name, size, estimates, and bounds render in the correct units.",
     "Streaming: start/pause/resume/stop behaves correctly; buffer fill and progress update smoothly.",
     "Completion: popup shows run stats; progress bar resets after acknowledgment.",
-    "Overrides: feed/spindle overrides send real-time commands and update UI sliders.",
+    "Overrides: feed/spindle sliders send real-time commands and update the UI.",
     "Jogging: on-screen jog works; jog cancel halts motion; joystick hold stops on release.",
     "Safety: joystick safety hold gates actions; blocked actions emit status/log text.",
     "Alarms: alarm/lock messages display; unlock and recovery actions behave as expected.",

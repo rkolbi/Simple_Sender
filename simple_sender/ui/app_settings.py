@@ -552,8 +552,66 @@ def build_app_settings_tab(app, notebook):
         "Record GUI button actions in the console log when enabled.",
     )
 
+    indicator_label = ttk.Label(interface_frame, text="Status indicators")
+    indicator_label.grid(row=4, column=0, sticky="w", pady=(10, 0))
+    indicator_row = ttk.Frame(interface_frame)
+    indicator_row.grid(row=5, column=0, sticky="w", pady=(2, 0))
+    app.endstop_indicator_check = ttk.Checkbutton(
+        indicator_row,
+        text="Endstops",
+        variable=app.show_endstop_indicator,
+        command=app._on_led_visibility_change,
+    )
+    app.endstop_indicator_check.pack(side="left")
+    apply_tooltip(app.endstop_indicator_check, "Show or hide the Endstops status indicator.")
+    app.probe_indicator_check = ttk.Checkbutton(
+        indicator_row,
+        text="Probe",
+        variable=app.show_probe_indicator,
+        command=app._on_led_visibility_change,
+    )
+    app.probe_indicator_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(app.probe_indicator_check, "Show or hide the Probe status indicator.")
+    app.hold_indicator_check = ttk.Checkbutton(
+        indicator_row,
+        text="Hold",
+        variable=app.show_hold_indicator,
+        command=app._on_led_visibility_change,
+    )
+    app.hold_indicator_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(app.hold_indicator_check, "Show or hide the Hold status indicator.")
+
+    quick_buttons_label = ttk.Label(interface_frame, text="Quick buttons (status bar)")
+    quick_buttons_label.grid(row=6, column=0, sticky="w", pady=(10, 0))
+    quick_buttons_row = ttk.Frame(interface_frame)
+    quick_buttons_row.grid(row=7, column=0, sticky="w", pady=(2, 0))
+    app.quick_tips_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="Tips",
+        variable=app.show_quick_tips_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_tips_check.pack(side="left")
+    apply_tooltip(app.quick_tips_check, "Show or hide the Tips quick button in the status bar.")
+    app.quick_3d_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="3DR",
+        variable=app.show_quick_3d_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_3d_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(app.quick_3d_check, "Show or hide the 3DR quick button in the status bar.")
+    app.quick_keys_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="Keys",
+        variable=app.show_quick_keys_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_keys_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(app.quick_keys_check, "Show or hide the Keys quick button in the status bar.")
+
     toggle_btn_row = ttk.Frame(interface_frame)
-    toggle_btn_row.grid(row=4, column=0, sticky="w", pady=(10, 0))
+    toggle_btn_row.grid(row=8, column=0, sticky="w", pady=(10, 0))
     app.btn_toggle_tips_settings = ttk.Button(
         toggle_btn_row,
         text="Tips",

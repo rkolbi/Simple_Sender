@@ -3,6 +3,15 @@ from tkinter import ttk
 from simple_sender.ui.widgets import apply_tooltip, set_kb_id
 
 
+def _bool_from_var(value, default=True) -> bool:
+    if value is None:
+        return default
+    try:
+        return bool(value.get())
+    except Exception:
+        return bool(value)
+
+
 def build_status_bar(app, before):
     # Status bar
     status_bar = ttk.Frame(app, padding=(8, 0, 8, 6))
@@ -74,6 +83,7 @@ def build_status_bar(app, before):
     app._refresh_tooltips_toggle_text()
     app._refresh_render_3d_toggle_text()
     app._refresh_keybindings_toggle_text()
+    update_quick_button_visibility(app)
     app._on_error_dialogs_enabled_change()
     if getattr(app, "_state_default_bg", None) is None:
         try:
@@ -81,4 +91,29 @@ def build_status_bar(app, before):
         except Exception:
             app._state_default_bg = app.status.cget("background") if app.status else None
     app._update_state_highlight(app._machine_state_text)
+
+
+def update_quick_button_visibility(app):
+    buttons = [
+        ("btn_toggle_tips", app.show_quick_tips_button),
+        ("btn_toggle_3d", app.show_quick_3d_button),
+        ("btn_toggle_keybinds", app.show_quick_keys_button),
+    ]
+    for attr, _ in buttons:
+        btn = getattr(app, attr, None)
+        if btn:
+            btn.pack_forget()
+    for attr, var in buttons:
+        btn = getattr(app, attr, None)
+        if not btn:
+            continue
+        if _bool_from_var(var, True):
+            btn.pack(side="right", padx=(8, 0))
+
+
+def on_quick_button_visibility_change(app):
+    app.settings["show_quick_tips_button"] = bool(app.show_quick_tips_button.get())
+    app.settings["show_quick_3d_button"] = bool(app.show_quick_3d_button.get())
+    app.settings["show_quick_keys_button"] = bool(app.show_quick_keys_button.get())
+    update_quick_button_visibility(app)
 

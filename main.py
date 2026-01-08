@@ -33,13 +33,21 @@ import tkinter as tk
 # Refactored module imports
 from simple_sender.utils.constants import *
 from simple_sender.ui.toolbar import build_toolbar
-from simple_sender.ui.led_panel import build_led_panel, refresh_led_backgrounds, set_led_state, update_led_panel
+from simple_sender.ui.led_panel import (
+    build_led_panel,
+    on_led_visibility_change,
+    refresh_led_backgrounds,
+    set_led_state,
+    update_led_panel,
+    update_led_visibility,
+)
 from simple_sender.ui.dialogs import show_alarm_recovery, show_macro_prompt, show_resume_dialog
 from simple_sender.ui.diagnostics import open_release_checklist
 from simple_sender.ui.popup_utils import patch_messagebox, set_default_parent
 from simple_sender.ui.gcode_loading import ensure_gcode_loading_popup, finish_gcode_loading, hide_gcode_loading, set_gcode_loading_indeterminate, set_gcode_loading_progress, show_gcode_loading
 from simple_sender.ui.app_settings_scroll import bind_app_settings_mousewheel, on_app_settings_mousewheel, unbind_app_settings_mousewheel, update_app_settings_scrollregion
 from simple_sender.ui.state_flash import apply_state_fg, cancel_state_flash, start_state_flash, toggle_state_flash, update_state_highlight
+from simple_sender.ui.status_bar import on_quick_button_visibility_change, update_quick_button_visibility
 from simple_sender.ui.toggle_text import refresh_keybindings_toggle_text, refresh_render_3d_toggle_text, refresh_tooltips_toggle_text
 from simple_sender.ui.theme_helpers import apply_theme, refresh_stop_button_backgrounds
 from simple_sender.ui.toolbar_visibility import on_recover_button_visibility_change, on_resume_button_visibility_change, update_recover_button_visibility, update_resume_button_visibility
@@ -876,6 +884,12 @@ class App(tk.Tk):
     def _update_led_panel(self, endstop: bool, probe: bool, hold: bool):
         update_led_panel(self, endstop, probe, hold)
 
+    def _update_led_visibility(self):
+        update_led_visibility(self)
+
+    def _on_led_visibility_change(self):
+        on_led_visibility_change(self)
+
     def _apply_state_fg(self, color: str | None, fg: str | None = None):
         apply_state_fg(self, color, fg=fg)
 
@@ -902,6 +916,12 @@ class App(tk.Tk):
 
     def _refresh_keybindings_toggle_text(self):
         refresh_keybindings_toggle_text(self)
+
+    def _update_quick_button_visibility(self):
+        update_quick_button_visibility(self)
+
+    def _on_quick_button_visibility_change(self):
+        on_quick_button_visibility_change(self)
 
     def _toggle_tooltips(self):
         toggle_tooltips(self)

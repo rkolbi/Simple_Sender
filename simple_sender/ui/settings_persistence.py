@@ -123,6 +123,12 @@ def save_settings(app):
         "console_status_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
+        "show_endstop_indicator": bool(app.show_endstop_indicator.get()),
+        "show_probe_indicator": bool(app.show_probe_indicator.get()),
+        "show_hold_indicator": bool(app.show_hold_indicator.get()),
+        "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
+        "show_quick_3d_button": bool(app.show_quick_3d_button.get()),
+        "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
         "fallback_rapid_rate": app.fallback_rapid_rate.get().strip(),
         "estimate_factor": safe_float(
             app.estimate_factor,

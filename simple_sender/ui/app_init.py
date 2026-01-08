@@ -93,9 +93,9 @@ def init_basic_preferences(app, app_version: str):
     except Exception:
         tab_size = 10
     if tab_size < 0:
-        tab_size -= 1
-    else:
         tab_size += 1
+    else:
+        tab_size = max(tab_size - 1, 1)
     app.tab_font = tkfont.Font(
         family=default_font.cget("family"),
         size=tab_size,
@@ -132,6 +132,12 @@ def init_basic_preferences(app, app_version: str):
     app.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{app_version}")
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))
+    app.show_endstop_indicator = tk.BooleanVar(value=setting("show_endstop_indicator", True))
+    app.show_probe_indicator = tk.BooleanVar(value=setting("show_probe_indicator", True))
+    app.show_hold_indicator = tk.BooleanVar(value=setting("show_hold_indicator", True))
+    app.show_quick_tips_button = tk.BooleanVar(value=setting("show_quick_tips_button", True))
+    app.show_quick_3d_button = tk.BooleanVar(value=setting("show_quick_3d_button", True))
+    app.show_quick_keys_button = tk.BooleanVar(value=setting("show_quick_keys_button", True))
     app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "acked"))
 
 
@@ -353,9 +359,7 @@ def init_runtime_state(
     app.spindle_override_scale = None
     app.feed_override_display = tk.StringVar(value="100%")
     app.spindle_override_display = tk.StringVar(value="100%")
-    app.override_info_var = tk.StringVar(
-        value="Overrides: Feed 100% | Rapid 100% | Spindle 100%"
-    )
+    app.override_info_var = tk.StringVar(value="Overrides: Feed 100% | Spindle 100%")
     app._feed_override_slider_locked = False
     app._spindle_override_slider_locked = False
     app._feed_override_slider_last_position = 100

@@ -38,7 +38,7 @@ A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built wit
 - Read-only file load (Read G-code), clear/unload button, inline status/progress.
 - Resume From... dialog to continue a job with modal re-sync and safety warnings.
 - Performance mode: batches console updates, suppresses per-line RX logs during streaming, adapts status polling by state.
-- Overdrive tab: spindle control plus feed/spindle override sliders with nice sliding controls and +/-/reset shortcuts keep the console tidy while the live override summary mirrors GRBL's Ov* values and slider moves send the matching 10% real-time override bytes.
+- Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Machine profiles for units + max rates; estimates prefer GRBL settings, then profile, then fallback.
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Macros: left-click to run, right-click to preview.
@@ -94,7 +94,7 @@ This is a practical, end-to-end flow with rationale for key options.
 6) **Prepare the machine**
    - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-   - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts; each slider move nudges GRBL in 10% steps while the override summary mirrors the current Ov* values.
+   - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
@@ -124,7 +124,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
 
     ![-](pics/Slide2.JPG)
-  - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders with +/-/reset shortcuts and a live override summary that mirrors GRBL's Ov* values while each slider move emits the matching 10% real-time byte.
+  - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
 
     ![-](pics/Slide3.JPG)
   - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
@@ -182,6 +182,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Console & Manual Commands
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
+- Manual commands longer than GRBL's 80-byte limit are rejected.
 - Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
 - Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
 - Manual command errors (e.g., from the console or settings writes) update the status bar with a source label and do not flip the stream state.
@@ -221,8 +222,8 @@ All directives above operate through the modal interpreter implemented in `main.
 | `ABSOLUTE`, `ABS` | Send `G90` so the next moves use machine coordinates. | `ABSOLUTE` |
 | `RELATIVE`, `REL` | Send `G91` for incremental jog sequences. | `REL` |
 | `HOME` | Run homing, which issues the same `$H` or homing cycle as the UI buttons. | `HOME` |
-| `OPEN` | Connect if disconnected (calls `toggle_connect`). Useful for macros that need GRBL before streaming commands. | `OPEN` |
-| `CLOSE` | Disconnect when connected. | `CLOSE` |
+| `OPEN [timeout_s]` | Connect if disconnected and wait for connection (default 10s). Useful for macros that need GRBL before streaming commands. | `OPEN 15` |
+| `CLOSE [timeout_s]` | Disconnect when connected and wait for close (default 10s). | `CLOSE 5` |
 | `HELP` | Show a fixed macro help dialog (no GRBL interaction). | `HELP` |
 | `QUIT`, `EXIT` | Close the application cleanly. | `QUIT` |
 | `LOAD <path>` | Load a specific G-code file (`app._load_gcode_from_path`), then let the macro stream it. | `LOAD C:\jobs\test.nc` |

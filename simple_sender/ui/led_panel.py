@@ -4,10 +4,21 @@ from tkinter import ttk
 from simple_sender.ui.widgets import _resolve_widget_bg
 
 
+def _bool_from_var(value, default=True) -> bool:
+    if value is None:
+        return default
+    try:
+        return bool(value.get())
+    except Exception:
+        return bool(value)
+
+
 def build_led_panel(app, parent):
     frame = ttk.Frame(parent)
     frame.pack(side="right", padx=(8, 0))
+    app._led_frame = frame
     app._led_indicators = {}
+    app._led_indicator_containers = {}
     app._led_containers = []
     app._led_bg = _resolve_widget_bg(parent)
     labels = [
@@ -17,7 +28,6 @@ def build_led_panel(app, parent):
     ]
     for key, text in labels:
         container = tk.Frame(frame, bg=app._led_bg)
-        container.pack(side="left", padx=(0, 8))
         canvas = tk.Canvas(
             container,
             width=18,
@@ -30,9 +40,11 @@ def build_led_panel(app, parent):
         oval = canvas.create_oval(2, 2, 16, 16, fill="#b0b0b0", outline="#555")
         ttk.Label(container, text=text).pack(side="left", padx=(4, 0))
         app._led_indicators[key] = (canvas, oval)
+        app._led_indicator_containers[key] = container
         app._led_containers.append(container)
     app._led_states = {key: False for key in app._led_indicators}
     app._update_led_panel(False, False, False)
+    update_led_visibility(app)
 
 
 def set_led_state(app, key, on):
@@ -59,8 +71,34 @@ def refresh_led_backgrounds(app):
             canvas.config(bg=bg)
         except Exception:
             pass
-    for container in getattr(app, "_led_containers", []):
+    for container in getattr(app, "_led_indicator_containers", {}).values():
         try:
             container.config(bg=bg)
         except Exception:
             pass
+
+
+def update_led_visibility(app):
+    containers = getattr(app, "_led_indicator_containers", {})
+    if not containers:
+        return
+    visibility = {
+        "endstop": _bool_from_var(getattr(app, "show_endstop_indicator", None), True),
+        "probe": _bool_from_var(getattr(app, "show_probe_indicator", None), True),
+        "hold": _bool_from_var(getattr(app, "show_hold_indicator", None), True),
+    }
+    order = ("endstop", "probe", "hold")
+    for key in order:
+        container = containers.get(key)
+        if not container:
+            continue
+        container.pack_forget()
+        if visibility.get(key, True):
+            container.pack(side="left", padx=(0, 8))
+
+
+def on_led_visibility_change(app):
+    app.settings["show_endstop_indicator"] = bool(app.show_endstop_indicator.get())
+    app.settings["show_probe_indicator"] = bool(app.show_probe_indicator.get())
+    app.settings["show_hold_indicator"] = bool(app.show_hold_indicator.get())
+    update_led_visibility(app)
