@@ -1,5 +1,7 @@
 # Simple Sender — Full Manual
 
+### Work in progress (alpha). Don’t trust it until you’ve validated it a few times.
+
 A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
 ![-](pics/Slide8.JPG)
