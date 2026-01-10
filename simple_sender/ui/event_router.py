@@ -385,6 +385,12 @@ def handle_status_event(app, raw: str):
     wco_vals = parse_xyz(wco) if wco else None
     mpos_vals = parse_xyz(mpos) if mpos else None
     wpos_vals = parse_xyz(wpos) if wpos else None
+    if wco_vals:
+        app._wco_raw = tuple(wco_vals)
+    else:
+        cached_wco = getattr(app, "_wco_raw", None)
+        if cached_wco and len(cached_wco) >= 3:
+            wco_vals = [cached_wco[0], cached_wco[1], cached_wco[2]]
     report_units = getattr(app, "_report_units", None) or app.unit_mode.get()
     modal_units = app.unit_mode.get()
 
@@ -432,6 +438,49 @@ def handle_status_event(app, raw: str):
                 macro_vars["mz"] = to_modal(mpos_calc[2])
         except Exception:
             pass
+    def flash_wpos_labels():
+        labels = getattr(app, "_wpos_value_labels", None)
+        if not labels:
+            return
+        for axis, label in labels.items():
+            default_fg = ""
+            try:
+                default_fg = app._wpos_label_default_fg.get(axis, "")
+            except Exception:
+                default_fg = ""
+            after_id = None
+            try:
+                after_id = app._wpos_flash_after_ids.get(axis)
+            except Exception:
+                after_id = None
+            if after_id:
+                try:
+                    app.after_cancel(after_id)
+                except Exception:
+                    pass
+            try:
+                label.configure(foreground="#2196f3")
+            except Exception:
+                continue
+
+            def restore(target=label, axis_key=axis, fg=default_fg):
+                try:
+                    if fg:
+                        target.configure(foreground=fg)
+                    else:
+                        target.configure(foreground="")
+                except Exception:
+                    pass
+                try:
+                    app._wpos_flash_after_ids[axis_key] = None
+                except Exception:
+                    pass
+
+            try:
+                app._wpos_flash_after_ids[axis] = app.after(150, restore)
+            except Exception:
+                pass
+
     if wpos_vals:
         try:
             app._wpos_raw = tuple(wpos_vals)
@@ -452,8 +501,10 @@ def handle_status_event(app, raw: str):
                 pass
         except Exception:
             pass
+        flash_wpos_labels()
     elif wpos_calc:
         try:
+            app._wpos_raw = tuple(wpos_calc)
             app.wpos_x.set(format_dro_value(wpos_calc[0], report_units, modal_units))
             app.wpos_y.set(format_dro_value(wpos_calc[1], report_units, modal_units))
             app.wpos_z.set(format_dro_value(wpos_calc[2], report_units, modal_units))

@@ -142,7 +142,15 @@ from simple_sender.ui.streaming_metrics import format_throughput, maybe_notify_j
 from simple_sender.ui.streaming_lock import set_streaming_lock
 from simple_sender.ui.threading_utils import call_on_ui_thread, post_ui_thread
 from simple_sender.ui.ui_queue import drain_ui_queue
-from simple_sender.ui.zeroing_actions import goto_zero, zero_all, zero_x, zero_y, zero_z
+from simple_sender.ui.zeroing_actions import (
+    goto_zero,
+    on_zeroing_mode_change,
+    refresh_zeroing_ui,
+    zero_all,
+    zero_x,
+    zero_y,
+    zero_z,
+)
 from simple_sender.ui.console_utils import clear_console_log, save_console_log, send_console, setup_console_tags
 from simple_sender.ui.input_bindings import (
     toggle_keyboard_bindings,
@@ -840,7 +848,13 @@ class App(tk.Tk):
     ) -> None:
         show_macro_prompt(self, title, message, choices, cancel_label, result_q)
 
-    # ---------- Zeroing (simple G92-based) ----------
+    # ---------- Zeroing ----------
+    def _refresh_zeroing_ui(self):
+        refresh_zeroing_ui(self)
+
+    def _on_zeroing_mode_change(self):
+        on_zeroing_mode_change(self)
+
     def zero_x(self):
         zero_x(self)
 

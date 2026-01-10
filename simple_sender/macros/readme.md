@@ -46,5 +46,5 @@ These macros implement the CNCjs workflow documented in `ref/cncjs_macros.md`. T
 ## Notes
 
 - Each macro relies on `%macro.state` parameters (`SAFE_HEIGHT`, `PROBE_*`, `PLATE_THICKNESS`, etc.). Adjust those defaults directly inside the macro file to match your machine before using them.
-- The macro runner snapshots modal state before each macro, forces `G21` (mm), and restores the original units afterward; use `STATE_RETURN` in a macro to restore the full modal snapshot.
+- The macro runner snapshots modal state before each macro, forces `G21` (mm), and restores the original units afterward; use `STATE_RETURN` (or `%state_return`) in a macro to restore the full modal snapshot.
 - The macros log progress via `%msg` so you can see when each probe or wait occurs in the console.

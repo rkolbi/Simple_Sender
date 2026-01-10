@@ -94,7 +94,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
    - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
 6) **Prepare the machine**
-   - Home if required; set work offsets (Zero buttons use G92 by default). If you prefer persistent offsets, swap zeroing to G10 in code.
+   - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
    - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
 7) **Start and monitor**
@@ -135,7 +135,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
+  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -205,7 +205,7 @@ Execution happens on a background worker that holds `_macro_lock`, so only one m
 
 `App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, any line that begins with `%` or `_`, contains `[`/`]`, or includes `=` raises a compile error, though raw GRBL commands still stream. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
-Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
+Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` (or `%state_return`) inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
 
 ### Macro directives
 | Directive | What it does | Example usage |
@@ -239,7 +239,7 @@ All directives above operate through the modal interpreter implemented in `main.
 | `SAVE` | Unsupported; logs `[macro] SAVE is not supported.`. | `SAVE` |
 | `SENDHEX <xx>` | Send raw real-time byte `0xXX`. | `SENDHEX 91` |
 | `SAFE <value>` | Update `_macro_vars["safe"]`, a helper the UI uses for safe heights. | `SAFE 10` |
-| `STATE_RETURN` | Restore the modal state snapshot captured when the macro started (WCS/plane/units/distance/feedmode/spindle/coolant). | `STATE_RETURN` |
+| `STATE_RETURN` | Restore the modal state snapshot captured when the macro started (WCS/plane/units/distance/feedmode/spindle/coolant); `%state_return` is accepted as shorthand. | `STATE_RETURN` |
 | `SET0` | Send `G92 X0 Y0 Z0`. | `SET0` |
 | `SETX`, `SETY`, `SETZ` | Zero a single axis with `G92`. | `SETZ 2` |
 | `SET <X> <Y> <Z>` | Zero only the axes you specify. | `SET 0 50` |
@@ -424,7 +424,7 @@ The sender exposes a curated subset of GRBL's real-time, system, and motion comm
 | Absolute positioning | `G90` | `G90` before a `G0 X10` move | Ensures subsequent moves use machine coordinates. |
 | Relative positioning | `G91` | `G91` before `$J=` jog | Temporarily switches to incremental mode. |
 | Units | `G20` or `G21` | `G21` when working in millimeters | The unit toggle sends the proper command automatically. |
-| Zero work coords | `G92` | `G92 X0 Y0 Z0` (zero all buttons) | Sender uses this for DRO zero buttons; macros can adjust `G92` arguments. |
+| Zero work coords | `G92` / `G10 L20` | `G92 X0 Y0 Z0` (zero all buttons) | Sender uses G92 by default; enable persistent zeroing to switch the buttons to `G10 L20`. |
 | Motion | `G0`, `G1`, `G2`, `G3` | `G0 Z10` or `G2 X1 Y1 I0 J1` | Standard rapid/linear/arc commands used in macros. |
 | Dwell | `G4` | `G4 P1` | Macro `%wait` uses similar concepts (but there is also the `%wait` directive). |
 | Spindle on/off | `M3 S<rpm>` / `M5` | `M3 S12000` (button default) / `M5` | Spindle buttons log these commands via `attach_log_gcode`. |

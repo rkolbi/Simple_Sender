@@ -80,6 +80,14 @@ def build_status_bar(app, before):
     set_kb_id(app.btn_toggle_keybinds, "toggle_keybindings")
     app.btn_toggle_keybinds.pack(side="right", padx=(8, 0))
     apply_tooltip(app.btn_toggle_keybinds, "Toggle keyboard shortcuts.")
+    app.btn_release_checklist = ttk.Button(
+        status_bar,
+        text="Release",
+        command=app._show_release_checklist,
+    )
+    set_kb_id(app.btn_release_checklist, "release_checklist")
+    app.btn_release_checklist.pack(side="right", padx=(8, 0))
+    apply_tooltip(app.btn_release_checklist, "Open the release checklist.")
     app._refresh_tooltips_toggle_text()
     app._refresh_render_3d_toggle_text()
     app._refresh_keybindings_toggle_text()
@@ -98,6 +106,7 @@ def update_quick_button_visibility(app):
         ("btn_toggle_tips", app.show_quick_tips_button),
         ("btn_toggle_3d", app.show_quick_3d_button),
         ("btn_toggle_keybinds", app.show_quick_keys_button),
+        ("btn_release_checklist", app.show_quick_release_button),
     ]
     for attr, _ in buttons:
         btn = getattr(app, attr, None)
@@ -115,5 +124,6 @@ def on_quick_button_visibility_change(app):
     app.settings["show_quick_tips_button"] = bool(app.show_quick_tips_button.get())
     app.settings["show_quick_3d_button"] = bool(app.show_quick_3d_button.get())
     app.settings["show_quick_keys_button"] = bool(app.show_quick_keys_button.get())
+    app.settings["show_quick_release_button"] = bool(app.show_quick_release_button.get())
     update_quick_button_visibility(app)
 

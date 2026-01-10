@@ -35,7 +35,6 @@ def build_jog_panel(app, parent):
     app.btn_unit_toggle = ttk.Button(
         mpos,
         text=app._unit_toggle_label(),
-        style=app.icon_button_style,
         command=app._toggle_unit_mode,
     )
     set_kb_id(app.btn_unit_toggle, "unit_toggle")
@@ -50,7 +49,6 @@ def build_jog_panel(app, parent):
     app.btn_hold_mpos = ttk.Button(
         mpos,
         text=icon_label(ICON_HOLD, "Hold"),
-        style=app.icon_button_style,
         command=lambda: app._run_if_connected(app.grbl.hold),
     )
     set_kb_id(app.btn_hold_mpos, "feed_hold")
@@ -61,7 +59,6 @@ def build_jog_panel(app, parent):
     app.btn_resume_mpos = ttk.Button(
         mpos,
         text=icon_label(ICON_RESUME, "Resume"),
-        style=app.icon_button_style,
         command=lambda: app._run_if_connected(app.grbl.resume),
     )
     set_kb_id(app.btn_resume_mpos, "feed_resume")
@@ -77,12 +74,6 @@ def build_jog_panel(app, parent):
     app.btn_zero_y = app._dro_row(dro, "Y", app.wpos_y, app.zero_y)
     app.btn_zero_z = app._dro_row(dro, "Z", app.wpos_z, app.zero_z)
     app._manual_controls.extend([app.btn_zero_x, app.btn_zero_y, app.btn_zero_z])
-    apply_tooltip(app.btn_zero_x, "Zero the WCS X axis (G92 X0).")
-    apply_tooltip(app.btn_zero_y, "Zero the WCS Y axis (G92 Y0).")
-    apply_tooltip(app.btn_zero_z, "Zero the WCS Z axis (G92 Z0).")
-    attach_log_gcode(app.btn_zero_x, "G92 X0")
-    attach_log_gcode(app.btn_zero_y, "G92 Y0")
-    attach_log_gcode(app.btn_zero_z, "G92 Z0")
 
     btns = ttk.Frame(dro)
     btns.pack(fill="x", pady=(6, 0))
@@ -90,8 +81,7 @@ def build_jog_panel(app, parent):
     set_kb_id(app.btn_zero_all, "zero_all")
     app.btn_zero_all.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_zero_all)
-    apply_tooltip(app.btn_zero_all, "Zero all WCS axes (G92 X0 Y0 Z0).")
-    attach_log_gcode(app.btn_zero_all, "G92 X0 Y0 Z0")
+    app._refresh_zeroing_ui()
     app.btn_goto_zero = ttk.Button(btns, text="Goto Zero", command=app.goto_zero)
     set_kb_id(app.btn_goto_zero, "goto_zero")
     app.btn_goto_zero.pack(side="left", expand=True, fill="x", padx=(6, 0))

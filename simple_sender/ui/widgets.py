@@ -260,7 +260,16 @@ def apply_tooltip(widget, text: str):
         widget._tooltip_text = text
     except Exception:
         pass
-    ToolTip(widget, text)
+    existing = getattr(widget, "_tooltip", None)
+    if isinstance(existing, ToolTip):
+        existing.set_text(text)
+        return existing
+    tip = ToolTip(widget, text)
+    try:
+        widget._tooltip = tip
+    except Exception:
+        pass
+    return tip
 
 
 def attach_log_gcode(widget, gcode_or_func):

@@ -129,6 +129,7 @@ def save_settings(app):
         "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
         "show_quick_3d_button": bool(app.show_quick_3d_button.get()),
         "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
+        "show_quick_release_button": bool(app.show_quick_release_button.get()),
         "fallback_rapid_rate": app.fallback_rapid_rate.get().strip(),
         "estimate_factor": safe_float(
             app.estimate_factor,
@@ -168,6 +169,7 @@ def save_settings(app):
         "job_completion_popup": bool(app.job_completion_popup.get()),
         "job_completion_beep": bool(app.job_completion_beep.get()),
         "macros_allow_python": bool(app.macros_allow_python.get()),
+        "zeroing_persistent": bool(app.zeroing_persistent.get()),
     })
     app.settings = data
     app._settings_store.data = app.settings

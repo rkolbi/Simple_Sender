@@ -295,8 +295,29 @@ def build_app_settings_tab(app, notebook):
         justify="left",
     ).grid(row=1, column=0, sticky="w")
 
+    zeroing_frame = ttk.LabelFrame(app._app_settings_inner, text="Zeroing", padding=8)
+    zeroing_frame.grid(row=7, column=0, sticky="ew", pady=(0, 8))
+    zeroing_frame.grid_columnconfigure(0, weight=1)
+    app.zeroing_persistent_check = ttk.Checkbutton(
+        zeroing_frame,
+        text="Use persistent zeroing (G10 L20)",
+        variable=app.zeroing_persistent,
+        command=app._on_zeroing_mode_change,
+    )
+    app.zeroing_persistent_check.grid(row=0, column=0, sticky="w", pady=(0, 4))
+    apply_tooltip(
+        app.zeroing_persistent_check,
+        "Use G10 L20 to write WCS offsets instead of temporary G92 offsets.",
+    )
+    ttk.Label(
+        zeroing_frame,
+        text="Persistent zeroing saves the active WCS offsets to GRBL; standard zeroing uses G92.",
+        wraplength=560,
+        justify="left",
+    ).grid(row=1, column=0, sticky="w")
+
     jog_frame = ttk.LabelFrame(app._app_settings_inner, text="Jogging", padding=8)
-    jog_frame.grid(row=7, column=0, sticky="ew", pady=(0, 8))
+    jog_frame.grid(row=8, column=0, sticky="ew", pady=(0, 8))
     jog_frame.grid_columnconfigure(1, weight=1)
     ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -331,7 +352,7 @@ def build_app_settings_tab(app, notebook):
     )
 
     kb_frame = ttk.LabelFrame(app._app_settings_inner, text="Keyboard shortcuts", padding=8)
-    kb_frame.grid(row=8, column=0, sticky="nsew", pady=(0, 8))
+    kb_frame.grid(row=9, column=0, sticky="nsew", pady=(0, 8))
     kb_frame.grid_columnconfigure(0, weight=1)
     kb_frame.grid_rowconfigure(1, weight=1)
     app.kb_enable_check = ttk.Checkbutton(
@@ -442,7 +463,7 @@ def build_app_settings_tab(app, notebook):
     app._refresh_joystick_safety_display()
 
     view_frame = ttk.LabelFrame(app._app_settings_inner, text="G-code view", padding=8)
-    view_frame.grid(row=9, column=0, sticky="ew")
+    view_frame.grid(row=10, column=0, sticky="ew")
     view_frame.grid_columnconfigure(1, weight=1)
     ttk.Label(view_frame, text="Current line highlight").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -470,7 +491,7 @@ def build_app_settings_tab(app, notebook):
     app.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     diagnostics_frame = ttk.LabelFrame(app._app_settings_inner, text="Diagnostics", padding=8)
-    diagnostics_frame.grid(row=10, column=0, sticky="ew", pady=(8, 0))
+    diagnostics_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
     diagnostics_frame.grid_columnconfigure(1, weight=1)
     ttk.Label(diagnostics_frame, text="Release checklist").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
@@ -487,7 +508,7 @@ def build_app_settings_tab(app, notebook):
     )
 
     tw_frame = ttk.LabelFrame(app._app_settings_inner, text="Safety Aids", padding=8)
-    tw_frame.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+    tw_frame.grid(row=12, column=0, sticky="ew", pady=(8, 0))
     app.training_wheels_check = ttk.Checkbutton(
         tw_frame,
         text="Training Wheels (confirm top-bar actions)",
@@ -505,7 +526,7 @@ def build_app_settings_tab(app, notebook):
     apply_tooltip(app.reconnect_check, "Auto-connect to the last used port when the app starts.")
 
     interface_frame = ttk.LabelFrame(app._app_settings_inner, text="Interface", padding=8)
-    interface_frame.grid(row=12, column=0, sticky="ew", pady=(8, 0))
+    interface_frame.grid(row=13, column=0, sticky="ew", pady=(8, 0))
     interface_frame.grid_columnconfigure(0, weight=1)
     app.resume_button_check = ttk.Checkbutton(
         interface_frame,
@@ -609,6 +630,17 @@ def build_app_settings_tab(app, notebook):
     )
     app.quick_keys_check.pack(side="left", padx=(12, 0))
     apply_tooltip(app.quick_keys_check, "Show or hide the Keys quick button in the status bar.")
+    app.quick_release_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="Release",
+        variable=app.show_quick_release_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_release_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(
+        app.quick_release_check,
+        "Show or hide the Release checklist quick button in the status bar.",
+    )
 
     toggle_btn_row = ttk.Frame(interface_frame)
     toggle_btn_row.grid(row=8, column=0, sticky="w", pady=(10, 0))
@@ -638,7 +670,7 @@ def build_app_settings_tab(app, notebook):
     apply_tooltip(app.btn_toggle_keybinds_settings, "Toggle keyboard shortcuts.")
 
     toolpath_settings = ttk.LabelFrame(app._app_settings_inner, text="3D View", padding=8)
-    toolpath_settings.grid(row=14, column=0, sticky="ew", pady=(8, 0))
+    toolpath_settings.grid(row=15, column=0, sticky="ew", pady=(8, 0))
     toolpath_settings.grid_columnconfigure(1, weight=1)
     ttk.Label(toolpath_settings, text="Streaming refresh (sec)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4

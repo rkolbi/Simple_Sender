@@ -90,6 +90,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_quick_tips_button": True,
     "show_quick_3d_button": True,
     "show_quick_keys_button": True,
+    "show_quick_release_button": True,
     "status_poll_interval": 0.2,
     "status_query_failure_limit": 3,
     "step_xy": 400.0,
@@ -113,6 +114,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "training_wheels": True,
     "unit_mode": "mm",
     "window_geometry": "1194x864+261+83",
+    "zeroing_persistent": False,
 }
 
 def _deep_merge_defaults(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:

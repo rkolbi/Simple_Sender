@@ -182,8 +182,11 @@ class MacroExecutor:
             with self._macro_vars_lock:
                 modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
             self._macro_send("$G")
-            self._macro_wait_for_modal(modal_seq)
-            self._macro_wait_for_status()
+            modal_ok = self._macro_wait_for_modal(modal_seq)
+            status_ok = self._macro_wait_for_status()
+            if not modal_ok or not status_ok:
+                self.ui_q.put(("log", "[macro] Snapshot failed; macro aborted."))
+                return
             self._macro_saved_state = self._snapshot_macro_state()
             if self.grbl.is_connected():
                 self._macro_force_mm()
@@ -824,6 +827,8 @@ class MacroExecutor:
                 return ("MSG", args if args else "")
             if cmd == "%update":
                 return ("UPDATE", args if args else "")
+            if cmd in ("%state_return", "%state-return"):
+                return "STATE_RETURN"
             if line.startswith("%if running"):
                 with self._macro_vars_lock:
                     if not self._macro_vars.get("running"):

@@ -175,7 +175,7 @@ MACRO_STDEXPR = False
 
 # Regular expressions
 MACRO_GPAT = re.compile(r"[A-Za-z]\s*[-+]?\d+.*")
-MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9]+)\b *(.*)$")
+MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9_-]+)\b *(.*)$")
 MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
 
 # ============================================================================

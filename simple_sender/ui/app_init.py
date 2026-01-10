@@ -61,6 +61,7 @@ def init_basic_preferences(app, app_version: str):
     app.all_stop_mode = tk.StringVar(value=setting("all_stop_mode", "stop_reset"))
     app.training_wheels = tk.BooleanVar(value=setting("training_wheels", True))
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
+    app.zeroing_persistent = tk.BooleanVar(value=setting("zeroing_persistent", False))
     app.keyboard_bindings_enabled = tk.BooleanVar(
         value=setting("keyboard_bindings_enabled", True)
     )
@@ -157,6 +158,7 @@ def init_basic_preferences(app, app_version: str):
     app.show_quick_tips_button = tk.BooleanVar(value=setting("show_quick_tips_button", True))
     app.show_quick_3d_button = tk.BooleanVar(value=setting("show_quick_3d_button", True))
     app.show_quick_keys_button = tk.BooleanVar(value=setting("show_quick_keys_button", True))
+    app.show_quick_release_button = tk.BooleanVar(value=setting("show_quick_release_button", True))
     app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "acked"))
 
 
@@ -324,6 +326,10 @@ def init_runtime_state(
     app.mpos_z = tk.StringVar(value="0.000")
     app._wpos_raw = (0.0, 0.0, 0.0)
     app._mpos_raw = (0.0, 0.0, 0.0)
+    app._wco_raw = None
+    app._wpos_value_labels = {}
+    app._wpos_label_default_fg = {}
+    app._wpos_flash_after_ids = {}
     app._last_gcode_lines = []
     app._last_gcode_path = None
     app._gcode_hash = None
