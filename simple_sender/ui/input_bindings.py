@@ -25,6 +25,7 @@ else:
     PYGAME_AVAILABLE = True
 
 JOYSTICK_POLL_INTERVAL_MS = 50
+JOYSTICK_DISCOVERY_INTERVAL_MS = 1000
 JOYSTICK_CAPTURE_TIMEOUT_MS = 15000
 JOYSTICK_LISTENING_TEXT = "Listening for joystick input..."
 
@@ -121,7 +122,25 @@ def discover_joysticks(app, py, count: int) -> list[str]:
     app._joystick_button_poll_state.clear()
     app._joystick_axis_poll_state.clear()
     app._joystick_hat_poll_state.clear()
+    app._joystick_axis_active.clear()
+    app._joystick_hat_active.clear()
     return names
+
+def update_joystick_test_status(app, count: int, names: list[str] | None = None) -> None:
+    if not hasattr(app, "joystick_test_status"):
+        return
+    if count <= 0:
+        app.joystick_test_status.set(
+            "No joysticks detected. Plug in a controller to use joystick bindings."
+        )
+        return
+    if names is None:
+        names = [app._joystick_names.get(idx, f"Joystick {idx}") for idx in range(count)]
+    lines = [f"{count} joystick(s) detected:"]
+    for idx, name in enumerate(names):
+        lines.append(f"- #{idx}: {name}")
+    lines.append("Enable USB joystick bindings and press a button/axis/hat to map it.")
+    app.joystick_test_status.set("\n".join(lines))
 
 def refresh_joystick_test_info(app):
     if not hasattr(app, "joystick_test_status"):
@@ -140,17 +159,13 @@ def refresh_joystick_test_info(app):
     if count <= 0:
         app._joystick_names = {}
         app._joystick_instances = {}
-        app.joystick_test_status.set(
-            "No joysticks detected. Plug in a controller and click Refresh."
-        )
+        app._joystick_device_count = 0
+        update_joystick_test_status(app, 0)
         return
-    lines = [f"{count} joystick(s) detected:"]
     names = app._discover_joysticks(py, count)
-    for idx, name in enumerate(names):
-        lines.append(f"- #{idx}: {name}")
     app._joystick_names = {idx: name for idx, name in enumerate(names)}
-    lines.append("Enable USB joystick bindings and press a button/axis/hat to map it.")
-    app.joystick_test_status.set("\n".join(lines))
+    app._joystick_device_count = count
+    update_joystick_test_status(app, count, names)
 
 def refresh_joystick_safety_display(app):
     if not hasattr(app, "joystick_safety_status"):
@@ -180,11 +195,38 @@ def ensure_joystick_backend(app):
         count = py.joystick.get_count()
         names = app._discover_joysticks(py, count)
         app._joystick_names = {idx: name for idx, name in enumerate(names)}
+        app._joystick_device_count = count
         app._joystick_backend_ready = True
         return True
     except Exception as exc:
         logger.exception("Joystick backend initialization failed: %s", exc)
         return False
+
+def maybe_refresh_joystick_devices(app, py, *, force: bool = False) -> bool:
+    now = time.monotonic()
+    last_check = getattr(app, "_joystick_last_discovery", 0.0)
+    if not force and (now - last_check) < (JOYSTICK_DISCOVERY_INTERVAL_MS / 1000.0):
+        return False
+    app._joystick_last_discovery = now
+    last_count = getattr(app, "_joystick_device_count", None)
+    if last_count is None:
+        last_count = len(getattr(app, "_joystick_instances", {}) or {})
+    if not force and last_count > 0:
+        # Skip discovery polling when a joystick is already present.
+        return False
+    try:
+        count = py.joystick.get_count()
+    except Exception as exc:
+        logger.exception("Joystick discovery failed: %s", exc)
+        return False
+    if not force:
+        if count == last_count:
+            return False
+    names = app._discover_joysticks(py, count)
+    app._joystick_names = {idx: name for idx, name in enumerate(names)}
+    app._joystick_device_count = count
+    update_joystick_test_status(app, count, names)
+    return True
 
 def start_joystick_polling(app):
     if app._joystick_poll_id is not None:
@@ -210,7 +252,20 @@ def poll_joystick_events(app):
         return
     try:
         py.event.pump()
-        events = list(py.event.get())
+        raw_events = list(py.event.get())
+        events = []
+        device_change = False
+        device_added = getattr(py, "JOYDEVICEADDED", None)
+        device_removed = getattr(py, "JOYDEVICEREMOVED", None)
+        for event in raw_events:
+            if device_added is not None and event.type == device_added:
+                device_change = True
+                continue
+            if device_removed is not None and event.type == device_removed:
+                device_change = True
+                continue
+            events.append(event)
+        maybe_refresh_joystick_devices(app, py, force=device_change)
         for event in events:
             app._handle_joystick_event(event)
         joystick_hold.check_release(app)

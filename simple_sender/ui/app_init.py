@@ -205,6 +205,8 @@ def init_runtime_state(
     app._joystick_capture_state: dict[str, Any] | None = None
     app._joystick_poll_id: Any = None
     app._joystick_backend_ready = False
+    app._joystick_device_count = 0
+    app._joystick_last_discovery = 0.0
     app._joystick_names: dict[int, str] = {}
     app._joystick_instances: dict[int, Any] = {}
     app._joystick_button_poll_state: dict[tuple[int, int], bool] = {}
