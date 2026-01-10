@@ -1,12 +1,12 @@
-# Simple Sender — Full Manual
+# Simple Sender - Full Manual
 
-### Work in progress (alpha). Don’t trust it until you’ve validated it a few times.
+### Work in progress (alpha). Don't trust it until you've validated it a few times.
 
-A minimal, reliable **GRBL 1.1h** sender for **3‑axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
+A minimal, reliable **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
 ![-](pics/Slide8.JPG)
 
-> **Safety notice:** This is **alpha** software. Always test “in the air” with the spindle **off** before cutting material.
+> **Safety notice:** This is **alpha** software. Always test "in the air" with the spindle **off** before cutting material.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -135,7 +135,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender – Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
+  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -205,12 +205,14 @@ Execution happens on a background worker that holds `_macro_lock`, so only one m
 
 `App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, any line that begins with `%` or `_`, contains `[`/`]`, or includes `=` raises a compile error, though raw GRBL commands still stream. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
+Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
+
 ### Macro directives
 | Directive | What it does | Example usage |
 | --- | --- | --- |
 | `%wait` | Pause until GRBL reports Idle before continuing; useful after long G1 moves so macros resume only when the controller is ready. | `G1 F3000 X10 Y10`<br>`%wait` |
-| `%msg <text>` | Log `<text>` with the `[macro]` prefix so operators see status updates without sending unrelated G-code. | `%msg retracting to safe height` |
-| `%update` | Request a status report (`?`) to refresh WPos/FS, letting `[wx]`, `[wy]`, `[curfeed]`, etc., read the live values before the next line. | `%update` |
+| `%msg <text>` | Log `<text>` with the `[macro]` prefix; supports `[expression]` expansion for live values. | `%msg Probe wz=[wz]` |
+| `%update` | Request a status report (`?`) and block until a fresh status arrives, so `[wx]`, `[wy]`, `[wz]`, `[curfeed]`, etc., reflect the latest controller state. | `%update` |
 | `%if running` | Skip the current line unless a stream is already running (the app sets `_macro_vars["running"]` true for active or paused jobs). | `%if running G0 Z5` |
 | `%if paused` | Execute the line only while streaming is paused, so recovery steps (e.g., retracting Z) stay blocked during active runs. | `%if paused G0 Z10` |
 | `%if not running` | Skip the current line while a stream is active so setup steps only run when the controller is idle. | `%if not running G0 Z0` |
@@ -237,6 +239,7 @@ All directives above operate through the modal interpreter implemented in `main.
 | `SAVE` | Unsupported; logs `[macro] SAVE is not supported.`. | `SAVE` |
 | `SENDHEX <xx>` | Send raw real-time byte `0xXX`. | `SENDHEX 91` |
 | `SAFE <value>` | Update `_macro_vars["safe"]`, a helper the UI uses for safe heights. | `SAFE 10` |
+| `STATE_RETURN` | Restore the modal state snapshot captured when the macro started (WCS/plane/units/distance/feedmode/spindle/coolant). | `STATE_RETURN` |
 | `SET0` | Send `G92 X0 Y0 Z0`. | `SET0` |
 | `SETX`, `SETY`, `SETZ` | Zero a single axis with `G92`. | `SETZ 2` |
 | `SET <X> <Y> <Z>` | Zero only the axes you specify. | `SET 0 50` |
@@ -282,6 +285,25 @@ Every macro shares access to `_macro_vars`. The following keys hold live data yo
 | `macro` | `types.SimpleNamespace(state=SimpleNamespace())`; store persistent values with `macro.state.last_probe = ...`. |
 
 Add your own entries (e.g., `_macro_vars["my_flag"] = True`) when you want data to survive between lines or macros.
+
+### Sharing variables between macros
+Macros share `macro.state` across runs, so you can store a value in one macro and reuse or update it in another. Example:
+
+```text
+Save stock top
+Store the current work Z so later macros can reuse it.
+%macro.state.STOCK_TOP = wz
+%msg Stored stock top (wz) in macro.state.STOCK_TOP
+```
+
+```text
+Return to stock top + lift
+Use the stored value, then adjust it for the next operation.
+G90
+G0 Z[macro.state.STOCK_TOP]
+%macro.state.STOCK_TOP = macro.state.STOCK_TOP + 2.0
+%msg Lifted; macro.state.STOCK_TOP updated
+```
 
 ### Python expressions, loops, and new variables
 When scripting is enabled, prefix a line with `_` or simply write a Python statement (`=`) to run it. The interpreter injects `app` and `os` so you can call `app._log(...)`, `app._call_on_ui_thread(...)`, or inspect `app.connected`. Square brackets evaluate Python expressions before streaming, such as `G0 Z[_macro_vars["safe"] + pass_num * 0.5]`.
@@ -331,12 +353,12 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Joystick Bindings
 - Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
-- App Settings → Keyboard Shortcuts now has a Joystick testing frame above the table: it reports the detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right so you can rediscover devices before enabling capture.
-- Click a row's `Joystick` column to listen (it momentarily shows “Listening for joystick input…”); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
+- App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports the detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right so you can rediscover devices before enabling capture.
+- Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
 - When the toggle is left on before closing, the app now reopens with joystick capturing enabled automatically (just like auto-reconnecting to the last serial port), so you can pick up where you left off without another click.
-- The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When you bind a joystick button to one of them and hold the button, the matching axis jogs continuously (the same feed rates as the jog buttons); the motion stops as soon as the button is released, giving you a “jog-to-hold” behavior from the joystick.
-- The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control – binding it again to another action automatically clears the prior assignment so there’s no ambiguity in the list.
+- The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When you bind a joystick button to one of them and hold the button, the matching axis jogs continuously (the same feed rates as the jog buttons); the motion stops as soon as the button is released, giving you a "jog-to-hold" behavior from the joystick.
+- The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.
 - Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
 
 ## Logs & Filters
@@ -352,9 +374,9 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - 3D slow: toggle 3D render off.
 
 ## Pre-release Notes
-1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` → `~/.simple_sender`).
-2. `main.py:391` – There is a single `MacroExecutor.notify_alarm` implementation again, which continues to set `_alarm_event` and log the contextual alarm snippet so macros unblock and the log shows which line triggered the alarm.
-3. `main.py:4938` – `last_port` defaults to `None`, so the new `(self.settings.get("last_port") or "").strip()` guard ensures auto-reconnect processing no longer calls `.strip()` on `None` when no prior port has been saved yet.
+1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
+2. `main.py:391` - There is a single `MacroExecutor.notify_alarm` implementation again, which continues to set `_alarm_event` and log the contextual alarm snippet so macros unblock and the log shows which line triggered the alarm.
+3. `main.py:4938` - `last_port` defaults to `None`, so the new `(self.settings.get("last_port") or "").strip()` guard ensures auto-reconnect processing no longer calls `.strip()` on `None` when no prior port has been saved yet.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
@@ -363,7 +385,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - **Persistent offsets (G10)?** Swap zero commands if desired.
 
 ## License
-GPL-3.0-or-later © 2026 Bob Kolbasowski
+GPL-3.0-or-later (c) 2026 Bob Kolbasowski
 
 
 
@@ -449,9 +471,9 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 | Macro | Purpose | When to use | When to avoid | Code notes |
 | --- | --- | --- | --- | --- |
 | Macro-1: Return to Work X & Y Zero (Safe Height) | Raises to a safe Z before moving to X0 Y0 so you can reset work coordinates without crashing. | When you need a quick safe return to the origin before setting offsets. | Avoid while actively executing a job; use only when motion is paused. | Defines `%macro.state.SAFE_HEIGHT` and uses `M5`, `G53 G0`, and `%wait` so moves execute away from the workpiece. |
-| Macro-2: Park over Tool Sensor | Drives to the fixed probe location so you can clean the sensor or stage fixtures. | Park the spindle for maintenance or measurement after a job finishes. | Don’t use while cutting or while the spindle is still rotating. | Stores `PROBE_X/Y_LOCATION` in `%macro.state` and issues `G53 G0` so the coordinates ignore any applied offsets. |
-| Macro-3: Reference Tool Recovery | Re-probes the reference tool when the stored `TOOL_REFERENCE` is missing, then saves the result. | Run after a crash or failed recovery to restore the reference measurement. | Skip if `macro.state.TOOL_REFERENCE` already exists; the macro exits early if the reference is present. | Guards with `%if getattr(macro.state, "TOOL_REFERENCE", None) is not None` and logs the recovered value with `%msg`. |
-| Macro-4: XYZ Touch Plate & Reference Tool Setup | Probes the touch plate (Z/X/Y) and captures the reference tool height for later restorations. | Use during initial calibration or whenever the touch plate setup changes. | Don’t run during a production cycle; the routine assumes the tool is free to move to the plate. | Mixes fast and slow probing commands with `G92` offsets before updating `%macro.state.TOOL_REFERENCE`. |
-| Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn’t been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
-| Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don’t run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE`, and logs the new height. |
-| Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it’s purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
+| Macro-2: Park Spindle over Tool Sensor | Drives to the fixed probe location so you can clean the sensor or stage fixtures. | Park the spindle for maintenance or measurement after a job finishes. | Don't use while cutting or while the spindle is still rotating. | Stores `PROBE_X/Y_LOCATION` in `%macro.state` and issues `G53 G0` so the coordinates ignore any applied offsets. |
+| Macro-3: Attempt Reference Tool Recovery | Re-probes the reference tool when the stored `TOOL_REFERENCE` is missing, then saves the result. | Run after a crash or failed recovery to restore the reference measurement. | Skip if `macro.state.TOOL_REFERENCE` already exists; the macro exits early if the reference is present. | Guards with `%if getattr(macro.state, "TOOL_REFERENCE", None) is not None` and stores `TOOL_REFERENCE` from `wz` (work Z) so `G10 L20` uses the correct WCS. |
+| Macro-4: XYZ Touch Plate & Reference Tool Setup | Probes the touch plate (Z/X/Y) and captures the reference tool height for later restorations. | Use during initial calibration or whenever the touch plate setup changes. | Don't run during a production cycle; the routine assumes the tool is free to move to the plate. | Mixes fast and slow probing commands with `G92` offsets before updating `%macro.state.TOOL_REFERENCE` from `wz` (work Z). |
+| Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn't been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
+| Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don't run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE` from `wz`, and logs the new height. |
+| Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it's purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |

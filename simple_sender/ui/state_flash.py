@@ -56,7 +56,7 @@ def update_state_highlight(app, state: str | None):
         apply_state_fg(app, "#2b2b2b", fg="#ffffff")
     elif text.startswith(("home", "homing")):
         cancel_state_flash(app)
-        apply_state_fg(app, "#26c6da")
+        apply_state_fg(app, "#7e57c2")
     elif text.startswith("hold"):
         cancel_state_flash(app)
         apply_state_fg(app, "#ffc107")

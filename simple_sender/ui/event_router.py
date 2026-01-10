@@ -11,18 +11,56 @@ def _parse_modal_units(app, raw: str) -> None:
     if not (line.startswith("[GC:") and line.endswith("]")):
         return
     tokens = line.strip("[]").split()
+    if not tokens:
+        return
     modal_units = None
+    modal_state = {}
     for token in tokens:
-        if token == "G20":
-            modal_units = "inch"
-        elif token == "G21":
-            modal_units = "mm"
+        if token.startswith("GC:"):
+            token = token[3:]
+            if not token:
+                continue
+        if token in ("G20", "G21"):
+            modal_units = "inch" if token == "G20" else "mm"
+            modal_state["units"] = token
+            continue
+        if token in ("G90", "G91"):
+            modal_state["distance"] = token
+            continue
+        if token in ("G17", "G18", "G19"):
+            modal_state["plane"] = token
+            continue
+        if token in ("G93", "G94"):
+            modal_state["feedmode"] = token
+            continue
+        if token in ("G90.1", "G91.1"):
+            modal_state["arc"] = token
+            continue
+        if token in ("G54", "G55", "G56", "G57", "G58", "G59", "G59.1", "G59.2", "G59.3"):
+            modal_state["WCS"] = token
+            continue
+        if token in ("G0", "G1", "G2", "G3", "G38.2", "G38.3", "G38.4", "G38.5"):
+            modal_state["motion"] = token
+            continue
+        if token in ("M3", "M4", "M5"):
+            modal_state["spindle"] = token
+            continue
+        if token in ("M7", "M8", "M9"):
+            modal_state["coolant"] = token
+            continue
+        if token.startswith("T") and token[1:].isdigit():
+            modal_state["tool"] = int(token[1:])
     if modal_units:
         app._modal_units = modal_units
         try:
             app._set_unit_mode(modal_units)
         except Exception:
             pass
+    if modal_state or modal_units:
+        with app.macro_executor.macro_vars() as macro_vars:
+            for key, value in modal_state.items():
+                macro_vars[key] = value
+            macro_vars["_modal_seq"] = int(macro_vars.get("_modal_seq", 0) or 0) + 1
 
 
 def _parse_report_units_setting(app, raw: str) -> None:
@@ -333,6 +371,7 @@ def handle_status_event(app, raw: str):
             app.btn_resume_from.config(state="normal")
     with app.macro_executor.macro_vars() as macro_vars:
         macro_vars["state"] = state
+        macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
 
     def parse_xyz(text: str):
         parts = text.split(",")
@@ -351,6 +390,9 @@ def handle_status_event(app, raw: str):
 
     def to_mm(value: float) -> float:
         return convert_units(value, report_units, "mm")
+
+    def to_modal(value: float) -> float:
+        return convert_units(value, report_units, modal_units)
 
     wpos_calc = None
     mpos_calc = None
@@ -374,9 +416,9 @@ def handle_status_event(app, raw: str):
             app.mpos_y.set(format_dro_value(mpos_vals[1], report_units, modal_units))
             app.mpos_z.set(format_dro_value(mpos_vals[2], report_units, modal_units))
             with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["mx"] = float(mpos_vals[0])
-                macro_vars["my"] = float(mpos_vals[1])
-                macro_vars["mz"] = float(mpos_vals[2])
+                macro_vars["mx"] = to_modal(mpos_vals[0])
+                macro_vars["my"] = to_modal(mpos_vals[1])
+                macro_vars["mz"] = to_modal(mpos_vals[2])
         except Exception:
             pass
     elif mpos_calc:
@@ -385,9 +427,9 @@ def handle_status_event(app, raw: str):
             app.mpos_y.set(format_dro_value(mpos_calc[1], report_units, modal_units))
             app.mpos_z.set(format_dro_value(mpos_calc[2], report_units, modal_units))
             with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["mx"] = float(mpos_calc[0])
-                macro_vars["my"] = float(mpos_calc[1])
-                macro_vars["mz"] = float(mpos_calc[2])
+                macro_vars["mx"] = to_modal(mpos_calc[0])
+                macro_vars["my"] = to_modal(mpos_calc[1])
+                macro_vars["mz"] = to_modal(mpos_calc[2])
         except Exception:
             pass
     if wpos_vals:
@@ -397,9 +439,9 @@ def handle_status_event(app, raw: str):
             app.wpos_y.set(format_dro_value(wpos_vals[1], report_units, modal_units))
             app.wpos_z.set(format_dro_value(wpos_vals[2], report_units, modal_units))
             with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["wx"] = float(wpos_vals[0])
-                macro_vars["wy"] = float(wpos_vals[1])
-                macro_vars["wz"] = float(wpos_vals[2])
+                macro_vars["wx"] = to_modal(wpos_vals[0])
+                macro_vars["wy"] = to_modal(wpos_vals[1])
+                macro_vars["wz"] = to_modal(wpos_vals[2])
             try:
                 app.toolpath_panel.set_position(
                     to_mm(wpos_vals[0]),
@@ -416,9 +458,9 @@ def handle_status_event(app, raw: str):
             app.wpos_y.set(format_dro_value(wpos_calc[1], report_units, modal_units))
             app.wpos_z.set(format_dro_value(wpos_calc[2], report_units, modal_units))
             with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["wx"] = float(wpos_calc[0])
-                macro_vars["wy"] = float(wpos_calc[1])
-                macro_vars["wz"] = float(wpos_calc[2])
+                macro_vars["wx"] = to_modal(wpos_calc[0])
+                macro_vars["wy"] = to_modal(wpos_calc[1])
+                macro_vars["wz"] = to_modal(wpos_calc[2])
             try:
                 app.toolpath_panel.set_position(
                     to_mm(wpos_calc[0]),
@@ -443,9 +485,9 @@ def handle_status_event(app, raw: str):
             macro_vars["rxbytes"] = rxbytes
     if wco_vals:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["wcox"] = float(wco_vals[0])
-            macro_vars["wcoy"] = float(wco_vals[1])
-            macro_vars["wcoz"] = float(wco_vals[2])
+            macro_vars["wcox"] = to_modal(wco_vals[0])
+            macro_vars["wcoy"] = to_modal(wco_vals[1])
+            macro_vars["wcoz"] = to_modal(wco_vals[2])
     if pins is not None:
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["pins"] = pins

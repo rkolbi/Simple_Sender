@@ -135,6 +135,7 @@ def build_toolbar(app):
     )
     set_kb_id(app.btn_unlock_top, "unlock_top")
     app.btn_unlock_top.pack(side="left", padx=(6, 0))
+    app._manual_controls.append(app.btn_unlock_top)
     apply_tooltip(app.btn_unlock_top, "Send $X to clear alarm (top-bar).")
     app.btn_alarm_recover = ttk.Button(
         bar,

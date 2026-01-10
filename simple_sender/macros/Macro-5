@@ -12,6 +12,14 @@ Moves to the fixed sensor, lets you swap the tool, then re-applies the stored re
 %if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 1 or Macro 2 first.")
 
 %wait
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
+%msg (Tool change start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz] TOOL_REFERENCE=[macro.state.TOOL_REFERENCE])
 G21
 M5
 G90
@@ -33,11 +41,16 @@ G4 P0.25
 G38.4 Z10 F5
 G90
 %wait
+%update
+%msg (New tool probe mz=[mz])
 G10 L20 Z[macro.state.TOOL_REFERENCE]
 %wait
+%update
+%msg (After G10: wz=[wz] mz=[mz])
 G91
 G0 Z5
 G90
 G53 Z[macro.state.SAFE_HEIGHT]
 %wait
 G0 X0 Y0
+STATE_RETURN

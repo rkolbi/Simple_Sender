@@ -12,6 +12,14 @@ Use when you must set X/Y manually before probing Z. Captures the reference tool
 %macro.state.Z_FAST_PROBE_DISTANCE = 50
 
 %wait
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
+%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
 M0 (Set X0/Y0 manually at your job origin, then move to a flat spot for Z probing and install the touch plate + clip.)
 G90
 G21
@@ -33,6 +41,8 @@ G92 Z[macro.state.PLATE_THICKNESS]
 G0 Z16
 
 G0 Z20
+%update
+%msg (After touch plate: wz=[wz])
 M0 (Stow the touch plate and clip before measuring the tool height.)
 %wait
 
@@ -57,11 +67,13 @@ G4 P0.25
 G38.4 Z10 F5
 G90
 %wait
-%macro.state.TOOL_REFERENCE = mz
-%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE])
+%update
+%macro.state.TOOL_REFERENCE = wz
+%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
 G91
 G0 Z5
 G90
 G53 Z[macro.state.SAFE_HEIGHT]
 %wait
 G0 X[macro.state.START_X] Y[macro.state.START_Y]
+STATE_RETURN

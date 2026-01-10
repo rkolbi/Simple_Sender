@@ -6,9 +6,17 @@ Moves to the tool-height sensor so you can clean, inspect, or stage without alte
 %macro.state.PROBE_X_LOCATION = -1.5
 %macro.state.PROBE_Y_LOCATION = -1224
 
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
 M5
 G21
 G90
 G53 G0 Z[macro.state.SAFE_HEIGHT]
 G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
 %wait
+STATE_RETURN

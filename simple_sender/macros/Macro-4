@@ -14,6 +14,14 @@ Probes XYZ on the touch plate, then captures the reference tool height at the fi
 %macro.state.Y_PLATE_OFFSET = -13.175
 
 %wait
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
+%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
 M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
 G90
 G21
@@ -57,6 +65,8 @@ G92 Y[macro.state.Y_PLATE_OFFSET]
 G0 Y-15
 G0 Z20
 G0 X0 Y0
+%update
+%msg (After touch plate: wx=[wx] wy=[wy] wz=[wz])
 M0 (Stow the touch plate and clip; tool height will be measured next.)
 %wait
 
@@ -81,11 +91,13 @@ G4 P0.25
 G38.4 Z10 F5
 G90
 %wait
-%macro.state.TOOL_REFERENCE = mz
-%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE])
+%update
+%macro.state.TOOL_REFERENCE = wz
+%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
 G91
 G0 Z5
 G90
 G53 Z[macro.state.SAFE_HEIGHT]
 %wait
 G0 X0 Y0
+STATE_RETURN

@@ -24,7 +24,7 @@ def build_jog_panel(app, parent):
     app.btn_home_mpos = ttk.Button(
         mpos,
         text=icon_label(ICON_HOME, "Home"),
-        style=app.icon_button_style,
+        style=getattr(app, "home_button_style", app.icon_button_style),
         command=app._start_homing,
     )
     set_kb_id(app.btn_home_mpos, "home")

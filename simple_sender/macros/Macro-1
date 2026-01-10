@@ -4,9 +4,17 @@ Raises to the safe height and then re-centers on the WCS origin without changing
 ; SAFE_HEIGHT should match the other macros so the return path clears all fixtures.
 %macro.state.SAFE_HEIGHT = -5
 
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
 M5
 G21
 G90
 G53 G0 Z[macro.state.SAFE_HEIGHT]
 %wait
 G0 X0 Y0
+STATE_RETURN

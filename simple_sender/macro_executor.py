@@ -34,8 +34,8 @@ class MacroExecutor:
         self._current_macro_line: str = ""
         self._alarm_event = threading.Event()
         self._alarm_notified = False
-        self._current_macro_line: str = ""
-        self._alarm_notified = False
+        self._macro_saved_state = None
+        self._macro_state_restored = False
         macro_namespace = types.SimpleNamespace(state=types.SimpleNamespace())
         self._macro_vars = {
             "prbx": 0.0,
@@ -111,6 +111,8 @@ class MacroExecutor:
             "prompt_choice": "",
             "prompt_index": -1,
             "prompt_cancelled": False,
+            "_status_seq": 0,
+            "_modal_seq": 0,
             "macro": macro_namespace,
         }
 
@@ -175,6 +177,16 @@ class MacroExecutor:
                 self._macro_local_vars = {"app": self.app, "os": os}
                 self._macro_vars["app"] = self.app
                 self._macro_vars["os"] = os
+            self._macro_state_restored = False
+            self._macro_saved_state = None
+            with self._macro_vars_lock:
+                modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+            self._macro_send("$G")
+            self._macro_wait_for_modal(modal_seq)
+            self._macro_wait_for_status()
+            self._macro_saved_state = self._snapshot_macro_state()
+            if self.grbl.is_connected():
+                self._macro_force_mm()
             for idx in range(2, len(lines)):
                 raw = lines[idx]
                 raw_line = raw.rstrip("\r\n")
@@ -199,9 +211,10 @@ class MacroExecutor:
                     elif kind == "MSG":
                         msg = compiled[1] if len(compiled) > 1 else ""
                         if msg:
+                            msg = self._format_macro_message(str(msg))
                             self.ui_q.put(("log", f"[macro] {msg}"))
                     elif kind == "UPDATE":
-                        self.grbl.send_realtime(RT_STATUS)
+                        self._macro_wait_for_status()
                     continue
                 evaluated = self._bcnc_evaluate_line(compiled)
                 if evaluated is None:
@@ -214,6 +227,14 @@ class MacroExecutor:
         except Exception as exc:
             self.app._log_exception("Macro error", exc, show_dialog=True, dialog_title="Macro error")
         finally:
+            try:
+                if not self._macro_state_restored:
+                    self._macro_restore_units()
+            except Exception as exc:
+                logger.exception("Macro unit restore failed: %s", exc)
+                self.ui_q.put(("log", f"[macro] Unit restore failed: {exc}"))
+            self._macro_saved_state = None
+            self._macro_state_restored = False
             self._macro_lock.release()
             duration = time.perf_counter() - start
             if duration >= 0.2:
@@ -257,6 +278,111 @@ class MacroExecutor:
                 self.ui_q.put(("log", "[macro] %wait timeout"))
                 return
             time.sleep(0.1)
+
+    def _macro_wait_for_status(self, timeout_s: float = 1.0) -> bool:
+        start = time.time()
+        with self._macro_vars_lock:
+            seq = int(self._macro_vars.get("_status_seq", 0) or 0)
+        self.grbl.send_realtime(RT_STATUS)
+        while True:
+            with self._macro_vars_lock:
+                now_seq = int(self._macro_vars.get("_status_seq", 0) or 0)
+            if now_seq != seq:
+                return True
+            if timeout_s and (time.time() - start) > timeout_s:
+                self.ui_q.put(("log", "[macro] %update timeout"))
+                return False
+            time.sleep(0.05)
+
+    def _macro_wait_for_modal(self, seq: int | None = None, timeout_s: float = 1.0) -> bool:
+        start = time.time()
+        if seq is None:
+            with self._macro_vars_lock:
+                seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+        while True:
+            with self._macro_vars_lock:
+                now_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+            if now_seq != seq:
+                return True
+            if timeout_s and (time.time() - start) > timeout_s:
+                self.ui_q.put(("log", "[macro] $G modal update timeout"))
+                return False
+            time.sleep(0.05)
+
+    def _snapshot_macro_state(self) -> dict[str, str]:
+        with self._macro_vars_lock:
+            def pick(key: str) -> str:
+                value = self._macro_vars.get(key, "")
+                return str(value) if value is not None else ""
+
+            return {
+                "WCS": pick("WCS"),
+                "plane": pick("plane"),
+                "units": pick("units"),
+                "distance": pick("distance"),
+                "feedmode": pick("feedmode"),
+                "spindle": pick("spindle"),
+                "coolant": pick("coolant"),
+            }
+
+    def _macro_force_mm(self):
+        self._macro_send("G21")
+        try:
+            self.app._set_unit_mode("mm")
+        except Exception:
+            pass
+        with self._macro_vars_lock:
+            self._macro_vars["units"] = "G21"
+
+    def _macro_restore_units(self):
+        state = self._macro_saved_state
+        if not state:
+            return
+        units = state.get("units", "")
+        if not units:
+            return
+        if not self.grbl.is_connected() or getattr(self.app, "_alarm_locked", False):
+            self.ui_q.put(("log", "[macro] Skipped unit restore due to disconnect/alarm."))
+            return
+        self._macro_send(units)
+        try:
+            self.app._set_unit_mode("mm" if units.upper() == "G21" else "inch")
+        except Exception:
+            pass
+        with self._macro_vars_lock:
+            self._macro_vars["units"] = units
+
+    def _macro_restore_state(self) -> bool:
+        state = self._macro_saved_state
+        if not state:
+            self.ui_q.put(("log", "[macro] STATE_RETURN skipped: no saved state."))
+            return True
+        if not self.grbl.is_connected() or getattr(self.app, "_alarm_locked", False):
+            self.ui_q.put(("log", "[macro] STATE_RETURN skipped due to disconnect/alarm."))
+            return True
+        tokens = [
+            state.get("WCS", ""),
+            state.get("plane", ""),
+            state.get("units", ""),
+            state.get("distance", ""),
+            state.get("feedmode", ""),
+            state.get("spindle", ""),
+            state.get("coolant", ""),
+        ]
+        tokens = [tok for tok in tokens if tok]
+        if tokens:
+            self._macro_send(" ".join(tokens))
+        units = state.get("units", "")
+        if units:
+            try:
+                self.app._set_unit_mode("mm" if units.upper() == "G21" else "inch")
+            except Exception:
+                pass
+            with self._macro_vars_lock:
+                self._macro_vars["units"] = units
+        self._macro_state_restored = True
+        self.ui_q.put(("log", "[macro] STATE_RETURN restored modal state."))
+        return True
 
     def _parse_timeout(self, cmd_parts: list[str], default: float) -> float:
         if len(cmd_parts) > 1:
@@ -411,6 +537,50 @@ class MacroExecutor:
 
         return re.sub(r"\[macro\.([A-Za-z_]\w*)\]", replace, text)
 
+    def _format_macro_message(self, text: str) -> str:
+        if "[" not in text:
+            return text
+        out: list[str] = []
+        expr: list[str] = []
+        bracket = 0
+        for ch in text:
+            if ch == "[":
+                if bracket == 0:
+                    bracket = 1
+                    expr = []
+                else:
+                    expr.append(ch)
+                    bracket += 1
+                continue
+            if ch == "]":
+                if bracket == 0:
+                    out.append(ch)
+                    continue
+                bracket -= 1
+                if bracket == 0:
+                    expr_text = "".join(expr)
+                    try:
+                        with self._macro_vars_lock:
+                            globals_ctx = self._macro_eval_globals()
+                            result = eval(expr_text, globals_ctx, self._macro_local_vars)
+                    except Exception:
+                        result = ""
+                    if isinstance(result, float):
+                        out.append(str(round(result, 4)))
+                    else:
+                        out.append(str(result))
+                    expr = []
+                else:
+                    expr.append(ch)
+                continue
+            if bracket > 0:
+                expr.append(ch)
+            else:
+                out.append(ch)
+        if bracket > 0:
+            out.append("[" + "".join(expr))
+        return "".join(out)
+
     def _strip_prompt_tokens(self, line: str) -> str:
         return self.PROMPT_BRACKET_PAT.sub(" ", line).strip()
 
@@ -435,6 +605,13 @@ class MacroExecutor:
             return True
         cmd_parts = s.replace(",", " ").split()
         cmd = cmd_parts[0].upper()
+        unit_mode = None
+        for part in cmd_parts:
+            upper = part.upper()
+            if upper == "G20":
+                unit_mode = "inch"
+            elif upper == "G21":
+                unit_mode = "mm"
 
         if cmd in ("M0", "M00", "PROMPT"):
             prompt_source = raw_line or s
@@ -540,6 +717,8 @@ class MacroExecutor:
         if cmd == "RUN":
             self.grbl.start_stream()
             return True
+        if cmd in ("STATE_RETURN", "STATE-RETURN"):
+            return self._macro_restore_state()
         if cmd == "SAVE":
             self.ui_q.put(("log", "[macro] SAVE is not supported."))
             return True
@@ -598,11 +777,26 @@ class MacroExecutor:
 
         if s.startswith("$") or s.startswith("@") or s.startswith("{"):
             self._macro_send(s)
+            if unit_mode:
+                try:
+                    self.app._set_unit_mode(unit_mode)
+                except Exception:
+                    pass
             return True
         if s.startswith("(") or MACRO_GPAT.match(s):
             self._macro_send(s)
+            if unit_mode:
+                try:
+                    self.app._set_unit_mode(unit_mode)
+                except Exception:
+                    pass
             return True
         self._macro_send(s)
+        if unit_mode:
+            try:
+                self.app._set_unit_mode(unit_mode)
+            except Exception:
+                pass
         return True
 
     def _bcnc_compile_line(self, line: str):

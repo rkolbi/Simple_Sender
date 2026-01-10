@@ -109,6 +109,25 @@ def init_basic_preferences(app, app_version: str):
         padding=(8, 4),
         font=app.icon_button_font,
     )
+    app.home_button_style = "SimpleSender.HomeButton.TButton"
+    home_size = default_font.cget("size")
+    if not isinstance(home_size, int):
+        try:
+            home_size = int(home_size)
+        except Exception:
+            home_size = 10
+    app.home_button_font = tkfont.Font(
+        family=default_font.cget("family"),
+        size=home_size,
+        weight="bold",
+    )
+    app.style.configure(
+        app.home_button_style,
+        anchor="center",
+        justify="center",
+        padding=(9, 5),
+        font=app.home_button_font,
+    )
     dro_size = default_font.cget("size")
     if not isinstance(dro_size, int):
         try:

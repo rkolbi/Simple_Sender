@@ -12,6 +12,13 @@ Re-measures the installed reference tool at the sensor and restores TOOL_REFEREN
 %if getattr(macro.state, "TOOL_REFERENCE", None) is not None: raise RuntimeError("TOOL_REFERENCE already exists; clear macro.state.TOOL_REFERENCE before running this macro.")
 
 %wait
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
 M0 (Install the original reference tool and continue when ready.)
 G21
 M5
@@ -35,11 +42,13 @@ G38.4 Z10 F5
 G4 P0.25
 G90
 %wait
-%macro.state.TOOL_REFERENCE = mz
-%msg (Recovered TOOL_REFERENCE = [macro.state.TOOL_REFERENCE])
+%update
+%macro.state.TOOL_REFERENCE = wz
+%msg (Recovered TOOL_REFERENCE = [macro.state.TOOL_REFERENCE] wz=[wz])
 G91
 G0 Z5
 G90
 G53 G0 Z[macro.state.SAFE_HEIGHT]
 %wait
 M0 (Reference tool recovery complete; the machine is parked at the sensor.)
+STATE_RETURN

@@ -32,6 +32,41 @@ def _apply_icon_button_theme(app, palette: dict):
     )
 
 
+def _apply_home_button_theme(app, palette: dict):
+    style = app.style
+    style_name = getattr(app, "home_button_style", "")
+    if not style_name:
+        return
+    button_bg = palette.get("button_bg", "#f0f0f0") if isinstance(palette, dict) else "#f0f0f0"
+    accent = "#5b3b89"
+    fg = accent
+    border = palette.get("border", button_bg) if isinstance(palette, dict) else button_bg
+    hover = palette.get("button_hover", button_bg) if isinstance(palette, dict) else button_bg
+    pressed = palette.get("button_pressed", button_bg) if isinstance(palette, dict) else button_bg
+    disabled_bg = palette.get("bg", "#f0f0f0") if isinstance(palette, dict) else "#f0f0f0"
+    disabled_fg = palette.get("muted_fg", "#808080") if isinstance(palette, dict) else "#808080"
+    style.configure(
+        style_name,
+        background=button_bg,
+        foreground=fg,
+        bordercolor=border,
+        lightcolor=button_bg,
+        darkcolor=button_bg,
+    )
+    style.map(
+        style_name,
+        background=[
+            ("pressed", pressed),
+            ("active", hover),
+            ("disabled", disabled_bg),
+        ],
+        foreground=[
+            ("pressed", fg),
+            ("active", fg),
+            ("disabled", disabled_fg),
+        ],
+    )
+
 def apply_theme(app, theme: str):
     try:
         if theme in app.available_themes:
@@ -53,6 +88,10 @@ def apply_theme(app, theme: str):
                     pass
             else:
                 app.theme_palette = {}
+            try:
+                _apply_home_button_theme(app, palette or {})
+            except Exception:
+                pass
             try:
                 app.style.configure("TNotebook.Tab", font=app.tab_font)
             except Exception:
