@@ -221,6 +221,8 @@ class ToolpathPanel:
     def set_position(self, x: float, y: float, z: float):
         if self.view:
             self.view.set_position(x, y, z)
+        if self.top_view:
+            self.top_view.set_position(x, y, z)
 
     def get_view_state(self):
         if self.view:
@@ -1190,6 +1192,7 @@ class TopViewPanel(ttk.Frame):
         self.canvas.bind("<Configure>", lambda event: self._schedule_render())
         self.segments: list[tuple[float, float, float, float, float, float, str]] = []
         self.bounds: tuple[float, float, float, float, float, float] | None = None
+        self.position: tuple[float, float, float] | None = None
         self._job_name = ""
         self._visible = True
         self._render_pending = False
@@ -1197,6 +1200,8 @@ class TopViewPanel(ttk.Frame):
         self._arc_step_rad = math.pi / 18
         self._colors = _TOOLPATH_SEGMENT_COLORS
         self._last_lines_hash = None
+        self._render_params: dict[str, float] | None = None
+        self._position_item = None
 
     def set_lines(self, lines: list[str] | None):
         self._parse_token += 1
@@ -1240,6 +1245,7 @@ class TopViewPanel(ttk.Frame):
         self.bounds = None
         self._job_name = ""
         self._last_lines_hash = None
+        self.position = None
         self._schedule_render()
 
     def set_job_name(self, name: str | None):
@@ -1253,6 +1259,14 @@ class TopViewPanel(ttk.Frame):
         self._visible = visible
         if self._visible:
             self._schedule_render()
+
+    def set_position(self, x: float, y: float, z: float):
+        self.position = (x, y, z)
+        if self._visible and self.segments:
+            if self._render_params and not self._render_pending:
+                self._update_position_marker()
+            else:
+                self._schedule_render()
 
     def _segments_bounds(self, segments):
         if not segments:
@@ -1281,6 +1295,8 @@ class TopViewPanel(ttk.Frame):
         if w <= 1 or h <= 1:
             return
         self.canvas.delete("all")
+        self._position_item = None
+        self._render_params = None
         if not self.segments:
             msg = "No G-code loaded"
             if self._job_name:
@@ -1304,6 +1320,15 @@ class TopViewPanel(ttk.Frame):
             cx = (x - minx) * scale + offset_x
             cy = h - ((y - miny) * scale + offset_y)
             return cx, cy
+
+        self._render_params = {
+            "minx": minx,
+            "miny": miny,
+            "scale": scale,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+            "height": h,
+        }
 
         runs: dict[str, list[list[float]]] = {}
         cur_color = None
@@ -1370,5 +1395,30 @@ class TopViewPanel(ttk.Frame):
             anchor="nw",
             justify="left",
         )
+
+        self._update_position_marker()
+
+    def _update_position_marker(self):
+        if not self._render_params:
+            return
+        if not self.position:
+            if self._position_item is not None:
+                try:
+                    self.canvas.delete(self._position_item)
+                except Exception:
+                    pass
+                self._position_item = None
+            return
+        params = self._render_params
+        px, py, _ = self.position
+        cx = (px - params["minx"]) * params["scale"] + params["offset_x"]
+        cy = params["height"] - ((py - params["miny"]) * params["scale"] + params["offset_y"])
+        r = 4
+        if self._position_item is None:
+            self._position_item = self.canvas.create_oval(
+                cx - r, cy - r, cx + r, cy + r, fill="#d64545", outline=""
+            )
+        else:
+            self.canvas.coords(self._position_item, cx - r, cy - r, cx + r, cy + r)
 
 

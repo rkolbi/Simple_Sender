@@ -107,6 +107,7 @@ def open_gcode(app):
 def run_job(app):
     if not app._require_grbl_connection():
         return
+    app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._reset_gcode_view_for_run()
     app._job_started_at = datetime.now()
     app._job_completion_notified = False

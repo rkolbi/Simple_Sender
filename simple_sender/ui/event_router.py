@@ -1,9 +1,11 @@
+import os
 import time
 from tkinter import messagebox
 
 from simple_sender.ui.dro_display import convert_units, format_dro_value
 from simple_sender.ui.grbl_lifecycle import handle_connection_event, handle_ready_event
 from simple_sender.utils.constants import MAX_LINE_LENGTH
+from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 
 
 def _parse_modal_units(app, raw: str) -> None:
@@ -144,6 +146,7 @@ def handle_event(app, evt):
         return
     if kind == "manual_error":
         msg = evt[1] if len(evt) > 1 else "error"
+        msg = annotate_grbl_error(msg)
         source = evt[2] if len(evt) > 2 else None
         label = str(source).strip() if source else ""
         prefix = f"GRBL error ({label})" if label else "GRBL error"
@@ -160,6 +163,7 @@ def handle_event(app, evt):
         return
     if kind == "alarm":
         msg = evt[1] if len(evt) > 1 else ""
+        msg = annotate_grbl_alarm(msg)
         if getattr(app, "_homing_in_progress", False):
             app._homing_in_progress = False
             app._homing_state_seen = False
@@ -242,6 +246,8 @@ def handle_gcode_loaded(app, evt):
     lines = evt[3]
     lines_hash = evt[4] if len(evt) > 4 else None
     validated = bool(evt[5]) if len(evt) > 5 else False
+    report = evt[6] if len(evt) > 6 else None
+    app._gcode_validation_report = report
     app._apply_loaded_gcode(path, lines, lines_hash=lines_hash, validated=validated)
 
 
@@ -257,6 +263,7 @@ def handle_gcode_load_invalid(
 ):
     if token != app._gcode_load_token:
         return
+    app._gcode_validation_report = None
     app._gcode_loading = False
     app._finish_gcode_loading()
     app.gcode_stats_var.set("No file loaded")
@@ -274,6 +281,7 @@ def handle_gcode_load_invalid(
 def handle_gcode_load_error(app, token, _path, err):
     if token != app._gcode_load_token:
         return
+    app._gcode_validation_report = None
     app._gcode_loading = False
     app._finish_gcode_loading()
     app.gcode_stats_var.set("No file loaded")
@@ -592,6 +600,22 @@ def handle_stream_state_event(app, evt):
             app._live_estimate_min = None
             app._refresh_gcode_stats_display()
             app.throughput_var.set("TX: 0 B/s")
+        try:
+            status_text = app.status.cget("text")
+        except Exception:
+            status_text = ""
+        if status_text.startswith(("Stream error", "Paused", "Resuming")):
+            try:
+                name = ""
+                path = getattr(app, "_last_gcode_path", None)
+                if path:
+                    name = os.path.basename(path)
+                if not name:
+                    name = getattr(app.grbl, "_gcode_name", "") or ""
+                label = f"Streaming: {name}" if name else "Streaming..."
+                app.status.config(text=label)
+            except Exception:
+                pass
     elif st == "paused":
         if app._stream_paused_at is None:
             app._stream_paused_at = now

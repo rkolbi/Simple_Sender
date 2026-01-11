@@ -142,6 +142,7 @@ def save_settings(app):
         "keyboard_bindings_enabled": bool(app.keyboard_bindings_enabled.get()),
         "joystick_bindings_enabled": bool(app.joystick_bindings_enabled.get()),
         "joystick_safety_enabled": bool(app.joystick_safety_enabled.get()),
+        "dry_run_sanitize_stream": bool(app.dry_run_sanitize_stream.get()),
         "joystick_bindings": dict(app._joystick_bindings),
         "joystick_safety_binding": dict(app._joystick_safety_binding) if app._joystick_safety_binding else None,
         "current_line_mode": app.current_line_mode.get(),

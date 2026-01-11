@@ -26,6 +26,8 @@ else:
 
 JOYSTICK_POLL_INTERVAL_MS = 50
 JOYSTICK_DISCOVERY_INTERVAL_MS = 1000
+JOYSTICK_DISCOVERY_CONNECTED_INTERVAL_MS = 8000
+JOYSTICK_LIVE_STATUS_INTERVAL_MS = 200
 JOYSTICK_CAPTURE_TIMEOUT_MS = 15000
 JOYSTICK_LISTENING_TEXT = "Listening for joystick input..."
 
@@ -75,6 +77,8 @@ def update_joystick_polling_state(app):
         app._stop_joystick_polling()
         app._stop_joystick_hold()
         app._joystick_safety_active = False
+        if hasattr(app, "joystick_live_status"):
+            app.joystick_live_status.set("Joystick state: disabled.")
         return
     if not app._ensure_joystick_backend():
         messagebox.showwarning(
@@ -142,6 +146,74 @@ def update_joystick_test_status(app, count: int, names: list[str] | None = None)
     lines.append("Enable USB joystick bindings and press a button/axis/hat to map it.")
     app.joystick_test_status.set("\n".join(lines))
 
+def update_joystick_device_status(app, count: int, reason: str | None = None) -> None:
+    if not hasattr(app, "joystick_device_status"):
+        return
+    ts = time.strftime("%H:%M:%S")
+    if reason:
+        msg = f"Hot-plug: {reason} ({count} detected @ {ts})."
+    elif count <= 0:
+        msg = f"Hot-plug: no joystick detected (@ {ts})."
+    else:
+        msg = f"Hot-plug: {count} joystick(s) detected (@ {ts})."
+    app.joystick_device_status.set(msg)
+
+def update_joystick_live_status(app, py) -> None:
+    if not hasattr(app, "joystick_live_status"):
+        return
+    now = time.monotonic()
+    last = getattr(app, "_joystick_last_live_status", 0.0)
+    if (now - last) < (JOYSTICK_LIVE_STATUS_INTERVAL_MS / 1000.0):
+        return
+    app._joystick_last_live_status = now
+    if not app._joystick_instances:
+        app.joystick_live_status.set("Joystick state: none detected.")
+        return
+    lines = []
+    for joy_id, joy in sorted(app._joystick_instances.items()):
+        try:
+            axes_count = min(getattr(joy, "get_numaxes", lambda: 0)(), 4)
+            axes = [f"{joy.get_axis(i):.2f}" for i in range(axes_count)]
+            btn_count = getattr(joy, "get_numbuttons", lambda: 0)()
+            pressed = [str(i) for i in range(btn_count) if joy.get_button(i)]
+            pressed = pressed[:6]
+            hat_count = getattr(joy, "get_numhats", lambda: 0)()
+            hats = []
+            for i in range(hat_count):
+                value = joy.get_hat(i)
+                if value != (0, 0):
+                    hats.append(f"{i}:{value}")
+            hats = hats[:4]
+        except Exception:
+            continue
+        axes_text = ",".join(axes) if axes else "n/a"
+        btn_text = ",".join(pressed) if pressed else "none"
+        hat_text = ",".join(hats) if hats else "none"
+        lines.append(f"Joy {joy_id}: axes[{axes_text}] buttons[{btn_text}] hats[{hat_text}]")
+        if len(lines) >= 2:
+            break
+    if not lines:
+        lines = ["Joystick state: unavailable."]
+    app.joystick_live_status.set("\n".join(lines))
+
+def update_keyboard_live_status(app, label: str | None = None) -> None:
+    if not hasattr(app, "keyboard_live_status"):
+        return
+    mods = []
+    for keysym in app._kb_mod_keys_down:
+        name = app._kb_mod_keysyms.get(keysym, keysym)
+        if name in ("Ctrl", "Shift", "Alt") and name not in mods:
+            mods.append(name)
+    mod_order = ("Ctrl", "Shift", "Alt")
+    ordered_mods = [m for m in mod_order if m in mods]
+    if label:
+        text = f"Keyboard: {label}"
+    elif ordered_mods:
+        text = f"Keyboard: {'+'.join(ordered_mods)} held"
+    else:
+        text = "Keyboard: idle"
+    app.keyboard_live_status.set(text)
+
 def refresh_joystick_test_info(app):
     if not hasattr(app, "joystick_test_status"):
         return
@@ -161,11 +233,13 @@ def refresh_joystick_test_info(app):
         app._joystick_instances = {}
         app._joystick_device_count = 0
         update_joystick_test_status(app, 0)
+        update_joystick_device_status(app, 0, reason="Refresh")
         return
     names = app._discover_joysticks(py, count)
     app._joystick_names = {idx: name for idx, name in enumerate(names)}
     app._joystick_device_count = count
     update_joystick_test_status(app, count, names)
+    update_joystick_device_status(app, count, reason="Refresh")
 
 def refresh_joystick_safety_display(app):
     if not hasattr(app, "joystick_safety_status"):
@@ -196,24 +270,33 @@ def ensure_joystick_backend(app):
         names = app._discover_joysticks(py, count)
         app._joystick_names = {idx: name for idx, name in enumerate(names)}
         app._joystick_device_count = count
+        update_joystick_device_status(app, count, reason="Init")
         app._joystick_backend_ready = True
         return True
     except Exception as exc:
         logger.exception("Joystick backend initialization failed: %s", exc)
         return False
 
-def maybe_refresh_joystick_devices(app, py, *, force: bool = False) -> bool:
+def maybe_refresh_joystick_devices(
+    app,
+    py,
+    *,
+    force: bool = False,
+    reason: str | None = None,
+) -> bool:
     now = time.monotonic()
     last_check = getattr(app, "_joystick_last_discovery", 0.0)
-    if not force and (now - last_check) < (JOYSTICK_DISCOVERY_INTERVAL_MS / 1000.0):
-        return False
-    app._joystick_last_discovery = now
     last_count = getattr(app, "_joystick_device_count", None)
     if last_count is None:
         last_count = len(getattr(app, "_joystick_instances", {}) or {})
-    if not force and last_count > 0:
-        # Skip discovery polling when a joystick is already present.
+    interval_ms = (
+        JOYSTICK_DISCOVERY_CONNECTED_INTERVAL_MS
+        if last_count > 0
+        else JOYSTICK_DISCOVERY_INTERVAL_MS
+    )
+    if not force and (now - last_check) < (interval_ms / 1000.0):
         return False
+    app._joystick_last_discovery = now
     try:
         count = py.joystick.get_count()
     except Exception as exc:
@@ -226,6 +309,7 @@ def maybe_refresh_joystick_devices(app, py, *, force: bool = False) -> bool:
     app._joystick_names = {idx: name for idx, name in enumerate(names)}
     app._joystick_device_count = count
     update_joystick_test_status(app, count, names)
+    update_joystick_device_status(app, count, reason=reason)
     return True
 
 def start_joystick_polling(app):
@@ -255,17 +339,29 @@ def poll_joystick_events(app):
         raw_events = list(py.event.get())
         events = []
         device_change = False
+        device_added_evt = False
+        device_removed_evt = False
         device_added = getattr(py, "JOYDEVICEADDED", None)
         device_removed = getattr(py, "JOYDEVICEREMOVED", None)
         for event in raw_events:
             if device_added is not None and event.type == device_added:
                 device_change = True
+                device_added_evt = True
                 continue
             if device_removed is not None and event.type == device_removed:
                 device_change = True
+                device_removed_evt = True
                 continue
             events.append(event)
-        maybe_refresh_joystick_devices(app, py, force=device_change)
+        reason = None
+        if device_added_evt and device_removed_evt:
+            reason = "device change"
+        elif device_added_evt:
+            reason = "device added"
+        elif device_removed_evt:
+            reason = "device removed"
+        maybe_refresh_joystick_devices(app, py, force=device_change, reason=reason)
+        update_joystick_live_status(app, py)
         for event in events:
             app._handle_joystick_event(event)
         joystick_hold.check_release(app)
@@ -1090,6 +1186,7 @@ def event_to_binding_label(app, event) -> str:
 
 def on_key_modifier_release(app, event):
     app._update_modifier_state(event, pressed=False)
+    update_keyboard_live_status(app)
 
 def sequence_conflict_pair(app, seq_a: tuple[str, ...], seq_b: tuple[str, ...]) -> bool:
     if not seq_a or not seq_b:
@@ -1109,6 +1206,7 @@ def on_key_sequence(app, event):
     label = app._event_to_binding_label(event)
     if not label:
         return
+    update_keyboard_live_status(app, label)
     now = time.time()
     if now - app._key_sequence_last_time > app._key_sequence_timeout:
         app._key_sequence_buffer = []

@@ -2,7 +2,7 @@
 
 ### Work in progress (alpha). Don't trust it until you've validated it a few times.
 
-A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
+A minimal, reliable **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
 ![-](pics/Slide8.JPG)
 
@@ -38,6 +38,8 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read G-code), clear/unload button, inline status/progress.
+- Status bar shows streaming file name when a job is running.
+- Top View 2D preview with live spindle position marker.
 - Resume From... dialog to continue a job with modal re-sync and safety warnings.
 - Performance mode: batches console updates, suppresses per-line RX logs during streaming, adapts status polling by state.
 - Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
@@ -93,13 +95,15 @@ This is a practical, end-to-end flow with rationale for key options.
    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
    - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
-6) **Prepare the machine**
-   - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
-   - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-   - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
-7) **Start and monitor**
-   - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
-   - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
+  6) **Prepare the machine**
+     - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
+     - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
+     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in App Settings > Safety.
+     - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
+  7) **Start and monitor**
+     - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
+     - The Run confirmation includes a G-code validation report (unsupported codes, long lines, modal hazards) before streaming, with a Details view for line-level issues.
+     - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
    - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
@@ -356,6 +360,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected.
 - Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
+- The Live input state panel reports joystick axes/buttons/hats and the latest keyboard input while testing; hot-plug status updates when devices connect/disconnect.
 - When the toggle is left on before closing, the app now reopens with joystick capturing enabled automatically (just like auto-reconnecting to the last serial port), so you can pick up where you left off without another click.
 - The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When you bind a joystick button to one of them and hold the button, the matching axis jogs continuously (the same feed rates as the jog buttons); the motion stops as soon as the button is released, giving you a "jog-to-hold" behavior from the joystick.
 - The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.

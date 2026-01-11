@@ -68,6 +68,9 @@ def init_basic_preferences(app, app_version: str):
     app.joystick_bindings_enabled = tk.BooleanVar(
         value=setting("joystick_bindings_enabled", False)
     )
+    app.dry_run_sanitize_stream = tk.BooleanVar(
+        value=setting("dry_run_sanitize_stream", False)
+    )
     app.joystick_safety_enabled = tk.BooleanVar(
         value=setting("joystick_safety_enabled", False)
     )
@@ -207,6 +210,7 @@ def init_runtime_state(
     app._joystick_backend_ready = False
     app._joystick_device_count = 0
     app._joystick_last_discovery = 0.0
+    app._joystick_last_live_status = 0.0
     app._joystick_names: dict[int, str] = {}
     app._joystick_instances: dict[int, Any] = {}
     app._joystick_button_poll_state: dict[tuple[int, int], bool] = {}
@@ -222,12 +226,15 @@ def init_runtime_state(
     app._joystick_safety_binding = dict(raw_safety) if isinstance(raw_safety, dict) else None
     app._joystick_safety_active = False
     app.joystick_safety_status = tk.StringVar(value="Safety button: None")
+    app.joystick_device_status = tk.StringVar(value="Hot-plug status: unknown")
     app.joystick_test_status = tk.StringVar(
         value="Press 'Refresh joystick list' to discover controllers."
     )
     app.joystick_event_status = tk.StringVar(
         value="Joystick events appear here while listening."
     )
+    app.joystick_live_status = tk.StringVar(value="Joystick state: idle")
+    app.keyboard_live_status = tk.StringVar(value="Keyboard state: idle")
     app._closing = False
     app._connecting = False
     app._disconnecting = False
@@ -335,6 +342,7 @@ def init_runtime_state(
     app._last_gcode_lines = []
     app._last_gcode_path = None
     app._gcode_hash = None
+    app._gcode_validation_report = None
     app._last_parse_result = None
     app._last_parse_hash = None
     app._gcode_loading = False

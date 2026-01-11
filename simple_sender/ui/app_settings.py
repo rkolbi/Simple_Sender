@@ -77,6 +77,16 @@ def build_app_settings_tab(app, notebook):
         justify="left",
     )
     app.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+    app.dry_run_sanitize_check = ttk.Checkbutton(
+        safety,
+        text="Dry run: disable spindle/coolant/tool changes while streaming",
+        variable=app.dry_run_sanitize_stream,
+    )
+    app.dry_run_sanitize_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    apply_tooltip(
+        app.dry_run_sanitize_check,
+        "Strip M3/M4/M5, M7/M8/M9, M6, S, and T words from streamed G-code for safe dry runs.",
+    )
 
     estimation = ttk.LabelFrame(app._app_settings_inner, text="Estimation", padding=8)
     estimation.grid(row=3, column=0, sticky="ew", pady=(0, 8))
@@ -403,19 +413,26 @@ def build_app_settings_tab(app, notebook):
         justify="left",
     )
     app.joystick_test_label.grid(row=0, column=0, sticky="w")
+    app.joystick_device_label = ttk.Label(
+        joystick_test_frame,
+        textvariable=app.joystick_device_status,
+        wraplength=520,
+        justify="left",
+    )
+    app.joystick_device_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
     app.btn_refresh_joysticks = ttk.Button(
         joystick_test_frame,
         text="Refresh joystick list",
         command=app._refresh_joystick_test_info,
     )
-    app.btn_refresh_joysticks.grid(row=1, column=0, sticky="w", pady=(6, 0))
+    app.btn_refresh_joysticks.grid(row=2, column=0, sticky="w", pady=(6, 0))
     app.btn_toggle_joystick_bindings = ttk.Button(
         joystick_test_frame,
         text="Enable USB Joystick Bindings",
         command=app._toggle_joystick_bindings,
     )
     set_kb_id(app.btn_toggle_joystick_bindings, "toggle_joystick_bindings")
-    app.btn_toggle_joystick_bindings.grid(row=1, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+    app.btn_toggle_joystick_bindings.grid(row=2, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
     apply_tooltip(
         app.btn_toggle_joystick_bindings,
         "Enable or disable joystick shortcuts and capture new bindings from a USB joystick.",
@@ -426,7 +443,7 @@ def build_app_settings_tab(app, notebook):
         wraplength=520,
         justify="left",
     )
-    app.joystick_event_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+    app.joystick_event_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
 
     app.joystick_safety_check = ttk.Checkbutton(
         joystick_test_frame,
@@ -434,7 +451,7 @@ def build_app_settings_tab(app, notebook):
         variable=app.joystick_safety_enabled,
         command=app._on_joystick_safety_toggle,
     )
-    app.joystick_safety_check.grid(row=3, column=0, sticky="w", pady=(8, 0))
+    app.joystick_safety_check.grid(row=4, column=0, sticky="w", pady=(8, 0))
     apply_tooltip(
         app.joystick_safety_check,
         "Require holding a safety button before other joystick actions are accepted.",
@@ -445,22 +462,40 @@ def build_app_settings_tab(app, notebook):
         wraplength=520,
         justify="left",
     )
-    app.joystick_safety_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
+    app.joystick_safety_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
     app.btn_set_joystick_safety = ttk.Button(
         joystick_test_frame,
         text="Set Safety Button",
         command=app._start_joystick_safety_capture,
     )
-    app.btn_set_joystick_safety.grid(row=5, column=0, sticky="w", pady=(6, 0))
+    app.btn_set_joystick_safety.grid(row=6, column=0, sticky="w", pady=(6, 0))
     app.btn_clear_joystick_safety = ttk.Button(
         joystick_test_frame,
         text="Clear Safety Button",
         command=app._clear_joystick_safety_binding,
     )
-    app.btn_clear_joystick_safety.grid(row=5, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+    app.btn_clear_joystick_safety.grid(row=6, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
     apply_tooltip(app.btn_set_joystick_safety, "Capture a joystick button to use as a safety hold.")
     apply_tooltip(app.btn_clear_joystick_safety, "Clear the safety button binding.")
     app._refresh_joystick_safety_display()
+
+    input_state_frame = ttk.LabelFrame(kb_frame, text="Live input state", padding=8)
+    input_state_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=6, pady=(0, 6))
+    input_state_frame.grid_columnconfigure(0, weight=1)
+    app.joystick_live_label = ttk.Label(
+        input_state_frame,
+        textvariable=app.joystick_live_status,
+        wraplength=520,
+        justify="left",
+    )
+    app.joystick_live_label.grid(row=0, column=0, sticky="w")
+    app.keyboard_live_label = ttk.Label(
+        input_state_frame,
+        textvariable=app.keyboard_live_status,
+        wraplength=520,
+        justify="left",
+    )
+    app.keyboard_live_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     view_frame = ttk.LabelFrame(app._app_settings_inner, text="G-code view", padding=8)
     view_frame.grid(row=10, column=0, sticky="ew")

@@ -13,6 +13,7 @@ import traceback
 from collections import deque
 from typing import Callable, List, Optional, Tuple
 
+from .utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 try:
     import serial
     from serial.tools import list_ports
@@ -71,6 +72,8 @@ _PAUSE_MCODE_MAP = {
     "06": "M6",
 }
 _PAUSE_MCODE_PAT = re.compile(r"(?<![0-9])M(0|00|1|01|6|06)(?![0-9])")
+_SANITIZE_TOKEN_PAT = re.compile(r"[A-Za-z][+-]?(?:\d+\.?\d*|\.\d+)", re.ASCII)
+_DRY_RUN_M_CODES = {3, 4, 5, 6, 7, 8, 9}
 
 
 class GrblWorker:
@@ -150,6 +153,7 @@ class GrblWorker:
         self._status_query_failure_limit = 3
         self._status_query_backoff_base = 0.2
         self._status_query_backoff_max = 2.0
+        self._dry_run_sanitize = False
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -336,6 +340,10 @@ class GrblWorker:
             True if streaming is active
         """
         return self._streaming
+
+    def set_dry_run_sanitize(self, enabled: bool) -> None:
+        """Enable or disable dry-run sanitization for streamed G-code."""
+        self._dry_run_sanitize = bool(enabled)
     
     # ========================================================================
     # COMMAND EXECUTION
@@ -571,6 +579,8 @@ class GrblWorker:
         self._abort_writes.clear()
         self._reset_stream_buffer()
         self._emit_buffer_fill()
+        if self._dry_run_sanitize:
+            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("stream_state", "running", None))
         logger.info("Started G-code streaming")
     
@@ -612,6 +622,8 @@ class GrblWorker:
                 self._resume_preamble = deque(cleaned)
         
         self._emit_buffer_fill()
+        if self._dry_run_sanitize:
+            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("progress", start_index, len(self._gcode)))
         self.ui_q.put(("stream_state", "running", None))
         logger.info(f"Resumed streaming from line {start_index}")
@@ -706,6 +718,7 @@ class GrblWorker:
         Args:
             message: Alarm message from GRBL
         """
+        message = annotate_grbl_alarm(message)
         logger.warning(f"GRBL ALARM: {message}")
         
         # Log to console
@@ -810,6 +823,28 @@ class GrblWorker:
         """
         return (line.strip() + "\n").encode("utf-8", errors="replace")
 
+    def _sanitize_stream_line(self, line: str) -> str:
+        if not self._dry_run_sanitize or not line:
+            return line
+
+        def repl(match: re.Match[str]) -> str:
+            token = match.group(0)
+            letter = token[0].upper()
+            if letter == "S":
+                return ""
+            if letter == "T":
+                return ""
+            if letter == "M":
+                try:
+                    value = float(token[1:])
+                except Exception:
+                    return token
+                if abs(value - round(value)) < 1e-9 and int(round(value)) in _DRY_RUN_M_CODES:
+                    return ""
+            return token
+
+        return _SANITIZE_TOKEN_PAT.sub(repl, line)
+
     def _pause_reason_for_line(self, line: str) -> str | None:
         if not line:
             return None
@@ -835,7 +870,7 @@ class GrblWorker:
         idx: int | None,
         line_text: str | None,
     ) -> str:
-        parts = [raw_error]
+        parts = [annotate_grbl_error(raw_error)]
         if idx is not None:
             if self._gcode_name:
                 parts.append(f"{self._gcode_name} line {idx + 1}")
@@ -1024,6 +1059,8 @@ class GrblWorker:
                         item = (line, True, self._send_index)
                 
                 line, is_gcode, idx = item
+                line = self._sanitize_stream_line(line)
+                item = (line, is_gcode, idx)
                 if is_gcode and idx is not None and self._pause_after_idx is None:
                     reason = self._pause_reason_for_line(line)
                     if reason:

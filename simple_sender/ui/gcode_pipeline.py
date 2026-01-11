@@ -3,6 +3,7 @@ import threading
 from tkinter import messagebox
 
 from simple_sender.gcode_parser import clean_gcode_line, parse_gcode_lines, split_gcode_lines
+from simple_sender.gcode_validator import validate_gcode_lines
 from simple_sender.utils.constants import GCODE_VIEWER_CHUNK_SIZE_SMALL, MAX_LINE_LENGTH
 from simple_sender.utils.hashing import hash_lines
 
@@ -82,8 +83,9 @@ def load_gcode_from_path(app, path: str):
                     )
                 app.ui_q.put(("log", msg))
             lines = result.lines
+            report = validate_gcode_lines(lines)
             lines_hash = hash_lines(lines)
-            app.ui_q.put(("gcode_loaded", token, path, lines, lines_hash, True))
+            app.ui_q.put(("gcode_loaded", token, path, lines, lines_hash, True, report))
         except Exception as exc:
             app.ui_q.put(("gcode_load_error", token, path, str(exc)))
 
@@ -145,6 +147,8 @@ def apply_loaded_gcode(
             app.streaming_controller.log(msg)
         lines = result.lines
         lines_hash = hash_lines(lines)
+    if app._gcode_validation_report is None:
+        app._gcode_validation_report = validate_gcode_lines(lines)
     app._clear_pending_ui_updates()
     app._last_gcode_lines = lines
     app._last_gcode_path = path
@@ -261,6 +265,7 @@ def clear_gcode(app):
     app._last_gcode_lines = []
     app._last_gcode_path = None
     app._gcode_hash = None
+    app._gcode_validation_report = None
     app._last_parse_result = None
     app._last_parse_hash = None
     app._gcode_parse_token += 1

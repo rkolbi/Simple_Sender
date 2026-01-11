@@ -7,6 +7,7 @@ import tkinter.font as tkfont
 
 from simple_sender.ui.gcode_stats import format_duration
 from simple_sender.ui.popup_utils import center_window
+from simple_sender.gcode_validator import format_validation_details, format_validation_report
 
 
 def toggle_tooltips(app):
@@ -200,9 +201,60 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         ttk.Label(dialog, text=value, font=value_font, wraplength=520).grid(
             row=idx, column=1, sticky="w", pady=2
         )
+    report = getattr(app, "_gcode_validation_report", None)
+    report_text = format_validation_report(report)
+    report_row = len(rows) + 1
+    ttk.Label(
+        dialog,
+        text=report_text,
+        wraplength=520,
+        justify="left",
+    ).grid(row=report_row, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+    details_window = {"win": None}
+
+    def open_details():
+        win = details_window.get("win")
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.lift()
+                    win.focus_force()
+                    return
+            except Exception:
+                pass
+        win = tk.Toplevel(dialog)
+        details_window["win"] = win
+        win.title("G-code validation details")
+        win.transient(dialog)
+        win.minsize(640, 420)
+        container = ttk.Frame(win, padding=12)
+        container.pack(fill="both", expand=True)
+        text = tk.Text(container, wrap="word", height=18)
+        vsb = ttk.Scrollbar(container, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=vsb.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+        text.insert("end", format_validation_details(report))
+        text.configure(state="disabled")
+
+        def close():
+            details_window["win"] = None
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        btn_row = ttk.Frame(container)
+        btn_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btn_row, text="Close", command=close).pack(side="right")
+        win.protocol("WM_DELETE_WINDOW", close)
+        center_window(win, dialog)
 
     btn_frame = ttk.Frame(dialog)
-    btn_frame.grid(row=len(rows) + 1, column=0, columnspan=2, sticky="e", pady=(12, 0))
+    btn_frame.grid(row=report_row + 1, column=0, columnspan=2, sticky="e", pady=(12, 0))
     result = {"ok": False}
 
     def accept():
@@ -219,6 +271,11 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             pass
 
     confirm_label = "START"
+    if report is not None and getattr(report, "line_issue_count", 0) > 0:
+        ttk.Button(btn_frame, text="Details...", command=open_details).pack(
+            side="left",
+            padx=(0, 6),
+        )
     ttk.Button(btn_frame, text=confirm_label, command=accept).pack(side="right", padx=(6, 0))
     ttk.Button(btn_frame, text="Cancel", command=cancel).pack(side="right")
     dialog.protocol("WM_DELETE_WINDOW", cancel)

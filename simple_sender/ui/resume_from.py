@@ -119,6 +119,7 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     if start_index < 0 or start_index >= len(app._last_gcode_lines):
         messagebox.showwarning("Resume", "Line number is out of range.")
         return
+    app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._clear_pending_ui_updates()
     app.gview.clear_highlights()
     app._last_sent_index = start_index - 1

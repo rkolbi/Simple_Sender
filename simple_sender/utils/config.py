@@ -52,6 +52,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "console_status_enabled": False,
     "current_line_mode": "sent",
     "default_spindle_rpm": 12000,
+    "dry_run_sanitize_stream": False,
     "error_dialog_burst_limit": 3,
     "error_dialog_burst_window": 30.0,
     "error_dialog_interval": 2.0,
