@@ -222,7 +222,7 @@ class MacroExecutor:
                 evaluated = self._bcnc_evaluate_line(compiled)
                 if evaluated is None:
                     continue
-                if not self._execute_bcnc_command(evaluated, raw_line):
+                if not self._execute_command(evaluated, raw_line):
                     break
                 if getattr(self.app, "_alarm_locked", False):
                     self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
@@ -599,6 +599,9 @@ class MacroExecutor:
             self._macro_wait_for_idle()
 
     def _execute_bcnc_command(self, line: str, raw_line: str | None = None):
+        return self._execute_command(line, raw_line)
+
+    def _execute_command(self, line: str, raw_line: str | None = None):
         if line is None:
             return True
         if isinstance(line, tuple):

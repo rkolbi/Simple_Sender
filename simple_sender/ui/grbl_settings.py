@@ -1,5 +1,5 @@
 import logging
-import logging
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox

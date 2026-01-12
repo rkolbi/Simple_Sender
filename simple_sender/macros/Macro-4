@@ -21,7 +21,10 @@ Probes XYZ on the touch plate, then captures the reference tool height at the fi
 %FEEDMODE = feedmode
 %SPINDLE = spindle
 %COOLANT = coolant
-%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+%macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
+%if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
+%if getattr(macro.state, "TOOL_REFERENCE", None) is not None and not app.macro_executor._execute_command("PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]", "PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]"): app.macro_executor._alarm_event.set()
 M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
 G90
 G21
@@ -101,3 +104,5 @@ G53 Z[macro.state.SAFE_HEIGHT]
 %wait
 G0 X0 Y0
 STATE_RETURN
+
+

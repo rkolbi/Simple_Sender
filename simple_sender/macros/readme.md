@@ -20,17 +20,11 @@ These macros implement the CNCjs workflow documented in `ref/cncjs_macros.md`. T
 - **How it works:** Stops the spindle, raises to `macro.state.SAFE_HEIGHT`, then parks at the configured sensor coordinates in `G53`.
 - **Usage:** Use during setup or maintenance when you need clear access to the tool or sensor.
 
-## Macro 3 - Attempt Reference Tool Recovery
-
-- **Purpose:** Re-measures the reference tool when `macro.state.TOOL_REFERENCE` is missing.
-- **How it works:** Moves to the sensor, probes the installed reference tool, and stores `macro.state.TOOL_REFERENCE` from `wz`.
-- **Usage:** Run only when the reference value is missing and the original reference tool is installed.
-
 ## Macro 4 - XYZ Touch Plate & Reference Tool Setup
 
 - **Purpose:** Probes X/Y/Z on the touch plate and captures the reference tool height at the fixed sensor.
 - **How it works:** Uses fast/slow probes for Z, then X and Y touch-plate probing, and finally measures the reference tool at the sensor.
-- **Usage:** Run during initial setup or any time your touch plate or sensor offsets change.
+- **Usage:** Run during initial setup or any time your touch plate or sensor offsets change. If `TOOL_REFERENCE` is already set, you'll be prompted to confirm overwriting it.
 
 ## Macro 5 - Tool Change (Preserve Reference Tool Height)
 
@@ -40,11 +34,15 @@ These macros implement the CNCjs workflow documented in `ref/cncjs_macros.md`. T
 
 ## Macro 6 - Z Touch Plate & Reference Tool Setup
 
-- **Purpose:** Probes Z only (with manual X/Y), then captures the reference tool height.
-- **How it works:** Probes Z on the touch plate, then moves to the sensor to store `macro.state.TOOL_REFERENCE` from `wz`.
-- **Usage:** Use when X/Y probing is not possible and you have already set XY manually.
+- **Purpose:** Probes Z on the touch plate and captures the reference tool height; identical to Macro 4 except X/Y probing is skipped.
+- **How it works:** Runs the same Z fast/slow probe sequence, then measures the reference tool at the fixed sensor.
+- **Usage:** Use when X/Y probing is not possible but you still want to capture Z and `TOOL_REFERENCE`. If `TOOL_REFERENCE` is already set, you'll be prompted to confirm overwriting it.
+
 ## Notes
 
 - Each macro relies on `%macro.state` parameters (`SAFE_HEIGHT`, `PROBE_*`, `PLATE_THICKNESS`, etc.). Adjust those defaults directly inside the macro file to match your machine before using them.
 - The macro runner snapshots modal state before each macro, forces `G21` (mm), and restores the original units afterward; use `STATE_RETURN` (or `%state_return`) in a macro to restore the full modal snapshot.
 - The macros log progress via `%msg` so you can see when each probe or wait occurs in the console.
+
+
+

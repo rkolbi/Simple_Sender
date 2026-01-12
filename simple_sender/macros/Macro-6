@@ -1,7 +1,7 @@
 Z Touch Plate & Reference Tool Setup
-Use when you must set X/Y manually before probing Z. Captures the reference tool height at the fixed sensor.
+Probes Z on the touch plate, then captures the reference tool height at the fixed sensor.
 
-; Tune these coordinates/feeds to match your sensor location and safe travel before using.
+; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe distance/feed).
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5
 %macro.state.PROBE_Y_LOCATION = -1224
@@ -10,6 +10,8 @@ Use when you must set X/Y manually before probing Z. Captures the reference tool
 %macro.state.PROBE_RAPID_FEEDRATE = 200
 %macro.state.PLATE_THICKNESS = 11.95
 %macro.state.Z_FAST_PROBE_DISTANCE = 50
+%macro.state.X_PLATE_OFFSET = -13.175
+%macro.state.Y_PLATE_OFFSET = -13.175
 
 %wait
 %WCS = WCS
@@ -20,12 +22,16 @@ Use when you must set X/Y manually before probing Z. Captures the reference tool
 %SPINDLE = spindle
 %COOLANT = coolant
 %msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
-M0 (Set X0/Y0 manually at your job origin, then move to a flat spot for Z probing and install the touch plate + clip.)
+
+%macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
+%if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
+%if getattr(macro.state, "TOOL_REFERENCE", None) is not None and not app.macro_executor._execute_command("PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]", "PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]"): app.macro_executor._alarm_event.set()
+M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
 G90
 G21
-%macro.state.START_X = wx if wx is not None else 0.0
-%macro.state.START_Y = wy if wy is not None else 0.0
+G92 X0 Y0
 
+; Probe Z (touch plate)
 G91
 G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150
 G90
@@ -41,9 +47,10 @@ G92 Z[macro.state.PLATE_THICKNESS]
 G0 Z16
 
 G0 Z20
+G0 X0 Y0
 %update
-%msg (After touch plate: wz=[wz])
-M0 (Stow the touch plate and clip before measuring the tool height.)
+%msg (After touch plate: wx=[wx] wy=[wy] wz=[wz])
+M0 (Stow the touch plate and clip; tool height will be measured next.)
 %wait
 
 G21
@@ -75,5 +82,7 @@ G0 Z5
 G90
 G53 Z[macro.state.SAFE_HEIGHT]
 %wait
-G0 X[macro.state.START_X] Y[macro.state.START_Y]
+G0 X0 Y0
 STATE_RETURN
+
+

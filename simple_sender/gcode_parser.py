@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, List, Optional, Set, Tuple
 
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
-WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
+WORD_PAT = re.compile(r"([A-Z])([-+]?(?:\d+(?:\.\d*)?|\.\d+))")
 AXIS_WORDS = ("X", "Y", "Z")
 UNSUPPORTED_AXIS_WORDS = ("A", "B", "C", "U", "V", "W")
 SPLIT_DECIMALS = (6, 5, 4, 3)
