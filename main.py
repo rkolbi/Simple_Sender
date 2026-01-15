@@ -25,7 +25,7 @@ import os
 import queue
 import sys
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 # GUI imports
 import tkinter as tk
@@ -118,6 +118,9 @@ from simple_sender.ui.override_controls import (
     set_override_scale,
     set_spindle_override_slider_value,
 )
+
+if TYPE_CHECKING:
+    from simple_sender.macro_executor import MacroExecutor
 from simple_sender.ui.grbl_settings_requests import request_settings_dump
 from simple_sender.ui.jog_control_state import (
     set_step_xy,
@@ -272,9 +275,12 @@ _MACRO_SEARCH_DIRS = _discover_macro_dirs()
 class App(tk.Tk):
     HIDDEN_MPOS_BUTTON_STYLE = "SimpleSender.HiddenMpos.TButton"
     # Type hints for attributes initialized in helper modules.
+    connected: bool
+    macro_executor: "MacroExecutor"
     settings: dict[str, Any]
     reconnect_on_open: tk.BooleanVar
     streaming_controller: Any
+    tool_reference_var: tk.StringVar
     machine_state: tk.StringVar
     _machine_state_text: str
     _last_gcode_lines: list[str]
