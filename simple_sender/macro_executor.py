@@ -487,16 +487,20 @@ class MacroExecutor:
                 key = key.lower()
                 if key in ("title", "t"):
                     title = val
+                    continue
                 elif key in ("msg", "message", "text"):
                     message = val
+                    continue
                 elif key in ("buttons", "btns"):
                     raw = val.replace("|", ",")
                     buttons = [b.strip() for b in raw.split(",") if b.strip()]
+                    continue
                 elif key in ("resume", "resumelabel"):
                     if val.lower() in ("0", "false", "no", "off"):
                         show_resume = False
                     else:
                         resume_label = val
+                    continue
                 elif key in ("cancel", "cancellabel"):
                     cancel_label = val
                     continue
@@ -621,6 +625,10 @@ class MacroExecutor:
 
         if cmd in ("M0", "M00", "PROMPT"):
             prompt_source = raw_line or s
+            if raw_line:
+                stripped = raw_line.lstrip()
+                if not stripped.upper().startswith(("M0", "M00", "PROMPT")):
+                    prompt_source = s
             with self._macro_vars_lock:
                 macro_snapshot = dict(self._macro_vars)
             title, message, choices, cancel_label, button_keys = self._parse_macro_prompt(
@@ -861,7 +869,28 @@ class MacroExecutor:
         expr = ""
         cmd = ""
         in_comment = False
+        in_quote: str | None = None
+        escape = False
         for i, ch in enumerate(line):
+            if in_quote:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == in_quote:
+                    in_quote = None
+                if bracket > 0:
+                    expr += ch
+                elif not in_comment:
+                    cmd += ch
+                continue
+            if ch in ("'", '"') and not in_comment:
+                in_quote = ch
+                if bracket > 0:
+                    expr += ch
+                else:
+                    cmd += ch
+                continue
             if ch == "(":
                 paren += 1
                 in_comment = bracket == 0

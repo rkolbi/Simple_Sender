@@ -303,6 +303,11 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.refresh_ports(auto_connect=bool(self.reconnect_on_open.get()))
+        if not self.connected and bool(self.reconnect_on_open.get()):
+            last_port = (self.settings.get("last_port") or "").strip()
+            if last_port:
+                self._auto_reconnect_last_port = last_port
+                self._auto_reconnect_pending = True
         geometry = self.settings.get("window_geometry", "")
         if isinstance(geometry, str) and geometry:
             try:
@@ -481,6 +486,28 @@ class App(tk.Tk):
 
     def _refresh_dro_display(self):
         refresh_dro_display(self)
+
+    def _sync_tool_reference_label(self):
+        try:
+            with self.macro_executor.macro_vars() as macro_vars:
+                macro_ns = macro_vars.get("macro")
+                state = getattr(macro_ns, "state", None)
+                tool_ref = getattr(state, "TOOL_REFERENCE", None) if state is not None else None
+        except Exception:
+            return
+        if tool_ref == getattr(self, "_tool_reference_last", None):
+            return
+        self._tool_reference_last = tool_ref
+        if tool_ref is None:
+            self.tool_reference_var.set("")
+            return
+        try:
+            value = float(tool_ref)
+        except Exception:
+            text = str(tool_ref)
+        else:
+            text = f"{value:.4f}"
+        self.tool_reference_var.set(f"Tool Ref: {text}")
 
     def _on_estimate_factor_change(self, _value=None):
         on_estimate_factor_change(self, _value)

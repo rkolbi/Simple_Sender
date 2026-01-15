@@ -188,6 +188,14 @@ def build_jog_panel(app, parent):
     app.btn_jog_z_plus = ttk.Button(pad, text="Z+", width=6, command=lambda: j(0, 0, app.step_z.get()))
     set_kb_id(app.btn_jog_z_plus, "jog_z_plus")
     app.btn_jog_z_plus.grid(row=0, column=5, padx=(6, 2), pady=2)
+    app.tool_reference_label = ttk.Label(
+        pad,
+        textvariable=app.tool_reference_var,
+        width=18,
+        anchor="center",
+    )
+    app.tool_reference_label.grid(row=1, column=5, padx=(6, 2), pady=2)
+    apply_tooltip(app.tool_reference_label, "Tool reference height.")
     app.btn_jog_z_minus = ttk.Button(pad, text="Z-", width=6, command=lambda: j(0, 0, -app.step_z.get()))
     set_kb_id(app.btn_jog_z_minus, "jog_z_minus")
     app.btn_jog_z_minus.grid(row=2, column=5, padx=(6, 2), pady=2)

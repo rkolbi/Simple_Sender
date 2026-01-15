@@ -1,54 +1,19 @@
-Attempt Reference Tool Recovery
-Re-measures the installed reference tool at the sensor and restores TOOL_REFERENCE when it is missing.
+Prompt Test Macro
+Presents a test prompt and message to verify the popup flow.
 
-; Use the same probe offsets/feeds so recovery places the sensor back where it belongs; adjust PROBE_DISTANCE if your switch is deeper.
-%macro.state.SAFE_HEIGHT = -5
-%macro.state.PROBE_X_LOCATION = -1.5
-%macro.state.PROBE_Y_LOCATION = -1224
-%macro.state.PROBE_Z_LOCATION = -5
-%macro.state.PROBE_DISTANCE = 100
-%macro.state.PROBE_RAPID_FEEDRATE = 200
-
-%if getattr(macro.state, "TOOL_REFERENCE", None) is not None: raise RuntimeError("TOOL_REFERENCE already exists; clear macro.state.TOOL_REFERENCE before running this macro.")
-
+; First prompt uses the default Resume/Cancel UI.
+%msg (Press Resume or Cancel to confirm default behaviour.)
+M0 (Ensure the default Resume/Cancel prompt appears.)
 %wait
-%WCS = WCS
-%PLANE = plane
-%UNITS = units
-%DISTANCE = distance
-%FEEDMODE = feedmode
-%SPINDLE = spindle
-%COOLANT = coolant
-M0 (Install the original reference tool and continue when ready.)
-G21
+
+; Second prompt exercises the custom title + button syntax.
+PROMPT [title(Custom Choice)] Pick an option from the custom buttons. [btn(Option One)a] [btn(Option Two)b] [btn(Option Three)c]
+%msg (Selected option key: [macro.prompt_choice_key] (label: [macro.prompt_choice_label]) index [macro.prompt_index])
+%wait
+
+; Third popup echoes the chosen option.
+PROMPT [title(Choice Made)] Your choice was: [macro.prompt_choice_key] [btn(OK)]
+%wait
+
+; Additional prompt to show Cancel handling remains at the end.
 M5
-G90
-G53 G0 Z[macro.state.SAFE_HEIGHT]
-G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
-%wait
-G53 G0 Z[macro.state.PROBE_Z_LOCATION]
-%wait
-
-G91
-G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
-G0 Z2
-G38.2 Z-5 F40
-G4 P0.25
-G38.4 Z10 F20
-G4 P0.25
-G38.2 Z-2 F10
-G4 P0.25
-G38.4 Z10 F5
-G4 P0.25
-G90
-%wait
-%update
-%macro.state.TOOL_REFERENCE = wz
-%msg (Recovered TOOL_REFERENCE = [macro.state.TOOL_REFERENCE] wz=[wz])
-G91
-G0 Z5
-G90
-G53 G0 Z[macro.state.SAFE_HEIGHT]
-%wait
-M0 (Reference tool recovery complete; the machine is parked at the sensor.)
-STATE_RETURN

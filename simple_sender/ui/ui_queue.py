@@ -13,5 +13,7 @@ def drain_ui_queue(app):
             app._log_exception("UI event error", exc)
     if app._closing:
         return
+    if hasattr(app, "_sync_tool_reference_label"):
+        app._sync_tool_reference_label()
     app._maybe_auto_reconnect()
     app.after(50, app._drain_ui_queue)

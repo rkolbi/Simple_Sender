@@ -324,6 +324,8 @@ def init_runtime_state(
 
     app.connected = False
     app.current_port = tk.StringVar(value=app.settings.get("last_port", DEFAULT_SETTINGS.get("last_port", "")))
+    app.tool_reference_var = tk.StringVar(value="")
+    app._tool_reference_last = None
 
     # State
     app.machine_state = tk.StringVar(value="DISCONNECTED")

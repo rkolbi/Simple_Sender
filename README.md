@@ -139,20 +139,20 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D-quality controls, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, and error-dialog controls.
+  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
 
     ![-](pics/Slide7.JPG)
-  - **3D View:** Rapid/Feed/Arc toggles, rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
+  - **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
 
     ![-](pics/Slide8.JPG)
 
-- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), and the error-dialog status indicator (tooltips, 3D render, and keybinding toggles remain on the bar; logging/error-dialog controls moved into App Settings).
+- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips/3DR/Keys/Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
 ## Status Lights
-- **Placement:** The LEDs sit inline with the status bar so they stay next to the logging/3D/keybinding toggles and provide a quick glance of machine triggers.
+- **Placement:** The LEDs sit inline with the status bar so they stay next to the quick buttons (Tips/3DR/Keys/Release) and provide a quick glance of machine triggers.
 - **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). The indicators derive their state directly from those flags:
   - `X`, `Y`, `Z` light the **Endstops** indicator whenever those limit pins feed a high signal.
   - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
@@ -175,7 +175,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
-- **Completion alert:** When a job finishes streaming, a dialog summarizes the start/finish/elapsed wallclock so you know the file completed without monitoring the logs.
+- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep.
 
 ### Line length limitations and CAM guidance
 - Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
@@ -350,7 +350,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
-- 3D View: Rapid/Feed/Arc legend toggles, rotate/pan/zoom, live position marker, save/load/reset view; quality controls (draw limits, arc detail, lightweight preview) live in App Settings.
+- 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > 3D View.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
@@ -358,6 +358,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 ## Joystick Bindings
 - Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
 - App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected.
+- Optional safety hold: enable **Require safety hold for joystick actions**, then click **Set Safety Button** to capture a hold-to-enable button; **Clear Safety Button** removes it and the status line shows the current binding.
 - Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
 - The Live input state panel reports joystick axes/buttons/hats and the latest keyboard input while testing; hot-plug status updates when devices connect/disconnect.

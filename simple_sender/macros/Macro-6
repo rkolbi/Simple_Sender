@@ -25,7 +25,7 @@ Probes Z on the touch plate, then captures the reference tool height at the fixe
 
 %macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
 %if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
-%if getattr(macro.state, "TOOL_REFERENCE", None) is not None and not app.macro_executor._execute_command("PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]", "PROMPT [title(Tool Reference Already Set)] TOOL REFERENCE seems to already be set at [macro.prompt_tool_ref]. Are you sure you wish to proceed and overwrite Tool Reference? [btn(Continue)]"): app.macro_executor._alarm_event.set()
+["PROMPT resumelabel=Proceed You are about to overwrite material and tool reference points. Are you sure you want to proceed?" if macro.prompt_tool_ref is not None else ""][""]
 M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
 G90
 G21
