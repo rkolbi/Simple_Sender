@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Simple Sender (GRBL G-code Sender)
 # Copyright (C) 2026 Bob Kolbasowski
 #

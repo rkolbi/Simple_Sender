@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+# Simple Sender (GRBL G-code Sender)
+# Copyright (C) 2026 Bob Kolbasowski
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """GRBL serial communication worker.
 
 This module handles all serial communication with GRBL controllers,
@@ -712,6 +731,20 @@ class GrblWorker:
             self.ui_q.put(("ready", True))
             logger.info("GRBL ready")
     
+    def _safe_ui_put(self, *args, context: str = "operation") -> None:
+        """Safely put item on UI queue with error logging.
+        
+        Wraps ui_q.put() to ensure worker thread continues even if UI queue fails.
+        
+        Args:
+            *args: Arguments to pass to ui_q.put()
+            context: Description of operation for error logging
+        """
+        try:
+            self.ui_q.put(*args)
+        except Exception as e:
+            logger.error(f"Failed to send UI event during {context}: {e}")
+    
     def _handle_alarm(self, message: str) -> None:
         """Handle alarm state.
         
@@ -721,11 +754,8 @@ class GrblWorker:
         message = annotate_grbl_alarm(message)
         logger.warning(f"GRBL ALARM: {message}")
         
-        # Log to console
-        try:
-            self.ui_q.put(("log", f"[ALARM] {message}"))
-        except Exception as e:
-            logger.error(f"Failed to log alarm: {e}")
+        # Log to console (safe)
+        self._safe_ui_put(("log", f"[ALARM] {message}"), context="alarm logging")
         
         if not self._alarm_active:
             self._alarm_active = True
@@ -737,10 +767,21 @@ class GrblWorker:
             self._streaming = False
             self._paused = False
         self._reset_stream_buffer()
-        self._emit_buffer_fill()
-        self.ui_q.put(("stream_state", "alarm", message))
+        
+        # Emit buffer state (wrapped to handle failures)
+        try:
+            self._emit_buffer_fill()
+        except Exception as e:
+            logger.error(f"Failed to emit buffer state during alarm: {e}")
+        
+        # Notify UI of alarm state (safe)
+        self._safe_ui_put(("stream_state", "alarm", message), context="alarm state")
+        
         self._clear_outgoing()
-        self.ui_q.put(("alarm", message))
+        
+        # Emit alarm event (safe)
+        self._safe_ui_put(("alarm", message), context="alarm event")
+        
         self._abort_writes.clear()
 
     # ========================================================================
