@@ -116,6 +116,12 @@ GCODE_VIEWER_SMALL_FILE_THRESHOLD = 1000
 GCODE_VIEWER_LARGE_FILE_THRESHOLD = 10000
 """Line count threshold for large files."""
 
+GCODE_STREAMING_SIZE_THRESHOLD = 50 * 1024 * 1024
+"""File size (bytes) above which streaming mode is used."""
+
+GCODE_STREAMING_PREVIEW_LINES = 2000
+"""Preview lines shown when streaming from disk."""
+
 CLEAR_ICON = "X"
 """Icon/text for clear buttons."""
 
@@ -238,6 +244,12 @@ TX_THROUGHPUT_EMIT_INTERVAL = 0.5
 
 STREAM_RECONNECT_DELAY = 0.5
 """Delay before attempting reconnect (seconds)."""
+
+WATCHDOG_RX_TIMEOUT = 5.0
+"""Seconds without RX before pausing streaming."""
+
+WATCHDOG_DISCONNECT_TIMEOUT = 10.0
+"""Seconds without RX before disconnecting."""
 
 # ============================================================================
 # TIMING CONSTANTS

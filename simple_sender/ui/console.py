@@ -25,7 +25,7 @@ to prevent UI blocking, filtering capabilities, and command history.
 
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Optional, Set
+from typing import Callable, Optional, Set
 import logging
 from collections import deque
 
@@ -53,7 +53,7 @@ class Console(ttk.Frame):
     def __init__(
         self,
         parent: tk.Widget,
-        on_command: Optional[callable] = None
+        on_command: Optional[Callable[[str], None]] = None
     ):
         """Initialize console.
         

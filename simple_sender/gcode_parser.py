@@ -163,8 +163,12 @@ def parse_gcode_lines(
     last_motion = 1
     segments: List[tuple[float, float, float, float, float, float, str]] = []
     moves: List[GcodeMove] = []
-    minx = miny = minz = None
-    maxx = maxy = maxz = None
+    minx: float | None = None
+    miny: float | None = None
+    minz: float | None = None
+    maxx: float | None = None
+    maxy: float | None = None
+    maxz: float | None = None
 
     def update_bounds(nx: float, ny: float, nz: float) -> None:
         nonlocal minx, maxx, miny, maxy, minz, maxz
@@ -173,6 +177,12 @@ def parse_gcode_lines(
             miny = maxy = ny
             minz = maxz = nz
             return
+        assert minx is not None
+        assert maxx is not None
+        assert miny is not None
+        assert maxy is not None
+        assert minz is not None
+        assert maxz is not None
         minx = min(minx, nx)
         maxx = max(maxx, nx)
         miny = min(miny, ny)
@@ -444,7 +454,7 @@ def parse_gcode_lines(
             last_motion = motion
             continue
 
-    if minx is None:
+    if minx is None or miny is None or minz is None or maxx is None or maxy is None or maxz is None:
         bounds = None
     else:
         bounds = (minx, maxx, miny, maxy, minz, maxz)

@@ -113,6 +113,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_quick_release_button": True,
     "status_poll_interval": 0.2,
     "status_query_failure_limit": 3,
+    "stop_joystick_hold_on_focus_loss": True,
     "step_xy": 400.0,
     "step_z": 1.0,
     "theme": "vista",
@@ -133,6 +134,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "tooltips_enabled": True,
     "training_wheels": True,
     "unit_mode": "mm",
+    "validate_streaming_gcode": True,
     "window_geometry": "1194x864+261+83",
     "zeroing_persistent": False,
 }

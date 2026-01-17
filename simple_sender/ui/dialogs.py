@@ -40,10 +40,14 @@ def show_resume_dialog(app):
     if app._alarm_locked:
         messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
         return
-    if not app._last_gcode_lines:
+    total_lines = (
+        app._gcode_total_lines
+        if getattr(app, "_gcode_streaming_mode", False)
+        else len(app._last_gcode_lines)
+    )
+    if total_lines <= 0:
         messagebox.showwarning("No G-code", "Load a G-code file first.")
         return
-    total_lines = len(app._last_gcode_lines)
     default_line = 1
     if app._last_acked_index >= 0:
         default_line = min(total_lines, app._last_acked_index + 2)

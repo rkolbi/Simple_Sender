@@ -136,6 +136,8 @@ def save_settings(app):
         "view_3d": app.settings.get("view_3d"),
         "all_stop_mode": app.all_stop_mode.get(),
         "training_wheels": bool(app.training_wheels.get()),
+        "stop_joystick_hold_on_focus_loss": bool(app.stop_hold_on_focus_loss.get()),
+        "validate_streaming_gcode": bool(app.validate_streaming_gcode.get()),
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
         "theme": app.selected_theme.get(),
         "console_positions_enabled": pos_status_enabled,

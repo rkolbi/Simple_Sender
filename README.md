@@ -41,9 +41,8 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Status bar shows streaming file name when a job is running.
 - Top View 2D preview with live spindle position marker.
 - Resume From... dialog to continue a job with modal re-sync and safety warnings.
-- Performance mode: batches console updates, suppresses per-line RX logs during streaming, adapts status polling by state.
+- Performance mode: batches console updates and suppresses per-line RX logs during streaming.
 - Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
-- Machine profiles for units + max rates; estimates prefer GRBL settings, then profile, then fallback.
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Macros: left-click to run, right-click to preview.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
@@ -94,7 +93,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
-   - Performance mode: reduces console churn during streaming and adapts status polling; toggle it from the Interface block inside App Settings.
+   - Performance mode: reduces console churn during streaming; toggle it from the Interface block inside App Settings.
   6) **Prepare the machine**
      - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
      - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
@@ -102,7 +101,7 @@ This is a practical, end-to-end flow with rationale for key options.
      - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
      - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
-     - The Run confirmation includes a G-code validation report (unsupported codes, long lines, modal hazards) before streaming, with a Details view for line-level issues.
+     - The Run confirmation includes a G-code validation report (unsupported codes, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
      - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
@@ -139,7 +138,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
+  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, joystick focus-loss stop, streaming validation, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -164,14 +163,14 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
-- **Performance mode:** Batches console updates, suppresses per-line RX logging during streaming, and adapts status polling by state.
+- **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 
 ## Jobs, Files, and Streaming
-- **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. Lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified.
+- **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads, lines must already fit the 80-byte limit or the load is rejected.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting.
-- **Line length safety:** The loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected.
+- **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads do not compact or split; they are rejected if any line exceeds 80 bytes.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
@@ -357,7 +356,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Joystick Bindings
 - Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
-- App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected.
+- App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected. The same frame includes a "Stop joystick hold when app loses focus" safety toggle.
 - Optional safety hold: enable **Require safety hold for joystick actions**, then click **Set Safety Button** to capture a hold-to-enable button; **Clear Safety Button** removes it and the status line shows the current binding.
 - Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.

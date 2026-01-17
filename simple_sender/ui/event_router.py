@@ -135,6 +135,9 @@ def handle_event(app, evt):
     if kind == "gcode_loaded":
         handle_gcode_loaded(app, evt)
         return
+    if kind == "gcode_loaded_stream":
+        handle_gcode_loaded_stream(app, evt)
+        return
     if kind == "gcode_load_invalid":
         handle_gcode_load_invalid(
             app,
@@ -204,6 +207,9 @@ def handle_event(app, evt):
     if kind == "stream_state":
         handle_stream_state_event(app, evt)
         return
+    if kind == "stream_interrupted":
+        handle_stream_interrupted(app, evt)
+        return
     if kind == "stream_error":
         msg = evt[1] if len(evt) > 1 else ""
         try:
@@ -268,6 +274,27 @@ def handle_gcode_loaded(app, evt):
     report = evt[6] if len(evt) > 6 else None
     app._gcode_validation_report = report
     app._apply_loaded_gcode(path, lines, lines_hash=lines_hash, validated=validated)
+
+
+def handle_gcode_loaded_stream(app, evt):
+    token = evt[1]
+    if token != app._gcode_load_token:
+        return
+    path = evt[2]
+    source = evt[3]
+    preview_lines = evt[4] if len(evt) > 4 else []
+    lines_hash = evt[5] if len(evt) > 5 else None
+    total_lines = evt[6] if len(evt) > 6 else None
+    report = evt[7] if len(evt) > 7 else None
+    app._gcode_validation_report = report
+    app._apply_loaded_gcode(
+        path,
+        preview_lines,
+        lines_hash=lines_hash,
+        validated=True,
+        streaming_source=source,
+        total_lines=total_lines,
+    )
 
 
 def handle_gcode_load_invalid(
@@ -782,7 +809,22 @@ def handle_stream_state_event(app, evt):
         except Exception:
             pass
         app.toolpath_panel.set_streaming(False)
-        if app._toolpath_reparse_deferred and app._last_gcode_lines:
+        if (
+            app._toolpath_reparse_deferred
+            and app._last_gcode_lines
+            and not getattr(app, "_gcode_streaming_mode", False)
+        ):
             app._toolpath_reparse_deferred = False
             app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
     app._apply_status_poll_profile()
+
+
+def handle_stream_interrupted(app, evt):
+    was_streaming = bool(evt[1]) if len(evt) > 1 else False
+    if not was_streaming:
+        return
+    if getattr(app, "_user_disconnect", False):
+        return
+    app._resume_after_disconnect = True
+    app._resume_from_index = max(0, app._last_acked_index + 1)
+    app._resume_job_name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")

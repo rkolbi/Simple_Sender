@@ -19,7 +19,7 @@
 
 import os
 import queue
-from typing import Any
+from typing import Any, cast
 
 import tkinter as tk
 from tkinter import ttk
@@ -79,6 +79,12 @@ def init_basic_preferences(app, app_version: str):
     app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
     app.all_stop_mode = tk.StringVar(value=setting("all_stop_mode", "stop_reset"))
     app.training_wheels = tk.BooleanVar(value=setting("training_wheels", True))
+    app.stop_hold_on_focus_loss = tk.BooleanVar(
+        value=setting("stop_joystick_hold_on_focus_loss", True)
+    )
+    app.validate_streaming_gcode = tk.BooleanVar(
+        value=setting("validate_streaming_gcode", True)
+    )
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
     app.zeroing_persistent = tk.BooleanVar(value=setting("zeroing_persistent", False))
     app.keyboard_bindings_enabled = tk.BooleanVar(
@@ -190,6 +196,9 @@ def init_runtime_state(
     default_jog_feed_z: float,
     macro_search_dirs: tuple[str, ...],
 ):
+    def setting(key: str, fallback):
+        return app.settings.get(key, DEFAULT_SETTINGS.get(key, fallback))
+
     raw_bindings = app.settings.get("key_bindings", {})
     if isinstance(raw_bindings, dict):
         app._key_bindings = {}
@@ -203,7 +212,7 @@ def init_runtime_state(
         for key, binding in raw_joystick_bindings.items():
             if isinstance(binding, dict):
                 normalized_joystick_bindings[str(key)] = dict(binding)
-    app._joystick_bindings: dict[str, dict[str, Any]] = normalized_joystick_bindings
+    app._joystick_bindings = normalized_joystick_bindings
     app._bound_key_sequences = set()
     app._key_sequence_map = {}
     app._kb_conflicts = set()
@@ -222,21 +231,21 @@ def init_runtime_state(
     }
     app._kb_item_to_button = {}
     app._kb_edit = None
-    app._kb_edit_state: dict[ttk.Entry, dict[str, Any]] = {}
-    app._joystick_binding_map: dict[tuple, Any] = {}
-    app._joystick_capture_state: dict[str, Any] | None = None
-    app._joystick_poll_id: Any = None
+    app._kb_edit_state = cast(dict[ttk.Entry, dict[str, Any]], {})
+    app._joystick_binding_map = cast(dict[tuple, Any], {})
+    app._joystick_capture_state = None
+    app._joystick_poll_id = None
     app._joystick_backend_ready = False
     app._joystick_device_count = 0
     app._joystick_last_discovery = 0.0
     app._joystick_last_live_status = 0.0
-    app._joystick_names: dict[int, str] = {}
-    app._joystick_instances: dict[int, Any] = {}
-    app._joystick_button_poll_state: dict[tuple[int, int], bool] = {}
-    app._joystick_axis_poll_state: dict[tuple[int, int], float] = {}
-    app._joystick_hat_poll_state: dict[tuple[int, int], tuple[int, int]] = {}
-    app._joystick_axis_active: set[tuple[int, int, int]] = set()
-    app._joystick_hat_active: set[tuple[int, int, tuple[int, int]]] = set()
+    app._joystick_names = cast(dict[int, str], {})
+    app._joystick_instances = cast(dict[int, Any], {})
+    app._joystick_button_poll_state = cast(dict[tuple[int, int], bool], {})
+    app._joystick_axis_poll_state = cast(dict[tuple[int, int], float], {})
+    app._joystick_hat_poll_state = cast(dict[tuple[int, int], tuple[int, int]], {})
+    app._joystick_axis_active = cast(set[tuple[int, int, int]], set())
+    app._joystick_hat_active = cast(set[tuple[int, int, tuple[int, int]]], set())
     app._virtual_hold_buttons = []
     app._active_joystick_hold_binding = None
     app._joystick_hold_after_id = None
@@ -361,6 +370,9 @@ def init_runtime_state(
     app._wpos_label_default_fg = {}
     app._wpos_flash_after_ids = {}
     app._last_gcode_lines = []
+    app._gcode_source = None
+    app._gcode_streaming_mode = False
+    app._gcode_total_lines = 0
     app._last_gcode_path = None
     app._gcode_hash = None
     app._gcode_validation_report = None
@@ -393,6 +405,9 @@ def init_runtime_state(
     app._stream_start_ts = None
     app._stream_pause_total = 0.0
     app._stream_paused_at = None
+    app._resume_after_disconnect = False
+    app._resume_from_index = None
+    app._resume_job_name = None
     app._toolpath_reparse_deferred = False
     app._job_started_at = None
     app._job_completion_notified = False

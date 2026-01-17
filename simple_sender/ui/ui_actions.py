@@ -230,7 +230,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         justify="left",
     ).grid(row=report_row, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
-    details_window = {"win": None}
+    details_window: dict[str, tk.Toplevel | None] = {"win": None}
 
     def open_details():
         win = details_window.get("win")

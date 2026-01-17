@@ -17,7 +17,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
 import time
+from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
@@ -58,6 +60,15 @@ def handle_connection_event(app, is_on: bool, port):
         app.btn_alarm_recover.config(state="disabled")
         app._set_manual_controls_enabled(False)
         app.throughput_var.set("TX: 0 B/s")
+        try:
+            if getattr(app, "_gcode_source", None) is not None:
+                name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
+                app.grbl.load_gcode(app._gcode_source, name=name or None)
+            elif app._last_gcode_lines:
+                name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
+                app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
+        except Exception:
+            pass
     else:
         app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"))
         app._connected_port = None
@@ -87,6 +98,10 @@ def handle_connection_event(app, is_on: bool, port):
         app._accel_rates = None
         if app._last_gcode_lines:
             app._update_gcode_stats(app._last_gcode_lines)
+        if app._user_disconnect:
+            app._resume_after_disconnect = False
+            app._resume_from_index = None
+            app._resume_job_name = None
         if not app._user_disconnect:
             app._auto_reconnect_pending = True
             app._auto_reconnect_retry = 0
@@ -125,6 +140,28 @@ def handle_ready_event(app, ready):
             app._send_manual("$$", "status")
         except Exception:
             pass
+        if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
+            app._resume_after_disconnect = False
+            total_lines = (
+                app._gcode_total_lines
+                if getattr(app, "_gcode_streaming_mode", False)
+                else len(app._last_gcode_lines)
+            )
+            if total_lines > 0:
+                start_index = app._resume_from_index
+                if start_index is None:
+                    start_index = max(0, app._last_acked_index + 1)
+                start_index = max(0, min(start_index, total_lines - 1))
+                job_name = app._resume_job_name or os.path.basename(
+                    getattr(app, "_last_gcode_path", "") or ""
+                )
+                label = f" '{job_name}'" if job_name else ""
+                prompt = f"Resume interrupted job{label} from line {start_index + 1}?"
+                if messagebox.askyesno("Resume job", prompt):
+                    preamble, _ = app._build_resume_preamble(app._last_gcode_lines, start_index)
+                    app._resume_from_line(start_index, preamble)
+            app._resume_from_index = None
+            app._resume_job_name = None
     apply_status_poll_profile(app)
 
 

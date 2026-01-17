@@ -23,7 +23,7 @@ from simple_sender.gcode_parser import clean_gcode_line
 from simple_sender.utils.constants import RESUME_WORD_PAT
 
 
-def build_resume_preamble(lines: list[str], stop_index: int) -> tuple[list[str], bool]:
+def build_resume_preamble(lines, stop_index: int) -> tuple[list[str], bool]:
     units = None
     distance = None
     plane = None
@@ -39,7 +39,10 @@ def build_resume_preamble(lines: list[str], stop_index: int) -> tuple[list[str],
     def is_code(code: float, target: float) -> bool:
         return abs(code - target) < 1e-3
 
-    for raw in lines[: max(0, stop_index)]:
+    max_index = max(0, stop_index)
+    for idx, raw in enumerate(lines):
+        if idx >= max_index:
+            break
         s = clean_gcode_line(raw)
         if not s:
             continue
@@ -132,10 +135,15 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     if app._alarm_locked:
         messagebox.showwarning("Alarm", "Clear the alarm before resuming.")
         return
-    if not app._last_gcode_lines:
+    total_lines = (
+        app._gcode_total_lines
+        if getattr(app, "_gcode_streaming_mode", False)
+        else len(app._last_gcode_lines)
+    )
+    if total_lines <= 0:
         messagebox.showwarning("No G-code", "Load a G-code file first.")
         return
-    if start_index < 0 or start_index >= len(app._last_gcode_lines):
+    if start_index < 0 or start_index >= total_lines:
         messagebox.showwarning("Resume", "Line number is out of range.")
         return
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
@@ -146,8 +154,8 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     if start_index > 0:
         app.gview.mark_acked_upto(start_index - 1)
     app.gview.highlight_current(start_index)
-    if len(app._last_gcode_lines) > 0:
-        pct = int(round((start_index / len(app._last_gcode_lines)) * 100))
+    if total_lines > 0:
+        pct = int(round((start_index / total_lines) * 100))
         app.progress_pct.set(pct)
     app.status.config(text=f"Resuming at line {start_index + 1}")
     app.grbl.start_stream_from(start_index, preamble)

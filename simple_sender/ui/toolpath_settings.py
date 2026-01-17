@@ -21,6 +21,10 @@ import math
 import tkinter as tk
 
 
+def _can_use_toolpath(app) -> bool:
+    return bool(app._last_gcode_lines) and not getattr(app, "_gcode_streaming_mode", False)
+
+
 def init_toolpath_settings(app):
     app._toolpath_full_limit_default = 40000
     app._toolpath_interactive_limit_default = 5000
@@ -116,7 +120,7 @@ def toggle_render_3d(app):
     app.render3d_enabled.set(new_val)
     app._refresh_render_3d_toggle_text()
     app.toolpath_panel.set_enabled(new_val)
-    if new_val and app._last_gcode_lines:
+    if new_val and _can_use_toolpath(app):
         app.toolpath_panel.set_gcode_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
 
 def toolpath_limit_value(app, raw, fallback):
@@ -200,7 +204,7 @@ def apply_toolpath_performance(app, _event=None):
     app.toolpath_panel.set_arc_detail(arc_detail)
     app.toolpath_panel.set_lightweight(lightweight)
     app.toolpath_panel.set_draw_percent(draw_percent)
-    if app._last_gcode_lines:
+    if _can_use_toolpath(app):
         if app._stream_state in ("running", "paused"):
             app._toolpath_reparse_deferred = True
         else:
@@ -253,7 +257,7 @@ def schedule_toolpath_arc_detail_reparse(app):
 
 def run_toolpath_arc_detail_reparse(app):
     app._toolpath_arc_detail_reparse_after_id = None
-    if app._last_gcode_lines:
+    if _can_use_toolpath(app):
         if app._stream_state in ("running", "paused"):
             app._toolpath_reparse_deferred = True
             return
@@ -261,7 +265,7 @@ def run_toolpath_arc_detail_reparse(app):
 
 def on_toolpath_lightweight_change(app):
     app.toolpath_panel.set_lightweight(bool(app.toolpath_lightweight.get()))
-    if app._last_gcode_lines:
+    if _can_use_toolpath(app):
         if app._stream_state in ("running", "paused"):
             app._toolpath_reparse_deferred = True
             return

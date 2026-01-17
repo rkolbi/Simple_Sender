@@ -292,6 +292,11 @@ def make_stats_cache_key(
 
 
 def update_gcode_stats(app, lines: list[str], parse_result=None):
+    if getattr(app, "_gcode_streaming_mode", False):
+        app._last_stats = None
+        app._last_rate_source = None
+        app.gcode_stats_var.set("Stats unavailable (streaming mode)")
+        return
     if not lines:
         app._last_stats = None
         app._last_rate_source = None

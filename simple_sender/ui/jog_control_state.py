@@ -22,8 +22,8 @@ from simple_sender.ui.icons import ICON_UNITS, icon_label
 
 def unit_toggle_label(app, mode: str | None = None) -> str:
     if mode is None:
-        mode = app.unit_mode.get()
-    return icon_label(ICON_UNITS, mode)
+        mode = app.unit_mode.get() or "mm"
+    return icon_label(ICON_UNITS, str(mode))
 
 
 def update_unit_toggle_display(app):

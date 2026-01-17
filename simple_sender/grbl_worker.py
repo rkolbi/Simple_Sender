@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from collections import deque
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
 from .utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 try:
@@ -41,6 +41,18 @@ except ImportError:
     serial = None
     list_ports = None
     SERIAL_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from serial import Serial as _Serial
+    from serial import SerialException as _SerialException
+    from serial import SerialTimeoutException as _SerialTimeoutException
+    SerialType: TypeAlias = _Serial
+    SerialExceptionType: TypeAlias = _SerialException
+    SerialTimeoutExceptionType: TypeAlias = _SerialTimeoutException
+else:
+    SerialType: TypeAlias = Any
+    SerialExceptionType: TypeAlias = Exception
+    SerialTimeoutExceptionType: TypeAlias = Exception
 
 from .utils.constants import (
     BAUD_DEFAULT,
@@ -62,6 +74,8 @@ from .utils.constants import (
     STATUS_POLL_DEFAULT,
     EVENT_QUEUE_TIMEOUT,
     DEFAULT_SPINDLE_RPM,
+    WATCHDOG_DISCONNECT_TIMEOUT,
+    WATCHDOG_RX_TIMEOUT,
 )
 from .utils.exceptions import (
     SerialConnectionError,
@@ -81,6 +95,16 @@ from .utils.validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _serial_exception_type():
+    if serial is None:
+        return Exception
+    return getattr(serial, "SerialException", Exception)
+
+def _serial_timeout_exception_type():
+    if serial is None:
+        return Exception
+    return getattr(serial, "SerialTimeoutException", Exception)
 
 _PAUSE_MCODE_MAP = {
     "0": "M0",
@@ -120,7 +144,7 @@ class GrblWorker:
             ui_event_q: Queue for sending events to the UI thread
         """
         self.ui_q = ui_event_q
-        self.ser: Optional[serial.Serial] = None
+        self.ser: Optional[SerialType] = None
         
         # Worker threads
         self._rx_thread: Optional[threading.Thread] = None
@@ -133,7 +157,7 @@ class GrblWorker:
         self._last_buffer_emit_ts = 0.0
         
         # Streaming state
-        self._gcode: List[str] = []
+        self._gcode: Sequence[str] = []
         self._streaming = False
         self._paused = False
         self._send_index = 0  # next index to send
@@ -173,6 +197,9 @@ class GrblWorker:
         self._status_query_backoff_base = 0.2
         self._status_query_backoff_max = 2.0
         self._dry_run_sanitize = False
+        self._last_rx_ts = time.time()
+        self._watchdog_paused = False
+        self._watchdog_trip_ts = 0.0
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -194,7 +221,7 @@ class GrblWorker:
     # CONNECTION MANAGEMENT
     # ========================================================================
     
-    def list_ports(self) -> List[str]:
+    def list_ports(self) -> list[str]:
         """Get list of available serial ports.
         
         Returns:
@@ -202,6 +229,7 @@ class GrblWorker:
         """
         if not SERIAL_AVAILABLE or list_ports is None:
             return []
+        assert list_ports is not None
         return [p.device for p in list_ports.comports()]
     
     def connect(self, port: str, baud: int = BAUD_DEFAULT) -> None:
@@ -220,6 +248,8 @@ class GrblWorker:
                 "pyserial is required to connect to GRBL. "
                 "Install with: pip install pyserial"
             )
+        assert serial is not None
+        serial_exc = _serial_exception_type()
         
         # Validate inputs
         port = validate_port_name(port)
@@ -234,6 +264,9 @@ class GrblWorker:
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
+        self._last_rx_ts = time.time()
+        self._watchdog_paused = False
+        self._watchdog_trip_ts = 0.0
         
         try:
             # Open serial port
@@ -243,15 +276,17 @@ class GrblWorker:
                 timeout=SERIAL_TIMEOUT,
                 write_timeout=SERIAL_WRITE_TIMEOUT
             )
+            ser = self.ser
+            assert ser is not None
             
             # Give GRBL time to reset (some boards reset on connection)
             time.sleep(SERIAL_CONNECT_DELAY)
             
             # Clear buffers
             try:
-                self.ser.reset_input_buffer()
-                self.ser.reset_output_buffer()
-            except serial.SerialException as e:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+            except serial_exc as e:
                 logger.warning(f"Failed to reset buffers: {e}")
             
             # Start worker threads
@@ -282,7 +317,7 @@ class GrblWorker:
             self.ui_q.put(("conn", True, port))
             logger.info(f"Connected to {port} at {baud} baud")
             
-        except serial.SerialException as e:
+        except serial_exc as e:
             self.ser = None
             raise SerialConnectionError(f"Failed to connect to {port}: {e}")
         except Exception as e:
@@ -320,11 +355,12 @@ class GrblWorker:
         self.ui_q.put(("stream_state", "stopped", None))
         
         # Close serial port
+        serial_exc = _serial_exception_type()
         if self.ser:
             try:
                 self.ser.close()
                 logger.info("Serial port closed")
-            except serial.SerialException as e:
+            except serial_exc as e:
                 logger.error(f"Error closing serial port: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error closing serial port: {e}")
@@ -421,21 +457,25 @@ class GrblWorker:
         if not self.is_connected():
             logger.warning("Cannot send real-time command - not connected")
             return
-        
+        ser = self.ser
+        if ser is None:
+            raise SerialWriteError("Serial port not connected")
+        timeout_exc = _serial_timeout_exception_type()
+        serial_exc = _serial_exception_type()
         try:
             with self._write_lock:
                 total = 0
                 length = len(command)
                 while total < length:
-                    written = self.ser.write(command[total:])
+                    written = ser.write(command[total:])
                     if written is None:
                         written = 0
                     if written <= 0:
-                        raise serial.SerialTimeoutException("Write returned 0 bytes")
+                        raise timeout_exc("Write returned 0 bytes")
                     total += written
-        except serial.SerialTimeoutException as e:
+        except timeout_exc as e:
             raise SerialWriteError(f"Write timeout: {e}")
-        except serial.SerialException as e:
+        except serial_exc as e:
             raise SerialWriteError(f"Serial write error: {e}")
         except Exception as e:
             logger.error(f"Unexpected write error: {e}")
@@ -563,7 +603,7 @@ class GrblWorker:
     # G-CODE STREAMING
     # ========================================================================
     
-    def load_gcode(self, lines: List[str], *, name: str | None = None) -> None:
+    def load_gcode(self, lines: Sequence[str], *, name: str | None = None) -> None:
         """Load G-code for streaming.
         
         Args:
@@ -606,7 +646,7 @@ class GrblWorker:
     def start_stream_from(
         self,
         start_index: int,
-        preamble: Optional[List[str]] = None
+        preamble: Sequence[str] | None = None
     ) -> None:
         """Resume streaming from specific line.
         
@@ -799,6 +839,7 @@ class GrblWorker:
 
     def _signal_disconnect(self, reason: str | None = None) -> None:
         """Signal an unexpected disconnect and reset internal state."""
+        was_streaming = self._streaming or self._paused
         self._stop_evt.set()
         try:
             if self.ser is not None:
@@ -813,9 +854,13 @@ class GrblWorker:
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
+        self._watchdog_paused = False
+        self._watchdog_trip_ts = 0.0
         self._reset_stream_buffer()
         self._clear_outgoing()
         try:
+            if was_streaming:
+                self.ui_q.put(("stream_interrupted", True, reason))
             self.ui_q.put(("ready", False))
             self.ui_q.put(("stream_state", "stopped", reason))
             self.ui_q.put(("conn", False, None))
@@ -937,7 +982,8 @@ class GrblWorker:
         """
         if not self.is_connected():
             return False
-        
+        timeout_exc = _serial_timeout_exception_type()
+        serial_exc = _serial_exception_type()
         try:
             if payload is None:
                 payload = self._encode_line_payload(line)
@@ -945,26 +991,29 @@ class GrblWorker:
             with self._write_lock:
                 if self._abort_writes.is_set():
                     return False
+                ser = self.ser
+                if ser is None:
+                    return False
                 total = 0
                 length = len(payload)
                 while total < length:
-                    written = self.ser.write(payload[total:])
+                    written = ser.write(payload[total:])
                     if written is None:
                         written = 0
                     if written <= 0:
-                        raise serial.SerialTimeoutException("Write returned 0 bytes")
+                        raise timeout_exc("Write returned 0 bytes")
                     total += written
 
             return True
 
-        except serial.SerialTimeoutException as e:
+        except timeout_exc as e:
             logger.error(f"Write timeout: {e}")
             self.ui_q.put(("log", f"[write timeout] {e}"))
             if self.is_connected():
                 self._signal_disconnect(f"Serial write timeout: {e}")
             return False
             
-        except serial.SerialException as e:
+        except serial_exc as e:
             logger.error(f"Serial write error: {e}")
             self.ui_q.put(("log", f"[write error] {e}"))
             if self.is_connected():
@@ -1211,8 +1260,8 @@ class GrblWorker:
         """Process immediate command queue with buffer pacing."""
         if self._purge_jog_queue.is_set():
             self._purge_jog_queue.clear()
+            pending: list[str] = []
             try:
-                pending = []
                 while True:
                     pending.append(self._outgoing_q.get_nowait())
             except queue.Empty:
@@ -1344,6 +1393,8 @@ class GrblWorker:
         """
         logger.debug("RX thread started")
         buf = b""
+        timeout_exc = _serial_timeout_exception_type()
+        serial_exc = _serial_exception_type()
         
         try:
             while not stop_evt.is_set():
@@ -1351,12 +1402,16 @@ class GrblWorker:
                     time.sleep(0.05)
                     continue
                 
+                ser = self.ser
+                if ser is None:
+                    time.sleep(0.05)
+                    continue
                 try:
-                    chunk = self.ser.read(256)
-                except serial.SerialTimeoutException:
+                    chunk = ser.read(256)
+                except timeout_exc:
                     # Normal timeout - just continue
                     continue
-                except serial.SerialException as e:
+                except serial_exc as e:
                     logger.error(f"Serial read error: {e}")
                     self.ui_q.put(("log", f"[read error] {e}"))
                     self._signal_disconnect(f"Serial read error: {e}")
@@ -1370,7 +1425,9 @@ class GrblWorker:
                 
                 if not chunk:
                     continue
-                
+                self._last_rx_ts = time.time()
+                self._watchdog_paused = False
+                self._watchdog_trip_ts = 0.0
                 buf += chunk
                 
                 # Process complete lines
@@ -1395,6 +1452,10 @@ class GrblWorker:
         Args:
             line: Line received from GRBL
         """
+        self._last_rx_ts = time.time()
+        self._watchdog_paused = False
+        self._watchdog_trip_ts = 0.0
+
         # Parse status reports
         is_status = line.startswith("<") and line.endswith(">")
         
@@ -1482,23 +1543,22 @@ class GrblWorker:
                     try:
                         _, rx_free = part[3:].split(",", 1)
                         rx_free = int(rx_free.strip())
-
+                        if rx_free < 0:
+                            rx_free = 0
                         with self._stream_lock:
-                            if (
-                                self._streaming
-                                or self._paused
+                            busy = (
+                                self._stream_buf_used > 0
                                 or self._stream_line_queue
-                                or self._stream_pending_item
-                                or self._manual_pending_item
+                                or self._stream_pending_item is not None
+                                or self._manual_pending_item is not None
                                 or self._resume_preamble
-                                or self._stream_buf_used
-                            ):
+                            )
+                            if busy:
                                 continue
                             capacity = rx_free + self._stream_buf_used
                             if capacity < RX_BUFFER_SIZE:
                                 capacity = RX_BUFFER_SIZE
                             self._rx_window = capacity
-
                         self._emit_buffer_fill()
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Failed to parse Bf field: {e}")
@@ -1515,6 +1575,25 @@ class GrblWorker:
         
         try:
             while not stop_evt.is_set():
+                if self.is_connected():
+                    idle = time.time() - self._last_rx_ts
+                    if (
+                        idle >= WATCHDOG_RX_TIMEOUT
+                        and (self._streaming or self._paused or self._ready)
+                        and not self._watchdog_paused
+                    ):
+                        if self._streaming and not self._paused:
+                            self._pause_stream(reason="connection watchdog")
+                        self._watchdog_paused = True
+                        self._watchdog_trip_ts = time.time()
+                        try:
+                            self.ui_q.put(("log", "[watchdog] No RX from GRBL; pausing stream."))
+                        except Exception:
+                            pass
+                    if idle >= WATCHDOG_DISCONNECT_TIMEOUT and (self._streaming or self._ready):
+                        self._signal_disconnect("Connection watchdog timeout")
+                        stop_evt.set()
+                        break
                 if self.is_connected():
                     try:
                         self.send_realtime(RT_STATUS)

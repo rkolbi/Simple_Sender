@@ -498,6 +498,17 @@ def build_app_settings_tab(app, notebook):
     apply_tooltip(app.btn_clear_joystick_safety, "Clear the safety button binding.")
     app._refresh_joystick_safety_display()
 
+    app.stop_hold_focus_check = ttk.Checkbutton(
+        joystick_test_frame,
+        text="Stop joystick hold when app loses focus",
+        variable=app.stop_hold_on_focus_loss,
+    )
+    app.stop_hold_focus_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    apply_tooltip(
+        app.stop_hold_focus_check,
+        "Stop held jog actions if focus leaves the app window.",
+    )
+
     input_state_frame = ttk.LabelFrame(kb_frame, text="Live input state", padding=8)
     input_state_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=6, pady=(0, 6))
     input_state_frame.grid_columnconfigure(0, weight=1)
@@ -559,6 +570,16 @@ def build_app_settings_tab(app, notebook):
     apply_tooltip(
         app.btn_release_checklist,
         "Open a quick regression checklist for streaming, jogging, and unit handling.",
+    )
+    app.validate_streaming_check = ttk.Checkbutton(
+        diagnostics_frame,
+        text="Validate streaming (large) G-code files",
+        variable=app.validate_streaming_gcode,
+    )
+    app.validate_streaming_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    apply_tooltip(
+        app.validate_streaming_check,
+        "Validate large files while loading; adds an extra scan but improves preflight checks.",
     )
 
     tw_frame = ttk.LabelFrame(app._app_settings_inner, text="Safety Aids", padding=8)

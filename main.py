@@ -121,6 +121,7 @@ from simple_sender.ui.override_controls import (
 
 if TYPE_CHECKING:
     from simple_sender.macro_executor import MacroExecutor
+    from simple_sender.gcode_source import FileGcodeSource
 from simple_sender.ui.grbl_settings_requests import request_settings_dump
 from simple_sender.ui.jog_control_state import (
     set_step_xy,
@@ -279,6 +280,8 @@ class App(tk.Tk):
     macro_executor: "MacroExecutor"
     settings: dict[str, Any]
     reconnect_on_open: tk.BooleanVar
+    stop_hold_on_focus_loss: tk.BooleanVar
+    validate_streaming_gcode: tk.BooleanVar
     streaming_controller: Any
     tool_reference_var: tk.StringVar
     machine_state: tk.StringVar
@@ -287,6 +290,12 @@ class App(tk.Tk):
     _last_parse_result: Any
     _last_parse_hash: str | None
     _gcode_parse_token: int
+    _gcode_source: "FileGcodeSource | None"
+    _gcode_streaming_mode: bool
+    _gcode_total_lines: int
+    _resume_after_disconnect: bool
+    _resume_from_index: int | None
+    _resume_job_name: str | None
     def __init__(self):
         super().__init__()
         self.title("Simple Sender")
@@ -305,7 +314,7 @@ class App(tk.Tk):
 
         self.after(50, self._drain_ui_queue)
         self.after(0, self._restore_joystick_bindings_on_start)
-        self.bind("<FocusOut>", self._on_app_focus_out)
+        self.bind_all("<FocusOut>", self._on_app_focus_out)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.refresh_ports(auto_connect=bool(self.reconnect_on_open.get()))
@@ -336,9 +345,21 @@ class App(tk.Tk):
         build_main_layout(self)
 
     def _on_app_focus_out(self, event=None):
-        if event is not None and event.widget is not self:
+        if not bool(self.stop_hold_on_focus_loss.get()):
             return
-        if getattr(self, "_active_joystick_hold_binding", None):
+        try:
+            self.after_idle(self._maybe_stop_joystick_hold_on_focus_loss)
+        except Exception:
+            self._maybe_stop_joystick_hold_on_focus_loss()
+
+    def _maybe_stop_joystick_hold_on_focus_loss(self):
+        if not bool(self.stop_hold_on_focus_loss.get()):
+            return
+        try:
+            focus_widget = self.focus_get()
+        except (tk.TclError, KeyError):
+            return
+        if focus_widget is None and getattr(self, "_active_joystick_hold_binding", None):
             self._stop_joystick_hold()
 
     def _show_release_checklist(self):
@@ -439,7 +460,10 @@ class App(tk.Tk):
         show_resume_dialog(self)
 
     def _build_resume_preamble(self, lines: list[str], stop_index: int) -> tuple[list[str], bool]:
-        return build_resume_preamble(lines, stop_index)
+        source = lines
+        if getattr(self, "_gcode_streaming_mode", False) and getattr(self, "_gcode_source", None):
+            source = self._gcode_source
+        return build_resume_preamble(source, stop_index)
 
     def _resume_from_line(self, start_index: int, preamble: list[str]):
         resume_from_line(self, start_index, preamble)
@@ -457,8 +481,18 @@ class App(tk.Tk):
         *,
         lines_hash: str | None = None,
         validated: bool = False,
+        streaming_source=None,
+        total_lines: int | None = None,
     ):
-        apply_loaded_gcode(self, path, lines, lines_hash=lines_hash, validated=validated)
+        apply_loaded_gcode(
+            self,
+            path,
+            lines,
+            lines_hash=lines_hash,
+            validated=validated,
+            streaming_source=streaming_source,
+            total_lines=total_lines,
+        )
 
     def _clear_gcode(self):
         clear_gcode(self)

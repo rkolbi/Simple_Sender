@@ -23,7 +23,7 @@ This module provides validation functions for various input types,
 ensuring data integrity throughout the application.
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from .constants import GRBL_SETTING_LIMITS, GRBL_NON_NUMERIC_SETTINGS
 from .exceptions import InvalidParameterError, InvalidRangeError
@@ -73,7 +73,7 @@ def validate_unit_mode(unit_mode: str) -> str:
 def validate_grbl_setting(
     setting_id: int,
     value: str
-) -> Tuple[int, float]:
+) -> tuple[int, float | str]:
     """Validate a GRBL setting value.
     
     Args:

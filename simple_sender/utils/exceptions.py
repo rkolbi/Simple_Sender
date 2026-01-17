@@ -23,6 +23,8 @@ This module defines specific exception types for different error conditions,
 enabling better error handling and debugging throughout the application.
 """
 
+from typing import Any, Optional
+
 
 class SimpleSenderException(Exception):
     """Base exception for all Simple Sender errors."""
@@ -80,7 +82,7 @@ class GrblNotConnectedException(GrblException):
 class GrblAlarmException(GrblException):
     """GRBL is in alarm state."""
     
-    def __init__(self, message: str, alarm_code: str = None):
+    def __init__(self, message: str, alarm_code: Optional[str] = None):
         super().__init__(message)
         self.alarm_code = alarm_code
 
@@ -88,7 +90,7 @@ class GrblAlarmException(GrblException):
 class GrblErrorException(GrblException):
     """GRBL returned an error response."""
     
-    def __init__(self, message: str, error_code: str = None):
+    def __init__(self, message: str, error_code: Optional[str] = None):
         super().__init__(message)
         self.error_code = error_code
 
@@ -115,7 +117,12 @@ class GcodeException(SimpleSenderException):
 class GcodeParseError(GcodeException):
     """Failed to parse G-code."""
     
-    def __init__(self, message: str, line_number: int = None, line_content: str = None):
+    def __init__(
+        self,
+        message: str,
+        line_number: Optional[int] = None,
+        line_content: Optional[str] = None,
+    ):
         super().__init__(message)
         self.line_number = line_number
         self.line_content = line_content
@@ -143,7 +150,7 @@ class MacroException(SimpleSenderException):
 class MacroExecutionError(MacroException):
     """Error executing macro."""
     
-    def __init__(self, message: str, line_number: int = None):
+    def __init__(self, message: str, line_number: Optional[int] = None):
         super().__init__(message)
         self.line_number = line_number
 
@@ -199,7 +206,7 @@ class ValidationException(SimpleSenderException):
 class InvalidParameterError(ValidationException):
     """Invalid parameter value."""
     
-    def __init__(self, parameter_name: str, value, reason: str = None):
+    def __init__(self, parameter_name: str, value: Any, reason: Optional[str] = None):
         self.parameter_name = parameter_name
         self.value = value
         self.reason = reason
