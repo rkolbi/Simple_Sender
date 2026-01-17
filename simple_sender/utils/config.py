@@ -23,6 +23,7 @@ This module handles loading, saving, and managing application settings
 with atomic file operations and automatic backup.
 """
 
+import copy
 import json
 import os
 import sys
@@ -235,7 +236,7 @@ class Settings:
         Returns:
             Dictionary of default settings
         """
-        return dict(DEFAULT_SETTINGS)
+        return copy.deepcopy(DEFAULT_SETTINGS)
     
     def load(self) -> bool:
         """Load settings from file.

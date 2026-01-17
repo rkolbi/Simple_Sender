@@ -138,7 +138,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v1.2`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, joystick focus-loss stop, streaming validation, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
+  - **App Settings:** Banner showing `Simple Sender - Version: v<current>`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, joystick focus-loss stop, streaming validation, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.

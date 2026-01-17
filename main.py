@@ -32,6 +32,7 @@ import tkinter as tk
 
 # Refactored module imports
 from simple_sender.utils.constants import *
+from simple_sender import __version__
 from simple_sender.ui.toolbar import build_toolbar
 from simple_sender.ui.led_panel import (
     build_led_panel,
@@ -234,8 +235,6 @@ from simple_sender.ui.widgets import (
     attach_log_gcode,
 )
 
-APP_VERSION = "1.2"
-
 SERIAL_IMPORT_ERROR = ""
 
 _SCRIPT_FILE = __file__ if __file__ is not None else os.path.abspath(sys.argv[0])
@@ -301,7 +300,7 @@ class App(tk.Tk):
         self.title("Simple Sender")
         self.minsize(980, 620)
         default_jog_feed_xy, default_jog_feed_z = init_settings_store(self, _SCRIPT_DIR)
-        init_basic_preferences(self, APP_VERSION)
+        init_basic_preferences(self, __version__)
         init_toolpath_settings(self)
         init_runtime_state(self, default_jog_feed_xy, default_jog_feed_z, _MACRO_SEARCH_DIRS)
         set_default_parent(self)
