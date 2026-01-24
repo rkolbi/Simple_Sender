@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
@@ -25,7 +28,12 @@ from tkinter import ttk, messagebox
 from typing import Any
 
 from simple_sender.ui.widgets import ToolTip, apply_tooltip, attach_log_gcode, set_kb_id
-from simple_sender.utils.constants import GRBL_NON_NUMERIC_SETTINGS, GRBL_SETTING_KEYS, GRBL_SETTING_LIMITS
+from simple_sender.utils.constants import (
+    GRBL_NON_NUMERIC_SETTINGS,
+    GRBL_SETTING_KEYS,
+    GRBL_SETTING_LIMITS,
+    GRBL_SETTINGS_WRITE_DELAY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +124,11 @@ class GRBLSettingsController:
 
     def handle_line(self, line: str):
         if not self._settings_capture:
-            return
+            s = line.strip()
+            if s.startswith("$") and "=" in s:
+                self.start_capture("Captured $$ output")
+            else:
+                return
         s = line.strip()
         if s.startswith("<") and s.endswith(">"):
             return
@@ -178,7 +190,7 @@ class GRBLSettingsController:
                 for key, val in changes:
                     self.app._send_manual(f"{key}={val}", "settings")
                     sent += 1
-                    time.sleep(0.05)
+                    time.sleep(GRBL_SETTINGS_WRITE_DELAY)
             except Exception as exc:
                 self.app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
                 try:

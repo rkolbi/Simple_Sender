@@ -15,13 +15,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import queue
 import threading
 
+from simple_sender.utils.constants import (
+    UI_THREAD_CALL_DEFAULT_TIMEOUT,
+    UI_THREAD_CALL_POLL_INTERVAL,
+)
 
-def call_on_ui_thread(app, func, *args, timeout: float | None = 5.0, **kwargs):
+
+def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_DEFAULT_TIMEOUT, **kwargs):
     if threading.current_thread() is threading.main_thread():
         try:
             return func(*args, **kwargs)
@@ -34,7 +42,7 @@ def call_on_ui_thread(app, func, *args, timeout: float | None = 5.0, **kwargs):
         if timeout is None:
             while True:
                 try:
-                    ok, value = result_q.get(timeout=0.2)
+                    ok, value = result_q.get(timeout=UI_THREAD_CALL_POLL_INTERVAL)
                     break
                 except queue.Empty:
                     if app._closing:

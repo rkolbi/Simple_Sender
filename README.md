@@ -23,24 +23,31 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [GRBL Settings UI](#grbl-settings-ui)
 - [Macros](#macros)
 - [Estimation & 3D View](#estimation--3d-view)
+- [Auto-Leveling](#auto-leveling)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Joystick Bindings](#joystick-bindings)
 - [Logs & Filters](#logs--filters)
+- [Testing](#testing)
+- [Module Layout](#module-layout)
+- [Performance Profiling](#performance-profiling)
 - [Troubleshooting](#troubleshooting)
+- [Change Summary (since 1.2)](#change-summary-since-12)
 - [FAQ](#faq)
 - [Appendix A: GRBL 1.1h Commands](#appendix-a-grbl-11h-commands)
 - [Appendix B: GRBL 1.1h Settings](#appendix-b-grbl-11h-settings)
 - [Appendix C: Macro Reference](#appendix-c-macro-reference)
+- [Appendix D: UI Field Appendix](#appendix-d-ui-field-appendix)
 
 ## Overview
 - Target: GRBL 1.1h, 3-axis.
-- Character-count streaming with Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; live buffer fill and TX throughput.
+- Character-count streaming with Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
-- Read-only file load (Read G-code), clear/unload button, inline status/progress.
+- Read-only file load (Read Job), clear/unload button, inline status/progress.
 - Status bar shows streaming file name when a job is running.
 - Top View 2D preview with live spindle position marker.
-- Resume From... dialog to continue a job with modal re-sync and safety warnings.
+- Resume From... dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present).
+- Tooltips for every control; disabled buttons explain why (streaming, disconnected, alarm).
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
 - Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Idle status spam suppressed in console; filters for alarms/errors.
@@ -56,7 +63,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` on Windows or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender` or the app folder.
+Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender` or the app folder.
 
 ## Launching
 ```powershell
@@ -84,10 +91,12 @@ This is a practical, end-to-end flow with rationale for key options.
 3) **Set units and jogging**
    - Use the unit toggle (mm/inch); jog commands insert the proper G20/G21.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
+   - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read G-code**; file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). Use **Clear G-code** to unload if needed.
+   - Click **Read Job** (auto-switches to the G-code tab after selection); file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
+   - Optional: run the Preflight check in the **Checklists** tab to catch validation issues before running.
    - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
 5) **App safety options**
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
@@ -97,11 +106,11 @@ This is a practical, end-to-end flow with rationale for key options.
   6) **Prepare the machine**
      - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
      - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in App Settings > Safety.
+     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in the **Checklists** tab > Safety.
      - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
      - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
-     - The Run confirmation includes a G-code validation report (unsupported codes, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
+     - The Run confirmation includes a G-code validation report (unsupported codes, GRBL warnings, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
      - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
@@ -115,12 +124,13 @@ This is a practical, end-to-end flow with rationale for key options.
 ## Quick Start Workflow
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
-3) Read G-code file; optional Clear to unload.
+3) Read Job file; optional Clear Job to unload.
 4) Run (Training Wheels may confirm). Pause/Resume/Stop as needed.
 5) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
-- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read G-code, Clear G-code, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
+- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
+- **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.).
 - **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Macro buttons (if Macro-1..Macro-7 files exist).
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
@@ -138,7 +148,8 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v<current>`, theme picker, ALL STOP mode, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, release checklist, current-line highlight mode, 3D streaming refresh, Training Wheels, auto-reconnect, joystick focus-loss stop, streaming validation, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
+  - **App Settings:** Banner showing `Simple Sender - Version: v<current>`, theme picker, UI scale slider (handy for high-DPI displays or making controls easier to read at the machine), estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, current-line highlight mode, 3D streaming refresh, streaming validation, streaming line threshold, Auto-Level enable toggle, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
+  - **Checklists:** Release/run checklists, preflight check, diagnostics export, and safety settings (ALL STOP, dry run, homing watchdog, Training Wheels, auto-reconnect).
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -164,15 +175,19 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
+- **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (Checklists tab).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
+- **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Toggle with the Tips button in the status bar or App Settings.
 
 ## Jobs, Files, and Streaming
-- **Read G-code:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads, lines must already fit the 80-byte limit or the load is rejected.
-- **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting.
-- **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads do not compact or split; they are rejected if any line exceeds 80 bytes.
+- **Read Job:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
+- **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
+- **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3DR toggle prompts before enabling a full 3D render.
+- **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads use the same compaction/splitting rules; unsplittable lines are rejected if they exceed 80 bytes, and send-time checks enforce the limit. Auto-level output is post-processed to meet the 80-byte limit before it reloads.
+- **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
-- **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line.
+- **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep.
 
@@ -184,10 +199,11 @@ This is a practical, end-to-end flow with rationale for key options.
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
 - Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.
+- Safe mode (App Settings > Jogging) sets conservative jog feeds and steps for first-time setup.
 
 ## Console & Manual Commands
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
-- Manual commands longer than GRBL's 80-byte limit are rejected.
+- Manual commands longer than GRBL's 80-byte limit are rejected; non-ASCII commands are rejected.
 - Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
 - Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
 - Manual command errors (e.g., from the console or settings writes) update the status bar with a source label and do not flip the stream state.
@@ -349,7 +365,67 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
-- 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > 3D View.
+- 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > 3D View. For streaming (large) loads, 3D rendering is off by default and the 3DR toggle prompts before enabling a full preview.
+- Renderer: Tk Canvas (no OpenGL backend in this build).
+
+## Auto-Leveling
+Auto-leveling probes the job bounds and builds a height map to compensate for surface variation. It then applies that map to the loaded job, writes a leveled `-AL` G-code file, and reloads that file as the active job.
+
+### Availability
+- Requires a loaded, file-backed G-code job; bounds come from the parser/Top View.
+- Streaming loads are supported; if the leveled file is large, it may reload in streaming preview mode.
+- Auto-level is disabled for files that already end in `-AL` (load the original file to re-level).
+- You can open Auto-Level while disconnected to review settings; **Start Probe** stays disabled until connected, GRBL is ready, and no alarm is active.
+- Auto-Level can be disabled in App Settings > Interface to keep the toolbar in Read Job mode.
+
+### How it works
+1) The app reads the parsed job bounds.
+2) It builds an adaptive probe grid using your margin/spacing settings.
+3) It probes each grid point and records a height map.
+4) The job is leveled by adjusting Z along the toolpath (arcs are converted to line segments; rapids are left unchanged).
+5) The leveled file is post-processed to enforce GRBL's 80-byte limit (compaction and G0/G1 splitting). Comments and blank lines are preserved; inline comments may move to their own comment lines when a motion line is shortened.
+6) The leveled G-code file is loaded as the active job (auto-saved by default).
+
+### Step-by-step
+1) Load a job with **Read Job** (the button flips to **Auto-Level**).
+2) Open **Auto-Level** and review the grid preview and probe settings.
+3) Connect to the controller and clear alarms; verify the probe input works.
+4) Set Z0 to the surface plane and confirm Safe Z, probe depth, and feed.
+5) Click **Start Probe** and monitor progress.
+6) Click **Apply to Job** to generate and load the leveled `-AL` file.
+7) Run the leveled job, or use **Save Leveled** to keep a copy in a new location.
+
+### Quick checklist
+- Job loaded and bounds look correct in Top View.
+- Probe wired and tested; alarms cleared; GRBL status ready.
+- Z0 set on the surface; Safe Z clears clamps/fixtures.
+- Probe depth/feed set conservatively for your material.
+- Dry run the leveled job in air before cutting.
+
+### Buttons and outputs
+- **Start Probe:** begins probing. Disabled until connected, GRBL is ready, and no alarms are active.
+- **Apply to Job:** writes a leveled file and loads it; the original job is kept so you can revert.
+- **Revert Job:** restores the original job.
+- **Save Leveled:** writes the leveled job to disk (useful if you want a second copy in a new location).
+- **Save Map / Load Map:** stores or reuses a height map; once loaded you can apply without re-probing.
+- Auto-level saves `original-AL.gcode` (or `original-AL-#.gcode` if needed) in the same folder before loading it. The file starts with a `(Auto-Level from <name>)` header comment and retains source comments/blank lines when possible. If the folder is not writable, it falls back to a temporary file and warns you to save a copy.
+
+### Presets and settings
+- App Settings > Auto-Level defines job-size thresholds and preset spacing/interpolation.
+- The job area selects the Small or Large preset; Custom applies between thresholds.
+- Margin expands the probe area; min/max spacing and max points limit the adaptive grid.
+
+### Avoidance areas
+- The Auto-Level dialog uses tabs; configure no-probe circles in **Avoidance Areas**.
+- Each area includes an optional note plus X/Y center and radius (mm). Use **Read Position** to populate X/Y from the current WPos.
+- Enabled areas block probe points inside or on the circle; those points are marked invalid and excluded from interpolation.
+- If no avoidance areas are enabled, **Start Probe** warns and lets you cancel to configure them first.
+
+### Limitations and safety notes
+- Requires G90, G94, and G17. G91 and G93 are rejected.
+- Arcs are converted to line segments during leveling; rapids are not modified.
+- Large leveled files may reload in streaming preview mode (stats are limited until fully loaded).
+- Always test in the air first and confirm probe wiring before running a full grid.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
@@ -369,6 +445,61 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
 
+## Testing
+Tests are grouped by scope:
+- `tests/unit/`: core logic (parser, worker, settings, autolevel).
+- `tests/integration/`: streaming workflows.
+- `tests/ui/`: UI/state handling (Tkinter-backed tests will skip if Tcl/Tk is unavailable).
+
+Run the suite:
+```powershell
+pytest
+```
+
+Run a subset:
+```powershell
+# Unit
+pytest tests/unit
+
+# Integration
+pytest tests/integration
+
+# UI
+pytest tests/ui
+```
+
+Coverage:
+```powershell
+pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
+```
+
+## Module Layout
+- `simple_sender/application.py`: Tkinter app class with UI orchestration and delegates.
+- `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
+- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Settings/3D).
+- `simple_sender/ui/gcode_viewer.py`: G-code viewer widget and run-reset helper.
+- `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
+- `simple_sender/ui/event_router.py`: UI state updates from GRBL events (includes streaming lock helper).
+- `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
+- `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
+- `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
+- `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
+
+## Performance Profiling
+Local-only profiling tools live in `tools/profile_performance.py` and `tools/memory_profile.py`, with baselines recorded in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
+
+```powershell
+# Streaming scan timings (large files)
+python tools/profile_performance.py --mode streaming --sizes 1000,10000,100000 --validate-streaming
+
+# Full load pipeline timings (small files)
+python tools/profile_performance.py --mode full --sizes 1000,10000 --arc-every 20
+
+# Memory baselines
+python tools/memory_profile.py --mode streaming --sizes 1000,10000,100000 --validate-streaming
+python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
+```
+
 ## Troubleshooting
 - No ports: install driver, try another cable/port.
 - Connect fails: verify port/baud 115200; close other apps.
@@ -377,11 +508,29 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
+- Need a support bundle: use Checklists > Export session diagnostics.
+
+## Change Summary (since 1.2)
+- Auto-leveling: added RMS roughness + outlier stats in the height map summary.
+- Auto-leveling: optional spiral (center-out) probe order in addition to serpentine.
+- Auto-leveling: fixed dialog initialization error when opening after loading a job.
+- Checklists tab replaces the old dialog popups and now loads `checklist-*.chk` files from the macros folder.
+- Diagnostics export bundles recent console/status history plus current settings; preflight check flags bounds/validation issues.
+- Auto-leveling now produces a `-AL` file, enforces GRBL's 80-byte limit in the output, and blocks re-leveling an already leveled file.
+- Streaming validation for large files is configurable, and streaming loads now preserve comments/blank lines when auto-leveling rewrites lines.
+- Streaming loads now compact/split lines to enforce the 80-byte limit while keeping Resume From... available.
+- Streaming send-time checks now reject overlong or non-ASCII lines, and Resume From... defaults to the last stream error line.
+- Validation allows G90.1 but emits a GRBL 1.1h warning when it appears.
+- GRBL system commands (`$...`) are rejected inside job files to prevent unsafe startup actions mid-job.
+- Safe mode profile added for conservative jog feeds/steps; unit-aware conversion fixes safe-mode use in inch mode.
+- Homing watchdog grace period is configurable to avoid disconnects during long homing cycles.
+- GRBL settings capture is more resilient: queued refresh after streaming, console `$$` routes through the refresh path, and Raw $$ always completes on the final `ok`.
+- Status history is stored for diagnostics export; console logging is throttled in performance mode.
 
 ## Pre-release Notes
-1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
-2. `main.py:391` - There is a single `MacroExecutor.notify_alarm` implementation again, which continues to set `_alarm_event` and log the contextual alarm snippet so macros unblock and the log shows which line triggered the alarm.
-3. `main.py:4938` - `last_port` defaults to `None`, so the new `(self.settings.get("last_port") or "").strip()` guard ensures auto-reconnect processing no longer calls `.strip()` on `None` when no prior port has been saved yet.
+1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
+2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
+3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
@@ -482,3 +631,254 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 | Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn't been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
 | Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don't run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE` from `wz`, and logs the new height. |
 | Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it's purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
+
+## Appendix D: UI Field Appendix
+Macro UI is included below along with the rest of the interface.
+
+### Top Toolbar
+- Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
+- Refresh: rescans serial ports and repopulates the port list.
+- Connect/Disconnect: opens or closes the selected port; waits for banner/status before enabling controls.
+- Read Job / Auto-Level: reads a G-code file into the viewer; after a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
+- Clear Job: unloads the current job and resets previews/state.
+- Run: starts streaming the loaded job to GRBL.
+- Pause: issues feed hold during a running job.
+- Resume: resumes after a pause or hold.
+- Stop/Reset: stops streaming and soft-resets GRBL per the configured ALL STOP behavior.
+- Resume From...: opens the resume dialog to start at a specific line with optional modal re-sync.
+- Unlock: sends $X to clear alarms (top-bar shortcut).
+- Recover: opens the alarm recovery dialog when an alarm is active.
+- Machine state label: shows GRBL state (Disconnected/Idle/Run/Hold/Alarm, etc).
+
+### Position + Jog Panel
+- MPos X/Y/Z readouts: live machine position from GRBL status.
+- Home: runs the homing cycle ($H) when available.
+- Units toggle: switches modal units (G20/G21); blue text indicates report units tracking via $13.
+- Hold: issues feed hold (!).
+- Resume: resumes motion (~).
+- WPos X/Y/Z readouts: live work position from GRBL status.
+- Zero X/Y/Z: zeroes each axis using G92 or G10 L20 depending on persistent zeroing.
+- Zero All: zeroes all axes in the current work coordinate system.
+- Goto Zero: rapid move to WCS X0 Y0.
+- Jog X+/X-/Y+/Y-: jogs by the selected XY step using the current jog feed.
+- Jog Z+/Z-: jogs by the selected Z step using the Z jog feed.
+- JOG STOP: cancels an active jog (RT 0x85) and stops pending jogs.
+- Tool reference label: displays the stored tool reference height used by probing workflows.
+- ALL STOP: immediate stop using the selected ALL STOP behavior.
+- XY step buttons: set the XY jog step value used by the jog pad.
+- Z step buttons: set the Z jog step value used by the jog pad.
+
+### Macro Panel (Jog Area)
+- Macro buttons (1-3): left-column buttons shown when Macro-1..3 files exist; left-click runs the macro.
+- Macro buttons (4-7): right-grid buttons shown when Macro-4..7 files exist; left-click runs the macro.
+- Right-click preview: opens a read-only preview of the selected macro.
+- Tooltips: show the second line of each macro file as a hint.
+- Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
+
+### G-code Tab
+- Estimate/Bounds label: read-only summary of parsed bounds and time estimates; updates with settings and GRBL rates.
+- G-code viewer: read-only text view with line numbers and sent/acked/current highlights.
+
+### Console Tab
+- Console log: read-only GRBL traffic log with filters.
+- Command entry: manual command input; blocked while streaming or when alarms restrict input.
+- Send: sends the command entry contents to GRBL.
+- Save: writes the current console log to a text file.
+- Clear: clears the console log.
+- Filters ALL/ERRORS/ALARMS: filter the console display by severity.
+- Pos/Status toggle: includes or omits status/position reports from the console view and log.
+
+### Overdrive Tab
+- Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
+- Spindle OFF: turns the spindle off (M5).
+- Override summary: read-only summary of current feed/spindle overrides.
+- Feed override slider: sets feed override target (10-200%).
+- Feed +10%/-10%/Reset: adjusts feed override in 10% GRBL steps.
+- Spindle override slider: sets spindle override target (10-200%).
+- Spindle +10%/-10%/Reset: adjusts spindle override in 10% GRBL steps.
+
+### Raw $$ Tab
+- Raw $$ text view: read-only capture of the last settings dump from GRBL.
+
+### GRBL Settings Tab
+- Refresh $$: requests a fresh $$ dump and populates the table.
+- Save Changes: sends edited settings back to GRBL in sequence.
+- Settings table: columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
+- Edited highlight: rows with pending edits are highlighted until saved or reverted.
+
+### App Settings: Theme
+- UI theme (dropdown): selects the ttk theme; some themes apply fully after restart.
+- UI scale: numeric scale factor (0.5-3.0) applied immediately.
+- Apply: applies the UI scale entry.
+- Apple 2.0x: quick preset that sets UI scale to 2.0 and applies it.
+
+### App Settings: Estimation
+- Fallback rapid rate: used for estimates when $110-112 are unavailable.
+- Estimator adjustment slider: multiplies the estimate (1.00x is default).
+- Max rates X/Y/Z: manual max rates used for estimates when GRBL rates are not available.
+
+### App Settings: Status Polling
+- Status report interval: seconds between status requests.
+- Disconnect after failures: consecutive status query failures before disconnecting.
+
+### App Settings: Error Dialogs
+- Enable error dialogs: toggles modal error popups.
+- Minimum interval: minimum seconds between dialogs.
+- Burst window: time window for burst detection.
+- Max dialogs per window: cap before suppression begins.
+- Show job completion dialog: toggles completion summary popup.
+- Play reminder beep on completion: toggles completion beep.
+
+### App Settings: Macros
+- Allow macro scripting (Python/eval): enables Python-style macro directives; disable to allow only plain G-code lines.
+
+### App Settings: Zeroing
+- Use persistent zeroing (G10 L20): switches zeroing buttons from G92 to G10 L20.
+
+### App Settings: Jogging
+- Default jog feed (X/Y): baseline jog speed for XY.
+- Default jog feed (Z): baseline jog speed for Z.
+- Apply safe mode: sets conservative jog feeds and steps for first use.
+
+### App Settings: Keyboard Shortcuts
+- Enabled: toggles shortcut processing.
+- Shortcut table: rows map UI actions to key sequences and joystick bindings.
+- Key column editor: captures up to three keys for a shortcut.
+- Joystick column capture: listens for joystick input to bind.
+- Remove/Clear Binding: clears the selected row binding.
+- Joystick testing: status labels show detected devices and last input.
+- Refresh joystick list: rescans for connected joysticks.
+- Enable USB Joystick Bindings: toggles joystick polling and bindings.
+- Require safety hold for joystick actions: requires holding a safety button to allow joystick actions.
+- Set Safety Button: captures the safety-hold joystick button.
+- Clear Safety Button: clears the safety binding.
+- Stop joystick hold when app loses focus: ends held jog actions when focus leaves the window.
+- Live input state: read-only labels for current joystick/keyboard activity.
+
+### App Settings: G-code View
+- Current line highlight (dropdown): selects whether Current highlights Processing or Sent lines.
+
+### App Settings: Interface
+- Show "Resume From..." button: toggles the toolbar button.
+- Show "Recover" button: toggles the alarm recovery button.
+- Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
+- Performance toggle: batches console updates and reduces streaming log chatter.
+- Log GUI button actions: includes GUI actions in the console log.
+- Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
+- Quick buttons (Tips/3DR/Keys/ALO/Release): toggles each status-bar quick button.
+- Quick toggles (Tips/3DR/Keys/ALO): immediate action buttons to flip the corresponding feature.
+
+### App Settings: Auto-Level Presets
+- Small max area: area threshold that selects the Small preset.
+- Large min area: area threshold that selects the Large preset.
+- Small/Large/Custom base spacing: base probe spacing for each preset.
+- Small/Large/Custom interpolation: interpolation method for each preset.
+
+### App Settings: 3D View
+- Streaming refresh (sec): minimum interval between 3D redraws while streaming.
+
+### Checklists Tab: Checklists
+- Checklist items: checkbox list loaded from checklist-*.chk files.
+
+### Checklists Tab: Diagnostics
+- Preflight check (Run check): scans the loaded job for bounds/validation warnings.
+- Export session diagnostics (Save report): saves console/status history and settings to a text report.
+- Validate streaming (large) G-code files: enables validation pass for large files.
+- Streaming line threshold: cleaned line count that forces streaming mode (0 disables).
+
+### Checklists Tab: Safety
+- All Stop behavior (dropdown): selects ALL STOP mode (soft reset vs stop+reset).
+- Dry run sanitize: strips spindle/coolant/tool-change commands while streaming.
+- Suspend watchdog during homing: disables watchdog during $H.
+- Homing watchdog grace (seconds): delay before watchdog resumes after homing.
+
+### Checklists Tab: Safety Aids
+- Training Wheels: confirm top-bar actions.
+- Reconnect to last port on open: auto-connect on startup when possible.
+
+### Auto-Level Dialog: Settings Tab
+- Profile (dropdown): chooses Small/Large/Custom preset for spacing/interpolation.
+- Preset (dropdown): loads a saved Auto-Level preset.
+- Preset Save/Delete: saves or removes the current preset.
+- Margin: expands the probing area around the job bounds.
+- Base spacing: baseline grid spacing before adaptive adjustments.
+- Min spacing: minimum adaptive spacing.
+- Max spacing: maximum adaptive spacing.
+- Max points: optional cap for total probe points.
+- Probe order (dropdown): Serpentine (bottom-left) or Spiral (center) path.
+- Safe Z: clearance height between probe moves.
+- Probe depth: depth to probe below surface.
+- Probe feed: probe speed.
+- Retract Z: lift after probing each point.
+- Settle time: dwell after retract before next move.
+- Interpolation (dropdown): bilinear or bicubic height map interpolation.
+- Preview text: read-only summary of grid and settings.
+- Bounds/map/stats text: read-only summary of job bounds and height map stats.
+
+### Auto-Level Dialog: Avoidance Areas Tab
+- Area enabled checkbox: toggles each avoidance circle.
+- Note: optional label for the avoidance area.
+- Y/X: center coordinates for the avoidance circle.
+- Radius: radius of the avoidance circle.
+- Read Position: fills X/Y from current position.
+
+### Auto-Level Dialog: Actions
+- Status line: read-only status updates during probe/apply.
+- Progress bar: probe progress indicator.
+- Start Probe: begins probing the grid.
+- Apply to Job: applies the height map to the loaded job.
+- Save Leveled: writes the leveled G-code to disk.
+- Save Map: saves the height map JSON.
+- Load Map: loads a height map JSON.
+- Revert Job: reloads the original job.
+- Close/Cancel: closes the dialog or cancels an active probe.
+
+### Auto-Level Preset Prompt
+- Continue (selected preset): applies the recommended preset.
+- Continue (Custom): overrides to the Custom preset.
+- Cancel: closes without applying.
+
+### Resume From Dialog
+- Line number: 1-based line to resume from.
+- Use last acked: sets the line to the last acknowledged line + 1.
+- Send modal re-sync: toggles preamble commands before resuming.
+- Preview text: read-only summary of modal re-sync.
+- Warning text: warns if G92 offsets exist before the target line.
+- Start Resume: begins streaming from the selected line.
+- Cancel: closes without changes.
+
+### Macro Preview Dialog
+- Title: shows the macro name being previewed.
+- Macro text: read-only contents of the macro (excluding the header lines).
+- Close: closes the preview.
+
+### Macro Prompt Dialog
+- Message: macro-supplied prompt text.
+- Choice buttons: macro-defined options; clicking one returns the choice to the macro.
+- Close window: returns the macro-defined cancel choice.
+
+### Alarm Recovery Dialog
+- Unlock ($X): clears the alarm.
+- Home ($H): runs homing after unlocking.
+- Reset: sends a soft reset (Ctrl-X).
+- Close: closes the dialog.
+
+### Status Bar
+- Status text: current connection/job status.
+- Progress bar: percent of job completed.
+- Buffer fill bar: current GRBL RX buffer usage.
+- Throughput label: current transmit throughput.
+- Error dialog status: shows error dialog suppression state.
+- Endstops/Probe/Hold LEDs: reflect GRBL pin/status flags.
+- Tips/3DR/Keys/ALO/Release: quick buttons to toggle tips, 3D render, keybindings, auto-level overlay, and release checklist.
+
+### Top View Tab
+- Toolpath canvas: read-only top view preview with job name, segment count, and optional Auto-Level overlay.
+- Position marker: live machine position overlay (read-only).
+
+### 3D View Tab
+- Rapid/Feed/Arc toggles: show or hide motion classes in the 3D preview.
+- 3D Performance slider: trades preview fidelity for speed.
+- Save View: stores the current 3D camera/view state.
+- Load View: restores the saved 3D view state.
+- Reset View: returns the 3D view to defaults.

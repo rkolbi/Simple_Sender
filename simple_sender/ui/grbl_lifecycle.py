@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
@@ -22,6 +25,7 @@ import time
 from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
 
 
@@ -53,10 +57,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text=f"Connected: {port} (waiting for Grbl)")
         app.btn_stop.config(state="normal")
-        app.btn_run.config(state="disabled")
-        app.btn_pause.config(state="disabled")
-        app.btn_resume.config(state="disabled")
-        app.btn_resume_from.config(state="disabled")
+        disable_job_controls(app)
         app.btn_alarm_recover.config(state="disabled")
         app._set_manual_controls_enabled(False)
         app.throughput_var.set("TX: 0 B/s")
@@ -70,6 +71,10 @@ def handle_connection_event(app, is_on: bool, port):
         except Exception:
             pass
     else:
+        try:
+            app._stop_macro_status()
+        except Exception:
+            pass
         app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"))
         app._connected_port = None
         app._grbl_ready = False
@@ -86,11 +91,8 @@ def handle_connection_event(app, is_on: bool, port):
         app._machine_state_text = "DISCONNECTED"
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text="Disconnected")
-        app.btn_run.config(state="disabled")
-        app.btn_pause.config(state="disabled")
-        app.btn_resume.config(state="disabled")
+        disable_job_controls(app)
         app.btn_stop.config(state="disabled")
-        app.btn_resume_from.config(state="disabled")
         app.btn_alarm_recover.config(state="disabled")
         app._set_manual_controls_enabled(False)
         app._rapid_rates = None
@@ -119,10 +121,7 @@ def handle_ready_event(app, ready):
         app._alarm_locked = False
         app._alarm_message = ""
         if app.connected:
-            app.btn_run.config(state="disabled")
-            app.btn_pause.config(state="disabled")
-            app.btn_resume.config(state="disabled")
-            app.btn_resume_from.config(state="disabled")
+            disable_job_controls(app)
             app._set_manual_controls_enabled(False)
             if app._connected_port:
                 app.status.config(text=f"Connected: {app._connected_port} (waiting for Grbl)")

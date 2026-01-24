@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from tkinter import ttk
@@ -99,6 +102,17 @@ def build_status_bar(app, before):
     set_kb_id(app.btn_toggle_keybinds, "toggle_keybindings")
     app.btn_toggle_keybinds.pack(side="right", padx=(8, 0))
     apply_tooltip(app.btn_toggle_keybinds, "Toggle keyboard shortcuts.")
+    app.btn_toggle_autolevel_overlay = ttk.Button(
+        status_bar,
+        text="ALO",
+        command=app._toggle_autolevel_overlay,
+    )
+    set_kb_id(app.btn_toggle_autolevel_overlay, "toggle_autolevel_overlay")
+    app.btn_toggle_autolevel_overlay.pack(side="right", padx=(8, 0))
+    apply_tooltip(
+        app.btn_toggle_autolevel_overlay,
+        "Toggle auto-level overlay in the toolpath views.",
+    )
     app.btn_release_checklist = ttk.Button(
         status_bar,
         text="Release",
@@ -110,6 +124,7 @@ def build_status_bar(app, before):
     app._refresh_tooltips_toggle_text()
     app._refresh_render_3d_toggle_text()
     app._refresh_keybindings_toggle_text()
+    app._refresh_autolevel_overlay_button()
     update_quick_button_visibility(app)
     app._on_error_dialogs_enabled_change()
     if getattr(app, "_state_default_bg", None) is None:
@@ -125,6 +140,7 @@ def update_quick_button_visibility(app):
         ("btn_toggle_tips", app.show_quick_tips_button),
         ("btn_toggle_3d", app.show_quick_3d_button),
         ("btn_toggle_keybinds", app.show_quick_keys_button),
+        ("btn_toggle_autolevel_overlay", app.show_quick_alo_button),
         ("btn_release_checklist", app.show_quick_release_button),
     ]
     for attr, _ in buttons:
@@ -143,6 +159,6 @@ def on_quick_button_visibility_change(app):
     app.settings["show_quick_tips_button"] = bool(app.show_quick_tips_button.get())
     app.settings["show_quick_3d_button"] = bool(app.show_quick_3d_button.get())
     app.settings["show_quick_keys_button"] = bool(app.show_quick_keys_button.get())
+    app.settings["show_quick_alo_button"] = bool(app.show_quick_alo_button.get())
     app.settings["show_quick_release_button"] = bool(app.show_quick_release_button.get())
     update_quick_button_visibility(app)
-

@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import threading
@@ -23,6 +26,19 @@ from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
 from simple_sender.utils.constants import BAUD_DEFAULT
+
+
+def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
+    if serial_available:
+        return True
+    msg = (
+        "pyserial is required to communicate with GRBL. Install pyserial (pip install pyserial) "
+        "and restart the application."
+    )
+    if serial_error:
+        msg += f"\n{serial_error}"
+    messagebox.showerror("Missing dependency", msg)
+    return False
 
 
 def refresh_ports(app, auto_connect: bool = False):
@@ -71,7 +87,11 @@ def start_connect_worker(
 
     def worker():
         try:
-            app.grbl.connect(port, BAUD_DEFAULT)
+            try:
+                baud = int(app.settings.get("baud_rate", BAUD_DEFAULT))
+            except Exception:
+                baud = BAUD_DEFAULT
+            app.grbl.connect(port, baud)
         except Exception as exc:
             if show_error:
                 try:
@@ -120,6 +140,11 @@ def open_gcode(app):
     )
     if not path:
         return
+    try:
+        if getattr(app, "notebook", None) is not None and getattr(app, "gcode_tab", None) is not None:
+            app.notebook.select(app.gcode_tab)
+    except Exception:
+        pass
     app._load_gcode_from_path(path)
 
 

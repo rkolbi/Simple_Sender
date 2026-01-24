@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Constants and configuration values for Simple Sender.
@@ -42,6 +45,18 @@ STATUS_POLL_IDLE = 0.5
 
 STATUS_POLL_RUNNING = 0.1
 """Status poll interval when machine is running."""
+
+STATUS_POLL_INTERVAL_MIN = 0.05
+"""Minimum allowed status poll interval (seconds)."""
+
+STATUS_QUERY_FAILURE_LIMIT_DEFAULT = 3
+"""Default status query failure limit before disconnect."""
+
+STATUS_QUERY_FAILURE_LIMIT_MIN = 1
+"""Minimum allowed status query failure limit."""
+
+STATUS_QUERY_FAILURE_LIMIT_MAX = 10
+"""Maximum allowed status query failure limit."""
 
 # ============================================================================
 # GRBL BUFFER MANAGEMENT
@@ -101,6 +116,21 @@ CONSOLE_BATCH_DELAY_MS = 50
 LINE_NUMBER_OFFSET = 1
 """Text widget line numbers are 1-indexed."""
 
+UI_THREAD_CALL_DEFAULT_TIMEOUT = 5.0
+"""Default timeout (seconds) for UI thread calls."""
+
+UI_THREAD_CALL_POLL_INTERVAL = 0.2
+"""Polling interval (seconds) while waiting for UI thread calls."""
+
+UI_EVENT_QUEUE_MAXSIZE = 3000
+"""Maximum number of low-priority UI events to buffer before dropping."""
+
+UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL = 1.0
+"""Minimum seconds between UI drop summary log entries."""
+
+GRBL_SETTINGS_WRITE_DELAY = 0.05
+"""Delay between sending GRBL settings updates (seconds)."""
+
 GCODE_VIEWER_CHUNK_SIZE_SMALL = 200
 """Chunk size for small files (<1000 lines)."""
 
@@ -109,6 +139,12 @@ GCODE_VIEWER_CHUNK_SIZE_MEDIUM = 500
 
 GCODE_VIEWER_CHUNK_SIZE_LARGE = 1000
 """Chunk size for large files (>10000 lines)."""
+
+GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE = 300
+"""Chunk size for large load previews in the UI loader."""
+
+GCODE_VIEWER_CHUNK_LOAD_THRESHOLD = 2000
+"""Line count threshold for using the larger loader chunk size."""
 
 GCODE_VIEWER_SMALL_FILE_THRESHOLD = 1000
 """Line count threshold for small files."""
@@ -119,11 +155,107 @@ GCODE_VIEWER_LARGE_FILE_THRESHOLD = 10000
 GCODE_STREAMING_SIZE_THRESHOLD = 50 * 1024 * 1024
 """File size (bytes) above which streaming mode is used."""
 
+GCODE_STREAMING_LINE_THRESHOLD = 250_000
+"""Cleaned line count above which streaming mode is used."""
+
+STREAMING_VALIDATION_PROMPT_LINES = 500_000
+"""Cleaned line count above which streaming validation prompts for confirmation."""
+
+STREAMING_VALIDATION_PROMPT_TIMEOUT = 120
+"""Seconds to wait for streaming validation confirmation."""
+
+GCODE_LOAD_PROGRESS_INTERVAL = 0.25
+"""Minimum seconds between progress updates while loading/validating G-code."""
+
 GCODE_STREAMING_PREVIEW_LINES = 2000
 """Preview lines shown when streaming from disk."""
 
+GCODE_TOP_VIEW_STREAMING_SEGMENT_LIMIT = 50000
+"""Maximum segments to keep for top view when streaming large files."""
+
 CLEAR_ICON = "X"
 """Icon/text for clear buttons."""
+
+TOOLTIP_DELAY_MS = 1000
+"""Default tooltip delay (ms)."""
+
+STOP_SIGN_CUT_RATIO = 0.29289321881345254
+"""Cut ratio for the stop-sign octagon geometry."""
+
+# Input bindings
+JOYSTICK_POLL_INTERVAL_MS = 50
+"""Joystick polling interval (ms)."""
+
+JOYSTICK_DISCOVERY_INTERVAL_MS = 1000
+"""Joystick discovery interval when disconnected (ms)."""
+
+JOYSTICK_DISCOVERY_CONNECTED_INTERVAL_MS = 8000
+"""Joystick discovery interval when connected (ms)."""
+
+JOYSTICK_LIVE_STATUS_INTERVAL_MS = 200
+"""Joystick live status update interval (ms)."""
+
+JOYSTICK_CAPTURE_TIMEOUT_MS = 15000
+"""Joystick capture timeout (ms)."""
+
+JOYSTICK_LISTENING_TEXT = "Listening for joystick input..."
+"""Status text for joystick capture mode."""
+
+JOYSTICK_AXIS_THRESHOLD = 0.7
+"""Threshold for joystick axis activation."""
+
+JOYSTICK_AXIS_RELEASE_THRESHOLD = 0.2
+"""Threshold for joystick axis release."""
+
+JOYSTICK_HOLD_REPEAT_MS = 60
+"""Repeat interval for joystick hold jogs (ms)."""
+
+JOYSTICK_HOLD_POLL_INTERVAL_MS = 20
+"""Polling interval for joystick hold input (ms)."""
+
+JOYSTICK_HOLD_MISS_LIMIT = 2
+"""Number of missed polls before releasing a joystick hold."""
+
+JOYSTICK_HOLD_DEFINITIONS = [
+    ("X-", "jog_hold_x_minus", "X", -1),
+    ("X+", "jog_hold_x_plus", "X", 1),
+    ("Y-", "jog_hold_y_minus", "Y", -1),
+    ("Y+", "jog_hold_y_plus", "Y", 1),
+    ("Z-", "jog_hold_z_minus", "Z", -1),
+    ("Z+", "jog_hold_z_plus", "Z", 1),
+]
+"""Definitions for joystick hold bindings (label, id, axis, direction)."""
+
+# Jogging presets
+JOG_STEP_XY_VALUES = (0.1, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 400.0)
+"""Default XY jog step values."""
+
+JOG_STEP_Z_VALUES = (0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 25.0, 50.0)
+"""Default Z jog step values."""
+
+SAFE_JOG_FEED_XY = 1000.0
+"""Safe-mode XY jog feed (mm/min)."""
+
+SAFE_JOG_FEED_Z = 200.0
+"""Safe-mode Z jog feed (mm/min)."""
+
+SAFE_JOG_STEP_XY = 1.0
+"""Safe-mode XY jog step (mm)."""
+
+SAFE_JOG_STEP_Z = 0.1
+"""Safe-mode Z jog step (mm)."""
+
+JOG_FEED_EPSILON = 1e-9
+"""Epsilon for detecting pure Z jog moves."""
+
+JOG_PANEL_ALL_STOP_SIZE = 60
+"""Size (pixels) of the All Stop button."""
+
+JOG_PANEL_ALL_STOP_OFFSET_IN = 0.7
+"""Offset in inches for the All Stop button alignment."""
+
+JOG_PANEL_ALL_STOP_OFFSET_FALLBACK_PX = 96
+"""Fallback pixel offset when inch conversion fails."""
 
 # ============================================================================
 # 3D VISUALIZATION CONSTANTS
@@ -156,6 +288,15 @@ VIEW_3D_DRAG_SENSITIVITY = 0.01
 VIEW_3D_RENDER_INTERVAL = 0.1
 """Minimum time between renders (seconds)."""
 
+VIEW_3D_STREAMING_RENDER_INTERVAL_DEFAULT = 0.25
+"""Default render interval while streaming (seconds)."""
+
+VIEW_3D_STREAMING_RENDER_INTERVAL_MIN = 0.05
+"""Minimum render interval for streaming (seconds)."""
+
+VIEW_3D_STREAMING_RENDER_INTERVAL_MAX = 2.0
+"""Maximum render interval for streaming (seconds)."""
+
 VIEW_3D_FAST_MODE_DURATION = 0.3
 """Duration to stay in fast mode after interaction (seconds)."""
 
@@ -168,16 +309,89 @@ VIEW_3D_MAX_SEGMENTS_INTERACTIVE = 5000
 VIEW_3D_PREVIEW_TARGET = 1000
 """Target segment count for preview mode."""
 
+VIEW_3D_LIGHTWEIGHT_PREVIEW_TARGET = 400
+"""Target segment count for lightweight preview mode."""
+
 VIEW_3D_FULL_PARSE_LIMIT = 20000
 """Line count threshold to use full parsing."""
+
+# Arc step thresholds
+VIEW_3D_ARC_STEP_FAST_THRESHOLD = 5000
+"""Line count threshold for switching to the fast arc step."""
 
 # Arc detail levels
 VIEW_3D_ARC_STEP_DEFAULT = math.pi / 18
 VIEW_3D_ARC_STEP_FAST = math.pi / 12
 VIEW_3D_ARC_STEP_LARGE = math.pi / 8
 
+VIEW_3D_DRAW_PERCENT_DEFAULT = 50
+"""Default draw percent for toolpath rendering."""
+
 VIEW_3D_POSITION_MARKER_RADIUS = 4
 """Radius of position marker circle."""
+
+VIEW_3D_PERF_LOG_THRESHOLD = 0.05
+"""Minimum duration (seconds) before logging toolpath timing."""
+
+TOOLPATH_CANVAS_MARGIN = 20
+"""Canvas margin (pixels) for toolpath views."""
+
+TOOLPATH_OVERLAY_TEXT_MARGIN = 12
+"""Overlay text margin (pixels) for toolpath views."""
+
+TOOLPATH_ORIGIN_CROSS_SIZE = 6
+"""Crosshair size (pixels) for origin marker."""
+
+TOOLPATH_GRID_MAX_POINTS = 800
+"""Maximum grid points to draw for auto-level overlay."""
+
+TOOLPATH_GRID_POINT_RADIUS = 2
+"""Radius (pixels) for auto-level grid points."""
+
+TOOLPATH_PERFORMANCE_DEFAULT = 50.0
+"""Default performance slider value (percent)."""
+
+TOOLPATH_PERF_LIGHTWEIGHT_THRESHOLD = 40.0
+"""Performance threshold below which lightweight mode is enabled."""
+
+TOOLPATH_DRAW_PERCENT_MIN = 5
+"""Minimum draw percent for toolpath rendering."""
+
+TOOLPATH_FULL_LIMIT_DEFAULT = VIEW_3D_MAX_SEGMENTS_FULL
+"""Default full render segment limit."""
+
+TOOLPATH_FULL_LIMIT_MIN = VIEW_3D_MAX_SEGMENTS_INTERACTIVE
+"""Minimum full render segment limit."""
+
+TOOLPATH_INTERACTIVE_LIMIT_DEFAULT = VIEW_3D_MAX_SEGMENTS_INTERACTIVE
+"""Default interactive render segment limit."""
+
+TOOLPATH_INTERACTIVE_LIMIT_MIN = VIEW_3D_PREVIEW_TARGET
+"""Minimum interactive render segment limit."""
+
+TOOLPATH_ARC_DETAIL_MIN_DEG = 1.0
+"""Minimum arc detail in degrees."""
+
+TOOLPATH_ARC_DETAIL_MAX_DEG = 45.0
+"""Maximum arc detail in degrees."""
+
+TOOLPATH_ARC_DETAIL_DEFAULT_DEG = math.degrees(VIEW_3D_ARC_STEP_DEFAULT)
+"""Default arc detail in degrees."""
+
+TOOLPATH_STREAMING_RENDER_INTERVAL_DEFAULT = VIEW_3D_STREAMING_RENDER_INTERVAL_DEFAULT
+"""Default streaming render interval (seconds)."""
+
+TOOLPATH_STREAMING_RENDER_INTERVAL_MIN = VIEW_3D_STREAMING_RENDER_INTERVAL_MIN
+"""Minimum streaming render interval (seconds)."""
+
+TOOLPATH_STREAMING_RENDER_INTERVAL_MAX = VIEW_3D_STREAMING_RENDER_INTERVAL_MAX
+"""Maximum streaming render interval (seconds)."""
+
+TOOLPATH_ARC_DETAIL_REPARSE_DELAY_MS = 300
+"""Delay before re-parsing toolpath after arc detail changes (ms)."""
+
+JOYSTICK_HOLD_MIN_DISTANCE = 0.01
+"""Minimum jog distance for joystick hold moves."""
 
 # ============================================================================
 # MACRO SYSTEM CONSTANTS
@@ -204,16 +418,29 @@ MACRO_AUXPAT = re.compile(r"^(%[A-Za-z0-9_-]+)\b *(.*)$")
 MACRO_CMDPAT = re.compile(r"([A-Za-z]+)")
 
 # ============================================================================
+# AUTO-LEVEL CONSTANTS
+# ============================================================================
+
+AUTOLEVEL_SPACING_MIN = 0.01
+"""Minimum spacing (mm) for auto-level grids."""
+
+AUTOLEVEL_LARGE_MIN_AREA_DEFAULT = 10000.0
+"""Default minimum area for the large auto-level preset (mm^2)."""
+
+AUTOLEVEL_START_STATE_POLL_MS = 300
+"""Polling interval (ms) for auto-level start readiness."""
+
+# ============================================================================
 # G-CODE PARSING CONSTANTS
 # ============================================================================
 
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
 """Pattern to match parenthesis comments."""
 
-WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
+WORD_PAT = re.compile(r"([A-Z])([-+]?(?:\d+(?:\.\d*)?|\.\d+))")
 """Pattern to match G-code words."""
 
-RESUME_WORD_PAT = re.compile(r"([A-Z])([-+]?\d*\.?\d+)")
+RESUME_WORD_PAT = re.compile(r"([A-Z])([-+]?(?:\d+(?:\.\d*)?|\.\d+))")
 """Pattern to parse G-code words for resume."""
 
 # ============================================================================
@@ -250,6 +477,18 @@ WATCHDOG_RX_TIMEOUT = 5.0
 
 WATCHDOG_DISCONNECT_TIMEOUT = 10.0
 """Seconds without RX before disconnecting."""
+
+WATCHDOG_HOMING_TIMEOUT = 180.0
+"""Seconds to suspend watchdog checks after issuing a homing cycle."""
+
+WATCHDOG_ALARM_DISCONNECT_TIMEOUT = 60.0
+"""Seconds without RX before disconnecting while in alarm state."""
+
+RX_STATUS_LOG_INTERVAL = 0.2
+"""Minimum seconds between status log entries in the UI console."""
+
+RX_OK_SUMMARY_INTERVAL = 0.5
+"""Minimum seconds between OK summary log entries in the UI console."""
 
 # ============================================================================
 # TIMING CONSTANTS

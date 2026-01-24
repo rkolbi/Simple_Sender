@@ -15,12 +15,16 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import re
 from typing import Iterable
 
 from simple_sender.gcode_parser import WORD_PAT
@@ -74,6 +78,7 @@ SUPPORTED_G_CODES = {
     92.3,
     93.0,
     94.0,
+    90.1,
 }
 SUPPORTED_M_CODES = {
     0,
@@ -114,10 +119,14 @@ MODAL_HAZARDS = {
     92.2: "G92 offsets",
     92.3: "G92 offsets",
 }
+GRBL_WARN_G_CODES = {
+    90.1: "G90.1 (arc center absolute) is not supported by GRBL 1.1h",
+}
 
 
 @dataclass
 class GcodeValidationLineIssue:
+    """Line-level validation issues for reporting."""
     line_no: int
     line: str
     issues: tuple[str, ...]
@@ -125,6 +134,7 @@ class GcodeValidationLineIssue:
 
 @dataclass
 class GcodeValidationReport:
+    """Aggregate validation report for a full G-code file."""
     total_lines: int
     long_line_count: int
     long_lines: list[tuple[int, int]]
@@ -132,6 +142,7 @@ class GcodeValidationReport:
     unsupported_words: Counter[str]
     unsupported_g_codes: Counter[str]
     unsupported_m_codes: Counter[str]
+    grbl_warnings: Counter[str]
     modal_hazards: set[str]
     line_issue_count: int
     line_issues: list[GcodeValidationLineIssue]
@@ -144,13 +155,23 @@ def _format_code(letter: str, code: float) -> str:
     return f"{letter}{code:g}"
 
 
-def validate_gcode_lines(lines: Iterable[str]) -> GcodeValidationReport:
+def validate_gcode_lines(
+    lines: Iterable[str],
+    *,
+    word_pattern: re.Pattern[str] = WORD_PAT,
+    supported_g_codes: Iterable[float] = SUPPORTED_G_CODES,
+    supported_m_codes: Iterable[int] = SUPPORTED_M_CODES,
+) -> GcodeValidationReport:
+    """Validate G-code lines against GRBL 1.1h constraints."""
+    supported_g_codes = set(supported_g_codes)
+    supported_m_codes = set(supported_m_codes)
     long_lines: list[tuple[int, int]] = []
     long_line_count = 0
     unsupported_axes: Counter[str] = Counter()
     unsupported_words: Counter[str] = Counter()
     unsupported_g_codes: Counter[str] = Counter()
     unsupported_m_codes: Counter[str] = Counter()
+    grbl_warnings: Counter[str] = Counter()
     modal_hazards: set[str] = set()
     line_issues: list[GcodeValidationLineIssue] = []
     line_issue_count = 0
@@ -180,7 +201,7 @@ def validate_gcode_lines(lines: Iterable[str]) -> GcodeValidationReport:
                 line_issue_seen,
                 f"Long line ({line_len} bytes)",
             )
-        words = WORD_PAT.findall(line.upper())
+        words = word_pattern.findall(line.upper())
         if not words:
             if line_issues_for_line:
                 line_issue_count += 1
@@ -215,7 +236,9 @@ def validate_gcode_lines(lines: Iterable[str]) -> GcodeValidationReport:
                         line_issue_seen,
                         f"Modal hazard: {MODAL_HAZARDS[code]}",
                     )
-                if code not in SUPPORTED_G_CODES:
+                if code in GRBL_WARN_G_CODES:
+                    grbl_warnings[GRBL_WARN_G_CODES[code]] += 1
+                if code not in supported_g_codes:
                     code_label = _format_code("G", code)
                     unsupported_g_codes[code_label] += 1
                     add_issue(
@@ -238,7 +261,7 @@ def validate_gcode_lines(lines: Iterable[str]) -> GcodeValidationReport:
                     )
                     continue
                 code_int = int(round(code))
-                if code_int not in SUPPORTED_M_CODES:
+                if code_int not in supported_m_codes:
                     code_label = f"M{code_int}"
                     unsupported_m_codes[code_label] += 1
                     add_issue(
@@ -263,6 +286,7 @@ def validate_gcode_lines(lines: Iterable[str]) -> GcodeValidationReport:
         unsupported_words=unsupported_words,
         unsupported_g_codes=unsupported_g_codes,
         unsupported_m_codes=unsupported_m_codes,
+        grbl_warnings=grbl_warnings,
         modal_hazards=modal_hazards,
         line_issue_count=line_issue_count,
         line_issues=line_issues,
@@ -276,6 +300,7 @@ def _format_counter(counter: Counter[str], limit: int = 5) -> str:
 
 
 def format_validation_report(report: GcodeValidationReport | None) -> str:
+    """Summarize validation results for brief display."""
     if report is None:
         return "G-code validation: unavailable."
     issues: list[str] = []
@@ -297,6 +322,8 @@ def format_validation_report(report: GcodeValidationReport | None) -> str:
             "Unsupported M-codes (not in GRBL 1.1h list): "
             f"{_format_counter(report.unsupported_m_codes)}."
         )
+    if report.grbl_warnings:
+        issues.append(f"GRBL warnings: {_format_counter(report.grbl_warnings)}.")
     if report.modal_hazards:
         hazards = ", ".join(sorted(report.modal_hazards))
         issues.append(f"Modal hazards: {hazards}.")
@@ -318,11 +345,17 @@ def _trim_detail_line(text: str, limit: int = DETAIL_LINE_TEXT_LIMIT) -> str:
 
 
 def format_validation_details(report: GcodeValidationReport | None) -> str:
+    """Return a detailed, line-by-line validation report."""
     if report is None:
         return "G-code validation details: unavailable."
-    if report.line_issue_count <= 0:
+    if report.line_issue_count <= 0 and not report.grbl_warnings:
         return "G-code validation details (GRBL 1.1h):\nNo issues detected."
     lines: list[str] = ["G-code validation details (GRBL 1.1h):"]
+    if report.grbl_warnings:
+        lines.append(f"GRBL warnings: {_format_counter(report.grbl_warnings)}.")
+        if report.line_issue_count <= 0:
+            lines.append("No other issues detected.")
+            return "\n".join(lines)
     summary = f"Issues on {report.line_issue_count} line(s)."
     if report.line_issues_truncated:
         summary += f" Showing first {len(report.line_issues)} line(s)."

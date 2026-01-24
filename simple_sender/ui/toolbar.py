@@ -15,8 +15,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
@@ -25,6 +29,7 @@ from simple_sender.ui.icons import (
     ICON_CONNECT,
     ICON_JOB_CLEAR,
     ICON_JOB_READ,
+    ICON_AUTO_LEVEL,
     ICON_PAUSE,
     ICON_RECOVER,
     ICON_REFRESH,
@@ -36,6 +41,155 @@ from simple_sender.ui.icons import (
     icon_label,
 )
 from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
+
+def update_job_button_mode(app, mode: str) -> None:
+    btn = getattr(app, "btn_open", None)
+    if not btn:
+        return
+    auto_level_enabled = bool(getattr(app, "auto_level_enabled", True))
+    mode = "auto_level" if str(mode).lower() in ("auto_level", "auto-level") else "read_job"
+    if not auto_level_enabled:
+        mode = "read_job"
+    streaming = bool(getattr(app, "_gcode_streaming_mode", False))
+    leveled_path = getattr(app, "_last_gcode_path", None)
+    leveled = False
+    if leveled_path:
+        base = os.path.splitext(os.path.basename(leveled_path))[0]
+        base_upper = base.upper()
+        if base_upper.endswith("-AL"):
+            leveled = True
+        else:
+            prefix, sep, suffix = base_upper.rpartition("-AL-")
+            leveled = bool(prefix) and bool(sep) and suffix.isdigit()
+    if (
+        getattr(app, "_job_button_mode", None) == mode
+        and getattr(app, "_job_button_streaming", None) == streaming
+        and getattr(app, "_job_button_leveled", None) == leveled
+    ):
+        return
+    if mode == "auto_level":
+        btn.config(
+            text=icon_label(ICON_AUTO_LEVEL, "Auto-Level"),
+            command=lambda: app._confirm_and_run("Auto-Level", app._show_auto_level_dialog),
+        )
+        if leveled:
+            reason = "Auto-level unavailable (already leveled)."
+            tooltip = "Auto-level is already applied. Load the original file to re-level."
+        else:
+            reason = None
+            tooltip = "Probe only the job bounds and build a height map."
+        try:
+            btn._disabled_reason = reason
+        except Exception:
+            pass
+        apply_tooltip(btn, tooltip)
+        set_kb_id(btn, "auto_level")
+        try:
+            app._offline_controls.add(btn)
+        except Exception:
+            pass
+    else:
+        btn.config(
+            text=icon_label(ICON_JOB_READ, "Read Job"),
+            command=app.open_gcode,
+        )
+        try:
+            btn._disabled_reason = None
+        except Exception:
+            pass
+        apply_tooltip(btn, "Load a G-code job for streaming (read-only).")
+        set_kb_id(btn, "gcode_open")
+        try:
+            app._offline_controls.add(btn)
+        except Exception:
+            pass
+    hint = getattr(app, "job_button_hint", None)
+    if hint is not None:
+        visible = bool(getattr(app, "_job_button_hint_visible", False))
+        if leveled and mode == "auto_level":
+            hint.config(text="Auto-Level disabled (already leveled)")
+            apply_tooltip(hint, "Auto-level is already applied. Load the original file to re-level.")
+            if not visible:
+                hint.pack(side="left", padx=(6, 0), after=btn)
+                try:
+                    app._job_button_hint_visible = True
+                except Exception:
+                    pass
+        elif visible:
+            try:
+                hint.pack_forget()
+            except Exception:
+                pass
+            try:
+                app._job_button_hint_visible = False
+            except Exception:
+                pass
+    try:
+        app._job_button_mode = mode
+        app._job_button_streaming = streaming
+        app._job_button_leveled = leveled
+    except Exception:
+        pass
+    try:
+        btn._force_disabled = bool(mode == "auto_level" and leveled)
+    except Exception:
+        pass
+    if mode == "auto_level" and leveled:
+        try:
+            btn.config(state="disabled")
+        except Exception:
+            pass
+    try:
+        ready = (
+            bool(getattr(app, "connected", False))
+            and bool(getattr(app, "_grbl_ready", False))
+            and bool(getattr(app, "_status_seen", False))
+            and not bool(getattr(app, "_alarm_locked", False))
+        )
+        app._set_manual_controls_enabled(ready)
+    except Exception:
+        pass
+
+
+def on_resume_button_visibility_change(app):
+    app.settings["show_resume_from_button"] = bool(app.show_resume_from_button.get())
+    update_resume_button_visibility(app)
+
+
+def on_recover_button_visibility_change(app):
+    app.settings["show_recover_button"] = bool(app.show_recover_button.get())
+    update_recover_button_visibility(app)
+
+
+def update_resume_button_visibility(app):
+    if not hasattr(app, "btn_resume_from"):
+        return
+    visible = bool(app.show_resume_from_button.get())
+    if visible:
+        if not app.btn_resume_from.winfo_ismapped():
+            pack_kwargs = {"side": "left", "padx": (6, 0)}
+            before_widget = getattr(app, "btn_unlock_top", None)
+            if before_widget and before_widget.winfo_exists():
+                pack_kwargs["before"] = before_widget
+            app.btn_resume_from.pack(**pack_kwargs)
+    else:
+        app.btn_resume_from.pack_forget()
+
+
+def update_recover_button_visibility(app):
+    if not hasattr(app, "btn_alarm_recover"):
+        return
+    visible = bool(app.show_recover_button.get())
+    if visible:
+        if not app.btn_alarm_recover.winfo_ismapped():
+            pack_kwargs = {"side": "left", "padx": (6, 0)}
+            separator = getattr(app, "_recover_separator", None)
+            if separator and separator.winfo_exists():
+                pack_kwargs["before"] = separator
+            app.btn_alarm_recover.pack(**pack_kwargs)
+    else:
+        app.btn_alarm_recover.pack_forget()
+
 
 def build_toolbar(app):
     bar = ttk.Frame(app, padding=(8, 6, 0, 6))
@@ -78,6 +232,15 @@ def build_toolbar(app):
     app._manual_controls.append(app.btn_open)
     app._offline_controls.add(app.btn_open)
     apply_tooltip(app.btn_open, "Load a G-code job for streaming (read-only).")
+    app.job_button_hint = ttk.Label(bar, text="")
+    try:
+        app._job_button_hint_visible = False
+    except Exception:
+        pass
+    try:
+        app._job_button_mode = "read_job"
+    except Exception:
+        pass
     app.btn_clear = ttk.Button(
         bar,
         text=icon_label(ICON_JOB_CLEAR, "Clear Job"),
@@ -198,6 +361,10 @@ def build_toolbar(app):
     app.machine_state_label.pack(side="right", fill="y")
     try:
         app._state_default_bg = app.machine_state_label.cget("background")
+    except Exception:
+        pass
+    try:
+        app._machine_state_max_chars = len("DISCONNECTED") + 2
     except Exception:
         pass
 

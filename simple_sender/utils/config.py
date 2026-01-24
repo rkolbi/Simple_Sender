@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Application settings management.
@@ -33,9 +36,11 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .constants import (
+    GCODE_STREAMING_LINE_THRESHOLD,
     SETTINGS_FILENAME,
     SETTINGS_BACKUP_SUFFIX,
     SETTINGS_TEMP_SUFFIX,
+    WATCHDOG_HOMING_TIMEOUT,
 )
 from .exceptions import (
     SettingsLoadError,
@@ -69,7 +74,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_reconnect": False,
     "baud_rate": 115200,
     "console_positions_enabled": False,
-    "console_status_enabled": False,
     "current_line_mode": "sent",
     "default_spindle_rpm": 12000,
     "dry_run_sanitize_stream": False,
@@ -108,16 +112,21 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_endstop_indicator": True,
     "show_probe_indicator": True,
     "show_hold_indicator": True,
+    "auto_level_enabled": True,
     "show_quick_tips_button": True,
     "show_quick_3d_button": True,
     "show_quick_keys_button": True,
+    "show_quick_alo_button": True,
     "show_quick_release_button": True,
     "status_poll_interval": 0.2,
     "status_query_failure_limit": 3,
+    "homing_watchdog_enabled": True,
+    "homing_watchdog_timeout": WATCHDOG_HOMING_TIMEOUT,
     "stop_joystick_hold_on_focus_loss": True,
     "step_xy": 400.0,
     "step_z": 1.0,
     "theme": "vista",
+    "ui_scale": 1.5,
     "toolpath_arc_detail_deg": 9.031746031746032,
     "toolpath_draw_percent": 82,
     "toolpath_full_limit": 33611,
@@ -127,7 +136,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "toolpath_low_power": False,
     "toolpath_performance": 81.74603174603175,
     "toolpath_quality": 100.0,
-    "toolpath_renderer": "opengl",
+    "toolpath_renderer": "canvas",
     "toolpath_show_arc": True,
     "toolpath_show_feed": True,
     "toolpath_show_rapid": False,
@@ -136,8 +145,42 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "training_wheels": True,
     "unit_mode": "mm",
     "validate_streaming_gcode": True,
+    "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,
     "window_geometry": "1194x864+261+83",
     "zeroing_persistent": False,
+    "show_autolevel_overlay": True,
+    "auto_level_settings": {
+        "margin": 5.0,
+        "base_spacing": 5.0,
+        "min_spacing": 2.0,
+        "max_spacing": 12.0,
+        "max_points": None,
+        "safe_z": 5.0,
+        "probe_depth": 3.0,
+        "probe_feed": 100.0,
+        "retract_z": 2.0,
+        "settle_time": 0.0,
+        "path_order": "serpentine",
+        "interpolation": "bicubic",
+        "avoidance_areas": [
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+            {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
+        ],
+    },
+    "auto_level_job_prefs": {
+        "small_max_area": 2500.0,
+        "large_min_area": 10000.0,
+        "small": {"spacing": 3.0, "interpolation": "bicubic"},
+        "large": {"spacing": 8.0, "interpolation": "bilinear"},
+        "custom": {"spacing": 5.0, "interpolation": "bicubic"},
+    },
+    "auto_level_presets": {},
 }
 
 def _deep_merge_defaults(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:

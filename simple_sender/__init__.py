@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Simple Sender - GRBL 1.1h CNC Controller.
@@ -22,7 +25,7 @@
 A minimal, reliable GRBL sender for 3-axis CNC machines with Python + Tkinter.
 """
 
-__version__ = "1.2"
+__version__ = "1.3"
 __author__ = "Bob Kolbasowski"
 
 from .grbl_worker import GrblWorker

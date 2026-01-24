@@ -15,8 +15,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import math
 import threading
 import time
 
@@ -198,6 +202,12 @@ def format_gcode_stats_text(app, stats: dict, rate_source: str | None) -> str:
     minx, maxx = minx / unit_scale, maxx / unit_scale
     miny, maxy = miny / unit_scale, maxy / unit_scale
     minz, maxz = minz / unit_scale, maxz / unit_scale
+    minx = math.ceil(minx)
+    maxx = math.ceil(maxx)
+    miny = math.ceil(miny)
+    maxy = math.ceil(maxy)
+    minz = math.ceil(minz)
+    maxz = math.ceil(maxz)
     factor = estimate_factor_value(app)
     time_min = stats.get("time_min")
     rapid_min = stats.get("rapid_min")
@@ -222,9 +232,9 @@ def format_gcode_stats_text(app, stats: dict, rate_source: str | None) -> str:
         live_seconds = int(round(app._live_estimate_min * factor * 60))
         live_txt = f" | Live est (stream): {format_duration(live_seconds)}"
     return (
-        f"Bounds ({unit_label}) X[{minx:.3f}..{maxx:.3f}] "
-        f"Y[{miny:.3f}..{maxy:.3f}] "
-        f"Z[{minz:.3f}..{maxz:.3f}] | "
+        f"Bounds ({unit_label}) X[{minx}..{maxx}] "
+        f"Y[{miny}..{maxy}] "
+        f"Z[{minz}..{maxz}] | "
         f"Est time (feed only): {time_txt} | "
         f"Est time (with rapids): {total_txt}"
         f"{live_txt} | "
@@ -295,7 +305,7 @@ def update_gcode_stats(app, lines: list[str], parse_result=None):
     if getattr(app, "_gcode_streaming_mode", False):
         app._last_stats = None
         app._last_rate_source = None
-        app.gcode_stats_var.set("Stats unavailable (streaming mode)")
+        app.gcode_stats_var.set("Preview only (streaming mode)")
         return
     if not lines:
         app._last_stats = None

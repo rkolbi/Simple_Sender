@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from datetime import datetime, timedelta
@@ -48,6 +51,110 @@ def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
 
 
+_UI_SCALE_NAMED_FONTS = (
+    "TkDefaultFont",
+    "TkTextFont",
+    "TkFixedFont",
+    "TkHeadingFont",
+    "TkMenuFont",
+    "TkSmallCaptionFont",
+    "TkIconFont",
+    "TkTooltipFont",
+)
+
+
+def _coerce_ui_scale(value, default: float = 1.0) -> float:
+    try:
+        scale = float(value)
+    except Exception:
+        return default
+    if scale <= 0:
+        return default
+    scale = max(0.5, min(3.0, scale))
+    return round(scale, 2)
+
+
+def _scaled_font_size(size: int, scale: float) -> int:
+    sign = -1 if size < 0 else 1
+    value = max(1, int(round(abs(size) * scale)))
+    return sign * value
+
+
+def _apply_scaled_named_fonts(app, scale: float) -> None:
+    bases = getattr(app, "_ui_scale_named_font_bases", None)
+    if bases is None:
+        bases = {}
+        for name in _UI_SCALE_NAMED_FONTS:
+            try:
+                size = int(tkfont.nametofont(name).cget("size"))
+            except Exception:
+                continue
+            bases[name] = size
+        app._ui_scale_named_font_bases = bases
+    for name, base in bases.items():
+        try:
+            tkfont.nametofont(name).configure(size=_scaled_font_size(base, scale))
+        except Exception:
+            continue
+
+
+def _apply_scaled_custom_fonts(app, scale: float) -> None:
+    bases = getattr(app, "_ui_scale_custom_font_bases", None)
+    if bases is None:
+        bases = {}
+        app._ui_scale_custom_font_bases = bases
+    for key in ("icon_button_font", "tab_font", "home_button_font", "dro_value_font", "console_font"):
+        font = getattr(app, key, None)
+        if font is None:
+            continue
+        if key not in bases:
+            try:
+                bases[key] = int(font.cget("size"))
+            except Exception:
+                continue
+        try:
+            font.configure(size=_scaled_font_size(bases[key], scale))
+        except Exception:
+            continue
+
+
+def apply_ui_scale(app, value: float | None = None) -> float:
+    raw = value
+    if raw is None:
+        try:
+            raw = app.ui_scale.get()
+        except Exception:
+            raw = 1.0
+    scale = _coerce_ui_scale(raw, 1.0)
+    try:
+        app.tk.call("tk", "scaling", scale)
+    except Exception:
+        return scale
+    _apply_scaled_named_fonts(app, scale)
+    _apply_scaled_custom_fonts(app, scale)
+    try:
+        app.ui_scale.set(scale)
+    except Exception:
+        pass
+    try:
+        app.settings["ui_scale"] = scale
+    except Exception:
+        pass
+    try:
+        app.update_idletasks()
+    except Exception:
+        pass
+    return scale
+
+
+def on_ui_scale_change(app, _event=None):
+    scale = apply_ui_scale(app)
+    try:
+        app.status.config(text=f"UI scale: {scale:.2f}x")
+    except Exception:
+        pass
+
+
 def toggle_performance(app):
     current = bool(app.performance_mode.get())
     new_val = not current
@@ -67,10 +174,30 @@ def toggle_console_pos_status(app):
     current = bool(app.console_positions_enabled.get())
     new_val = not current
     app.console_positions_enabled.set(new_val)
-    app.console_status_enabled.set(new_val)
     if hasattr(app, "btn_console_pos"):
         app.btn_console_pos.config(text="Pos/Status: On" if new_val else "Pos/Status: Off")
     app.streaming_controller.render_console()
+
+def toggle_autolevel_overlay(app):
+    current = bool(app.show_autolevel_overlay.get())
+    app.show_autolevel_overlay.set(not current)
+    on_autolevel_overlay_change(app)
+
+def on_autolevel_overlay_change(app):
+    show = bool(app.show_autolevel_overlay.get())
+    grid = app._auto_level_grid if show else None
+    try:
+        app.toolpath_panel.set_autolevel_overlay(grid)
+    except Exception:
+        pass
+    try:
+        app.settings["show_autolevel_overlay"] = show
+    except Exception:
+        pass
+    try:
+        app._refresh_autolevel_overlay_button()
+    except Exception:
+        pass
 
 
 def toggle_unit_mode(app):

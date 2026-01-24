@@ -15,17 +15,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import logging
-import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from simple_sender.ui.widgets import set_kb_id
+from simple_sender.ui.alarm_recovery_dialog import show_alarm_recovery
+from simple_sender.ui.autolevel_dialog import show_auto_level_dialog
+from simple_sender.ui.macro_prompt_dialog import show_macro_prompt
 from simple_sender.ui.popup_utils import center_window
-
-logger = logging.getLogger(__name__)
 
 
 def show_resume_dialog(app):
@@ -49,7 +50,10 @@ def show_resume_dialog(app):
         messagebox.showwarning("No G-code", "Load a G-code file first.")
         return
     default_line = 1
-    if app._last_acked_index >= 0:
+    last_error_index = getattr(app, "_last_error_index", -1)
+    if last_error_index >= 0:
+        default_line = min(total_lines, last_error_index + 1)
+    elif app._last_acked_index >= 0:
         default_line = min(total_lines, app._last_acked_index + 2)
 
     dlg = tk.Toplevel(app)
@@ -81,7 +85,9 @@ def show_resume_dialog(app):
     warning_var = tk.StringVar(value="")
     preview_lbl = ttk.Label(frm, textvariable=preview_var, wraplength=460, justify="left")
     preview_lbl.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 2))
-    warning_lbl = ttk.Label(frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left")
+    warning_lbl = ttk.Label(
+        frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left"
+    )
     warning_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
 
     def update_preview():
@@ -136,100 +142,3 @@ def show_resume_dialog(app):
     dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
     center_window(dlg, app)
 
-
-
-def show_alarm_recovery(app):
-    if not app._alarm_locked:
-        messagebox.showinfo("Alarm recovery", "No active alarm.")
-        return
-    msg = app._format_alarm_message(app._alarm_message)
-    dlg = tk.Toplevel(app)
-    dlg.title("Alarm recovery")
-    dlg.transient(app)
-    dlg.grab_set()
-    dlg.resizable(False, False)
-    frm = ttk.Frame(dlg, padding=12)
-    frm.pack(fill="both", expand=True)
-    ttk.Label(frm, text=msg, wraplength=460, justify="left").pack(fill="x", pady=(0, 8))
-    ttk.Label(
-        frm,
-        text="Suggested steps: Unlock ($X) to clear the alarm, then Home ($H) if required. "
-        "If motion feels unsafe, use Reset (Ctrl-X).",
-        wraplength=460,
-        justify="left",
-    ).pack(fill="x", pady=(0, 10))
-    btn_row = ttk.Frame(frm)
-    btn_row.pack(fill="x")
-
-    def run_and_close(action):
-        if not app._require_grbl_connection():
-            return
-        try:
-            action()
-        except Exception as exc:
-            logger.exception("Alarm recovery action failed: %s", exc)
-        try:
-            dlg.destroy()
-        except Exception as exc:
-            logger.exception("Failed to close alarm recovery dialog: %s", exc)
-
-    ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(app.grbl.unlock)).pack(
-        side="left", padx=(0, 6)
-    )
-    ttk.Button(btn_row, text="Home ($H)", command=lambda: run_and_close(app._start_homing)).pack(
-        side="left", padx=(0, 6)
-    )
-    ttk.Button(btn_row, text="Reset", command=lambda: run_and_close(app.grbl.reset)).pack(
-        side="left", padx=(0, 6)
-    )
-    ttk.Button(btn_row, text="Close", command=dlg.destroy).pack(side="left")
-    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
-    center_window(dlg, app)
-
-
-def show_macro_prompt(
-    app,
-    title: str,
-    message: str,
-    choices: list[str],
-    cancel_label: str,
-    result_q: queue.Queue,
-) -> None:
-    try:
-        dlg = tk.Toplevel(app)
-        dlg.title(title)
-        dlg.transient(app)
-        dlg.grab_set()
-        dlg.resizable(False, False)
-        frm = ttk.Frame(dlg, padding=12)
-        frm.pack(fill="both", expand=True)
-        lbl = ttk.Label(frm, text=message, wraplength=460, justify="left")
-        lbl.pack(fill="x", pady=(0, 10))
-        btn_row = ttk.Frame(frm)
-        btn_row.pack(fill="x")
-
-        def choose(label: str):
-            if result_q.empty():
-                result_q.put(label)
-            try:
-                dlg.destroy()
-            except Exception:
-                pass
-
-        for idx, lbl_text in enumerate(choices):
-            b = ttk.Button(btn_row, text=lbl_text, command=lambda t=lbl_text: choose(t))
-            set_kb_id(b, f"macro_prompt_{idx}")
-            b.pack(side="left", padx=(0, 6))
-
-        def on_close():
-            choose(cancel_label)
-
-        dlg.protocol("WM_DELETE_WINDOW", on_close)
-        center_window(dlg, app)
-    except Exception as exc:
-        try:
-            app.streaming_controller.log(f"[macro] Prompt failed: {exc}")
-        except Exception:
-            pass
-        if result_q.empty():
-            result_q.put(cancel_label)

@@ -15,48 +15,60 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
 import time
+from typing import Any, Callable
 import tkinter as tk
 
 from simple_sender.utils.constants import MAX_CONSOLE_LINES
 
 logger = logging.getLogger(__name__)
 
+AfterId = str | int
+ConsoleEntry = tuple[str, str | None]
+ConsoleEntryLike = ConsoleEntry | str
+
 class StreamingController:
-    def __init__(self, app):
+    """Manage streaming-related UI updates and console logging."""
+
+    def __init__(self, app: Any, *, timestamp: Callable[[], str] | None = None) -> None:
         self.app = app
+        self._timestamp = timestamp or (lambda: time.strftime("%H:%M:%S"))
         self.console: tk.Text | None = None
-        self.gview = None
-        self.progress_pct = None
-        self.buffer_fill = None
-        self.buffer_fill_pct = None
-        self.throughput_var = None
-        self._console_lines: list[tuple[str, str | None]] = []
+        self.gview: Any | None = None
+        self.progress_pct: tk.IntVar | None = None
+        self.buffer_fill: tk.StringVar | None = None
+        self.buffer_fill_pct: tk.IntVar | None = None
+        self.throughput_var: tk.StringVar | None = None
+        self._console_lines: list[ConsoleEntry] = []
         self._console_filter: str | None = None
-        self._pending_console_entries: list[tuple[str, str | None]] = []
-        self._pending_console_trim = 0
-        self._console_after_id = None
-        self._console_render_pending = False
-        self._pending_marks_after_id = None
-        self._pending_sent_index = None
-        self._pending_acked_index = None
-        self._pending_progress = None
-        self._pending_buffer = None
-        self._progress_after_id = None
-        self._buffer_after_id = None
+        self._pending_console_entries: list[ConsoleEntry] = []
+        self._pending_console_trim: int = 0
+        self._console_after_id: AfterId | None = None
+        self._console_render_pending: bool = False
+        self._pending_marks_after_id: AfterId | None = None
+        self._pending_sent_index: int | None = None
+        self._pending_acked_index: int | None = None
+        self._pending_progress: tuple[int, int] | None = None
+        self._pending_buffer: tuple[int, int, int] | None = None
+        self._progress_after_id: AfterId | None = None
+        self._buffer_after_id: AfterId | None = None
 
     def attach_widgets(
         self,
         console: tk.Text,
-        gview,
+        gview: Any,
         progress_pct: tk.IntVar,
         buffer_fill: tk.StringVar,
         buffer_fill_pct: tk.IntVar,
         throughput_var: tk.StringVar,
-    ):
+    ) -> None:
+        """Attach UI widgets used for streaming updates."""
         self.console = console
         self.gview = gview
         self.progress_pct = progress_pct
@@ -91,7 +103,7 @@ class StreamingController:
             or ("<" in stripped and ">" in stripped)
         )
 
-    def _should_skip_console_entry_for_toggles(self, entry) -> bool:
+    def _should_skip_console_entry_for_toggles(self, entry: ConsoleEntryLike) -> bool:
         if isinstance(entry, tuple):
             s, _ = entry
         else:
@@ -105,7 +117,7 @@ class StreamingController:
                 return True
         return False
 
-    def _console_filter_match(self, entry, for_save: bool = False) -> bool:
+    def _console_filter_match(self, entry: ConsoleEntryLike, for_save: bool = False) -> bool:
         if isinstance(entry, tuple):
             s, tag = entry
         else:
@@ -139,10 +151,11 @@ class StreamingController:
             return False
         return True
 
-    def log(self, s: str, tag: str | None = None):
+    def log(self, s: str, tag: str | None = None) -> None:
+        """Record a console entry and render it if needed."""
         if tag is None:
             tag = self._console_tag_for_line(s)
-        entry = (s, tag)
+        entry: ConsoleEntry = (s, tag)
         if self._should_skip_console_entry_for_toggles(entry):
             return
         self._console_lines.append(entry)
@@ -167,7 +180,7 @@ class StreamingController:
             return
         self._append_to_console(entry)
 
-    def _append_to_console(self, entry):
+    def _append_to_console(self, entry: ConsoleEntry) -> None:
         if not self.console:
             return
         line, tag = entry
@@ -179,16 +192,16 @@ class StreamingController:
         self.console.see("end")
         self.console.config(state="disabled")
 
-    def _queue_console_render(self):
+    def _queue_console_render(self) -> None:
         self._console_render_pending = True
         self._schedule_console_flush()
 
-    def _schedule_console_flush(self):
+    def _schedule_console_flush(self) -> None:
         if self._console_after_id is not None:
             return
         self._console_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_console_updates)
 
-    def _flush_console_updates(self):
+    def _flush_console_updates(self) -> None:
         self._console_after_id = None
         if self._console_render_pending:
             self._console_render_pending = False
@@ -213,7 +226,7 @@ class StreamingController:
         self.console.see("end")
         self.console.config(state="disabled")
 
-    def _render_console(self):
+    def _render_console(self) -> None:
         if not self.console:
             return
         self.console.config(state="normal")
@@ -227,7 +240,7 @@ class StreamingController:
         self.console.see("end")
         self.console.config(state="disabled")
 
-    def _trim_console_widget(self, count: int):
+    def _trim_console_widget(self, count: int) -> None:
         if count <= 0 or not self.console:
             return
         self.console.config(state="normal")
@@ -237,7 +250,7 @@ class StreamingController:
             self.console.delete("1.0", "end")
         self.console.config(state="disabled")
 
-    def _trim_console_widget_unlocked(self, count: int):
+    def _trim_console_widget_unlocked(self, count: int) -> None:
         if count <= 0 or not self.console:
             return
         try:
@@ -245,14 +258,16 @@ class StreamingController:
         except Exception:
             self.console.delete("1.0", "end")
 
-    def set_console_filter(self, mode):
+    def set_console_filter(self, mode: str | None) -> None:
+        """Update the console filter and re-render."""
         self._console_filter = mode
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
         self._render_console()
 
-    def clear_console(self):
+    def clear_console(self) -> None:
+        """Clear all console content and pending entries."""
         self._console_lines = []
         self._pending_console_entries = []
         self._pending_console_trim = 0
@@ -262,27 +277,33 @@ class StreamingController:
             self.console.delete("1.0", "end")
             self.console.config(state="disabled")
 
-    def get_console_lines(self) -> list[tuple[str, str | None]]:
+    def get_console_lines(self) -> list[ConsoleEntry]:
+        """Return a copy of the raw console lines."""
         return list(self._console_lines)
 
-    def matches_filter(self, entry, for_save: bool = False) -> bool:
+    def matches_filter(self, entry: ConsoleEntryLike, for_save: bool = False) -> bool:
+        """Check whether a console entry should be shown for the current filter."""
         return self._console_filter_match(entry, for_save=for_save)
 
     def is_position_line(self, s: str) -> bool:
+        """Return True if the line looks like a position report."""
         return self._is_position_line(s)
 
-    def flush_console(self):
+    def flush_console(self) -> None:
+        """Flush any pending console updates."""
         self._flush_console_updates()
 
-    def render_console(self):
+    def render_console(self) -> None:
+        """Force a full console re-render."""
         self._render_console()
 
-    def bind_button_logging(self):
+    def bind_button_logging(self) -> None:
+        """Attach GUI bindings for button logging."""
         self.app.bind_class("TButton", "<Button-1>", self._on_button_press, add="+")
         self.app.bind_class("Button", "<Button-1>", self._on_button_press, add="+")
         self.app.bind_class("Canvas", "<Button-1>", self._on_button_press, add="+")
 
-    def _on_button_press(self, event):
+    def _on_button_press(self, event: tk.Event) -> None:
         w = event.widget
         if isinstance(w, tk.Canvas) and not getattr(w, "_log_button", False):
             return
@@ -314,7 +335,7 @@ class StreamingController:
                 gcode = getter
         except Exception:
             gcode = ""
-        ts = time.strftime("%H:%M:%S")
+        ts = self._timestamp()
         if tip and gcode:
             self.log(f"[{ts}] Button: {label} | Tip: {tip} | GCode: {gcode}")
         elif tip:
@@ -324,12 +345,12 @@ class StreamingController:
         else:
             self.log(f"[{ts}] Button: {label}")
 
-    def _schedule_gcode_mark_flush(self):
+    def _schedule_gcode_mark_flush(self) -> None:
         if self._pending_marks_after_id is not None:
             return
         self._pending_marks_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_gcode_marks)
 
-    def _flush_gcode_marks(self):
+    def _flush_gcode_marks(self) -> None:
         self._pending_marks_after_id = None
         sent_idx = self._pending_sent_index
         acked_idx = self._pending_acked_index
@@ -346,12 +367,12 @@ class StreamingController:
         if sent_idx is not None or acked_idx is not None:
             self.app._update_current_highlight()
 
-    def _schedule_progress_flush(self):
+    def _schedule_progress_flush(self) -> None:
         if self._progress_after_id is not None:
             return
         self._progress_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_progress)
 
-    def _flush_progress(self):
+    def _flush_progress(self) -> None:
         self._progress_after_id = None
         if not self._pending_progress:
             return
@@ -363,12 +384,12 @@ class StreamingController:
             self.app._update_live_estimate(done, total)
         self.app._maybe_notify_job_completion(done, total)
 
-    def _schedule_buffer_flush(self):
+    def _schedule_buffer_flush(self) -> None:
         if self._buffer_after_id is not None:
             return
         self._buffer_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_buffer_fill)
 
-    def _flush_buffer_fill(self):
+    def _flush_buffer_fill(self) -> None:
         self._buffer_after_id = None
         if not self._pending_buffer:
             return
@@ -379,7 +400,8 @@ class StreamingController:
         if self.buffer_fill_pct:
             self.buffer_fill_pct.set(pct)
 
-    def clear_pending_ui_updates(self):
+    def clear_pending_ui_updates(self) -> None:
+        """Cancel pending UI updates when switching modes/closing."""
         for attr in (
             "_pending_marks_after_id",
             "_progress_after_id",
@@ -403,36 +425,44 @@ class StreamingController:
         self._pending_console_trim = 0
         self._console_render_pending = False
 
-    def handle_log_rx(self, raw: str):
+    def handle_log_rx(self, raw: str) -> None:
+        """Log a line received from GRBL."""
         if self._should_suppress_rx_log(raw):
             return
         self.log(f"<< {raw}", self._console_tag_for_line(raw))
 
-    def handle_log_tx(self, message: str):
+    def handle_log_tx(self, message: str) -> None:
+        """Log a line sent to GRBL."""
         self.log(f">> {message}")
 
-    def handle_log(self, message: str):
+    def handle_log(self, message: str) -> None:
+        """Log an informational message."""
         self.log(message)
 
-    def handle_buffer_fill(self, pct: int, used: int, window: int):
+    def handle_buffer_fill(self, pct: int, used: int, window: int) -> None:
+        """Queue buffer utilization updates."""
         self._pending_buffer = (pct, used, window)
         self._schedule_buffer_flush()
 
-    def handle_throughput(self, bps: float):
+    def handle_throughput(self, bps: float) -> None:
+        """Update throughput display."""
         if self.throughput_var:
             self.throughput_var.set(self.app._format_throughput(float(bps)))
 
-    def handle_gcode_sent(self, idx: int):
+    def handle_gcode_sent(self, idx: int) -> None:
+        """Queue sent-line marker updates."""
         if self._pending_sent_index is None or idx > self._pending_sent_index:
             self._pending_sent_index = idx
         self._schedule_gcode_mark_flush()
 
-    def handle_gcode_acked(self, idx: int):
+    def handle_gcode_acked(self, idx: int) -> None:
+        """Queue acknowledged-line marker updates."""
         if self._pending_acked_index is None or idx > self._pending_acked_index:
             self._pending_acked_index = idx
         self._schedule_gcode_mark_flush()
 
-    def handle_progress(self, done: int, total: int):
+    def handle_progress(self, done: int, total: int) -> None:
+        """Queue progress updates and estimate refreshes."""
         self._pending_progress = (done, total)
         self._schedule_progress_flush()
 

@@ -15,12 +15,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from tkinter import messagebox
 
-from simple_sender.gcode_parser import clean_gcode_line
-from simple_sender.utils.constants import RESUME_WORD_PAT
+from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
 
 
 def build_resume_preamble(lines, stop_index: int) -> tuple[list[str], bool]:
@@ -47,7 +49,7 @@ def build_resume_preamble(lines, stop_index: int) -> tuple[list[str], bool]:
         if not s:
             continue
         s = s.upper()
-        for w, val in RESUME_WORD_PAT.findall(s):
+        for w, val in WORD_PAT.findall(s):
             if w == "G":
                 try:
                     code = float(val)
@@ -151,6 +153,7 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     app.gview.clear_highlights()
     app._last_sent_index = start_index - 1
     app._last_acked_index = start_index - 1
+    app._last_error_index = -1
     if start_index > 0:
         app.gview.mark_acked_upto(start_index - 1)
     app.gview.highlight_current(start_index)

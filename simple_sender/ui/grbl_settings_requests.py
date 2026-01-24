@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import time
@@ -25,8 +28,18 @@ def request_settings_dump(app):
     if not app.grbl.is_connected():
         messagebox.showwarning("Not connected", "Connect to GRBL first.")
         return
-    if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before requesting settings.")
+    stream_state = getattr(app, "_stream_state", None)
+    streaming_active = app.grbl.is_streaming() or stream_state in ("running", "paused")
+    if streaming_active:
+        app._pending_settings_refresh = True
+        try:
+            app.status.config(text="Settings refresh queued (streaming active)")
+        except Exception:
+            pass
+        messagebox.showwarning(
+            "Busy",
+            "Stop the stream before requesting settings. The refresh will run once streaming stops.",
+        )
         return
     if not app._grbl_ready:
         app._pending_settings_refresh = True
@@ -35,6 +48,7 @@ def request_settings_dump(app):
     if app._alarm_locked:
         messagebox.showwarning("Alarm", "Clear alarm before requesting settings.")
         return
+    app._pending_settings_refresh = False
     app.streaming_controller.log(
         f"[{time.strftime('%H:%M:%S')}] Settings refresh requested ($$)."
     )

@@ -15,27 +15,25 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
 from typing import Any
 
+from simple_sender.utils.constants import (
+    JOYSTICK_AXIS_RELEASE_THRESHOLD,
+    JOYSTICK_AXIS_THRESHOLD,
+    JOYSTICK_HOLD_DEFINITIONS,
+    JOYSTICK_HOLD_MISS_LIMIT,
+    JOYSTICK_HOLD_POLL_INTERVAL_MS,
+    JOYSTICK_HOLD_REPEAT_MS,
+    JOYSTICK_HOLD_MIN_DISTANCE,
+)
+
 logger = logging.getLogger(__name__)
-
-JOYSTICK_AXIS_THRESHOLD = 0.7
-JOYSTICK_AXIS_RELEASE_THRESHOLD = 0.2
-JOYSTICK_HOLD_REPEAT_MS = 60
-JOYSTICK_HOLD_POLL_INTERVAL_MS = 20
-JOYSTICK_HOLD_MISS_LIMIT = 2
-
-JOYSTICK_HOLD_DEFINITIONS: list[tuple[str, str, str, int]] = [
-    ("X-", "jog_hold_x_minus", "X", -1),
-    ("X+", "jog_hold_x_plus", "X", 1),
-    ("Y-", "jog_hold_y_minus", "Y", -1),
-    ("Y+", "jog_hold_y_plus", "Y", 1),
-    ("Z-", "jog_hold_z_minus", "Z", -1),
-    ("Z+", "jog_hold_z_plus", "Z", 1),
-]
 JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
 
 
@@ -155,7 +153,7 @@ def send_hold_jog(app):
     if distance <= 0:
         stop_hold(app)
         return
-    distance = max(distance, 0.01)
+    distance = max(distance, JOYSTICK_HOLD_MIN_DISTANCE)
     dx = dy = dz = 0.0
     if axis == "X":
         dx = direction * distance

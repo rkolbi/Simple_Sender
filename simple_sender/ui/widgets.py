@@ -15,15 +15,20 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
+from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
+from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS
 
 class ToolTip:
-    def __init__(self, widget, text: str, delay_ms: int = 1000):
+    def __init__(self, widget, text: str, delay_ms: int = TOOLTIP_DELAY_MS):
         self.widget = widget
         self.text = text
         self._tip = None
@@ -45,15 +50,17 @@ class ToolTip:
                 return
         except tk.TclError:
             return
-        top = self.widget.winfo_toplevel()
         enabled = True
-        try:
-            enabled = bool(top.tooltip_enabled.get())
-        except Exception:
-            pass
+        owner = _resolve_owner(self.widget, "tooltip_enabled")
+        if owner is not None:
+            try:
+                enabled = bool(owner.tooltip_enabled.get())
+            except Exception:
+                pass
         if not enabled:
             return
-        if not self.text or self._tip is not None:
+        text = _resolve_tooltip_text(self.widget, self.text)
+        if not text or self._tip is not None:
             return
         # Position near the current pointer location for consistent placement with other tooltips.
         try:
@@ -68,7 +75,7 @@ class ToolTip:
             self._tip.wm_geometry(f"+{x}+{y}")
             label = ttk.Label(
                 self._tip,
-                text=self.text,
+                text=text,
                 background="#ffffe0",
                 relief="solid",
                 padding=(6, 3),
@@ -87,6 +94,10 @@ class ToolTip:
 
     def set_text(self, text: str):
         self.text = text
+        try:
+            self.widget._tooltip_text = text
+        except Exception:
+            pass
 
 
 def _resolve_widget_bg(widget):
@@ -198,7 +209,7 @@ class StopSignButton(tk.Canvas):
         size = self._size
         pad = 2
         s = size - pad * 2
-        cut = s * 0.2929
+        cut = s * STOP_SIGN_CUT_RATIO
         x0, y0 = pad, pad
         x1, y1 = pad + s, pad + s
         points = [
@@ -289,6 +300,127 @@ def apply_tooltip(widget, text: str):
     except Exception:
         pass
     return tip
+
+
+def _widget_state(widget) -> str:
+    try:
+        return str(widget.cget("state")).lower()
+    except Exception:
+        pass
+    try:
+        state = widget.state()
+        if isinstance(state, (list, tuple, set)):
+            return "disabled" if "disabled" in state else "normal"
+    except Exception:
+        pass
+    return "normal"
+
+
+def _widget_disabled(widget) -> bool:
+    return _widget_state(widget) == "disabled"
+
+
+def _resolve_owner(widget, attr: str):
+    try:
+        owner = widget.winfo_toplevel()
+    except Exception:
+        owner = widget
+    for _ in range(8):
+        if owner is None:
+            break
+        try:
+            if hasattr(owner, attr):
+                return owner
+        except Exception:
+            pass
+        try:
+            owner = owner.master
+        except Exception:
+            owner = None
+    return None
+
+
+def _resolve_disabled_reason(widget) -> str | None:
+    return _policy_disabled_reason(widget, _resolve_owner)
+
+
+def _resolve_tooltip_text(widget, fallback: str) -> str:
+    text = getattr(widget, "_tooltip_text", "") or fallback
+    if _widget_disabled(widget):
+        reason = _resolve_disabled_reason(widget)
+        if reason:
+            if text:
+                return f"Disabled: {reason}\n{text}"
+            return f"Disabled: {reason}"
+        if text:
+            return f"Disabled: {text}"
+        return "Disabled"
+    return text
+
+
+def _clean_label(text: str) -> str:
+    if not text:
+        return ""
+    text = text.replace("\n", " ").strip()
+    if text and not text[0].isalnum():
+        parts = text.split(" ", 1)
+        if len(parts) == 2 and parts[1].strip():
+            return parts[1].strip()
+    return text
+
+
+def _default_tooltip_text(widget) -> str | None:
+    try:
+        cls = widget.winfo_class()
+    except Exception:
+        cls = ""
+    label = ""
+    try:
+        label = widget.cget("text") or ""
+    except Exception:
+        label = getattr(widget, "_text", "") or getattr(widget, "_label", "") or ""
+    label = _clean_label(str(label))
+    if cls in ("TButton", "Button"):
+        return f"Click to {label.lower()}." if label else "Click to activate."
+    if cls in ("TCheckbutton",):
+        return f"Toggle {label.lower()}." if label else "Toggle this option."
+    if cls in ("TRadiobutton",):
+        return f"Select {label.lower()}." if label else "Select an option."
+    if cls in ("TEntry", "Entry", "TSpinbox", "Spinbox"):
+        return "Enter a value."
+    if cls in ("TCombobox",):
+        return "Select a value."
+    if cls in ("TScale", "Scale"):
+        return "Adjust the value."
+    if cls in ("Text",):
+        return "Read-only text output."
+    if cls in ("Treeview",):
+        return "Select a row."
+    return None
+
+
+def _walk_widgets(root):
+    try:
+        children = root.winfo_children()
+    except Exception:
+        return
+    for child in children:
+        yield child
+        yield from _walk_widgets(child)
+
+
+def ensure_tooltips(app):
+    for widget in _walk_widgets(app):
+        existing = getattr(widget, "_tooltip", None)
+        if existing:
+            continue
+        preset = getattr(widget, "_tooltip_text", None)
+        if preset:
+            apply_tooltip(widget, preset)
+            continue
+        text = _default_tooltip_text(widget)
+        if text:
+            apply_tooltip(widget, text)
 
 
 def attach_log_gcode(widget, gcode_or_func):

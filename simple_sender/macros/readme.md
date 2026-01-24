@@ -44,5 +44,10 @@ These macros implement the CNCjs workflow documented in `ref/cncjs_macros.md`. T
 - The macro runner snapshots modal state before each macro, forces `G21` (mm), and restores the original units afterward; use `STATE_RETURN` (or `%state_return`) in a macro to restore the full modal snapshot.
 - The macros log progress via `%msg` so you can see when each probe or wait occurs in the console.
 
+## Checklists
+
+- Checklist files live in this folder and use the `checklist-*.chk` naming format.
+- Each non-empty line becomes a checklist item with a checkbox in the Checklists tab.
+
 
 

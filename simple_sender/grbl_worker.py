@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """GRBL serial communication worker.
@@ -24,15 +27,29 @@ including connection management, G-code streaming, and status polling.
 """
 
 import logging
+import os
 import queue
 import re
 import threading
 import time
 import traceback
+from logging.handlers import RotatingFileHandler
 from collections import deque
 from typing import Any, Callable, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
+from .grbl_worker_commands import GrblWorkerCommandMixin
+from .grbl_worker_status import GrblWorkerStatusMixin
+from .grbl_worker_streaming import GrblWorkerStreamingMixin
 from .utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
+
+
+class _FallbackSerialException(Exception):
+    pass
+
+
+class _FallbackSerialTimeout(Exception):
+    pass
+
 try:
     import serial
     from serial.tools import list_ports
@@ -57,13 +74,6 @@ else:
 from .utils.constants import (
     BAUD_DEFAULT,
     RX_BUFFER_SIZE,
-    RX_BUFFER_SAFETY,
-    MAX_LINE_LENGTH,
-    RT_RESET,
-    RT_STATUS,
-    RT_HOLD,
-    RT_RESUME,
-    RT_JOG_CANCEL,
     SERIAL_CONNECT_DELAY,
     SERIAL_TIMEOUT,
     SERIAL_WRITE_TIMEOUT,
@@ -72,39 +82,73 @@ from .utils.constants import (
     TX_THROUGHPUT_WINDOW,
     TX_THROUGHPUT_EMIT_INTERVAL,
     STATUS_POLL_DEFAULT,
-    EVENT_QUEUE_TIMEOUT,
-    DEFAULT_SPINDLE_RPM,
-    WATCHDOG_DISCONNECT_TIMEOUT,
-    WATCHDOG_RX_TIMEOUT,
+    RT_RESUME,
+    RT_JOG_CANCEL,
+    WATCHDOG_HOMING_TIMEOUT,
 )
 from .utils.exceptions import (
     SerialConnectionError,
-    SerialDisconnectError,
     SerialWriteError,
-    SerialReadError,
-    GrblNotConnectedException,
-    GrblAlarmException,
 )
 from .utils.validation import (
     validate_port_name,
     validate_baud_rate,
-    validate_feed_rate,
-    validate_unit_mode,
-    validate_interval,
-    validate_rpm,
 )
 
 logger = logging.getLogger(__name__)
+_RX_LOGGER = None
+_RX_LOGGER_LOCK = threading.Lock()
+
+
+def _get_rx_logger():
+    global _RX_LOGGER
+    if _RX_LOGGER is not None:
+        return _RX_LOGGER
+    path = os.getenv("SIMPLE_SENDER_RX_LOG_PATH")
+    if not path:
+        _RX_LOGGER = False
+        return None
+    try:
+        max_bytes = int(os.getenv("SIMPLE_SENDER_RX_LOG_MAX_BYTES", "2097152"))
+    except Exception:
+        max_bytes = 2097152
+    try:
+        backup_count = int(os.getenv("SIMPLE_SENDER_RX_LOG_BACKUPS", "5"))
+    except Exception:
+        backup_count = 5
+    with _RX_LOGGER_LOCK:
+        if _RX_LOGGER is not None:
+            return _RX_LOGGER or None
+        try:
+            rx_logger = logging.getLogger("simple_sender.rxlog")
+            if not rx_logger.handlers:
+                handler = RotatingFileHandler(
+                    path,
+                    maxBytes=max_bytes,
+                    backupCount=backup_count,
+                    encoding="utf-8",
+                )
+                handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+                rx_logger.addHandler(handler)
+                rx_logger.setLevel(logging.INFO)
+                rx_logger.propagate = False
+            _RX_LOGGER = rx_logger
+            return rx_logger
+        except Exception as exc:
+            logger.warning("Failed to initialize RX log file: %s", exc)
+            _RX_LOGGER = False
+            return None
 
 def _serial_exception_type():
     if serial is None:
-        return Exception
+        return _FallbackSerialException
     return getattr(serial, "SerialException", Exception)
 
 def _serial_timeout_exception_type():
     if serial is None:
-        return Exception
+        return _FallbackSerialTimeout
     return getattr(serial, "SerialTimeoutException", Exception)
+
 
 _PAUSE_MCODE_MAP = {
     "0": "M0",
@@ -118,8 +162,7 @@ _PAUSE_MCODE_PAT = re.compile(r"(?<![0-9])M(0|00|1|01|6|06)(?![0-9])")
 _SANITIZE_TOKEN_PAT = re.compile(r"[A-Za-z][+-]?(?:\d+\.?\d*|\.\d+)", re.ASCII)
 _DRY_RUN_M_CODES = {3, 4, 5, 6, 7, 8, 9}
 
-
-class GrblWorker:
+class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerStatusMixin):
     """Manages serial communication with GRBL controller.
     
     This class handles:
@@ -145,6 +188,7 @@ class GrblWorker:
         """
         self.ui_q = ui_event_q
         self.ser: Optional[SerialType] = None
+        self._rx_logger = _get_rx_logger()
         
         # Worker threads
         self._rx_thread: Optional[threading.Thread] = None
@@ -167,6 +211,7 @@ class GrblWorker:
         self._stream_pending_item: Optional[Tuple[str, bool, Optional[int]]] = None
         self._manual_pending_item: Optional[Tuple[str, bytes, int]] = None
         self._last_manual_source: str | None = None
+        self._settings_dump_active = False
         self._pause_after_idx: Optional[int] = None
         self._pause_after_reason: str | None = None
         self._resume_preamble: deque[str] = deque()
@@ -200,6 +245,32 @@ class GrblWorker:
         self._last_rx_ts = time.time()
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
+        self._watchdog_ignore_until = 0.0
+        self._watchdog_ignore_reason = None
+        self._homing_watchdog_enabled = True
+        self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
+
+    def _log_rx_line(self, line: str) -> None:
+        if not line:
+            return
+        rx_logger = self._rx_logger
+        if not rx_logger:
+            return
+        try:
+            rx_logger.info("RX %s", line)
+        except Exception:
+            pass
+
+    def _log_tx_line(self, line: str) -> None:
+        if not line:
+            return
+        rx_logger = self._rx_logger
+        if not rx_logger:
+            return
+        try:
+            rx_logger.info("TX %s", line)
+        except Exception:
+            pass
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -267,6 +338,8 @@ class GrblWorker:
         self._last_rx_ts = time.time()
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
+        self._watchdog_ignore_until = 0.0
+        self._watchdog_ignore_reason = None
         
         try:
             # Open serial port
@@ -349,6 +422,11 @@ class GrblWorker:
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
+        self._settings_dump_active = False
+        self._watchdog_paused = False
+        self._watchdog_trip_ts = 0.0
+        self._watchdog_ignore_until = 0.0
+        self._watchdog_ignore_reason = None
         
         # Notify UI
         self.ui_q.put(("ready", False))
@@ -387,60 +465,6 @@ class GrblWorker:
             True if connected and serial port is open
         """
         return self.ser is not None and self.ser.is_open
-    
-    def is_streaming(self) -> bool:
-        """Check if currently streaming G-code.
-        
-        Returns:
-            True if streaming is active
-        """
-        return self._streaming
-
-    def set_dry_run_sanitize(self, enabled: bool) -> None:
-        """Enable or disable dry-run sanitization for streamed G-code."""
-        self._dry_run_sanitize = bool(enabled)
-    
-    # ========================================================================
-    # COMMAND EXECUTION
-    # ========================================================================
-    
-    def send_immediate(self, command: str, *, source: str | None = None) -> None:
-        """Send command immediately (bypasses streaming).
-        
-        Used for manual console commands and UI buttons.
-        Respects alarm state - only allows $X and $H during alarm.
-        
-        Args:
-            command: G-code or GRBL command to send
-        """
-        if not self.is_connected():
-            logger.warning("Cannot send command - not connected")
-            return
-        
-        if self._streaming:
-            logger.warning("Cannot send immediate command during streaming")
-            try:
-                self.ui_q.put(("log", f"[manual blocked] {command.strip()} (streaming active)"))
-            except Exception:
-                pass
-            return
-        
-        # During alarm, only allow unlock and home commands
-        if self._alarm_active:
-            cmd_upper = command.strip().upper()
-            if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
-                logger.warning(f"Command '{command}' blocked during alarm")
-                return
-        
-        if source:
-            self._last_manual_source = str(source)
-        elif not self._last_manual_source:
-            self._last_manual_source = "manual"
-        command = command.strip()
-        if not command:
-            return
-        
-        self._outgoing_q.put(command)
     
     def send_realtime(self, command: bytes) -> None:
         """Send real-time command (no newline).
@@ -481,353 +505,6 @@ class GrblWorker:
             logger.error(f"Unexpected write error: {e}")
             raise SerialWriteError(f"Unexpected error: {e}")
     
-    def unlock(self) -> None:
-        """Send unlock command ($X) to clear alarm state."""
-        self.send_immediate("$X")
-    
-    def home(self) -> None:
-        """Send home command ($H) to run homing cycle."""
-        self.send_immediate("$H")
-    
-    def reset(self, emit_state: bool = True) -> None:
-        """Send soft reset (Ctrl-X).
-        
-        Immediately halts all motion and resets GRBL state.
-        
-        Args:
-            emit_state: Whether to emit stream_state event
-        """
-        self._abort_writes.set()
-        try:
-            self.send_realtime(RT_RESET)
-        except SerialWriteError as exc:
-            logger.error(f"Reset failed: {exc}")
-            self.ui_q.put(("log", f"[reset failed] {exc}"))
-        # Reset local state
-        self._ready = False
-        self._alarm_active = False
-        was_streaming = self._streaming or self._paused
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = False
-            self._paused = False
-        self._reset_stream_buffer()
-        self._clear_outgoing()
-        self._emit_buffer_fill()
-        self.ui_q.put(("ready", False))
-        if emit_state and was_streaming:
-            self.ui_q.put(("stream_state", "stopped", None))
-        self._abort_writes.clear()
-    
-    def hold(self) -> None:
-        """Send feed hold command (!) to pause motion."""
-        self.send_realtime(RT_HOLD)
-    
-    def resume(self) -> None:
-        """Send cycle start command (~) to resume motion."""
-        self.send_realtime(RT_RESUME)
-    
-    def spindle_on(self, rpm: int = DEFAULT_SPINDLE_RPM) -> None:
-        """Turn spindle on at specified RPM.
-        
-        Args:
-            rpm: Spindle speed in RPM (default: 12000)
-            
-        Raises:
-            ValueError: If RPM is invalid
-        """
-        rpm = validate_rpm(rpm)
-        self.send_immediate(f"M3 S{rpm}")
-    
-    def spindle_off(self) -> None:
-        """Turn spindle off."""
-        self.send_immediate("M5")
-    
-    def jog_cancel(self) -> None:
-        """Cancel active jog command."""
-        self.send_realtime(RT_JOG_CANCEL)
-
-    def cancel_pending_jogs(self) -> None:
-        """Remove queued jog commands from the manual queue."""
-        self._purge_jog_queue.set()
-        self._emit_buffer_fill()
-
-    def manual_queue_busy(self) -> bool:
-        """Return True when manual commands are still queued/pending."""
-        with self._stream_lock:
-            if self._manual_pending_item is not None:
-                return True
-            for _, is_gcode, _, _ in self._stream_line_queue:
-                if not is_gcode:
-                    return True
-        return False
-
-    def manual_queue_backpressure(self) -> bool:
-        """Return True when manual queue is blocked by buffer limits."""
-        with self._stream_lock:
-            return self._manual_pending_item is not None
-    
-    def jog(
-        self,
-        dx: float,
-        dy: float,
-        dz: float,
-        feed: float,
-        unit_mode: str
-    ) -> None:
-        """Execute incremental jog move.
-        
-        Args:
-            dx: X distance (incremental)
-            dy: Y distance (incremental)
-            dz: Z distance (incremental)
-            feed: Feed rate in mm/min or inches/min
-            unit_mode: "mm" or "inch"
-            
-        Raises:
-            GrblNotConnectedException: If not connected
-            ValueError: If parameters are invalid
-        """
-        if not self.is_connected():
-            raise GrblNotConnectedException("Cannot jog - not connected")
-        
-        # Validate inputs
-        feed = validate_feed_rate(feed)
-        unit_mode = validate_unit_mode(unit_mode)
-        
-        gunit = "G21" if unit_mode == "mm" else "G20"
-        cmd = f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
-        self.send_immediate(cmd)
-    
-    # ========================================================================
-    # G-CODE STREAMING
-    # ========================================================================
-    
-    def load_gcode(self, lines: Sequence[str], *, name: str | None = None) -> None:
-        """Load G-code for streaming.
-        
-        Args:
-            lines: List of G-code lines (already cleaned)
-            name: Optional job name for error reporting
-        """
-        self._gcode = lines
-        self._gcode_name = name
-        self._streaming = False
-        self._paused = False
-        self._send_index = 0
-        self._ack_index = -1
-        self._reset_stream_buffer()
-        self.ui_q.put(("stream_state", "loaded", len(lines)))
-        logger.info(f"Loaded {len(lines)} lines of G-code")
-    
-    def start_stream(self) -> None:
-        """Start streaming loaded G-code from beginning."""
-        if not self.is_connected():
-            logger.warning("Cannot start stream - not connected")
-            return
-        
-        if not self._gcode:
-            logger.warning("Cannot start stream - no G-code loaded")
-            return
-        
-        self._clear_outgoing()
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = True
-            self._paused = False
-        self._abort_writes.clear()
-        self._reset_stream_buffer()
-        self._emit_buffer_fill()
-        if self._dry_run_sanitize:
-            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
-        self.ui_q.put(("stream_state", "running", None))
-        logger.info("Started G-code streaming")
-    
-    def start_stream_from(
-        self,
-        start_index: int,
-        preamble: Sequence[str] | None = None
-    ) -> None:
-        """Resume streaming from specific line.
-        
-        Args:
-            start_index: Zero-based index to resume from
-            preamble: Optional setup commands to send first (e.g., G90, G21)
-        """
-        if not self.is_connected():
-            logger.warning("Cannot resume stream - not connected")
-            return
-        
-        if not self._gcode:
-            logger.warning("Cannot resume stream - no G-code loaded")
-            return
-        
-        start_index = max(0, min(start_index, len(self._gcode) - 1))
-        
-        self._clear_outgoing()
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = True
-            self._paused = False
-        self._abort_writes.clear()
-        self._reset_stream_buffer()
-        
-        with self._stream_lock:
-            self._send_index = start_index
-            self._ack_index = start_index - 1
-            
-            if preamble:
-                cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
-                self._resume_preamble = deque(cleaned)
-        
-        self._emit_buffer_fill()
-        if self._dry_run_sanitize:
-            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
-        self.ui_q.put(("progress", start_index, len(self._gcode)))
-        self.ui_q.put(("stream_state", "running", None))
-        logger.info(f"Resumed streaming from line {start_index}")
-    
-    def pause_stream(self) -> None:
-        """Pause active stream (feed hold)."""
-        self._pause_stream()
-    
-    def resume_stream(self) -> None:
-        """Resume paused stream (cycle start)."""
-        if self._streaming:
-            try:
-                self.resume()
-            except SerialWriteError as exc:
-                logger.error(f"Resume failed: {exc}")
-                self.ui_q.put(("log", f"[resume failed] {exc}"))
-                return
-            self._paused = False
-            self.ui_q.put(("stream_state", "running", None))
-            logger.info("Stream resumed")
-
-    def _pause_stream(self, reason: str | None = None) -> None:
-        if not self._streaming:
-            return
-        if not self._paused:
-            try:
-                self.hold()
-            except SerialWriteError as exc:
-                logger.error(f"Pause failed: {exc}")
-                self.ui_q.put(("log", f"[pause failed] {exc}"))
-        self._paused = True
-        self.ui_q.put(("stream_state", "paused", None))
-        if reason:
-            self.ui_q.put(("stream_pause_reason", reason))
-            logger.info(f"Stream paused ({reason})")
-        else:
-            logger.info("Stream paused")
-    
-    def stop_stream(self) -> None:
-        """Stop active stream and reset."""
-        self.reset(emit_state=False)
-        self.ui_q.put(("stream_state", "stopped", None))
-        logger.info("Stream stopped")
-    
-    # ========================================================================
-    # STATUS MANAGEMENT
-    # ========================================================================
-    
-    def set_status_poll_interval(self, interval: float) -> None:
-        """Set status polling interval.
-        
-        Args:
-            interval: Polling interval in seconds
-            
-        Raises:
-            ValueError: If interval is invalid
-        """
-        interval = validate_interval(interval, min_val=0.01)
-        
-        with self._status_interval_lock:
-            self._status_poll_interval = interval
-
-        logger.debug(f"Status poll interval set to {interval}s")
-
-    def set_status_query_failure_limit(self, limit: int) -> None:
-        """Set the number of consecutive status failures before disconnect.
-
-        Args:
-            limit: Positive integer failure limit
-        """
-        try:
-            limit = int(limit)
-        except Exception:
-            limit = 3
-        if limit < 1:
-            limit = 1
-        if limit > 10:
-            limit = 10
-        self._status_query_failure_limit = limit
-        logger.debug(f"Status query failure limit set to {limit}")
-    
-    def _mark_ready(self) -> None:
-        """Mark GRBL as ready (banner received)."""
-        if not self._ready:
-            self._ready = True
-            self.ui_q.put(("ready", True))
-            logger.info("GRBL ready")
-    
-    def _safe_ui_put(self, *args, context: str = "operation") -> None:
-        """Safely put item on UI queue with error logging.
-        
-        Wraps ui_q.put() to ensure worker thread continues even if UI queue fails.
-        
-        Args:
-            *args: Arguments to pass to ui_q.put()
-            context: Description of operation for error logging
-        """
-        try:
-            self.ui_q.put(*args)
-        except Exception as e:
-            logger.error(f"Failed to send UI event during {context}: {e}")
-    
-    def _handle_alarm(self, message: str) -> None:
-        """Handle alarm state.
-        
-        Args:
-            message: Alarm message from GRBL
-        """
-        message = annotate_grbl_alarm(message)
-        logger.warning(f"GRBL ALARM: {message}")
-        
-        # Log to console (safe)
-        self._safe_ui_put(("log", f"[ALARM] {message}"), context="alarm logging")
-        
-        if not self._alarm_active:
-            self._alarm_active = True
-        
-        # Stop streaming if active
-        self._abort_writes.set()
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = False
-            self._paused = False
-        self._reset_stream_buffer()
-        
-        # Emit buffer state (wrapped to handle failures)
-        try:
-            self._emit_buffer_fill()
-        except Exception as e:
-            logger.error(f"Failed to emit buffer state during alarm: {e}")
-        
-        # Notify UI of alarm state (safe)
-        self._safe_ui_put(("stream_state", "alarm", message), context="alarm state")
-        
-        self._clear_outgoing()
-        
-        # Emit alarm event (safe)
-        self._safe_ui_put(("alarm", message), context="alarm event")
-        
-        self._abort_writes.clear()
-
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
-    
     def _emit_exception(self, context: str, exc: BaseException) -> None:
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         try:
@@ -854,8 +531,11 @@ class GrblWorker:
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
+        self._settings_dump_active = False
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
+        self._watchdog_ignore_until = 0.0
+        self._watchdog_ignore_reason = None
         self._reset_stream_buffer()
         self._clear_outgoing()
         try:
@@ -907,65 +587,8 @@ class GrblWorker:
         Returns:
             Encoded bytes with newline
         """
-        return (line.strip() + "\n").encode("utf-8", errors="replace")
+        return (line.strip() + "\n").encode("ascii")
 
-    def _sanitize_stream_line(self, line: str) -> str:
-        if not self._dry_run_sanitize or not line:
-            return line
-
-        def repl(match: re.Match[str]) -> str:
-            token = match.group(0)
-            letter = token[0].upper()
-            if letter == "S":
-                return ""
-            if letter == "T":
-                return ""
-            if letter == "M":
-                try:
-                    value = float(token[1:])
-                except Exception:
-                    return token
-                if abs(value - round(value)) < 1e-9 and int(round(value)) in _DRY_RUN_M_CODES:
-                    return ""
-            return token
-
-        return _SANITIZE_TOKEN_PAT.sub(repl, line)
-
-    def _pause_reason_for_line(self, line: str) -> str | None:
-        if not line:
-            return None
-        match = _PAUSE_MCODE_PAT.search(line.upper())
-        if not match:
-            return None
-        return _PAUSE_MCODE_MAP.get(match.group(1))
-
-    def _maybe_pause_after_ack(self, idx: int | None) -> None:
-        if idx is None:
-            return
-        if self._pause_after_idx is None or idx != self._pause_after_idx:
-            return
-        reason = self._pause_after_reason or "M0/M1/M6"
-        self._pause_after_idx = None
-        self._pause_after_reason = None
-        self._pause_stream(reason=reason)
-        self.ui_q.put(("log", f"[stream] Paused on {reason} at line {idx + 1}"))
-
-    def _format_stream_error(
-        self,
-        raw_error: str,
-        idx: int | None,
-        line_text: str | None,
-    ) -> str:
-        parts = [annotate_grbl_error(raw_error)]
-        if idx is not None:
-            if self._gcode_name:
-                parts.append(f"{self._gcode_name} line {idx + 1}")
-            else:
-                parts.append(f"line {idx + 1}")
-        if line_text:
-            parts.append(line_text)
-        return " | ".join(parts)
-    
     def _write_line(
         self,
         line: str,
@@ -988,6 +611,7 @@ class GrblWorker:
             if payload is None:
                 payload = self._encode_line_payload(line)
 
+            self._log_tx_line(line)
             with self._write_lock:
                 if self._abort_writes.is_set():
                     return False
@@ -1085,306 +709,6 @@ class GrblWorker:
     # WORKER THREAD LOOPS
     # ========================================================================
     
-    def _tx_loop(self, stop_evt: threading.Event) -> None:
-        """Transmit thread - handles streaming and command queue.
-        
-        Args:
-            stop_evt: Event to signal thread shutdown
-        """
-        logger.debug("TX thread started")
-        
-        try:
-            while not stop_evt.is_set():
-                if not self.is_connected():
-                    time.sleep(0.05)
-                    continue
-                
-                # Handle streaming
-                if self._streaming and not self._paused:
-                    self._process_stream_queue()
-
-                # Handle manual commands with buffer pacing
-                self._process_manual_queue()
-
-                if stop_evt.wait(EVENT_QUEUE_TIMEOUT):
-                    break
-        
-        except Exception as e:
-            logger.error(f"TX thread error: {e}", exc_info=True)
-            self._emit_exception("TX thread error", e)
-            self._signal_disconnect(f"TX thread error: {e}")
-            stop_evt.set()
-        
-        finally:
-            logger.debug("TX thread stopped")
-    
-    def _process_stream_queue(self) -> None:
-        """Process streaming queue - fill GRBL buffer."""
-        while True:
-            if not self._streaming or self._paused or self._abort_writes.is_set():
-                break
-            
-            with self._stream_lock:
-                if not self._streaming or self._paused or self._abort_writes.is_set():
-                    break
-                
-                stream_token = self._stream_token
-
-                if (
-                    self._pause_after_idx is not None
-                    and self._send_index > self._pause_after_idx
-                ):
-                    break
-
-                # Get next item to send
-                item = self._stream_pending_item
-                if item is None:
-                    if self._resume_preamble:
-                        line = self._resume_preamble[0]
-                        item = (line, False, None)
-                    else:
-                        if self._send_index >= len(self._gcode):
-                            break
-                        line = self._gcode[self._send_index].strip()
-                        item = (line, True, self._send_index)
-                
-                line, is_gcode, idx = item
-                line = self._sanitize_stream_line(line)
-                item = (line, is_gcode, idx)
-                if is_gcode and idx is not None and self._pause_after_idx is None:
-                    reason = self._pause_reason_for_line(line)
-                    if reason:
-                        self._pause_after_idx = idx
-                        self._pause_after_reason = reason
-                payload = self._encode_line_payload(line)
-                line_len = len(payload)
-                
-                # Check if it fits in buffer
-                usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                can_fit = (self._stream_buf_used + line_len) <= usable
-                
-                if not can_fit and self._stream_buf_used > 0:
-                    # Wait for buffer space
-                    self._stream_pending_item = item
-                    break
-                
-                # Allow oversized line to prevent deadlock
-                # (should never happen with GRBL's 80-char line limit)
-                
-                # Send the line
-                self._stream_pending_item = None
-                if is_gcode:
-                    idx = self._send_index
-                    self._send_index += 1
-                
-                self._stream_buf_used += line_len
-                self._stream_line_queue.append((line_len, is_gcode, idx, line))
-            
-            # Write outside lock
-            if (
-                self._abort_writes.is_set()
-                or stream_token != self._stream_token
-                or not self._streaming
-                or self._paused
-            ):
-                with self._stream_lock:
-                    if is_gcode and self._send_index > 0:
-                        self._send_index -= 1
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    self._stream_pending_item = None
-                self._emit_buffer_fill()
-                break
-
-            if not self._write_line(line, payload):
-                # Write failed - rollback and stop streaming
-                with self._stream_lock:
-                    if is_gcode and self._send_index > 0:
-                        self._send_index -= 1
-                    
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    
-                    self._stream_pending_item = item
-                
-                self._emit_buffer_fill()
-                if not self.is_connected():
-                    break
-                if not (self._abort_writes.is_set() or stream_token != self._stream_token):
-                    self._streaming = False
-                    self._paused = False
-                    self.ui_q.put(("stream_state", "error", "Write failed"))
-                break
-            
-            # Update state
-            if not is_gcode and self._resume_preamble:
-                self._resume_preamble.popleft()
-            
-            self._record_tx_bytes(line_len)
-            self._emit_buffer_fill()
-            
-            if is_gcode:
-                self.ui_q.put(("gcode_sent", idx, line))
-        
-        # Check if streaming is complete
-        with self._stream_lock:
-            send_index = self._send_index
-            ack_index = self._ack_index
-            pending = bool(
-                self._stream_line_queue or
-                self._stream_pending_item or
-                self._resume_preamble
-            )
-        
-        if (self._streaming and
-            not pending and
-            send_index >= len(self._gcode) and
-            ack_index >= len(self._gcode) - 1):
-            self._streaming = False
-            self.ui_q.put(("stream_state", "done", None))
-            logger.info("Streaming complete")
-
-    def _process_manual_queue(self) -> None:
-        """Process immediate command queue with buffer pacing."""
-        if self._purge_jog_queue.is_set():
-            self._purge_jog_queue.clear()
-            pending: list[str] = []
-            try:
-                while True:
-                    pending.append(self._outgoing_q.get_nowait())
-            except queue.Empty:
-                pass
-            kept = []
-            for cmd in pending:
-                if isinstance(cmd, str) and cmd.lstrip().upper().startswith("$J="):
-                    continue
-                kept.append(cmd)
-            for cmd in kept:
-                self._outgoing_q.put(cmd)
-            if self._manual_pending_item is not None:
-                line, _, _ = self._manual_pending_item
-                if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
-                    self._manual_pending_item = None
-        while True:
-            if self._streaming or self._paused:
-                return
-            if not self.is_connected():
-                return
-            if self._abort_writes.is_set():
-                return
-
-            if self._manual_pending_item is not None:
-                line, payload, line_len = self._manual_pending_item
-            else:
-                try:
-                    line = self._outgoing_q.get_nowait()
-                except queue.Empty:
-                    return
-
-                if self._alarm_active:
-                    cmd_upper = line.strip().upper()
-                    if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
-                        self._clear_outgoing()
-                        continue
-
-                line = line.strip()
-                if not line:
-                    continue
-                payload = self._encode_line_payload(line)
-                line_len = len(payload)
-
-            if line_len > MAX_LINE_LENGTH:
-                self.ui_q.put((
-                    "log",
-                    f"[manual] Line too long ({line_len} > {MAX_LINE_LENGTH}): {line}",
-                ))
-                self._manual_pending_item = None
-                continue
-
-            drop_for_buffer = False
-            usable = None
-            with self._stream_lock:
-                usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                if line_len > usable and self._stream_buf_used <= 0:
-                    self._manual_pending_item = None
-                    drop_for_buffer = True
-                else:
-                    can_fit = (self._stream_buf_used + line_len) <= usable
-
-                    if not can_fit and self._stream_buf_used > 0:
-                        self._manual_pending_item = (line, payload, line_len)
-                        break
-
-                    self._manual_pending_item = None
-                    self._stream_buf_used += line_len
-                    self._stream_line_queue.append((line_len, False, None, line))
-
-            if drop_for_buffer:
-                self.ui_q.put((
-                    "log",
-                    f"[manual] Line too long for buffer ({line_len} > {usable}): {line}",
-                ))
-                continue
-
-            if self._abort_writes.is_set():
-                with self._stream_lock:
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    self._manual_pending_item = None
-                self._emit_buffer_fill()
-                break
-
-            if not self._write_line(line, payload):
-                with self._stream_lock:
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    if self.is_connected():
-                        self._manual_pending_item = (line, payload, line_len)
-                    else:
-                        self._manual_pending_item = None
-                self._emit_buffer_fill()
-                break
-
-            self.ui_q.put(("log_tx", line))
-            self._record_tx_bytes(line_len)
-            self._emit_buffer_fill()
-
-    def wait_for_manual_completion(self, timeout_s: float = 30.0) -> bool:
-        """Block until manual/immediate commands finish."""
-        start = time.time()
-        while True:
-            with self._stream_lock:
-                pending = bool(self._stream_line_queue) or self._manual_pending_item is not None or bool(self._resume_preamble)
-            if not pending:
-                return True
-            if timeout_s and (time.time() - start) > timeout_s:
-                return False
-            time.sleep(0.01)
-    
     def _rx_loop(self, stop_evt: threading.Event) -> None:
         """Receive thread - reads from GRBL and processes responses.
         
@@ -1398,12 +722,19 @@ class GrblWorker:
         
         try:
             while not stop_evt.is_set():
-                if not self.is_connected():
-                    time.sleep(0.05)
-                    continue
-                
+                try:
+                    self.is_connected()
+                except Exception as e:
+                    logger.error(f"RX thread error: {e}", exc_info=True)
+                    self._emit_exception("RX thread error", e)
+                    self._signal_disconnect(f"RX thread error: {e}")
+                    stop_evt.set()
+                    break
                 ser = self.ser
                 if ser is None:
+                    time.sleep(0.05)
+                    continue
+                if hasattr(ser, "is_open") and not ser.is_open:
                     time.sleep(0.05)
                     continue
                 try:
@@ -1446,194 +777,3 @@ class GrblWorker:
         finally:
             logger.debug("RX thread stopped")
     
-    def _handle_rx_line(self, line: str) -> None:
-        """Handle received line from GRBL.
-        
-        Args:
-            line: Line received from GRBL
-        """
-        self._last_rx_ts = time.time()
-        self._watchdog_paused = False
-        self._watchdog_trip_ts = 0.0
-
-        # Parse status reports
-        is_status = line.startswith("<") and line.endswith(">")
-        
-        # Log to UI
-        self.ui_q.put(("log_rx", line))
-        
-        line_lower = line.lower()
-        
-        # GRBL banner
-        if line_lower.startswith("grbl"):
-            self._mark_ready()
-        
-        # Alarm detection
-        if line_lower.startswith("alarm:"):
-            self._handle_alarm(line)
-            return
-        
-        if "[msg:" in line_lower and "reset to continue" in line_lower:
-            self._handle_alarm(line)
-            return
-        
-        # Command acknowledgment
-        if line_lower == "ok" or line_lower.startswith("error"):
-            ack_index = None
-            ack_line_idx = None
-            ack_line_text = None
-            err_idx = None
-            err_line = None
-
-            with self._stream_lock:
-                if self._stream_line_queue:
-                    line_len, is_gcode, idx, sent_line = self._stream_line_queue.popleft()
-                    self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    
-                    if is_gcode and self._streaming:
-                        self._ack_index += 1
-                        ack_index = self._ack_index
-                        ack_line_idx = idx
-                        ack_line_text = sent_line
-                        if line_lower.startswith("error"):
-                            err_idx = idx
-                            err_line = sent_line
-            
-            self._emit_buffer_fill()
-            
-            # Report progress
-            if ack_index is not None:
-                self.ui_q.put(("gcode_acked", ack_index))
-                self.ui_q.put(("progress", ack_index + 1, len(self._gcode)))
-            
-            if line_lower == "ok":
-                if ack_line_idx is not None:
-                    self._maybe_pause_after_ack(ack_line_idx)
-
-            # Pause stream on error (gSender-style) with context.
-            if line_lower.startswith("error"):
-                logger.error(f"GRBL error: {line}")
-                if self._streaming or self._paused:
-                    if err_idx == self._pause_after_idx:
-                        self._pause_after_idx = None
-                        self._pause_after_reason = None
-                    msg = self._format_stream_error(line, err_idx, err_line)
-                    self._pause_stream(reason="error")
-                    self.ui_q.put(("stream_error", msg, err_idx, err_line, self._gcode_name))
-                    self.ui_q.put(("log", f"[stream error] {msg}"))
-                else:
-                    self.ui_q.put(("manual_error", line, self._last_manual_source))
-        
-        # Status report
-        if is_status:
-            self._mark_ready()
-            parts = line.strip("<>").split("|")
-            state = parts[0] if parts else ""
-            
-            # Check for alarm in status
-            if state.lower().startswith("alarm"):
-                if not self._alarm_active:
-                    self._handle_alarm(state)
-            elif self._alarm_active:
-                self._alarm_active = False
-            
-            # Parse buffer info
-            for part in parts:
-                if part.startswith("Bf:"):
-                    try:
-                        _, rx_free = part[3:].split(",", 1)
-                        rx_free = int(rx_free.strip())
-                        if rx_free < 0:
-                            rx_free = 0
-                        with self._stream_lock:
-                            busy = (
-                                self._stream_buf_used > 0
-                                or self._stream_line_queue
-                                or self._stream_pending_item is not None
-                                or self._manual_pending_item is not None
-                                or self._resume_preamble
-                            )
-                            if busy:
-                                continue
-                            capacity = rx_free + self._stream_buf_used
-                            if capacity < RX_BUFFER_SIZE:
-                                capacity = RX_BUFFER_SIZE
-                            self._rx_window = capacity
-                        self._emit_buffer_fill()
-                    except (ValueError, IndexError) as e:
-                        logger.warning(f"Failed to parse Bf field: {e}")
-            
-            self.ui_q.put(("status", line))
-    
-    def _status_loop(self, stop_evt: threading.Event) -> None:
-        """Status polling thread - periodically requests status.
-        
-        Args:
-            stop_evt: Event to signal thread shutdown
-        """
-        logger.debug("Status thread started")
-        
-        try:
-            while not stop_evt.is_set():
-                if self.is_connected():
-                    idle = time.time() - self._last_rx_ts
-                    if (
-                        idle >= WATCHDOG_RX_TIMEOUT
-                        and (self._streaming or self._paused or self._ready)
-                        and not self._watchdog_paused
-                    ):
-                        if self._streaming and not self._paused:
-                            self._pause_stream(reason="connection watchdog")
-                        self._watchdog_paused = True
-                        self._watchdog_trip_ts = time.time()
-                        try:
-                            self.ui_q.put(("log", "[watchdog] No RX from GRBL; pausing stream."))
-                        except Exception:
-                            pass
-                    if idle >= WATCHDOG_DISCONNECT_TIMEOUT and (self._streaming or self._ready):
-                        self._signal_disconnect("Connection watchdog timeout")
-                        stop_evt.set()
-                        break
-                if self.is_connected():
-                    try:
-                        self.send_realtime(RT_STATUS)
-                        self._status_query_failures = 0
-                    except Exception as e:
-                        logger.error(f"Status query error: {e}")
-                        self.ui_q.put(("log", f"[status query error] {e}"))
-                        self._emit_exception("Status query error", e)
-                        self._status_query_failures += 1
-                        try:
-                            self.ui_q.put((
-                                "log",
-                                f"[status] Query failed ({self._status_query_failures}/{self._status_query_failure_limit})",
-                            ))
-                        except Exception:
-                            pass
-                        if self._status_query_failures >= self._status_query_failure_limit:
-                            self._signal_disconnect(f"Status query error: {e}")
-                            stop_evt.set()
-                            break
-                        backoff = min(
-                            self._status_query_backoff_max,
-                            self._status_query_backoff_base * self._status_query_failures,
-                        )
-                        if stop_evt.wait(backoff):
-                            break
-                
-                # Get current interval
-                with self._status_interval_lock:
-                    interval = self._status_poll_interval
-                
-                # Wait for interval or stop signal
-                if stop_evt.wait(interval):
-                    break
-        
-        except Exception as e:
-            logger.error(f"Status thread error: {e}", exc_info=True)
-            self._emit_exception("Status thread error", e)
-            self._signal_disconnect(f"Status thread error: {e}")
-            stop_evt.set()
-        
-        finally:
-            logger.debug("Status thread stopped")

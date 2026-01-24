@@ -15,9 +15,26 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
+
+
+def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
+    if getattr(widget, "_force_disabled", False):
+        return "disabled"
+    if not connected:
+        return "normal" if widget in app._offline_controls else "disabled"
+    if not enabled:
+        if widget is getattr(app, "btn_all_stop", None):
+            return "normal"
+        if widget in app._override_controls:
+            return "normal"
+        return "disabled"
+    return "normal"
 
 
 def set_manual_controls_enabled(app, enabled: bool):
@@ -40,22 +57,9 @@ def set_manual_controls_enabled(app, enabled: bool):
                 pass
         return
     connected = bool(getattr(app, "connected", False))
-    state = "normal" if enabled else "disabled"
     for w in app._manual_controls:
         try:
-            if not connected:
-                if w in app._offline_controls:
-                    w.config(state="normal")
-                else:
-                    w.config(state="disabled")
-                continue
-            if not enabled and w is getattr(app, "btn_all_stop", None):
-                w.config(state="normal")
-                continue
-            if not enabled and w in app._override_controls:
-                w.config(state="normal")
-                continue
-            w.config(state=state)
+            w.config(state=_manual_control_state(app, w, enabled, connected))
         except tk.TclError:
             pass
     if enabled and connected:

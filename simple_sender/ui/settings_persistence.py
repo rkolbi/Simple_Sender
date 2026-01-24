@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
@@ -77,6 +80,7 @@ def save_settings(app):
     arc_detail_deg = app._clamp_arc_detail(app.toolpath_arc_detail.get())
     app._apply_error_dialog_settings()
     app._on_status_failure_limit_change()
+    app._on_homing_watchdog_change()
 
     try:
         os.makedirs(os.path.dirname(app.settings_path), exist_ok=True)
@@ -87,6 +91,7 @@ def save_settings(app):
 
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
+    data.pop("console_status_enabled", None)
     data.update({
         "last_port": app.current_port.get(),
         "unit_mode": app.unit_mode.get(),
@@ -133,23 +138,44 @@ def save_settings(app):
             ),
             "status failure limit",
         ),
+        "homing_watchdog_enabled": bool(app.homing_watchdog_enabled.get()),
+        "homing_watchdog_timeout": safe_float(
+            app.homing_watchdog_timeout,
+            app.settings.get(
+                "homing_watchdog_timeout",
+                DEFAULT_SETTINGS.get("homing_watchdog_timeout", 60.0),
+            ),
+            "homing watchdog timeout",
+        ),
         "view_3d": app.settings.get("view_3d"),
         "all_stop_mode": app.all_stop_mode.get(),
         "training_wheels": bool(app.training_wheels.get()),
         "stop_joystick_hold_on_focus_loss": bool(app.stop_hold_on_focus_loss.get()),
         "validate_streaming_gcode": bool(app.validate_streaming_gcode.get()),
+        "streaming_line_threshold": safe_int(
+            app.streaming_line_threshold,
+            app.settings.get("streaming_line_threshold", DEFAULT_SETTINGS.get("streaming_line_threshold", 0)),
+            "streaming line threshold",
+        ),
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
         "theme": app.selected_theme.get(),
+        "ui_scale": safe_float(
+            app.ui_scale,
+            app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0)),
+            "ui scale",
+        ),
         "console_positions_enabled": pos_status_enabled,
-        "console_status_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
         "show_endstop_indicator": bool(app.show_endstop_indicator.get()),
         "show_probe_indicator": bool(app.show_probe_indicator.get()),
         "show_hold_indicator": bool(app.show_hold_indicator.get()),
+        "auto_level_enabled": bool(app.auto_level_enabled.get()),
+        "show_autolevel_overlay": bool(app.show_autolevel_overlay.get()),
         "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
         "show_quick_3d_button": bool(app.show_quick_3d_button.get()),
         "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
+        "show_quick_alo_button": bool(app.show_quick_alo_button.get()),
         "show_quick_release_button": bool(app.show_quick_release_button.get()),
         "fallback_rapid_rate": app.fallback_rapid_rate.get().strip(),
         "estimate_factor": safe_float(
@@ -192,6 +218,9 @@ def save_settings(app):
         "job_completion_beep": bool(app.job_completion_beep.get()),
         "macros_allow_python": bool(app.macros_allow_python.get()),
         "zeroing_persistent": bool(app.zeroing_persistent.get()),
+        "auto_level_settings": dict(getattr(app, "auto_level_settings", {})),
+        "auto_level_job_prefs": dict(getattr(app, "auto_level_job_prefs", {})),
+        "auto_level_presets": dict(getattr(app, "auto_level_presets", {})),
     })
     app.settings = data
     app._settings_store.data = app.settings

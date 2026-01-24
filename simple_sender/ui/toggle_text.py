@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 def _ensure_toggle_button_styles(app) -> tuple[str, str]:
@@ -61,7 +64,8 @@ def refresh_tooltips_toggle_text(app):
 
 def refresh_render_3d_toggle_text(app):
     text = "3DR"
-    enabled = app.render3d_enabled.get()
+    blocked = bool(getattr(app, "_render3d_blocked", False))
+    enabled = app.render3d_enabled.get() and not blocked
     for attr in ("btn_toggle_3d", "btn_toggle_3d_settings"):
         btn = getattr(app, attr, None)
         if btn:
@@ -73,6 +77,16 @@ def refresh_keybindings_toggle_text(app):
     text = "Keys"
     enabled = app.keyboard_bindings_enabled.get()
     for attr in ("btn_toggle_keybinds", "btn_toggle_keybinds_settings"):
+        btn = getattr(app, attr, None)
+        if btn:
+            btn.config(text=text)
+            _apply_toggle_button_state(app, btn, enabled)
+
+
+def refresh_autolevel_overlay_toggle_text(app):
+    text = "ALO"
+    enabled = app.show_autolevel_overlay.get()
+    for attr in ("btn_toggle_autolevel_overlay", "btn_toggle_autolevel_overlay_settings"):
         btn = getattr(app, attr, None)
         if btn:
             btn.config(text=text)

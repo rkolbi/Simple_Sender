@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """G-code text viewer widget with syntax highlighting.
@@ -43,6 +46,17 @@ from ..utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def reset_gcode_view_for_run(app):
+    if not hasattr(app, "gview") or app.gview.lines_count <= 0:
+        return
+    app._clear_pending_ui_updates()
+    app.gview.clear_highlights()
+    app._last_sent_index = -1
+    app._last_acked_index = -1
+    app._last_error_index = -1
+    app.gview.highlight_current(0)
 
 
 class GcodeViewer(ttk.Frame):

@@ -15,26 +15,65 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import math
+import os
 import tkinter as tk
+from tkinter import messagebox
+
+from simple_sender.utils.constants import (
+    TOOLPATH_ARC_DETAIL_DEFAULT_DEG,
+    TOOLPATH_ARC_DETAIL_MAX_DEG,
+    TOOLPATH_ARC_DETAIL_MIN_DEG,
+    TOOLPATH_ARC_DETAIL_REPARSE_DELAY_MS,
+    TOOLPATH_DRAW_PERCENT_MIN,
+    TOOLPATH_FULL_LIMIT_DEFAULT,
+    TOOLPATH_FULL_LIMIT_MIN,
+    TOOLPATH_INTERACTIVE_LIMIT_DEFAULT,
+    TOOLPATH_INTERACTIVE_LIMIT_MIN,
+    TOOLPATH_PERF_LIGHTWEIGHT_THRESHOLD,
+    TOOLPATH_PERFORMANCE_DEFAULT,
+    TOOLPATH_STREAMING_RENDER_INTERVAL_DEFAULT,
+    TOOLPATH_STREAMING_RENDER_INTERVAL_MAX,
+    TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
+)
 
 
 def _can_use_toolpath(app) -> bool:
     return bool(app._last_gcode_lines) and not getattr(app, "_gcode_streaming_mode", False)
 
 
+def _confirm_streaming_3d_preview(app) -> bool:
+    name = "this file"
+    path = getattr(app, "_last_gcode_path", None)
+    if path:
+        name = os.path.basename(path)
+    line_count = getattr(app, "_gcode_total_lines", None)
+    line_text = f"{line_count:,} lines" if line_count else "many lines"
+    msg = (
+        f"{name} is loaded in streaming mode ({line_text}).\n"
+        "Generating a 3D preview can take time and memory.\n"
+        "Continue?"
+    )
+    try:
+        return messagebox.askyesno("Enable 3D preview?", msg)
+    except Exception:
+        return False
+
+
 def init_toolpath_settings(app):
-    app._toolpath_full_limit_default = 40000
-    app._toolpath_interactive_limit_default = 5000
-    app._toolpath_full_limit_min = 5000
-    app._toolpath_interactive_limit_min = 1000
-    app._toolpath_performance_default = 50.0
-    app._toolpath_arc_detail_min = 1.0
-    app._toolpath_arc_detail_max = 45.0
-    app._toolpath_arc_detail_default = math.degrees(math.pi / 18)
-    app._toolpath_streaming_render_interval_default = 0.25
+    app._toolpath_full_limit_default = TOOLPATH_FULL_LIMIT_DEFAULT
+    app._toolpath_interactive_limit_default = TOOLPATH_INTERACTIVE_LIMIT_DEFAULT
+    app._toolpath_full_limit_min = TOOLPATH_FULL_LIMIT_MIN
+    app._toolpath_interactive_limit_min = TOOLPATH_INTERACTIVE_LIMIT_MIN
+    app._toolpath_performance_default = TOOLPATH_PERFORMANCE_DEFAULT
+    app._toolpath_arc_detail_min = TOOLPATH_ARC_DETAIL_MIN_DEG
+    app._toolpath_arc_detail_max = TOOLPATH_ARC_DETAIL_MAX_DEG
+    app._toolpath_arc_detail_default = TOOLPATH_ARC_DETAIL_DEFAULT_DEG
+    app._toolpath_streaming_render_interval_default = TOOLPATH_STREAMING_RENDER_INTERVAL_DEFAULT
     try:
         saved_full = int(app.settings.get("toolpath_full_limit", app._toolpath_full_limit_default))
     except Exception:
@@ -63,7 +102,10 @@ def init_toolpath_settings(app):
         )
     except Exception:
         streaming_interval = app._toolpath_streaming_render_interval_default
-    streaming_interval = max(0.05, min(2.0, streaming_interval))
+    streaming_interval = max(
+        TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
+        min(TOOLPATH_STREAMING_RENDER_INTERVAL_MAX, streaming_interval),
+    )
     app.toolpath_streaming_render_interval = tk.DoubleVar(value=streaming_interval)
     app._toolpath_arc_detail_value = tk.StringVar(value=f"{saved_arc:.1f}°")
     saved_draw_percent = app.settings.get("toolpath_draw_percent", None)
@@ -111,16 +153,36 @@ def init_toolpath_settings(app):
     app.toolpath_lightweight = tk.BooleanVar(value=lightweight)
     app._toolpath_arc_detail_value = tk.StringVar(value=f"{arc_detail:.1f}°")
     app._toolpath_arc_detail_reparse_after_id = None
-    app._toolpath_arc_detail_reparse_delay = 300
+    app._toolpath_arc_detail_reparse_delay = TOOLPATH_ARC_DETAIL_REPARSE_DELAY_MS
 
 
 def toggle_render_3d(app):
+    streaming_mode = bool(getattr(app, "_gcode_streaming_mode", False))
+    blocked = bool(getattr(app, "_render3d_blocked", False))
+    if streaming_mode and blocked:
+        if not _confirm_streaming_3d_preview(app):
+            return
+        app._render3d_blocked = False
+        app.render3d_enabled.set(True)
+        app._refresh_render_3d_toggle_text()
+        app.toolpath_panel.set_enabled(True)
+        source = getattr(app, "_gcode_source", None)
+        if source is not None:
+            app.toolpath_panel.set_gcode_lines(source, lines_hash=getattr(app, "_gcode_hash", None))
+        return
     current = bool(app.render3d_enabled.get())
     new_val = not current
     app.render3d_enabled.set(new_val)
     app._refresh_render_3d_toggle_text()
     app.toolpath_panel.set_enabled(new_val)
-    if new_val and _can_use_toolpath(app):
+    if not new_val:
+        return
+    if streaming_mode:
+        source = getattr(app, "_gcode_source", None)
+        if source is not None:
+            app.toolpath_panel.set_gcode_lines(source, lines_hash=getattr(app, "_gcode_hash", None))
+        return
+    if _can_use_toolpath(app):
         app.toolpath_panel.set_gcode_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
 
 def toolpath_limit_value(app, raw, fallback):
@@ -144,7 +206,10 @@ def clamp_toolpath_streaming_render_interval(app, value):
         interval = float(value)
     except Exception:
         interval = app._toolpath_streaming_render_interval_default
-    return max(0.05, min(2.0, interval))
+    return max(
+        TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
+        min(TOOLPATH_STREAMING_RENDER_INTERVAL_MAX, interval),
+    )
 
 def apply_toolpath_streaming_render_interval(app, _event=None):
     interval = app._clamp_toolpath_streaming_render_interval(
@@ -173,8 +238,8 @@ def toolpath_perf_values(app, perf: float):
         app._toolpath_arc_detail_max
         - (app._toolpath_arc_detail_max - app._toolpath_arc_detail_min) * (perf / 100.0)
     )
-    lightweight = perf < 40.0
-    draw_percent = max(5, int(round(perf)))
+    lightweight = perf < TOOLPATH_PERF_LIGHTWEIGHT_THRESHOLD
+    draw_percent = max(TOOLPATH_DRAW_PERCENT_MIN, int(round(perf)))
     return full_limit, interactive_limit, arc_detail, lightweight, draw_percent
 
 def on_toolpath_performance_move(app, value):

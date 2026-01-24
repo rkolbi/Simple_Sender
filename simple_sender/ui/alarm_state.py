@@ -15,7 +15,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
+
+from simple_sender.ui.job_controls import (
+    disable_job_controls,
+    job_controls_ready,
+    set_run_resume_from,
+)
+
 
 def format_alarm_message(message: str | None) -> str:
     if not message:
@@ -35,13 +45,7 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         app._alarm_locked = True
         if message:
             app._alarm_message = message
-        app.btn_run.config(state="disabled")
-        app.btn_pause.config(state="disabled")
-        app.btn_resume.config(state="disabled")
-        try:
-            app.btn_resume_from.config(state="disabled")
-        except Exception:
-            pass
+        disable_job_controls(app)
         try:
             app.btn_alarm_recover.config(state="normal")
         except Exception:
@@ -72,9 +76,8 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         and app._stream_state not in ("running", "paused")
     ):
         app._set_manual_controls_enabled(True)
-        if app.gview.lines_count:
-            app.btn_run.config(state="normal")
-            app.btn_resume_from.config(state="normal")
+        if job_controls_ready(app):
+            set_run_resume_from(app, True)
     status_text = ""
     try:
         status_text = app.status.cget("text")

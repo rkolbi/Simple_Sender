@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
+# Optional (not required by the license): If you make improvements, please consider
+# contributing them back upstream (e.g., via a pull request) so others can benefit.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
@@ -27,6 +30,13 @@ from simple_sender.ui.widgets import (
     apply_tooltip,
     attach_log_gcode,
     set_kb_id,
+)
+from simple_sender.utils.constants import (
+    JOG_FEED_EPSILON,
+    JOG_PANEL_ALL_STOP_OFFSET_IN,
+    JOG_PANEL_ALL_STOP_SIZE,
+    JOG_STEP_XY_VALUES,
+    JOG_STEP_Z_VALUES,
 )
 
 def build_jog_panel(app, parent):
@@ -136,7 +146,7 @@ def build_jog_panel(app, parent):
 
     def _jog_feed_for_move(dx, dy, dz) -> float:
         # Use Z feed only for pure Z moves; otherwise use XY feed.
-        if abs(dz) > 0 and abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        if abs(dz) > 0 and abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON:
             return float(app.jog_feed_z.get())
         return float(app.jog_feed_xy.get())
 
@@ -223,8 +233,8 @@ def build_jog_panel(app, parent):
     attach_log_gcode(app.btn_jog_z_plus, lambda: jog_cmd(0, 0, app.step_z.get()))
     attach_log_gcode(app.btn_jog_z_minus, lambda: jog_cmd(0, 0, -app.step_z.get()))
 
-    all_stop_size = 60
-    app._all_stop_offset_px = int(app.winfo_fpixels("0.7i"))
+    all_stop_size = JOG_PANEL_ALL_STOP_SIZE
+    app._all_stop_offset_px = int(app.winfo_fpixels(f"{JOG_PANEL_ALL_STOP_OFFSET_IN}i"))
     app._all_stop_slot = ttk.Frame(pad, width=all_stop_size, height=all_stop_size)
     app._all_stop_slot.grid(row=0, column=6, rowspan=3, padx=(6, 0), pady=2, sticky="ns")
     app._all_stop_slot.grid_propagate(False)
@@ -259,8 +269,7 @@ def build_jog_panel(app, parent):
 
     xy_steps = ttk.Frame(pad)
     xy_steps.grid(row=4, column=0, columnspan=4, pady=(6, 0))
-    xy_values = [0.1, 1.0, 5.0, 10, 25, 50, 100, 400]
-    for i, v in enumerate(xy_values):
+    for i, v in enumerate(JOG_STEP_XY_VALUES):
         r = i // 4
         c = i % 4
         btn = ttk.Button(
@@ -275,8 +284,7 @@ def build_jog_panel(app, parent):
 
     z_steps = ttk.Frame(pad)
     z_steps.grid(row=4, column=5, padx=(6, 0), pady=(6, 0))
-    z_values = [0.05, 0.1, 0.5, 1, 5, 10, 25, 50]
-    for i, v in enumerate(z_values):
+    for i, v in enumerate(JOG_STEP_Z_VALUES):
         r = 0 if i < 4 else 1
         c = i if i < 4 else i - 4
         btn = ttk.Button(
