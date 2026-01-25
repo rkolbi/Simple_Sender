@@ -27,7 +27,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any
 
-from simple_sender.ui.widgets import ToolTip, apply_tooltip, attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets import (
+    ToolTip,
+    apply_tooltip,
+    attach_log_gcode,
+    attach_numeric_keypad,
+    set_kb_id,
+)
 from simple_sender.utils.constants import (
     GRBL_NON_NUMERIC_SETTINGS,
     GRBL_SETTING_KEYS,
@@ -366,6 +372,8 @@ class GRBLSettingsController:
         entry.place(x=x, y=y, width=w, height=h)
         entry.insert(0, current)
         entry.focus_set()
+        if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
+            attach_numeric_keypad(entry, allow_decimal=True)
         self._settings_entry_meta[entry] = (key, item)
         self._settings_edit_entry = entry
 

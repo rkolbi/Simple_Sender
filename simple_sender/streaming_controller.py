@@ -305,6 +305,8 @@ class StreamingController:
 
     def _on_button_press(self, event: tk.Event) -> None:
         w = event.widget
+        if not hasattr(w, "winfo_name"):
+            return
         if isinstance(w, tk.Canvas) and not getattr(w, "_log_button", False):
             return
         try:

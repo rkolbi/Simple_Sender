@@ -60,7 +60,7 @@ from simple_sender.ui.autolevel_dialog_io import (
 from simple_sender.ui.autolevel_prefs import pref_float, pref_interp
 from simple_sender.ui.dro import convert_units
 from simple_sender.ui.popup_utils import center_window
-from simple_sender.ui.widgets import apply_tooltip
+from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import (
     AUTOLEVEL_SPACING_MIN,
@@ -1189,10 +1189,18 @@ def show_auto_level_dialog(app):
                 pass
         close_btn.config(text="Cancel" if not enabled else "Close")
 
-    def grid_row(parent: ttk.Frame, label: str, var: tk.StringVar, row: int):
+    def grid_row(
+        parent: ttk.Frame,
+        label: str,
+        var: tk.StringVar,
+        row: int,
+        *,
+        allow_decimal: bool = True,
+    ):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
         entry = ttk.Entry(parent, textvariable=var, width=10)
         entry.grid(row=row, column=1, sticky="w", pady=2)
+        attach_numeric_keypad(entry, allow_decimal=allow_decimal)
         return entry
 
     frm.grid_columnconfigure(0, weight=1)
@@ -1256,7 +1264,13 @@ def show_auto_level_dialog(app):
     base_spacing_entry = grid_row(settings_tab, "Base spacing (mm)", base_spacing_var, 3)
     min_spacing_entry = grid_row(settings_tab, "Min spacing (mm)", min_spacing_var, 4)
     max_spacing_entry = grid_row(settings_tab, "Max spacing (mm)", max_spacing_var, 5)
-    max_points_entry = grid_row(settings_tab, "Max points (optional)", max_points_var, 6)
+    max_points_entry = grid_row(
+        settings_tab,
+        "Max points (optional)",
+        max_points_var,
+        6,
+        allow_decimal=False,
+    )
 
     ttk.Label(settings_tab, text="Probe order").grid(
         row=7, column=0, sticky="w", pady=(4, 2)
@@ -1325,6 +1339,9 @@ def show_auto_level_dialog(app):
         x_entry.grid(row=idx, column=3, sticky="w", padx=(2, 2))
         radius_entry = ttk.Entry(avoidance_frame, textvariable=radius_var, width=10)
         radius_entry.grid(row=idx, column=4, sticky="w", padx=(2, 2))
+        attach_numeric_keypad(x_entry, allow_decimal=True, allow_negative=True)
+        attach_numeric_keypad(y_entry, allow_decimal=True, allow_negative=True)
+        attach_numeric_keypad(radius_entry, allow_decimal=True)
         set_btn = ttk.Button(
             avoidance_frame,
             text="Read Position",

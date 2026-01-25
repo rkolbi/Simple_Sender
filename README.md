@@ -634,6 +634,7 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
+- Numeric entries: tapping a numeric field opens a modal keypad that matches the field's input rules (digits, decimal, sign) when enabled in App Settings. Done applies, Cancel restores.
 
 ### Top Toolbar
 - Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
@@ -711,6 +712,7 @@ Macro UI is included below along with the rest of the interface.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately.
 - Apply: applies the UI scale entry.
 - Apple 2.0x: quick preset that sets UI scale to 2.0 and applies it.
+- Enable numeric keypad popups: shows or hides the touch keypad on numeric fields.
 
 ### App Settings: Estimation
 - Fallback rapid rate: used for estimates when $110-112 are unavailable.

@@ -118,6 +118,7 @@ def save_settings(app):
         "last_gcode_dir": app.settings.get("last_gcode_dir", ""),
         "window_geometry": app.geometry(),
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
+        "numeric_keypad_enabled": bool(app.numeric_keypad_enabled.get()),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
         "error_dialogs_enabled": bool(app.error_dialogs_enabled.get()),
         "performance_mode": bool(app.performance_mode.get()),

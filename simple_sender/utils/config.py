@@ -142,6 +142,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "toolpath_show_rapid": False,
     "toolpath_streaming_render_interval": 0.25,
     "tooltips_enabled": True,
+    "numeric_keypad_enabled": True,
     "training_wheels": True,
     "unit_mode": "mm",
     "validate_streaming_gcode": True,
@@ -236,12 +237,16 @@ def get_settings_path() -> str:
     
     try:
         os.makedirs(base_dir, exist_ok=True)
+        if not os.access(base_dir, os.W_OK):
+            raise OSError("Settings directory is not writable")
     except OSError as e:
-        logger.warning(f"Failed to create settings directory: {e}")
+        logger.warning(f"Failed to use settings directory: {e}")
         # Try fallback location
         fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
         try:
             os.makedirs(fallback_dir, exist_ok=True)
+            if not os.access(fallback_dir, os.W_OK):
+                raise OSError("Fallback settings directory is not writable")
             base_dir = fallback_dir
         except OSError:
             # Last resort - current directory

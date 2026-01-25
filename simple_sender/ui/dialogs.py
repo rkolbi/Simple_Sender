@@ -27,6 +27,7 @@ from simple_sender.ui.alarm_recovery_dialog import show_alarm_recovery
 from simple_sender.ui.autolevel_dialog import show_auto_level_dialog
 from simple_sender.ui.macro_prompt_dialog import show_macro_prompt
 from simple_sender.ui.popup_utils import center_window
+from simple_sender.ui.widgets import attach_numeric_keypad
 
 
 def show_resume_dialog(app):
@@ -69,6 +70,7 @@ def show_resume_dialog(app):
     line_var = tk.StringVar(value=str(default_line))
     line_entry = ttk.Entry(frm, textvariable=line_var, width=10)
     line_entry.grid(row=0, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(line_entry, allow_decimal=False)
 
     def use_last_acked():
         if app._last_acked_index >= 0:

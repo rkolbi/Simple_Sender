@@ -23,7 +23,7 @@
 from tkinter import ttk
 
 from simple_sender.utils.constants import CURRENT_LINE_CHOICES
-from simple_sender.ui.widgets import apply_tooltip, set_kb_id
+from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad, set_kb_id
 
 def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     macro_frame = ttk.LabelFrame(parent, text="Macros", padding=8)
@@ -81,6 +81,7 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.jog_feed_xy_entry = ttk.Entry(jog_frame, textvariable=app.jog_feed_xy, width=12)
     app.jog_feed_xy_entry.grid(row=0, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.jog_feed_xy_entry, allow_decimal=True)
     app.jog_feed_xy_entry.bind("<Return>", app._on_jog_feed_change_xy)
     app.jog_feed_xy_entry.bind("<FocusOut>", app._on_jog_feed_change_xy)
     ttk.Label(jog_frame, text="Default jog feed (Z)").grid(
@@ -88,6 +89,7 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.jog_feed_z_entry = ttk.Entry(jog_frame, textvariable=app.jog_feed_z, width=12)
     app.jog_feed_z_entry.grid(row=1, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.jog_feed_z_entry, allow_decimal=True)
     app.jog_feed_z_entry.bind("<Return>", app._on_jog_feed_change_z)
     app.jog_feed_z_entry.bind("<FocusOut>", app._on_jog_feed_change_z)
     ttk.Label(jog_frame, text="Units: mm/min (in/min when in inches mode)").grid(

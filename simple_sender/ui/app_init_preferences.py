@@ -34,6 +34,9 @@ def init_basic_preferences(app, app_version: str, module):
         return app.settings.get(key, DEFAULT_SETTINGS.get(key, fallback))
 
     app.tooltip_enabled = tk.BooleanVar(value=setting("tooltips_enabled", True))
+    app.numeric_keypad_enabled = tk.BooleanVar(
+        value=setting("numeric_keypad_enabled", True)
+    )
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
     app.macros_allow_python = tk.BooleanVar(value=setting("macros_allow_python", False))

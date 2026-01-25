@@ -30,7 +30,7 @@ from simple_sender.utils.constants import (
     TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
 )
 from simple_sender.ui.autolevel_prefs import pref_dict, pref_float, pref_interp
-from simple_sender.ui.widgets import apply_tooltip, set_kb_id
+from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad, set_kb_id
 
 def build_safety_aids_section(app, parent: ttk.Frame, row: int) -> int:
     tw_frame = ttk.LabelFrame(parent, text="Safety Aids", padding=8)
@@ -112,7 +112,6 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.logging_check,
         "Record GUI button actions in the console log when enabled.",
     )
-
     indicator_label = ttk.Label(interface_frame, text="Status indicators")
     indicator_label.grid(row=5, column=0, sticky="w", pady=(10, 0))
     indicator_row = ttk.Frame(interface_frame)
@@ -328,6 +327,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(auto_level_frame, text="Small max area").grid(row=1, column=0, sticky="w", pady=2)
     small_max_area_entry = ttk.Entry(auto_level_frame, textvariable=small_max_area_var, width=12)
     small_max_area_entry.grid(row=1, column=1, sticky="w", pady=2)
+    attach_numeric_keypad(small_max_area_entry, allow_decimal=True)
     apply_tooltip(
         small_max_area_entry,
         "Max job area (mm^2) that uses the Small preset.",
@@ -335,6 +335,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(auto_level_frame, text="Large min area").grid(row=2, column=0, sticky="w", pady=2)
     large_min_area_entry = ttk.Entry(auto_level_frame, textvariable=large_min_area_var, width=12)
     large_min_area_entry.grid(row=2, column=1, sticky="w", pady=2)
+    attach_numeric_keypad(large_min_area_entry, allow_decimal=True)
     apply_tooltip(
         large_min_area_entry,
         "Min job area (mm^2) that uses the Large preset.",
@@ -346,6 +347,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(auto_level_frame, text="Small").grid(row=4, column=0, sticky="w", pady=2)
     small_spacing_entry = ttk.Entry(auto_level_frame, textvariable=small_spacing_var, width=12)
     small_spacing_entry.grid(row=4, column=1, sticky="w", pady=2)
+    attach_numeric_keypad(small_spacing_entry, allow_decimal=True)
     small_interp_combo = ttk.Combobox(
         auto_level_frame, textvariable=small_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
@@ -362,6 +364,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(auto_level_frame, text="Large").grid(row=5, column=0, sticky="w", pady=2)
     large_spacing_entry = ttk.Entry(auto_level_frame, textvariable=large_spacing_var, width=12)
     large_spacing_entry.grid(row=5, column=1, sticky="w", pady=2)
+    attach_numeric_keypad(large_spacing_entry, allow_decimal=True)
     large_interp_combo = ttk.Combobox(
         auto_level_frame, textvariable=large_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
@@ -378,6 +381,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(auto_level_frame, text="Custom").grid(row=6, column=0, sticky="w", pady=2)
     custom_spacing_entry = ttk.Entry(auto_level_frame, textvariable=custom_spacing_var, width=12)
     custom_spacing_entry.grid(row=6, column=1, sticky="w", pady=2)
+    attach_numeric_keypad(custom_spacing_entry, allow_decimal=True)
     custom_interp_combo = ttk.Combobox(
         auto_level_frame, textvariable=custom_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
@@ -425,6 +429,7 @@ def build_toolpath_settings_section(app, parent: ttk.Frame, row: int) -> int:
         width=10,
     )
     app.toolpath_streaming_interval_entry.grid(row=0, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.toolpath_streaming_interval_entry, allow_decimal=True)
     app.toolpath_streaming_interval_entry.bind(
         "<Return>", app._apply_toolpath_streaming_render_interval
     )

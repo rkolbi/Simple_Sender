@@ -23,7 +23,7 @@
 from tkinter import ttk
 
 from simple_sender.utils.constants import ALL_STOP_CHOICES
-from simple_sender.ui.widgets import apply_tooltip
+from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     diagnostics_frame = ttk.LabelFrame(parent, text="Diagnostics", padding=8)
@@ -74,6 +74,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         width=10,
     )
     app.streaming_line_threshold_entry.grid(row=3, column=1, sticky="w", pady=(6, 0))
+    attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
         "Cleaned line count that forces streaming mode (set to 0 to disable).",
@@ -102,6 +103,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(theme_frame, text="UI scale").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
     app.ui_scale_entry = ttk.Entry(theme_frame, textvariable=app.ui_scale, width=10)
     app.ui_scale_entry.grid(row=1, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.ui_scale_entry, allow_decimal=True)
     ttk.Label(theme_frame, text="(0.5 - 3.0)").grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
     app.ui_scale_entry.bind("<Return>", app._on_ui_scale_change)
     app.ui_scale_entry.bind("<FocusOut>", app._on_ui_scale_change)
@@ -130,6 +132,16 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     apply_tooltip(
         app.ui_scale_apple_btn,
         "Set the UI scale to 2.0x and apply it.",
+    )
+    app.numeric_keypad_check = ttk.Checkbutton(
+        theme_frame,
+        text="Enable numeric keypad popups",
+        variable=app.numeric_keypad_enabled,
+    )
+    app.numeric_keypad_check.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    apply_tooltip(
+        app.numeric_keypad_check,
+        "Show the touch keypad when tapping numeric fields.",
     )
     return row + 1
 
@@ -186,6 +198,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
         width=12,
     )
     app.homing_watchdog_timeout_entry.grid(row=4, column=1, sticky="w", pady=(6, 0))
+    attach_numeric_keypad(app.homing_watchdog_timeout_entry, allow_decimal=True)
     app.homing_watchdog_timeout_entry.bind("<Return>", app._on_homing_watchdog_change)
     app.homing_watchdog_timeout_entry.bind("<FocusOut>", app._on_homing_watchdog_change)
     apply_tooltip(
@@ -205,6 +218,7 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.fallback_rapid_entry = ttk.Entry(estimation, textvariable=app.fallback_rapid_rate, width=12)
     app.fallback_rapid_entry.grid(row=0, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.fallback_rapid_entry, allow_decimal=True)
     app.fallback_rapid_entry.bind("<Return>", app._on_fallback_rate_change)
     app.fallback_rapid_entry.bind("<FocusOut>", app._on_fallback_rate_change)
     apply_tooltip(
@@ -274,6 +288,9 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
     app.estimate_rate_y_entry.bind("<FocusOut>", app._on_estimate_rates_change)
     app.estimate_rate_z_entry.bind("<Return>", app._on_estimate_rates_change)
     app.estimate_rate_z_entry.bind("<FocusOut>", app._on_estimate_rates_change)
+    attach_numeric_keypad(app.estimate_rate_x_entry, allow_decimal=True)
+    attach_numeric_keypad(app.estimate_rate_y_entry, allow_decimal=True)
+    attach_numeric_keypad(app.estimate_rate_z_entry, allow_decimal=True)
     apply_tooltip(
         app.estimate_rate_x_entry,
         "Set machine max rate for X (used in time estimates).",
@@ -301,6 +318,7 @@ def build_status_polling_section(app, parent: ttk.Frame, row: int) -> int:
         status_frame, textvariable=app.status_poll_interval, width=12
     )
     app.status_poll_entry.grid(row=0, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.status_poll_entry, allow_decimal=True)
     app.status_poll_entry.bind("<Return>", app._on_status_interval_change)
     app.status_poll_entry.bind("<FocusOut>", app._on_status_interval_change)
     apply_tooltip(
@@ -315,6 +333,7 @@ def build_status_polling_section(app, parent: ttk.Frame, row: int) -> int:
         status_frame, textvariable=app.status_query_failure_limit, width=12
     )
     app.status_fail_limit_entry.grid(row=1, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.status_fail_limit_entry, allow_decimal=False)
     ttk.Label(status_frame, text="(1-10)").grid(row=1, column=2, sticky="w", padx=(6, 0))
     app.status_fail_limit_entry.bind("<Return>", app._on_status_failure_limit_change)
     app.status_fail_limit_entry.bind("<FocusOut>", app._on_status_failure_limit_change)
@@ -344,6 +363,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         dialog_frame, textvariable=app.error_dialog_interval_var, width=12
     )
     app.error_dialog_interval_entry.grid(row=1, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.error_dialog_interval_entry, allow_decimal=True)
     ttk.Label(dialog_frame, text="sec").grid(row=1, column=2, sticky="w", padx=(6, 0))
     app.error_dialog_interval_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_interval_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
@@ -354,6 +374,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         dialog_frame, textvariable=app.error_dialog_burst_window_var, width=12
     )
     app.error_dialog_window_entry.grid(row=2, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.error_dialog_window_entry, allow_decimal=True)
     ttk.Label(dialog_frame, text="sec").grid(row=2, column=2, sticky="w", padx=(6, 0))
     app.error_dialog_window_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_window_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
@@ -364,6 +385,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         dialog_frame, textvariable=app.error_dialog_burst_limit_var, width=12
     )
     app.error_dialog_limit_entry.grid(row=3, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.error_dialog_limit_entry, allow_decimal=False)
     ttk.Label(dialog_frame, text="count").grid(row=3, column=2, sticky="w", padx=(6, 0))
     app.error_dialog_limit_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_limit_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
