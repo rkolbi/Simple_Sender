@@ -118,7 +118,14 @@ def save_settings(app):
         "last_gcode_dir": app.settings.get("last_gcode_dir", ""),
         "window_geometry": app.geometry(),
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
-        "numeric_keypad_enabled": bool(app.numeric_keypad_enabled.get()),
+        "numeric_keypad_enabled": bool(
+            app.numeric_keypad_enabled.get()
+            if hasattr(app, "numeric_keypad_enabled")
+            else app.settings.get(
+                "numeric_keypad_enabled",
+                DEFAULT_SETTINGS.get("numeric_keypad_enabled", True),
+            )
+        ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
         "error_dialogs_enabled": bool(app.error_dialogs_enabled.get()),
         "performance_mode": bool(app.performance_mode.get()),
@@ -160,10 +167,14 @@ def save_settings(app):
         ),
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
         "theme": app.selected_theme.get(),
-        "ui_scale": safe_float(
-            app.ui_scale,
-            app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0)),
-            "ui scale",
+        "ui_scale": (
+            safe_float(
+                app.ui_scale,
+                app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0)),
+                "ui scale",
+            )
+            if hasattr(app, "ui_scale")
+            else app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0))
         ),
         "scrollbar_width": str(
             app.scrollbar_width.get()

@@ -131,7 +131,7 @@ This is a practical, end-to-end flow with rationale for key options.
 ## UI Tour
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
 - **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.).
-- **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors, Macro buttons (if Macro-1..Macro-7 files exist).
+- **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (−/+ with indicator), Macro buttons (if Macro-1..Macro-7 files exist).
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
 
@@ -666,8 +666,8 @@ Macro UI is included below along with the rest of the interface.
 - JOG STOP: cancels an active jog (RT 0x85) and stops pending jogs.
 - Tool reference label: displays the stored tool reference height used by probing workflows.
 - ALL STOP: immediate stop using the selected ALL STOP behavior.
-- XY step buttons: set the XY jog step value used by the jog pad.
-- Z step buttons: set the Z jog step value used by the jog pad.
+- XY Step adjuster (−/+ with indicator): sets the XY jog step value used by the jog pad.
+- Z Step adjuster (−/+ with indicator): sets the Z jog step value used by the jog pad.
 
 ### Macro Panel (Jog Area)
 - Macro buttons (1-3): left-column buttons shown when Macro-1..3 files exist; left-click runs the macro.
@@ -712,6 +712,7 @@ Macro UI is included below along with the rest of the interface.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately.
 - Apply: applies the UI scale entry.
 - Apple 2.0x: quick preset that sets UI scale to 2.0 and applies it.
+- Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
 - Enable numeric keypad popups: shows or hides the touch keypad on numeric fields.
 
 ### App Settings: Estimation

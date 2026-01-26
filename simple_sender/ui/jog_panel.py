@@ -266,44 +266,135 @@ def build_jog_panel(app, parent):
 
     spacer = ttk.Frame(pad, height=6)
     spacer.grid(row=3, column=0, columnspan=6)
+    steps_spacer = ttk.Frame(pad, height=24)
+    steps_spacer.grid(row=4, column=0, columnspan=6)
 
     xy_steps = ttk.Frame(pad)
-    xy_steps.grid(row=4, column=0, columnspan=4, pady=(6, 0))
-    for i, v in enumerate(JOG_STEP_XY_VALUES):
-        r = i // 4
-        c = i % 4
-        btn = ttk.Button(
-            xy_steps,
-            text=f"{v:g}",
-            command=lambda value=v: app._set_step_xy(value),
-        )
-        btn.grid(row=r, column=c, padx=2, pady=2, sticky="w")
-        set_kb_id(btn, f"step_xy_{v:g}")
-        app._xy_step_buttons.append((v, btn))
-        apply_tooltip(btn, f"Set XY step to {v:g}.")
+    xy_steps.grid(row=5, column=0, columnspan=4, pady=(0, 0), sticky="ew")
+    xy_steps.grid_columnconfigure(1, weight=1)
+    app._xy_step_values = list(JOG_STEP_XY_VALUES)
+
+    def _xy_step_index_for(value: float) -> int:
+        try:
+            val = float(value)
+        except Exception:
+            val = app._xy_step_values[0]
+        return min(range(len(app._xy_step_values)), key=lambda i: abs(app._xy_step_values[i] - val))
+
+    app._xy_step_index = tk.IntVar(value=_xy_step_index_for(app.step_xy.get()))
+    ttk.Label(xy_steps, text="XY Step").grid(row=0, column=0, sticky="w", padx=(0, 6))
+
+    def _step_xy_delta(delta: int) -> None:
+        idx = int(app._xy_step_index.get()) + delta
+        idx = max(0, min(len(app._xy_step_values) - 1, idx))
+        app._set_step_xy(app._xy_step_values[idx])
+
+    app._xy_step_minus = ttk.Button(
+        xy_steps,
+        text="-",
+        width=4,
+        command=lambda: _step_xy_delta(-1),
+    )
+    app._xy_step_minus.grid(row=0, column=1, sticky="w")
+    apply_tooltip(app._xy_step_minus, "Decrease XY step.")
+
+    app._xy_step_progress = ttk.Progressbar(
+        xy_steps,
+        orient="horizontal",
+        mode="determinate",
+        maximum=max(len(app._xy_step_values) - 1, 1),
+        variable=app._xy_step_index,
+        length=160,
+    )
+    app._xy_step_progress.grid(row=0, column=2, sticky="ew", padx=(6, 6))
+
+    app._xy_step_plus = ttk.Button(
+        xy_steps,
+        text="+",
+        width=4,
+        command=lambda: _step_xy_delta(1),
+    )
+    app._xy_step_plus.grid(row=0, column=3, sticky="e")
+    apply_tooltip(app._xy_step_plus, "Increase XY step.")
+
+    initial_idx = int(app._xy_step_index.get())
+    initial_idx = max(0, min(len(app._xy_step_values) - 1, initial_idx))
+    app._xy_step_value_label = ttk.Label(
+        xy_steps,
+        text=f"{app._xy_step_values[initial_idx]:g}",
+        width=6,
+        anchor="e",
+    )
+    app._xy_step_value_label.grid(row=0, column=4, sticky="e", padx=(6, 0))
 
     z_steps = ttk.Frame(pad)
-    z_steps.grid(row=4, column=5, padx=(6, 0), pady=(6, 0))
-    for i, v in enumerate(JOG_STEP_Z_VALUES):
-        r = 0 if i < 4 else 1
-        c = i if i < 4 else i - 4
-        btn = ttk.Button(
-            z_steps,
-            text=f"{v:g}",
-            command=lambda value=v: app._set_step_z(value),
-        )
-        btn.grid(row=r, column=c, padx=2, pady=2, sticky="w")
-        set_kb_id(btn, f"step_z_{v:g}")
-        app._z_step_buttons.append((v, btn))
-        apply_tooltip(btn, f"Set Z step to {v:g}.")
+    z_steps.grid(row=5, column=5, padx=(6, 0), pady=(0, 0), sticky="ew")
+    z_steps.grid_columnconfigure(1, weight=1)
+    app._z_step_values = list(JOG_STEP_Z_VALUES)
 
-    app._manual_controls.extend([btn for _, btn in app._xy_step_buttons])
-    app._manual_controls.extend([btn for _, btn in app._z_step_buttons])
+    def _z_step_index_for(value: float) -> int:
+        try:
+            val = float(value)
+        except Exception:
+            val = app._z_step_values[0]
+        return min(range(len(app._z_step_values)), key=lambda i: abs(app._z_step_values[i] - val))
+
+    app._z_step_index = tk.IntVar(value=_z_step_index_for(app.step_z.get()))
+    ttk.Label(z_steps, text="Z Step").grid(row=0, column=0, sticky="w", padx=(0, 6))
+
+    def _step_z_delta(delta: int) -> None:
+        idx = int(app._z_step_index.get()) + delta
+        idx = max(0, min(len(app._z_step_values) - 1, idx))
+        app._set_step_z(app._z_step_values[idx])
+
+    app._z_step_minus = ttk.Button(
+        z_steps,
+        text="-",
+        width=4,
+        command=lambda: _step_z_delta(-1),
+    )
+    app._z_step_minus.grid(row=0, column=1, sticky="w")
+    apply_tooltip(app._z_step_minus, "Decrease Z step.")
+
+    app._z_step_progress = ttk.Progressbar(
+        z_steps,
+        orient="horizontal",
+        mode="determinate",
+        maximum=max(len(app._z_step_values) - 1, 1),
+        variable=app._z_step_index,
+        length=160,
+    )
+    app._z_step_progress.grid(row=0, column=2, sticky="ew", padx=(6, 6))
+
+    app._z_step_plus = ttk.Button(
+        z_steps,
+        text="+",
+        width=4,
+        command=lambda: _step_z_delta(1),
+    )
+    app._z_step_plus.grid(row=0, column=3, sticky="e")
+    apply_tooltip(app._z_step_plus, "Increase Z step.")
+
+    initial_z_idx = int(app._z_step_index.get())
+    initial_z_idx = max(0, min(len(app._z_step_values) - 1, initial_z_idx))
+    app._z_step_value_label = ttk.Label(
+        z_steps,
+        text=f"{app._z_step_values[initial_z_idx]:g}",
+        width=6,
+        anchor="e",
+    )
+    app._z_step_value_label.grid(row=0, column=4, sticky="e", padx=(6, 0))
+
+    app._manual_controls.extend([app._xy_step_minus, app._xy_step_plus])
+    app._manual_controls.extend([app._z_step_minus, app._z_step_plus])
+    app._offline_controls.update([app._xy_step_minus, app._xy_step_plus, app._z_step_minus, app._z_step_plus])
     app._set_step_xy(app.step_xy.get())
     app._set_step_z(app.step_z.get())
 
+    macro_spacer = ttk.Frame(pad, height=28)
+    macro_spacer.grid(row=6, column=0, columnspan=6, sticky="ew")
     macro_right = ttk.Frame(pad)
-    macro_right.grid(row=5, column=0, columnspan=6, pady=(6, 0), sticky="ew")
+    macro_right.grid(row=7, column=0, columnspan=6, pady=(6, 0), sticky="ew")
 
     app.macro_panel.attach_frames(macro_left, macro_right)
 

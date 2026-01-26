@@ -238,7 +238,7 @@ def get_settings_path() -> str:
     
     try:
         os.makedirs(base_dir, exist_ok=True)
-        if not os.access(base_dir, os.W_OK):
+        if os.path.exists(base_dir) and not os.access(base_dir, os.W_OK):
             raise OSError("Settings directory is not writable")
     except OSError as e:
         logger.warning(f"Failed to use settings directory: {e}")
@@ -246,7 +246,7 @@ def get_settings_path() -> str:
         fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
         try:
             os.makedirs(fallback_dir, exist_ok=True)
-            if not os.access(fallback_dir, os.W_OK):
+            if os.path.exists(fallback_dir) and not os.access(fallback_dir, os.W_OK):
                 raise OSError("Fallback settings directory is not writable")
             base_dir = fallback_dir
         except OSError:

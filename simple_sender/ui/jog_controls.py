@@ -93,12 +93,80 @@ def set_step_xy(app, value: float):
     app.step_xy.set(value)
     for v, btn in app._xy_step_buttons:
         btn.config(state="disabled" if v == value else "normal")
+    values = getattr(app, "_xy_step_values", None)
+    if values:
+        idx = min(range(len(values)), key=lambda i: abs(values[i] - value))
+        try:
+            app._xy_step_index.set(idx)
+        except Exception:
+            pass
+        label = getattr(app, "_xy_step_value_label", None)
+        if label is not None:
+            try:
+                label.config(text=f"{values[idx]:g}")
+            except Exception:
+                pass
+        progress = getattr(app, "_xy_step_progress", None)
+        if progress is not None:
+            try:
+                progress.config(
+                    maximum=max(len(values) - 1, 1),
+                    value=idx,
+                )
+            except Exception:
+                pass
+        minus_btn = getattr(app, "_xy_step_minus", None)
+        plus_btn = getattr(app, "_xy_step_plus", None)
+        if minus_btn is not None:
+            try:
+                minus_btn.config(state="disabled" if idx <= 0 else "normal")
+            except Exception:
+                pass
+        if plus_btn is not None:
+            try:
+                plus_btn.config(state="disabled" if idx >= len(values) - 1 else "normal")
+            except Exception:
+                pass
 
 
 def set_step_z(app, value: float):
     app.step_z.set(value)
     for v, btn in app._z_step_buttons:
         btn.config(state="disabled" if v == value else "normal")
+    values = getattr(app, "_z_step_values", None)
+    if values:
+        idx = min(range(len(values)), key=lambda i: abs(values[i] - value))
+        try:
+            app._z_step_index.set(idx)
+        except Exception:
+            pass
+        label = getattr(app, "_z_step_value_label", None)
+        if label is not None:
+            try:
+                label.config(text=f"{values[idx]:g}")
+            except Exception:
+                pass
+        progress = getattr(app, "_z_step_progress", None)
+        if progress is not None:
+            try:
+                progress.config(
+                    maximum=max(len(values) - 1, 1),
+                    value=idx,
+                )
+            except Exception:
+                pass
+        minus_btn = getattr(app, "_z_step_minus", None)
+        plus_btn = getattr(app, "_z_step_plus", None)
+        if minus_btn is not None:
+            try:
+                minus_btn.config(state="disabled" if idx <= 0 else "normal")
+            except Exception:
+                pass
+        if plus_btn is not None:
+            try:
+                plus_btn.config(state="disabled" if idx >= len(values) - 1 else "normal")
+            except Exception:
+                pass
 
 
 def validate_jog_feed_var(app, var: tk.DoubleVar, fallback_default: float):

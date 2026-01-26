@@ -227,7 +227,24 @@ JOYSTICK_HOLD_DEFINITIONS = [
 """Definitions for joystick hold bindings (label, id, axis, direction)."""
 
 # Jogging presets
-JOG_STEP_XY_VALUES = (0.1, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 400.0)
+JOG_STEP_XY_VALUES = (
+    0.1,
+    1.0,
+    5.0,
+    10.0,
+    25.0,
+    50.0,
+    100.0,
+    200.0,
+    300.0,
+    400.0,
+    500.0,
+    600.0,
+    700.0,
+    800.0,
+    900.0,
+    1000.0,
+)
 """Default XY jog step values."""
 
 JOG_STEP_Z_VALUES = (0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 25.0, 50.0)

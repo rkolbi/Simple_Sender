@@ -99,8 +99,9 @@ class MacroPanel:
             w.destroy()
         for w in self._right_frame.winfo_children():
             w.destroy()
-        for col in range(2):
-            self._right_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
+        self._right_frame.grid_columnconfigure(0, weight=1, uniform="macro_buttons", minsize=140)
+        self._right_frame.grid_columnconfigure(1, weight=1, uniform="macro_buttons", minsize=140)
+        self._right_frame.grid_rowconfigure(0, weight=0)
 
         for idx in (1, 2, 3):
             path = self._macro_path(idx)
@@ -124,7 +125,11 @@ class MacroPanel:
             name, tip = self._read_macro_header(path, idx)
             btn = ttk.Button(self._right_frame, text=name, command=lambda i=idx: self._run_macro(i))
             set_kb_id(btn, f"macro_{idx}")
-            btn.grid(row=row, column=col, padx=4, pady=2, sticky="ew")
+            if col == 0:
+                padx = (0, 8)
+            else:
+                padx = (20, 0)
+            btn.grid(row=row, column=col, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
             self.app._manual_controls.append(btn)

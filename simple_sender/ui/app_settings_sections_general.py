@@ -22,6 +22,7 @@
 
 import subprocess
 import sys
+import tkinter as tk
 from tkinter import messagebox, ttk
 
 from simple_sender.utils.constants import ALL_STOP_CHOICES
@@ -88,6 +89,12 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     theme_frame = ttk.LabelFrame(parent, text="Theme", padding=8)
     theme_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     theme_frame.grid_columnconfigure(1, weight=1)
+    if not hasattr(app, "ui_scale"):
+        app.ui_scale = tk.DoubleVar(master=parent, value=1.0)
+    if not hasattr(app, "scrollbar_width"):
+        app.scrollbar_width = tk.StringVar(master=parent, value="wide")
+    if not hasattr(app, "numeric_keypad_enabled"):
+        app.numeric_keypad_enabled = tk.BooleanVar(master=parent, value=True)
     ttk.Label(theme_frame, text="UI theme").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
     app.theme_combo = ttk.Combobox(
         theme_frame,
@@ -97,7 +104,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         width=28,
     )
     app.theme_combo.grid(row=0, column=1, sticky="w", pady=4)
-    app.theme_combo.bind("<<ComboboxSelected>>", app._on_theme_change)
+    on_theme_change = getattr(app, "_on_theme_change", lambda *_args, **_kwargs: None)
+    app.theme_combo.bind("<<ComboboxSelected>>", on_theme_change)
     apply_tooltip(
         app.theme_combo,
         "Pick a ttk theme; some themes require a restart for best results.",
@@ -107,16 +115,17 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     app.ui_scale_entry.grid(row=1, column=1, sticky="w", pady=4)
     attach_numeric_keypad(app.ui_scale_entry, allow_decimal=True)
     ttk.Label(theme_frame, text="(0.5 - 3.0)").grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
-    app.ui_scale_entry.bind("<Return>", app._on_ui_scale_change)
-    app.ui_scale_entry.bind("<FocusOut>", app._on_ui_scale_change)
-    app.ui_scale_apply_btn = ttk.Button(theme_frame, text="Apply", command=app._on_ui_scale_change)
+    on_ui_scale_change = getattr(app, "_on_ui_scale_change", lambda *_args, **_kwargs: None)
+    app.ui_scale_entry.bind("<Return>", on_ui_scale_change)
+    app.ui_scale_entry.bind("<FocusOut>", on_ui_scale_change)
+    app.ui_scale_apply_btn = ttk.Button(theme_frame, text="Apply", command=on_ui_scale_change)
     app.ui_scale_apply_btn.grid(row=1, column=3, sticky="w", padx=(8, 0), pady=4)
     def _apply_scale_preset(value: float) -> None:
         try:
             app.ui_scale.set(value)
         except Exception:
             pass
-        app._on_ui_scale_change()
+        on_ui_scale_change()
     app.ui_scale_apple_btn = ttk.Button(
         theme_frame,
         text="Apple 2.0x",
@@ -144,7 +153,12 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         width=12,
     )
     app.scrollbar_width_combo.grid(row=2, column=1, sticky="w", pady=4)
-    app.scrollbar_width_combo.bind("<<ComboboxSelected>>", app._on_scrollbar_width_change)
+    on_scrollbar_width_change = getattr(
+        app,
+        "_on_scrollbar_width_change",
+        lambda *_args, **_kwargs: None,
+    )
+    app.scrollbar_width_combo.bind("<<ComboboxSelected>>", on_scrollbar_width_change)
     apply_tooltip(
         app.scrollbar_width_combo,
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
