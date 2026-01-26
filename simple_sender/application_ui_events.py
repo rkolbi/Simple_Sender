@@ -79,6 +79,21 @@ class UiEventsMixin:
     def _unbind_app_settings_mousewheel(self):
         _app_module(self).unbind_app_settings_mousewheel(self)
 
+    def _on_app_settings_touch_start(self, event):
+        _app_module(self).on_app_settings_touch_start(self, event)
+
+    def _on_app_settings_touch_move(self, event):
+        _app_module(self).on_app_settings_touch_move(self, event)
+
+    def _on_app_settings_touch_end(self, event=None):
+        _app_module(self).on_app_settings_touch_end(self, event)
+
+    def _bind_app_settings_touch_scroll(self):
+        _app_module(self).bind_app_settings_touch_scroll(self)
+
+    def _unbind_app_settings_touch_scroll(self):
+        _app_module(self).unbind_app_settings_touch_scroll(self)
+
     def _on_tab_changed(self, event):
         _app_module(self).on_tab_changed(self, event)
 

@@ -46,6 +46,15 @@ def update_tab_visibility(app, nb=None):
         return
     app.toolpath_panel.set_visible(label == "3D View")
     app.toolpath_panel.set_top_view_visible(label == "Top View")
+    try:
+        if label == "App Settings":
+            app._bind_app_settings_mousewheel()
+            app._bind_app_settings_touch_scroll()
+        else:
+            app._unbind_app_settings_mousewheel()
+            app._unbind_app_settings_touch_scroll()
+    except Exception:
+        pass
 
 
 def on_tab_changed(app, event):

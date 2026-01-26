@@ -20,7 +20,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from tkinter import ttk
+import subprocess
+import sys
+from tkinter import messagebox, ttk
 
 from simple_sender.utils.constants import ALL_STOP_CHOICES
 from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
@@ -133,12 +135,26 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.ui_scale_apple_btn,
         "Set the UI scale to 2.0x and apply it.",
     )
+    ttk.Label(theme_frame, text="Scrollbar width").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
+    app.scrollbar_width_combo = ttk.Combobox(
+        theme_frame,
+        state="readonly",
+        values=["default", "wide", "wider", "widest"],
+        textvariable=app.scrollbar_width,
+        width=12,
+    )
+    app.scrollbar_width_combo.grid(row=2, column=1, sticky="w", pady=4)
+    app.scrollbar_width_combo.bind("<<ComboboxSelected>>", app._on_scrollbar_width_change)
+    apply_tooltip(
+        app.scrollbar_width_combo,
+        "Set the width used for all scrollbars (wide matches the current App Settings size).",
+    )
     app.numeric_keypad_check = ttk.Checkbutton(
         theme_frame,
         text="Enable numeric keypad popups",
         variable=app.numeric_keypad_enabled,
     )
-    app.numeric_keypad_check.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.numeric_keypad_check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.numeric_keypad_check,
         "Show the touch keypad when tapping numeric fields.",
@@ -424,3 +440,57 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     return row + 1
 
 
+def build_power_section(app, parent: ttk.Frame, row: int) -> int:
+    if not sys.platform.startswith("linux"):
+        return row
+    power_frame = ttk.LabelFrame(parent, text="System", padding=8)
+    power_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
+    power_frame.grid_columnconfigure(1, weight=1)
+
+    def _log_status(text: str) -> None:
+        try:
+            app.ui_q.put(("log", text))
+        except Exception:
+            pass
+        try:
+            app.status.config(text=text)
+        except Exception:
+            pass
+
+    def _run_power_action(action: str, label: str) -> None:
+        confirm = messagebox.askyesno(
+            "Confirm",
+            f"{label} the system now?",
+        )
+        if not confirm:
+            return
+        try:
+            subprocess.Popen(["systemctl", action])
+            _log_status(f"[system] {label} requested")
+            return
+        except Exception:
+            pass
+        fallback_args = ["shutdown", "-h", "now"] if action == "poweroff" else ["shutdown", "-r", "now"]
+        try:
+            subprocess.Popen(fallback_args)
+            _log_status(f"[system] {label} requested")
+        except Exception as exc:
+            _log_status(f"[system] {label} failed: {exc}")
+
+    btn_row = ttk.Frame(power_frame)
+    btn_row.grid(row=0, column=0, sticky="w")
+    app.btn_shutdown = ttk.Button(
+        btn_row,
+        text="Shutdown",
+        command=lambda: _run_power_action("poweroff", "Shutdown"),
+    )
+    app.btn_shutdown.pack(side="left")
+    app.btn_reboot = ttk.Button(
+        btn_row,
+        text="Reboot",
+        command=lambda: _run_power_action("reboot", "Reboot"),
+    )
+    app.btn_reboot.pack(side="left", padx=(8, 0))
+    apply_tooltip(app.btn_shutdown, "Power off the system (Linux only).")
+    apply_tooltip(app.btn_reboot, "Reboot the system (Linux only).")
+    return row + 1

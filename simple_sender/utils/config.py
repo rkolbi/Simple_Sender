@@ -127,6 +127,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "step_z": 1.0,
     "theme": "vista",
     "ui_scale": 1.5,
+    "scrollbar_width": "wide",
     "toolpath_arc_detail_deg": 9.031746031746032,
     "toolpath_draw_percent": 82,
     "toolpath_full_limit": 33611,

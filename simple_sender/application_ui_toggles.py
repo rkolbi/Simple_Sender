@@ -26,11 +26,13 @@
 # Standard library imports
 from simple_sender.ui.app_exports import (
     apply_ui_scale,
+    apply_scrollbar_width,
     apply_theme,
     install_dialog_loggers,
     on_error_dialogs_enabled_change,
     on_gui_logging_change,
     on_quick_button_visibility_change,
+    on_scrollbar_width_change,
     on_theme_change,
     on_ui_scale_change,
     refresh_autolevel_overlay_toggle_text,
@@ -79,6 +81,12 @@ class UiTogglesMixin:
 
     def _on_ui_scale_change(self, _event=None):
         on_ui_scale_change(self, _event)
+
+    def _apply_scrollbar_width(self, value: str | None = None):
+        return apply_scrollbar_width(self, value)
+
+    def _on_scrollbar_width_change(self, _event=None):
+        on_scrollbar_width_change(self, _event)
 
     def _refresh_stop_button_backgrounds(self):
         refresh_stop_button_backgrounds(self)

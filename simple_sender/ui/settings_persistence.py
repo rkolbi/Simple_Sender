@@ -165,6 +165,11 @@ def save_settings(app):
             app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0)),
             "ui scale",
         ),
+        "scrollbar_width": str(
+            app.scrollbar_width.get()
+            if hasattr(app, "scrollbar_width")
+            else app.settings.get("scrollbar_width", DEFAULT_SETTINGS.get("scrollbar_width", "wide"))
+        ).strip().lower(),
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),

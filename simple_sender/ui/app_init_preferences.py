@@ -85,7 +85,16 @@ def init_basic_preferences(app, app_version: str, module):
     app.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
     app.console_status_enabled = tk.BooleanVar(value=legacy_status_enabled)
     app.ui_scale = tk.DoubleVar(value=setting("ui_scale", 1.0))
+    app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
     app.style = ttk.Style()
+    try:
+        default_scrollbar = app.style.lookup("TScrollbar", "width")
+    except Exception:
+        default_scrollbar = None
+    try:
+        app._scrollbar_width_default = int(default_scrollbar)
+    except Exception:
+        app._scrollbar_width_default = None
     app.theme_palettes = {}
     default_font = tkfont.nametofont("TkDefaultFont")
     app.icon_button_font = tkfont.Font(
@@ -177,6 +186,10 @@ def init_basic_preferences(app, app_version: str, module):
     theme_choice = setting("theme", app.style.theme_use())
     app.selected_theme = tk.StringVar(value=theme_choice)
     app._apply_theme(theme_choice)
+    try:
+        app._apply_scrollbar_width()
+    except Exception:
+        pass
     app.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{app_version}")
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))

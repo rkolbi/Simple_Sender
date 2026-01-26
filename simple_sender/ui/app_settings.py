@@ -32,6 +32,7 @@ from simple_sender.ui.app_settings_sections import (
     build_jogging_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
+    build_power_section,
     build_status_polling_section,
     build_theme_section,
     build_toolpath_settings_section,
@@ -49,7 +50,9 @@ def build_app_settings_tab(app, notebook):
     app.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
     app.app_settings_canvas.grid(row=0, column=0, sticky="nsew")
     app.app_settings_scroll = ttk.Scrollbar(
-        sstab, orient="vertical", command=app.app_settings_canvas.yview
+        sstab,
+        orient="vertical",
+        command=app.app_settings_canvas.yview,
     )
     app.app_settings_scroll.grid(row=0, column=1, sticky="ns")
     app.app_settings_canvas.configure(yscrollcommand=app.app_settings_scroll.set)
@@ -87,5 +90,6 @@ def build_app_settings_tab(app, notebook):
     next_row += 1
     next_row = build_interface_section(app, app._app_settings_inner, next_row)
     next_row = build_auto_level_section(app, app._app_settings_inner, next_row)
-    build_toolpath_settings_section(app, app._app_settings_inner, next_row)
+    next_row = build_toolpath_settings_section(app, app._app_settings_inner, next_row)
+    build_power_section(app, app._app_settings_inner, next_row)
 

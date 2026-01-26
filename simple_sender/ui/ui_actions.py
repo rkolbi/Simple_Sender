@@ -49,6 +49,14 @@ def on_gui_logging_change(app):
 
 def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
+    try:
+        app._scrollbar_width_default = _style_scrollbar_width(getattr(app, "style", None))
+    except Exception:
+        pass
+    try:
+        app._apply_scrollbar_width()
+    except Exception:
+        pass
 
 
 _UI_SCALE_NAMED_FONTS = (
@@ -61,6 +69,37 @@ _UI_SCALE_NAMED_FONTS = (
     "TkIconFont",
     "TkTooltipFont",
 )
+
+_SCROLLBAR_WIDTHS = {
+    "wide": 24,
+    "wider": 32,
+    "widest": 40,
+}
+
+def _style_scrollbar_width(style) -> int | None:
+    if style is None:
+        return None
+    try:
+        value = style.lookup("TScrollbar", "width")
+    except Exception:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+def _coerce_scrollbar_width(value, default: str = "wide") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+    else:
+        normalized = str(value).strip().lower()
+    if normalized == "narrow":
+        return "default"
+    if normalized in _SCROLLBAR_WIDTHS or normalized == "default":
+        return normalized
+    return default
 
 
 def _coerce_ui_scale(value, default: float = 1.0) -> float:
@@ -147,10 +186,55 @@ def apply_ui_scale(app, value: float | None = None) -> float:
     return scale
 
 
+def apply_scrollbar_width(app, value: str | None = None) -> str:
+    raw = value
+    if raw is None:
+        try:
+            raw = app.scrollbar_width.get()
+        except Exception:
+            raw = "wide"
+    choice = _coerce_scrollbar_width(raw, "wide")
+    if choice == "default":
+        width = getattr(app, "_scrollbar_width_default", None)
+        if width is None:
+            width = _style_scrollbar_width(getattr(app, "style", None))
+        if width is None:
+            width = 16
+    else:
+        width = _SCROLLBAR_WIDTHS.get(choice, _SCROLLBAR_WIDTHS["wide"])
+    try:
+        app.style.configure("TScrollbar", width=width)
+        app.style.configure("Vertical.TScrollbar", width=width)
+        app.style.configure("Horizontal.TScrollbar", width=width)
+    except Exception:
+        pass
+    try:
+        app.scrollbar_width.set(choice)
+    except Exception:
+        pass
+    try:
+        app.settings["scrollbar_width"] = choice
+    except Exception:
+        pass
+    return choice
+
+
+def on_scrollbar_width_change(app, _event=None):
+    choice = apply_scrollbar_width(app)
+    try:
+        app.status.config(text=f"Scrollbar width: {choice}")
+    except Exception:
+        pass
+
+
 def on_ui_scale_change(app, _event=None):
     scale = apply_ui_scale(app)
     try:
         app.status.config(text=f"UI scale: {scale:.2f}x")
+    except Exception:
+        pass
+    try:
+        app._save_settings()
     except Exception:
         pass
 
