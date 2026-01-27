@@ -37,6 +37,14 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 
+def _save_bindings(app) -> None:
+    saver = getattr(app, "_save_settings", None)
+    if callable(saver):
+        try:
+            saver()
+        except Exception:
+            pass
+
 
 def poll_joystick_events(
     app,
@@ -215,17 +223,19 @@ def handle_joystick_event(
                 app.after_cancel(timer_id)
             except Exception:
                 pass
-        if capture_state.get("mode") == "safety":
-            binding = app._joystick_binding_from_event(key)
-            if binding:
-                app._joystick_safety_binding = binding
-                app._joystick_safety_active = False
-                app._refresh_joystick_safety_display()
-        else:
-            binding = app._joystick_binding_from_event(key)
-            if binding:
-                app._joystick_bindings[capture_state["binding_id"]] = binding
-                app._clear_duplicate_joystick_binding(key, capture_state["binding_id"])
+            if capture_state.get("mode") == "safety":
+                binding = app._joystick_binding_from_event(key)
+                if binding:
+                    app._joystick_safety_binding = binding
+                    app._joystick_safety_active = False
+                    app._refresh_joystick_safety_display()
+                    _save_bindings(app)
+            else:
+                binding = app._joystick_binding_from_event(key)
+                if binding:
+                    app._joystick_bindings[capture_state["binding_id"]] = binding
+                    app._clear_duplicate_joystick_binding(key, capture_state["binding_id"])
+                    _save_bindings(app)
             if key[0] == "axis":
                 app._reset_joystick_axis_state(key[1], key[2])
             if key[0] == "hat":
@@ -449,6 +459,7 @@ def clear_joystick_safety_binding(app) -> None:
     app._joystick_safety_binding = None
     app._joystick_safety_active = False
     app._refresh_joystick_safety_display()
+    _save_bindings(app)
 
 
 def on_joystick_safety_toggle(app) -> None:

@@ -27,7 +27,10 @@ constants used throughout the application.
 """
 
 import math
+import os
+import platform
 import re
+import sys
 from typing import Dict, Tuple, Set
 
 # ============================================================================
@@ -215,6 +218,37 @@ JOYSTICK_HOLD_POLL_INTERVAL_MS = 20
 
 JOYSTICK_HOLD_MISS_LIMIT = 2
 """Number of missed polls before releasing a joystick hold."""
+
+
+def _is_raspberry_pi() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    model_paths = (
+        "/proc/device-tree/model",
+        "/sys/firmware/devicetree/base/model",
+    )
+    for path in model_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                    if "raspberry pi" in handle.read().lower():
+                        return True
+        except Exception:
+            continue
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as handle:
+            if "raspberry pi" in handle.read().lower():
+                return True
+    except Exception:
+        pass
+    machine = platform.machine().lower()
+    return machine in ("armv6l", "armv7l", "aarch64", "arm64")
+
+
+if _is_raspberry_pi():
+    JOYSTICK_POLL_INTERVAL_MS = 20
+    JOYSTICK_HOLD_REPEAT_MS = 30
+    JOYSTICK_HOLD_POLL_INTERVAL_MS = 10
 
 JOYSTICK_HOLD_DEFINITIONS = [
     ("X-", "jog_hold_x_minus", "X", -1),
