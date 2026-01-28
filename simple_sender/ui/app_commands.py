@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
 import threading
 from datetime import datetime
 from tkinter import filedialog, messagebox
@@ -39,6 +40,36 @@ def ensure_serial_available(app, serial_available: bool, serial_error: str | Non
         msg += f"\n{serial_error}"
     messagebox.showerror("Missing dependency", msg)
     return False
+
+
+def _safe_initial_dir(path: str) -> str:
+    if not path:
+        return ""
+    try:
+        path = os.path.expanduser(str(path))
+    except Exception:
+        return ""
+    if os.name == "nt":
+        if path.startswith("\\\\") or path.startswith("//"):
+            return ""
+        drive, _ = os.path.splitdrive(path)
+        if not drive:
+            return ""
+        root = drive + "\\"
+        try:
+            import ctypes
+            DRIVE_REMOVABLE = 2
+            DRIVE_FIXED = 3
+            DRIVE_RAMDISK = 6
+            dtype = ctypes.windll.kernel32.GetDriveTypeW(root)
+            if dtype not in (DRIVE_REMOVABLE, DRIVE_FIXED, DRIVE_RAMDISK):
+                return ""
+        except Exception:
+            return ""
+    try:
+        return path if os.path.isdir(path) else ""
+    except Exception:
+        return ""
 
 
 def refresh_ports(app, auto_connect: bool = False):
@@ -133,9 +164,10 @@ def open_gcode(app):
     if app.grbl.is_streaming():
         messagebox.showwarning("Busy", "Stop the stream before loading a new G-code file.")
         return
+    initial_dir = _safe_initial_dir(app.settings.get("last_gcode_dir", ""))
     path = filedialog.askopenfilename(
         title="Open G-code",
-        initialdir=app.settings.get("last_gcode_dir", ""),
+        initialdir=initial_dir,
         filetypes=[("G-code", "*.nc *.gcode *.tap *.txt"), ("All files", "*.*")],
     )
     if not path:
