@@ -789,6 +789,17 @@ def show_auto_level_dialog(app):
         ):
             status_var.set("")
         start_btn.config(state="normal")
+        _sync_pending_g90_notice()
+
+    pending_g90_text = "Pending G90 restore after alarm clears."
+
+    def _sync_pending_g90_notice() -> None:
+        if getattr(app, "_pending_force_g90", False):
+            if not status_var.get():
+                status_var.set(pending_g90_text)
+            return
+        if status_var.get() == pending_g90_text:
+            status_var.set("")
 
     def update_preview():
         try:
@@ -969,7 +980,10 @@ def show_auto_level_dialog(app):
                     if save_map_btn is not None:
                         save_map_btn.config(state="normal")
                 else:
-                    status_var.set(f"Probe stopped: {reason or 'failed'}")
+                    message = f"Probe stopped: {reason or 'failed'}"
+                    if getattr(app, "_pending_force_g90", False):
+                        message = f"{message} (pending G90 restore)"
+                    status_var.set(message)
             app.after(0, finish)
 
         started = app.auto_level_runner.start(

@@ -24,6 +24,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [Macros](#macros)
 - [Estimation & 3D View](#estimation--3d-view)
 - [Auto-Leveling](#auto-leveling)
+- [Probing Workflow](#probing-workflow)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Joystick Bindings](#joystick-bindings)
 - [Logs & Filters](#logs--filters)
@@ -236,7 +237,7 @@ Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20
 | `%if paused` | Execute the line only while streaming is paused, so recovery steps (e.g., retracting Z) stay blocked during active runs. | `%if paused G0 Z10` |
 | `%if not running` | Skip the current line while a stream is active so setup steps only run when the controller is idle. | `%if not running G0 Z0` |
 
-All directives above operate through the modal interpreter implemented in `main.py` and work with GRBL 1.1h because they merely gate G-code streaming or request standard status bytes (`?`). `%wait` relies on the GRBL Idle state reported by `<Idle|...>` lines, `%update` sends the conventional real-time status command, and `%msg` logs without touching the controller.
+All directives above operate through the macro executor (`simple_sender/macro_executor.py`) and work with GRBL 1.1h because they merely gate G-code streaming or request standard status bytes (`?`). `%wait` relies on the GRBL Idle state reported by `<Idle|...>` lines, `%update` sends the conventional real-time status command, and `%msg` logs without touching the controller.
 
 ### Helper commands
 | Command | Description | Example usage |
@@ -426,6 +427,42 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Arcs are converted to line segments during leveling; rapids are not modified.
 - Large leveled files may reload in streaming preview mode (stats are limited until fully loaded).
 - Always test in the air first and confirm probe wiring before running a full grid.
+
+## Probing Workflow
+This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) and optionally running Auto-Level. Adjust the numbers for your machine and tooling.
+
+### Step-by-step (touch plate / probe)
+1) **Home and clear alarms**
+   - Home the machine if you use homing switches, or at minimum verify GRBL is Idle.
+   - Clear alarms with **Unlock ($X)** or **Home ($H)** so probing commands are accepted.
+2) **Set up material and tool**
+   - Mount the stock securely; install the tool you plan to cut with.
+   - Connect the probe plate/clip and verify the **Probe** LED is off before contact.
+3) **Set units and work XY**
+   - Choose mm/inch (unit toggle) so probing and offsets are consistent.
+   - Jog to your XY origin and use **Zero X** / **Zero Y** (or **Zero All**).
+   - If you use persistent zeroing (App Settings > Zeroing), the app will use `G10 L20`; otherwise it uses `G92`.
+4) **Probe Z (touch plate)**
+   - Jog above the plate; set a **Safe Z** that clears clamps.
+   - Run a probe move (via a macro or the console), for example:
+     - `G38.2 Z-10.000 F100.000` (probe down 10 mm at 100 mm/min)
+   - On touch, set Z0 using the plate thickness:
+     - `G92 Z<plate_thickness>` (default zeroing mode), or
+     - `G10 L20 Z<plate_thickness>` (persistent offsets)
+   - Retract to Safe Z and remove the probe plate/clip.
+5) **Verify work XYZ**
+   - Jog back to the surface and confirm WPos Z ~= 0 at the work plane.
+   - If you need XY re-zero, re-jog and re-zero X/Y.
+6) **Optional: Auto-Level the job**
+   - Load the job, open **Auto-Level**, confirm Safe Z / depth / feed / grid.
+   - Click **Start Probe**, then **Apply to Job** to load the leveled file.
+7) **Dry run and cut**
+   - Do a dry run in air, then run the job with the spindle enabled.
+
+### Macro shortcuts
+If you prefer guided probing, the macro set includes touch-plate and reference-tool helpers (see the Macro table below):
+- **Macro-4**: XYZ touch plate + reference tool setup.
+- **Macro-6**: Z touch plate + reference tool setup.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.

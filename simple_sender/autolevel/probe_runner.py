@@ -96,6 +96,7 @@ class AutoLevelProbeRunner:
     ) -> None:
         ok = False
         reason = None
+        force_g90_on_exit = False
         try:
             self.app.probe_controller.clear()
             prev_units, prev_distance = self._snapshot_modal_state()
@@ -112,6 +113,7 @@ class AutoLevelProbeRunner:
                     return
                 if not self._probe_point(x, y, settings, height_map):
                     reason = "Probe failed."
+                    force_g90_on_exit = True
                     return
                 if on_point:
                     try:
@@ -131,6 +133,8 @@ class AutoLevelProbeRunner:
             ok = True
         finally:
             self._restore_modal_state(prev_units, prev_distance, settings.idle_timeout)
+            if force_g90_on_exit:
+                self._force_g90_restore()
             self._running = False
             if on_done:
                 try:
@@ -152,6 +156,27 @@ class AutoLevelProbeRunner:
             self._send_and_wait(units, timeout)
         if distance:
             self._send_and_wait(distance, timeout)
+
+    def _force_g90_restore(self) -> None:
+        if not self.app.grbl.is_connected():
+            self._queue_force_g90("disconnected")
+            return
+        if getattr(self.app, "_alarm_locked", False):
+            self._queue_force_g90("alarm")
+            return
+        if self.app.grbl.is_streaming():
+            self._queue_force_g90("streaming")
+            return
+        try:
+            self.app.grbl.send_immediate("G90", source="autolevel")
+        except Exception:
+            self._queue_force_g90("send failed")
+
+    def _queue_force_g90(self, reason: str) -> None:
+        if getattr(self.app, "_pending_force_g90", False):
+            return
+        setattr(self.app, "_pending_force_g90", True)
+        self._log(f"[autolevel] Pending G90 restore ({reason}).")
 
     def _probe_point(
         self,
