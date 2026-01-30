@@ -22,24 +22,25 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from typing import Any, Callable, cast
 
 from simple_sender.ui.widgets import apply_tooltip, set_kb_id
-from simple_sender.ui.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import center_window
 
 class MacroPanel:
-    def __init__(self, app):
+    def __init__(self, app: Any) -> None:
         self.app = app
         self._left_frame: ttk.Frame | None = None
         self._right_frame: ttk.Frame | None = None
         self._macro_buttons: list[tk.Widget] = []
 
-    def attach_frames(self, left: ttk.Frame, right: ttk.Frame):
+    def attach_frames(self, left: ttk.Frame, right: ttk.Frame) -> None:
         self._left_frame = left
         self._right_frame = right
         self._load_macro_buttons()
 
     def _macro_path(self, index: int) -> str | None:
-        return self.app.macro_executor.macro_path(index)
+        return cast(str | None, self.app.macro_executor.macro_path(index))
 
     def _read_macro_header(self, path: str, index: int) -> tuple[str, str]:
         try:
@@ -73,7 +74,7 @@ class MacroPanel:
         center_window(dlg, self.app)
         dlg.wait_window()
 
-    def _preview_macro(self, index: int):
+    def _preview_macro(self, index: int) -> None:
         path = self._macro_path(index)
         if not path:
             return
@@ -86,12 +87,18 @@ class MacroPanel:
         name = lines[0].strip() if lines else f"Macro {index}"
         self._show_macro_preview(name, lines)
 
-    def _run_macro(self, index: int):
+    def _run_macro(self, index: int) -> None:
         self.app.macro_executor.run_macro(index)
 
-    def _load_macro_buttons(self):
+    def _load_macro_buttons(self) -> None:
         if not self._left_frame or not self._right_frame:
             return
+        def _run_command(index: int) -> Callable[[], None]:
+            return lambda: self._run_macro(index)
+
+        def _preview_bind(index: int) -> Callable[[tk.Event], None]:
+            return lambda _event: self._preview_macro(index)
+
         if self._macro_buttons:
             self.app._manual_controls = [w for w in self.app._manual_controls if w not in self._macro_buttons]
         self._macro_buttons = []
@@ -108,11 +115,11 @@ class MacroPanel:
             if not path:
                 continue
             name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(self._left_frame, text=name, command=lambda i=idx: self._run_macro(i))
+            btn = ttk.Button(self._left_frame, text=name, command=_run_command(idx))
             set_kb_id(btn, f"macro_{idx}")
             btn.pack(fill="x", pady=(0, 4))
             apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
+            btn.bind("<Button-3>", _preview_bind(idx))
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
 
@@ -123,7 +130,7 @@ class MacroPanel:
             if not path:
                 continue
             name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(self._right_frame, text=name, command=lambda i=idx: self._run_macro(i))
+            btn = ttk.Button(self._right_frame, text=name, command=_run_command(idx))
             set_kb_id(btn, f"macro_{idx}")
             if col == 0:
                 padx = (0, 8)
@@ -131,7 +138,7 @@ class MacroPanel:
                 padx = (20, 0)
             btn.grid(row=row, column=col, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", lambda e, i=idx: self._preview_macro(i))
+            btn.bind("<Button-3>", _preview_bind(idx))
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
             col += 1

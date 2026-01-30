@@ -25,6 +25,7 @@
 
 # Standard library imports
 import sys
+from typing import Any, cast
 
 
 def _app_module(instance):
@@ -33,8 +34,9 @@ def _app_module(instance):
 
 class StatusMixin:
     def _on_fallback_rate_change(self, _event=None):
-        if self._last_gcode_lines:
-            self._update_gcode_stats(self._last_gcode_lines)
+        app = cast(Any, self)
+        if getattr(app, "_last_gcode_lines", None):
+            app._update_gcode_stats(app._last_gcode_lines)
 
     def _on_status_interval_change(self, _event=None):
         _app_module(self).on_status_interval_change(self, _event)
@@ -49,7 +51,7 @@ class StatusMixin:
         _app_module(self).apply_error_dialog_settings(self, _event)
 
     def _effective_status_poll_interval(self) -> float:
-        return _app_module(self).effective_status_poll_interval(self)
+        return float(_app_module(self).effective_status_poll_interval(self))
 
     def _apply_status_poll_profile(self):
         _app_module(self).apply_status_poll_profile(self)
@@ -61,7 +63,7 @@ class StatusMixin:
         _app_module(self).on_estimate_rates_change(self, _event)
 
     def _validate_estimate_rate_text(self, text: str) -> bool:
-        return _app_module(self).validate_estimate_rate_text(text)
+        return bool(_app_module(self).validate_estimate_rate_text(text))
 
     def _convert_estimate_rates(self, old_units: str, new_units: str):
         _app_module(self).convert_estimate_rates(self, old_units, new_units)

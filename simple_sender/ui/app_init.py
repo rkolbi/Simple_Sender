@@ -36,7 +36,7 @@ from simple_sender.grbl_worker import GrblWorker
 from simple_sender.macro_executor import MacroExecutor
 from simple_sender.streaming_controller import StreamingController
 from simple_sender.ui.grbl_settings import GRBLSettingsController
-from simple_sender.ui.input_bindings import PYGAME_AVAILABLE
+from simple_sender.ui.bindings import PYGAME_AVAILABLE
 from simple_sender.ui.macro_panel import MacroPanel
 from simple_sender.ui.toolpath import ToolpathPanel
 from simple_sender.ui.ui_queue import UiEventQueue

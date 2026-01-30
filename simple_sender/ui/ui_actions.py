@@ -27,8 +27,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import tkinter.font as tkfont
 
-from simple_sender.ui.gcode_stats import format_duration
-from simple_sender.ui.popup_utils import center_window
+from simple_sender.ui.gcode.stats import format_duration
+from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
 
 

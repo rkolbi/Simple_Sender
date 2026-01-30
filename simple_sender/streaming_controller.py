@@ -22,10 +22,11 @@
 
 import logging
 import time
-from typing import Any, Callable
+from typing import Callable
 import tkinter as tk
 
 from simple_sender.utils.constants import MAX_CONSOLE_LINES
+from simple_sender.types import AppProtocol, GcodeViewLike
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,11 @@ ConsoleEntryLike = ConsoleEntry | str
 class StreamingController:
     """Manage streaming-related UI updates and console logging."""
 
-    def __init__(self, app: Any, *, timestamp: Callable[[], str] | None = None) -> None:
+    def __init__(self, app: AppProtocol, *, timestamp: Callable[[], str] | None = None) -> None:
         self.app = app
         self._timestamp = timestamp or (lambda: time.strftime("%H:%M:%S"))
         self.console: tk.Text | None = None
-        self.gview: Any | None = None
+        self.gview: GcodeViewLike | None = None
         self.progress_pct: tk.IntVar | None = None
         self.buffer_fill: tk.StringVar | None = None
         self.buffer_fill_pct: tk.IntVar | None = None
@@ -62,7 +63,7 @@ class StreamingController:
     def attach_widgets(
         self,
         console: tk.Text,
-        gview: Any,
+        gview: GcodeViewLike,
         progress_pct: tk.IntVar,
         buffer_fill: tk.StringVar,
         buffer_fill_pct: tk.IntVar,

@@ -45,8 +45,22 @@ def bcnc_compile_line(
     # Always allow raw GRBL $-commands (including $J=...) even when macro scripting is disabled.
     if line[0] == "$":
         return line
+    if line[0] == ";":
+        return None
     if not macros_allow_python:
-        if line.startswith(("%", "_")) or ("[" in line) or ("]" in line) or ("=" in line):
+        if line.startswith("%"):
+            pat = MACRO_AUXPAT.match(line.strip())
+            cmd = pat.group(1) if pat else None
+            if cmd not in ("%wait", "%msg", "%update"):
+                return ("COMPILE_ERROR", "Macro scripting disabled in settings.")
+        if line.startswith("_") or ("[" in line) or ("]" in line):
+            return ("COMPILE_ERROR", "Macro scripting disabled in settings.")
+        if "=" in line:
+            stripped = line.lstrip()
+            if stripped.startswith(";"):
+                return None
+            if stripped.startswith("(") and stripped.endswith(")"):
+                return None
             return ("COMPILE_ERROR", "Macro scripting disabled in settings.")
     line = line.replace("#", "_")
     if line[0] == "%":
@@ -86,8 +100,6 @@ def bcnc_compile_line(
             return compile(line, "", "exec")
         except Exception as exc:
             return ("COMPILE_ERROR", f"{line} ({exc})")
-    if line[0] == ";":
-        return None
     out: list[str | types.CodeType] = []
     bracket = 0
     paren = 0

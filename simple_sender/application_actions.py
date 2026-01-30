@@ -33,10 +33,10 @@ def _app_module(instance):
 
 
 class ActionsMixin:
-    def refresh_ports(self, auto_connect: bool = False):
+    def refresh_ports(self, auto_connect: bool = False) -> None:
         _app_module(self).refresh_ports(self, auto_connect)
 
-    def toggle_connect(self):
+    def toggle_connect(self) -> None:
         _app_module(self).toggle_connect(self)
 
     def _start_connect_worker(
@@ -45,64 +45,66 @@ class ActionsMixin:
         *,
         show_error: bool = True,
         on_failure: Callable[[Exception], Any] | None = None,
-    ):
+    ) -> None:
         _app_module(self).start_connect_worker(self, port, show_error=show_error, on_failure=on_failure)
 
-    def _start_disconnect_worker(self):
+    def _start_disconnect_worker(self) -> None:
         _app_module(self).start_disconnect_worker(self)
 
-    def _ensure_serial_available(self) -> bool:
+    def _ensure_serial_available(self) -> Any:
         module = _app_module(self)
-        return module.ensure_serial_available(self, module.serial is not None, module.SERIAL_IMPORT_ERROR)
+        return module.ensure_serial_available(
+            self, module.serial is not None, module.SERIAL_IMPORT_ERROR
+        )
 
-    def open_gcode(self):
+    def open_gcode(self) -> None:
         _app_module(self).open_gcode(self)
 
-    def run_job(self):
+    def run_job(self) -> None:
         _app_module(self).run_job(self)
 
-    def pause_job(self):
+    def pause_job(self) -> None:
         _app_module(self).pause_job(self)
 
-    def resume_job(self):
+    def resume_job(self) -> None:
         _app_module(self).resume_job(self)
 
-    def stop_job(self):
+    def stop_job(self) -> None:
         _app_module(self).stop_job(self)
 
-    def _load_grbl_setting_info(self):
+    def _load_grbl_setting_info(self) -> None:
         module = _app_module(self)
         module.load_grbl_setting_info(self, module._SCRIPT_DIR)
 
-    def _setup_console_tags(self):
+    def _setup_console_tags(self) -> None:
         _app_module(self).setup_console_tags(self)
 
-    def _send_console(self):
+    def _send_console(self) -> None:
         _app_module(self).send_console(self)
 
-    def _clear_console_log(self):
+    def _clear_console_log(self) -> None:
         _app_module(self).clear_console_log(self)
 
-    def _save_console_log(self):
+    def _save_console_log(self) -> None:
         _app_module(self).save_console_log(self)
 
-    def _request_settings_dump(self):
+    def _request_settings_dump(self) -> None:
         _app_module(self).request_settings_dump(self)
 
-    def _maybe_auto_reconnect(self):
+    def _maybe_auto_reconnect(self) -> None:
         _app_module(self).maybe_auto_reconnect(self)
 
-    def _handle_auto_reconnect_failure(self, exc: Exception):
+    def _handle_auto_reconnect_failure(self, exc: Exception) -> None:
         _app_module(self).handle_auto_reconnect_failure(self, exc)
 
-    def _confirm_and_run(self, label: str, func):
+    def _confirm_and_run(self, label: str, func: Callable[..., Any]) -> None:
         _app_module(self).confirm_and_run(self, label, func)
 
     def _require_grbl_connection(self) -> bool:
-        return _app_module(self).require_grbl_connection(self)
+        return bool(_app_module(self).require_grbl_connection(self))
 
-    def _run_if_connected(self, func):
+    def _run_if_connected(self, func: Callable[..., Any]) -> None:
         _app_module(self).run_if_connected(self, func)
 
-    def _send_manual(self, command: str, source: str):
+    def _send_manual(self, command: str, source: str) -> None:
         _app_module(self).send_manual(self, command, source)

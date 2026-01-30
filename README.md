@@ -140,6 +140,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
 
     ![-](pics/Slide2.JPG)
+  - **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
   - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
 
     ![-](pics/Slide3.JPG)
@@ -223,7 +224,7 @@ Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the direct
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
 
-`App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, any line that begins with `%` or `_`, contains `[`/`]`, or includes `=` raises a compile error, though raw GRBL commands still stream. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
+`App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed; `_` lines, `[expression]`, and assignments inside non-comment lines are blocked. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
 Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` (or `%state_return`) inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
 
@@ -480,9 +481,15 @@ If you prefer guided probing, the macro set includes touch-plate and reference-t
 - Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
 
 ## Logs & Filters
-- Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming; jog/ALL STOP hotkeys (Space/Enter defaults).
+- Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
+- The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload and **Export Logs...** to save a zip bundle for support.
 
 ## Testing
+Dev dependencies (tests + type checking):
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
 Tests are grouped by scope:
 - `tests/unit/`: core logic (parser, worker, settings, autolevel).
 - `tests/integration/`: streaming workflows.
@@ -510,10 +517,15 @@ Coverage:
 pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
 ```
 
+Type checking (mypy):
+```powershell
+python -m mypy
+```
+
 ## Module Layout
 - `simple_sender/application.py`: Tkinter app class with UI orchestration and delegates.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
-- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Settings/3D).
+- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
 - `simple_sender/ui/gcode_viewer.py`: G-code viewer widget and run-reset helper.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
 - `simple_sender/ui/event_router.py`: UI state updates from GRBL events (includes streaming lock helper).
@@ -726,6 +738,13 @@ Macro UI is included below along with the rest of the interface.
 - Filters ALL/ERRORS/ALARMS: filter the console display by severity.
 - Pos/Status toggle: includes or omits status/position reports from the console view and log.
 
+### Logs Tab
+- Log viewer: read-only view of application/serial/UI/error logs.
+- Source filter: Application/Serial/UI/Errors/All.
+- Level filter: DEBUG/INFO/WARNING/ERROR/CRITICAL.
+- Refresh: reloads log files (last ~1000 lines).
+- Export Logs: writes a zip bundle for support.
+
 ### Overdrive Tab
 - Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
 - Spindle OFF: turns the spindle off (M5).
@@ -770,7 +789,7 @@ Macro UI is included below along with the rest of the interface.
 - Play reminder beep on completion: toggles completion beep.
 
 ### App Settings: Macros
-- Allow macro scripting (Python/eval): enables Python-style macro directives; disable to allow only plain G-code lines.
+- Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
 
 ### App Settings: Zeroing
 - Use persistent zeroing (G10 L20): switches zeroing buttons from G92 to G10 L20.
@@ -804,6 +823,7 @@ Macro UI is included below along with the rest of the interface.
 - Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
 - Performance toggle: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
+- View Logs...: opens the log viewer with source/level filters and export.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
 - Quick buttons (Tips/3DR/Keys/ALO/Release): toggles each status-bar quick button.
 - Quick toggles (Tips/3DR/Keys/ALO): immediate action buttons to flip the corresponding feature.

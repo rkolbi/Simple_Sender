@@ -26,7 +26,9 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Sequence
+from typing import Sequence, cast
+
+from simple_sender.types import GrblWorkerState
 
 from .utils.constants import EVENT_QUEUE_TIMEOUT, MAX_LINE_LENGTH, RX_BUFFER_SAFETY
 from .utils.exceptions import SerialWriteError
@@ -47,10 +49,10 @@ def _stream_patterns():
 def _annotate_stream_error(raw_error: str) -> str:
     from . import grbl_worker as grbl_worker_mod
 
-    return grbl_worker_mod.annotate_grbl_error(raw_error)
+    return cast(str, grbl_worker_mod.annotate_grbl_error(raw_error))
 
 
-class GrblWorkerStreamingMixin:
+class GrblWorkerStreamingMixin(GrblWorkerState):
     def is_streaming(self) -> bool:
         """Check if currently streaming G-code.
         
@@ -216,7 +218,7 @@ class GrblWorkerStreamingMixin:
                     return ""
             return token
 
-        return sanitize_pat.sub(repl, line)
+        return cast(str, sanitize_pat.sub(repl, line))
 
     def _build_line_payload(self, line: str) -> bytes | None:
         try:
@@ -231,7 +233,7 @@ class GrblWorkerStreamingMixin:
         match = pause_pat.search(line.upper())
         if not match:
             return None
-        return pause_map.get(match.group(1))
+        return cast(str | None, pause_map.get(match.group(1)))
 
     def _maybe_pause_after_ack(self, idx: int | None) -> None:
         if idx is None:
@@ -474,9 +476,10 @@ class GrblWorkerStreamingMixin:
                 return
             if not self.is_connected():
                 return
-            if self._abort_writes.is_set():
+            if self._abort_writes.is_set() and not self._alarm_active:
                 return
-
+            payload: bytes | None = None
+            line_len: int
             if self._manual_pending_item is not None:
                 line, payload, line_len = self._manual_pending_item
             else:
@@ -503,6 +506,14 @@ class GrblWorkerStreamingMixin:
                     self._manual_pending_item = None
                     continue
                 line_len = len(payload)
+
+            allowed_alarm_cmd = False
+            if self._alarm_active:
+                cmd_upper = line.strip().upper()
+                allowed_alarm_cmd = cmd_upper.startswith("$X") or cmd_upper.startswith("$H")
+                if not allowed_alarm_cmd:
+                    self._clear_outgoing()
+                    continue
 
             if line_len > MAX_LINE_LENGTH:
                 self.ui_q.put((
@@ -537,7 +548,7 @@ class GrblWorkerStreamingMixin:
                 ))
                 continue
 
-            if self._abort_writes.is_set():
+            if self._abort_writes.is_set() and not allowed_alarm_cmd:
                 with self._stream_lock:
                     if self._stream_line_queue:
                         try:
@@ -551,7 +562,7 @@ class GrblWorkerStreamingMixin:
                 self._emit_buffer_fill()
                 break
 
-            if not self._write_line(line, payload):
+            if not self._write_line(line, payload, allow_abort=allowed_alarm_cmd):
                 with self._stream_lock:
                     if self._stream_line_queue:
                         try:

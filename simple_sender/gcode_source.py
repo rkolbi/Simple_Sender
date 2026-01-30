@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Iterator
+from typing import IO, Iterator, cast, overload
 
 from simple_sender.gcode_parser import clean_gcode_line
 
@@ -36,7 +36,7 @@ class FileGcodeSource:
         self._offsets = list(offsets)
         self._encoding = encoding
         self._lock = threading.Lock()
-        self._file = None
+        self._file: IO[str] | None = None
 
     def __len__(self) -> int:
         return len(self._offsets)
@@ -45,7 +45,13 @@ class FileGcodeSource:
         for idx in range(len(self._offsets)):
             yield self._read_line_at(idx)
 
-    def __getitem__(self, idx):
+    @overload
+    def __getitem__(self, idx: int) -> str: ...
+
+    @overload
+    def __getitem__(self, idx: slice) -> list[str]: ...
+
+    def __getitem__(self, idx: int | slice):
         if isinstance(idx, slice):
             start, stop, step = idx.indices(len(self._offsets))
             if step == 1:
@@ -66,7 +72,7 @@ class FileGcodeSource:
                     pass
             self._file = None
 
-    def _open(self):
+    def _open(self) -> IO[str]:
         if self._file is None or self._file.closed:
             self._file = open(
                 self.path,
@@ -82,4 +88,4 @@ class FileGcodeSource:
             f = self._open()
             f.seek(self._offsets[idx])
             raw = f.readline()
-        return clean_gcode_line(raw)
+        return cast(str, clean_gcode_line(raw))

@@ -23,10 +23,11 @@
 from dataclasses import dataclass
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable, cast
 
 from simple_sender.autolevel.grid import ProbeGrid
 from simple_sender.autolevel.height_map import HeightMap
+from simple_sender.autolevel.probe_controller import ProbeReport
 
 
 @dataclass(frozen=True)
@@ -41,11 +42,11 @@ class ProbeRunSettings:
 
 
 class AutoLevelProbeRunner:
-    def __init__(self, app):
+    def __init__(self, app: Any):
         self.app = app
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
-        self._running = False
+        self._running: bool = False
 
     def is_running(self) -> bool:
         return self._running
@@ -215,14 +216,14 @@ class AutoLevelProbeRunner:
             return False
         return True
 
-    def _wait_for_probe_report(self, timeout_s: float) -> object | None:
+    def _wait_for_probe_report(self, timeout_s: float) -> ProbeReport | None:
         start = time.time()
         while True:
             if self._cancel.is_set():
                 return None
             report = self.app.probe_controller.last_report()
             if report is not None:
-                return report
+                return cast(ProbeReport, report)
             if timeout_s and (time.time() - start) > timeout_s:
                 return None
             time.sleep(0.02)

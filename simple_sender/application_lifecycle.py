@@ -25,6 +25,7 @@
 
 # Standard library imports
 import sys
+from typing import Any, cast
 
 
 def _app_module(instance):
@@ -36,7 +37,8 @@ class LifecycleMixin:
         _app_module(self).drain_ui_queue(self)
 
     def _clear_pending_ui_updates(self):
-        self.streaming_controller.clear_pending_ui_updates()
+        app = cast(Any, self)
+        app.streaming_controller.clear_pending_ui_updates()
 
     def _handle_evt(self, evt):
         _app_module(self).handle_event(self, evt)
@@ -72,7 +74,7 @@ class LifecycleMixin:
         _app_module(self).tk_report_callback_exception(self, exc, val, tb)
 
     def _should_show_error_dialog(self) -> bool:
-        return _app_module(self).should_show_error_dialog(self)
+        return bool(_app_module(self).should_show_error_dialog(self))
 
     def _reset_error_dialog_state(self):
         _app_module(self).reset_error_dialog_state(self)
@@ -81,7 +83,7 @@ class LifecycleMixin:
         _app_module(self).set_error_dialog_status(self, text)
 
     def _load_settings(self) -> dict:
-        return _app_module(self).load_settings(self)
+        return cast(dict, _app_module(self).load_settings(self))
 
     def _save_settings(self):
         _app_module(self).save_settings(self)

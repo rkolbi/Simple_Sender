@@ -30,10 +30,11 @@ import threading
 import time
 from tkinter import messagebox
 
+from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
 
 
-class MacroRunnerMixin:
+class MacroRunnerMixin(MacroExecutorState):
     def run_macro(self, index: int):
         if not self.grbl.is_connected():
             messagebox.showwarning("Macro blocked", "Connect to GRBL first.")

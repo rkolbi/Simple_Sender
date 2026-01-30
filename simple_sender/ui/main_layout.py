@@ -22,9 +22,9 @@
 
 from tkinter import ttk
 
-from simple_sender.ui.jog_panel import build_jog_panel
+from simple_sender.ui.controls.jog_panel import build_jog_panel
 from simple_sender.ui.main_tabs import build_main_tabs
-from simple_sender.ui.status_bar import build_status_bar
+from simple_sender.ui.status.bar import build_status_bar
 
 
 def build_main_layout(app):

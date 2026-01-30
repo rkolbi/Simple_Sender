@@ -19,8 +19,12 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-from simple_sender.application import App
+def main() -> None:
+    from simple_sender.utils.logging_config import setup_logging
+    setup_logging()
+    from simple_sender.application import App
+    App().mainloop()
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    main()

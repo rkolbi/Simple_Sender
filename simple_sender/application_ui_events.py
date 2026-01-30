@@ -26,6 +26,7 @@
 # Standard library imports
 import queue
 import sys
+from typing import Any, cast
 
 # GUI imports
 import tkinter as tk
@@ -37,22 +38,24 @@ def _app_module(instance):
 
 class UiEventsMixin:
     def _on_app_focus_out(self, event=None):
-        if not bool(self.stop_hold_on_focus_loss.get()):
+        app = cast(Any, self)
+        if not bool(app.stop_hold_on_focus_loss.get()):
             return
         try:
-            self.after_idle(self._maybe_stop_joystick_hold_on_focus_loss)
+            app.after_idle(self._maybe_stop_joystick_hold_on_focus_loss)
         except Exception:
             self._maybe_stop_joystick_hold_on_focus_loss()
 
     def _maybe_stop_joystick_hold_on_focus_loss(self):
-        if not bool(self.stop_hold_on_focus_loss.get()):
+        app = cast(Any, self)
+        if not bool(app.stop_hold_on_focus_loss.get()):
             return
         try:
-            focus_widget = self.focus_get()
+            focus_widget = app.focus_get()
         except (tk.TclError, KeyError):
             return
-        if focus_widget is None and getattr(self, "_active_joystick_hold_binding", None):
-            self._stop_joystick_hold()
+        if focus_widget is None and getattr(app, "_active_joystick_hold_binding", None):
+            app._stop_joystick_hold()
 
     def _show_macro_prompt(
         self,
@@ -98,12 +101,13 @@ class UiEventsMixin:
         _app_module(self).on_tab_changed(self, event)
 
     def _on_auto_level_enabled_change(self):
-        enabled = bool(self.auto_level_enabled.get())
+        app = cast(Any, self)
+        enabled = bool(app.auto_level_enabled.get())
         try:
-            self.settings["auto_level_enabled"] = enabled
+            app.settings["auto_level_enabled"] = enabled
         except Exception:
             pass
-        frame = getattr(self, "auto_level_frame", None)
+        frame = getattr(app, "auto_level_frame", None)
         if frame is not None:
             try:
                 if enabled:
@@ -113,26 +117,28 @@ class UiEventsMixin:
             except Exception:
                 pass
         if enabled:
-            if getattr(self, "_last_gcode_lines", None) or getattr(self, "_gcode_source", None):
-                self._set_job_button_mode("auto_level")
+            if getattr(app, "_last_gcode_lines", None) or getattr(app, "_gcode_source", None):
+                app._set_job_button_mode("auto_level")
         else:
-            self._set_job_button_mode("read_job")
+            app._set_job_button_mode("read_job")
 
     def _start_macro_status(self, name: str):
+        app = cast(Any, self)
         text = (name or "Macro").strip() or "Macro"
-        self._macro_status_text = f"Macro: {text}"
-        self._macro_status_scroll_index = 0
-        self._macro_status_active = True
-        self._macro_status_width = getattr(self, "_machine_state_max_chars", 0) or (len("DISCONNECTED") + 2)
-        self._cancel_state_flash()
-        self._apply_state_fg("#00c853")
-        self._update_macro_status_display()
+        app._macro_status_text = f"Macro: {text}"
+        app._macro_status_scroll_index = 0
+        app._macro_status_active = True
+        app._macro_status_width = getattr(app, "_machine_state_max_chars", 0) or (len("DISCONNECTED") + 2)
+        app._cancel_state_flash()
+        app._apply_state_fg("#00c853")
+        app._update_macro_status_display()
 
     def _update_macro_status_display(self):
-        if not self._macro_status_active:
+        app = cast(Any, self)
+        if not app._macro_status_active:
             return
-        width = int(getattr(self, "_macro_status_width", 0) or 0)
-        text = self._macro_status_text
+        width = int(getattr(app, "_macro_status_width", 0) or 0)
+        text = app._macro_status_text
         if width <= 0:
             width = len(text)
         if len(text) <= width:
@@ -140,29 +146,30 @@ class UiEventsMixin:
         else:
             gap = "   "
             scroll = text + gap
-            start = self._macro_status_scroll_index % len(scroll)
+            start = app._macro_status_scroll_index % len(scroll)
             double = scroll + scroll
             display = double[start : start + width]
-            self._macro_status_scroll_index += 1
+            app._macro_status_scroll_index += 1
         try:
-            self.machine_state.set(display)
+            app.machine_state.set(display)
         except Exception:
             pass
-        self._macro_status_after_id = self.after(200, self._update_macro_status_display)
+        app._macro_status_after_id = app.after(200, self._update_macro_status_display)
 
     def _stop_macro_status(self):
-        if not getattr(self, "_macro_status_active", False):
+        app = cast(Any, self)
+        if not getattr(app, "_macro_status_active", False):
             return
-        self._macro_status_active = False
-        after_id = getattr(self, "_macro_status_after_id", None)
+        app._macro_status_active = False
+        after_id = getattr(app, "_macro_status_after_id", None)
         if after_id:
             try:
-                self.after_cancel(after_id)
+                app.after_cancel(after_id)
             except Exception:
                 pass
-        self._macro_status_after_id = None
-        self.machine_state.set(self._machine_state_text)
-        self._update_state_highlight(self._machine_state_text)
+        app._macro_status_after_id = None
+        app.machine_state.set(app._machine_state_text)
+        app._update_state_highlight(app._machine_state_text)
 
     def _on_resume_button_visibility_change(self):
         _app_module(self).on_resume_button_visibility_change(self)

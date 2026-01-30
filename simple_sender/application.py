@@ -58,6 +58,7 @@ from simple_sender.ui.app_exports import (
     show_auto_level_dialog,
     show_macro_prompt,
     show_resume_dialog,
+    show_logs_dialog,
     open_release_checklist,
     open_run_checklist,
     run_preflight_check,

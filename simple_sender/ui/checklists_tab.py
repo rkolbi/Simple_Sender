@@ -24,8 +24,8 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.app_settings_sections_advanced import build_safety_aids_section
-from simple_sender.ui.app_settings_sections_general import (
+from simple_sender.ui.settings.sections_advanced import build_safety_aids_section
+from simple_sender.ui.settings.sections_general import (
     build_diagnostics_section,
     build_safety_section,
 )

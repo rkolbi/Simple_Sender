@@ -44,7 +44,7 @@ class HeightMap:
             raise ValueError("HeightMap requires non-empty xs and ys")
         self.xs = list(xs)
         self.ys = list(ys)
-        self._rows = [[None for _ in self.xs] for _ in self.ys]
+        self._rows: list[list[float | None]] = [[None for _ in self.xs] for _ in self.ys]
         self._x_index = {self._key(x): idx for idx, x in enumerate(self.xs)}
         self._y_index = {self._key(y): idx for idx, y in enumerate(self.ys)}
         self._invalid: set[tuple[int, int]] = set()
@@ -202,10 +202,10 @@ class HeightMap:
         z11 = self._value_at(ix1, iy1)
         if None in (z00, z10, z01, z11):
             return None
-        z00 = float(z00)
-        z10 = float(z10)
-        z01 = float(z01)
-        z11 = float(z11)
+        z00 = float(z00)  # type: ignore[arg-type]
+        z10 = float(z10)  # type: ignore[arg-type]
+        z01 = float(z01)  # type: ignore[arg-type]
+        z11 = float(z11)  # type: ignore[arg-type]
         return (
             (1 - tx) * (1 - ty) * z00
             + tx * (1 - ty) * z10
@@ -237,7 +237,15 @@ class HeightMap:
             p3 = self._value_at(ix2, iy)
             if None in (p0, p1, p2, p3):
                 return self._interpolate_bilinear(ix0, ix1, tx, iy0, iy1, ty)
-            values.append(self._catmull_rom(float(p0), float(p1), float(p2), float(p3), tx))
+            values.append(
+                self._catmull_rom(
+                    float(p0),  # type: ignore[arg-type]
+                    float(p1),  # type: ignore[arg-type]
+                    float(p2),  # type: ignore[arg-type]
+                    float(p3),  # type: ignore[arg-type]
+                    tx,
+                )
+            )
         return self._catmull_rom(values[0], values[1], values[2], values[3], ty)
 
     def _interpolate_sparse(

@@ -22,7 +22,7 @@
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Callable
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -38,11 +38,11 @@ class ProbeReport:
 
 
 class ProbeController:
-    def __init__(self, app):
+    def __init__(self, app: Any):
         self.app = app
         self._last_report: ProbeReport | None = None
         self._callbacks: list[Callable[[ProbeReport], None]] = []
-        self._seq = 0
+        self._seq: int = 0
 
     def last_report(self) -> ProbeReport | None:
         return self._last_report

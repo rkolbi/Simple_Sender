@@ -25,9 +25,9 @@
 
 # Standard library imports
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
-from simple_sender.ui import input_bindings
+from simple_sender.ui import bindings as input_bindings
 from simple_sender.ui.widgets import VirtualHoldButton
 
 
@@ -54,10 +54,10 @@ class InputBindingsMixin:
         input_bindings.restore_joystick_bindings_on_start(self)
 
     def _get_pygame_module(self) -> ModuleType | None:
-        return input_bindings.get_pygame_module(self)
+        return cast(ModuleType | None, input_bindings.get_pygame_module(self))
 
     def _discover_joysticks(self, py, count: int) -> list[str]:
-        return input_bindings.discover_joysticks(self, py, count)
+        return cast(list[str], input_bindings.discover_joysticks(self, py, count))
 
     def _refresh_joystick_test_info(self):
         input_bindings.refresh_joystick_test_info(self)
@@ -78,7 +78,7 @@ class InputBindingsMixin:
         input_bindings.poll_joystick_events(self)
 
     def _describe_joystick_event(self, event) -> str | None:
-        return input_bindings.describe_joystick_event(self, event)
+        return cast(str | None, input_bindings.describe_joystick_event(self, event))
 
     def _set_joystick_event_status(self, text: str):
         input_bindings.set_joystick_event_status(self, text)
@@ -87,7 +87,7 @@ class InputBindingsMixin:
         input_bindings.handle_joystick_event(self, event)
 
     def _is_virtual_hold_button(self, btn) -> bool:
-        return input_bindings.is_virtual_hold_button(self, btn)
+        return bool(input_bindings.is_virtual_hold_button(self, btn))
 
     def _handle_joystick_button_release(self, key: tuple):
         input_bindings.handle_joystick_button_release(self, key)
@@ -117,7 +117,7 @@ class InputBindingsMixin:
         input_bindings.clear_duplicate_joystick_binding(self, key, keep_binding_id)
 
     def _poll_joystick_states_from_hardware(self, py) -> bool:
-        return input_bindings.poll_joystick_states_from_hardware(self, py)
+        return bool(input_bindings.poll_joystick_states_from_hardware(self, py))
 
     def _reset_joystick_axis_state(self, joy_id, axis):
         input_bindings.reset_joystick_axis_state(self, joy_id, axis)
@@ -132,34 +132,34 @@ class InputBindingsMixin:
         input_bindings.refresh_keyboard_table(self)
 
     def _create_virtual_hold_buttons(self) -> list[VirtualHoldButton]:
-        return input_bindings.create_virtual_hold_buttons(self)
+        return cast(list[VirtualHoldButton], input_bindings.create_virtual_hold_buttons(self))
 
-    def _collect_buttons(self) -> list:
-        return input_bindings.collect_buttons(self)
+    def _collect_buttons(self) -> list[Any]:
+        return cast(list[Any], input_bindings.collect_buttons(self))
 
     def _button_label(self, btn) -> str:
-        return input_bindings.button_label(self, btn)
+        return str(input_bindings.button_label(self, btn))
 
     def _keyboard_key_for_button(self, btn) -> str:
-        return input_bindings.keyboard_key_for_button(self, btn)
+        return str(input_bindings.keyboard_key_for_button(self, btn))
 
     def _joystick_binding_display(self, binding: dict[str, Any]) -> str:
-        return input_bindings.joystick_binding_display(self, binding)
+        return str(input_bindings.joystick_binding_display(self, binding))
 
     def _joystick_binding_key(self, binding: dict[str, Any]):
         return input_bindings.joystick_binding_key(self, binding)
 
     def _button_axis_name(self, btn) -> str:
-        return input_bindings.button_axis_name(self, btn)
+        return str(input_bindings.button_axis_name(self, btn))
 
     def _button_binding_id(self, btn) -> str:
-        return input_bindings.button_binding_id(self, btn)
+        return str(input_bindings.button_binding_id(self, btn))
 
     def _find_binding_conflict(self, target_btn, label: str):
         return input_bindings.find_binding_conflict(self, target_btn, label)
 
     def _default_key_for_button(self, btn) -> str:
-        return input_bindings.default_key_for_button(self, btn)
+        return str(input_bindings.default_key_for_button(self, btn))
 
     def _on_kb_table_double_click(self, event):
         input_bindings.on_kb_table_double_click(self, event)
@@ -186,30 +186,30 @@ class InputBindingsMixin:
         input_bindings.commit_kb_edit(self, row, entry, label_override)
 
     def _normalize_key_label(self, text: str) -> str:
-        return input_bindings.normalize_key_label(self, text)
+        return str(input_bindings.normalize_key_label(self, text))
 
     def _normalize_key_chord(self, text: str) -> str:
-        return input_bindings.normalize_key_chord(self, text)
+        return str(input_bindings.normalize_key_chord(self, text))
 
     def _key_sequence_tuple(self, label: str) -> tuple[str, ...] | None:
-        return input_bindings.key_sequence_tuple(self, label)
+        return cast(tuple[str, ...] | None, input_bindings.key_sequence_tuple(self, label))
 
     def _update_modifier_state(self, event, pressed: bool) -> bool:
-        return input_bindings.update_modifier_state(self, event, pressed)
+        return bool(input_bindings.update_modifier_state(self, event, pressed))
 
     def _modifier_active(self, name: str, event_state: int | None = None) -> bool:
-        return input_bindings.modifier_active(self, name, event_state)
+        return bool(input_bindings.modifier_active(self, name, event_state))
 
     def _event_to_binding_label(self, event) -> str:
-        return input_bindings.event_to_binding_label(self, event)
+        return str(input_bindings.event_to_binding_label(self, event))
 
     def _on_key_modifier_release(self, event):
         input_bindings.on_key_modifier_release(self, event)
 
     def _sequence_conflict_pair(self, seq_a: tuple[str, ...], seq_b: tuple[str, ...]) -> bool:
-        return input_bindings.sequence_conflict_pair(self, seq_a, seq_b)
+        return bool(input_bindings.sequence_conflict_pair(self, seq_a, seq_b))
 
-    def _sequence_conflict(self, seq: tuple[str, ...], existing: dict):
+    def _sequence_conflict(self, seq: tuple[str, ...], existing: dict) -> Any:
         return input_bindings.sequence_conflict(self, seq, existing)
 
     def _on_key_sequence(self, event):
@@ -219,7 +219,7 @@ class InputBindingsMixin:
         input_bindings.clear_key_sequence_buffer(self)
 
     def _keyboard_binding_allowed(self) -> bool:
-        return input_bindings.keyboard_binding_allowed(self)
+        return bool(input_bindings.keyboard_binding_allowed(self))
 
     def _on_key_jog_stop(self, _event=None):
         input_bindings.on_key_jog_stop(self, _event)

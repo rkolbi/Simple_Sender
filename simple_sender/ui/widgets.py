@@ -22,7 +22,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any
+from typing import Any, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
 from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS
@@ -31,9 +31,9 @@ class ToolTip:
     def __init__(self, widget, text: str, delay_ms: int = TOOLTIP_DELAY_MS):
         self.widget = widget
         self.text = text
-        self._tip = None
+        self._tip: tk.Toplevel | None = None
         self.delay_ms = delay_ms
-        self._after_id = None
+        self._after_id: Any | None = None
         widget.bind("<Enter>", self._schedule_show)
         widget.bind("<Leave>", self._hide)
 
@@ -176,8 +176,8 @@ class StopSignButton(tk.Canvas):
         self._command = command
         self._size = size
         self._state = "normal"
-        self._poly = None
-        self._text_id = None
+        self._poly: int | None = None
+        self._text_id: int | None = None
         self._disabled_fill = self._blend_color(fill, "#f0f0f0", 0.55)
         self._disabled_text = self._blend_color(text_color, "#808080", 0.55)
         self._draw_octagon()
@@ -242,13 +242,13 @@ class StopSignButton(tk.Canvas):
             self.itemconfig(self._text_id, fill=text_color)
         self.config(cursor="arrow" if is_disabled else "hand2")
 
-    def _on_click(self, event=None):
+    def _on_click(self, event: Any | None = None) -> None:
         if self._state == "disabled":
             return
         if callable(self._command):
             self._command()
 
-    def configure(self, cnf=None, **kwargs):
+    def configure(self, cnf: Any = None, **kwargs: Any) -> Any:
         config_options: dict[str, Any] = {}
         if cnf:
             if isinstance(cnf, dict):
@@ -269,10 +269,10 @@ class StopSignButton(tk.Canvas):
             self._apply_state()
         return super().configure(**config_options)
 
-    def config(self, **kwargs):
-        return self.configure(**kwargs)
+    def config(self, cnf: Any = None, **kwargs: Any) -> Any:
+        return self.configure(cnf, **kwargs)
 
-    def cget(self, key):
+    def cget(self, key: str) -> Any:
         if key == "text":
             return self._text
         if key == "state":
@@ -617,7 +617,7 @@ def _resolve_owner(widget, attr: str):
 
 
 def _resolve_disabled_reason(widget) -> str | None:
-    return _policy_disabled_reason(widget, _resolve_owner)
+    return cast(str | None, _policy_disabled_reason(widget, _resolve_owner))
 
 
 def _resolve_tooltip_text(widget, fallback: str) -> str:

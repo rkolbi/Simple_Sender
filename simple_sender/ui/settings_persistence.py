@@ -22,6 +22,7 @@
 
 import logging
 import os
+from typing import cast
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
 from simple_sender.utils.exceptions import SettingsLoadError, SettingsSaveError
@@ -40,7 +41,7 @@ def load_settings(app) -> dict:
     except Exception as exc:
         logger.error(f"Unexpected error loading settings: {exc}")
         app._settings_store.reset_to_defaults()
-    return app._settings_store.data
+    return cast(dict, app._settings_store.data)
 
 
 def save_settings(app):

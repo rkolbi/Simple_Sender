@@ -35,9 +35,10 @@ from simple_sender.macro_state import (
     macro_wait_for_status,
     snapshot_macro_state,
 )
+from simple_sender.types import MacroExecutorState
 
 
-class MacroStateMixin:
+class MacroStateMixin(MacroExecutorState):
     def _macro_wait_for_idle(self, timeout_s: float = 30.0):
         macro_wait_for_idle(
             app=self.app,

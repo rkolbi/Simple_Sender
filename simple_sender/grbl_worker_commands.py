@@ -22,6 +22,8 @@
 
 import logging
 
+from simple_sender.types import GrblWorkerState
+
 from .utils.constants import (
     DEFAULT_SPINDLE_RPM,
     RT_RESET,
@@ -37,7 +39,7 @@ from .utils.validation import validate_feed_rate, validate_unit_mode, validate_r
 logger = logging.getLogger(__name__)
 
 
-class GrblWorkerCommandMixin:
+class GrblWorkerCommandMixin(GrblWorkerState):
     def send_immediate(self, command: str, *, source: str | None = None) -> None:
         """Send command immediately (bypasses streaming).
         

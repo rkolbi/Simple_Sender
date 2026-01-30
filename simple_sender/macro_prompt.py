@@ -95,9 +95,9 @@ def parse_macro_prompt(
             custom_btns.append((btn_match.group(1).strip(), btn_match.group(2)))
             continue
 
-    match = re.search(r"\((.*?)\)", parsed_line)
-    if match:
-        message = match.group(1).strip()
+    msg_match = re.search(r"\((.*?)\)", parsed_line)
+    if msg_match:
+        message = msg_match.group(1).strip()
     try:
         tokens = shlex.split(parsed_line)
     except Exception:
@@ -141,11 +141,11 @@ def parse_macro_prompt(
     extras = [b for b in buttons if b and b not in (resume_label, cancel_label)]
     choices: list[str] = []
     if custom_btns:
-        for label, key in custom_btns:
+        for label, btn_key in custom_btns:
             if not label:
                 continue
             choices.append(label)
-            button_keys[label] = key
+            button_keys[label] = btn_key
     else:
         if show_resume:
             choices.append(resume_label)

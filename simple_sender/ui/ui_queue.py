@@ -29,6 +29,7 @@ from simple_sender.utils.constants import (
     UI_EVENT_QUEUE_MAXSIZE,
     UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL,
 )
+from simple_sender.types import AppProtocol, UiEvent
 
 
 class UiEventQueue:
@@ -36,6 +37,8 @@ class UiEventQueue:
     _COALESCE_KINDS = {
         "buffer_fill",
         "gcode_load_progress",
+        "gcode_acked",
+        "gcode_sent",
         "progress",
         "status",
         "throughput",
@@ -49,16 +52,16 @@ class UiEventQueue:
     ) -> None:
         self._maxsize = max(1, int(maxsize))
         self._drop_notice_interval = float(drop_notice_interval)
-        self._high: deque = deque()
-        self._low: deque = deque()
-        self._coalesced: OrderedDict[str, object] = OrderedDict()
+        self._high: deque[UiEvent] = deque()
+        self._low: deque[UiEvent] = deque()
+        self._coalesced: OrderedDict[str, UiEvent] = OrderedDict()
         self._lock = threading.Lock()
         self._drop_counts: dict[str, int] = {}
         self._last_drop_notice = 0.0
 
-    def put(self, item, block: bool = True, timeout: float | None = None) -> None:
+    def put(self, item: UiEvent, block: bool = True, timeout: float | None = None) -> None:
         _ = block, timeout
-        kind = item[0] if isinstance(item, tuple) and item else None
+        kind = item[0]
         with self._lock:
             if self._is_high_priority(item, kind):
                 self._high.append(item)
@@ -73,10 +76,10 @@ class UiEventQueue:
                 return
             self._low.append(item)
 
-    def put_nowait(self, item) -> None:
+    def put_nowait(self, item: UiEvent) -> None:
         self.put(item, block=False)
 
-    def get_nowait(self):
+    def get_nowait(self) -> UiEvent:
         with self._lock:
             if self._high:
                 return self._high.popleft()
@@ -108,18 +111,16 @@ class UiEventQueue:
             self._last_drop_notice = now
         return f"[ui] Dropped {total} low-priority log event(s): " + ", ".join(parts)
 
-    def _record_drop(self, kind: str | None) -> None:
-        key = kind or "unknown"
-        self._drop_counts[key] = self._drop_counts.get(key, 0) + 1
+    def _record_drop(self, kind: str) -> None:
+        self._drop_counts[kind] = self._drop_counts.get(kind, 0) + 1
 
-    def _is_high_priority(self, item, kind: str | None) -> bool:
+    def _is_high_priority(self, item: UiEvent, kind: str) -> bool:
         if kind in self._COALESCE_KINDS:
             return False
         if kind not in self._LOW_PRIORITY_KINDS:
             return True
-        if kind == "log_rx":
-            line = item[1] if isinstance(item, tuple) and len(item) > 1 else ""
-            return self._is_critical_log_rx(line)
+        if item[0] == "log_rx":
+            return self._is_critical_log_rx(item[1])
         return False
 
     @staticmethod
@@ -140,7 +141,7 @@ class UiEventQueue:
         return False
 
 
-def drain_ui_queue(app):
+def drain_ui_queue(app: AppProtocol) -> None:
     for _ in range(100):
         try:
             evt = app.ui_q.get_nowait()

@@ -86,7 +86,7 @@ def init_runtime_state(
     }
     app._kb_item_to_button = {}
     app._kb_edit = None
-    app._kb_edit_state = cast(dict[ttk.Entry, dict[str, Any]], {})
+    app._kb_edit_state = cast(dict[Any, dict[str, Any]], {})
     app._joystick_binding_map = cast(dict[tuple, Any], {})
     app._joystick_capture_state = None
     app._joystick_poll_id = None

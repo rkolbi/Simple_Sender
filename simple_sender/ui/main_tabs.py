@@ -24,10 +24,11 @@ import logging
 import time
 from tkinter import ttk
 
-from simple_sender.ui.app_settings import build_app_settings_tab
+from simple_sender.ui.settings import build_app_settings_tab
 from simple_sender.ui.checklists_tab import build_checklists_tab
-from simple_sender.ui.console_panel import build_console_tab
-from simple_sender.ui.gcode_viewer import GcodeViewer
+from simple_sender.ui.console import build_console_tab
+from simple_sender.ui.log_viewer import LogViewer
+from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,12 @@ def build_main_tabs(app, parent):
 
     # Console tab
     build_console_tab(app, nb)
+
+    # Logs tab
+    ltab = ttk.Frame(nb, padding=6)
+    nb.add(ltab, text="Logs")
+    app.logs_viewer = LogViewer(ltab, app)
+    app.logs_viewer.pack(fill="both", expand=True)
 
     otab = ttk.Frame(nb, padding=6)
     nb.add(otab, text="Overdrive")

@@ -23,11 +23,14 @@
     Simple Sender - GRBL 1.1h CNC Controller
 """
 
+from typing import cast
+
 from simple_sender.macro_commands import execute_macro_command
 from simple_sender.macro_parser import bcnc_compile_line, bcnc_evaluate_line
+from simple_sender.types import MacroExecutorState
 
 
-class MacroCommandMixin:
+class MacroCommandMixin(MacroExecutorState):
     def _execute_bcnc_command(self, line: str, raw_line: str | None = None):
         return self._execute_command(line, raw_line)
 
@@ -65,7 +68,7 @@ class MacroCommandMixin:
         )
 
     def _macro_eval_globals(self) -> dict:
-        return self._macro_vars
+        return cast(dict, self._macro_vars)
 
     def _macro_exec_globals(self) -> dict:
-        return self._macro_vars
+        return cast(dict, self._macro_vars)

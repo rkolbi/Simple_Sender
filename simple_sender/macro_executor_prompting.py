@@ -31,9 +31,10 @@ from simple_sender.macro_prompt import (
     parse_macro_prompt,
     strip_prompt_tokens,
 )
+from simple_sender.types import MacroExecutorState
 
 
-class MacroPromptMixin:
+class MacroPromptMixin(MacroExecutorState):
     def _parse_macro_prompt(
         self,
         line: str,

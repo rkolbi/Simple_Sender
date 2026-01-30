@@ -23,6 +23,9 @@
 import logging
 import threading
 import time
+from typing import cast
+
+from simple_sender.types import GrblWorkerState
 
 from .utils.constants import (
     EVENT_QUEUE_TIMEOUT,
@@ -43,10 +46,10 @@ logger = logging.getLogger(__name__)
 def _annotate_alarm(message: str) -> str:
     from . import grbl_worker as grbl_worker_mod
 
-    return grbl_worker_mod.annotate_grbl_alarm(message)
+    return cast(str, grbl_worker_mod.annotate_grbl_alarm(message))
 
 
-class GrblWorkerStatusMixin:
+class GrblWorkerStatusMixin(GrblWorkerState):
     def set_status_poll_interval(self, interval: float) -> None:
         """Set status polling interval.
         
@@ -214,8 +217,6 @@ class GrblWorkerStatusMixin:
         
         # Emit alarm event (safe)
         self._safe_ui_put(("alarm", message), context="alarm event")
-        
-        self._abort_writes.clear()
 
     # ========================================================================
     # INTERNAL HELPERS
@@ -324,13 +325,14 @@ class GrblWorkerStatusMixin:
                     self._handle_alarm(state)
             elif self._alarm_active:
                 self._alarm_active = False
+                self._abort_writes.clear()
             
             # Parse buffer info
             for part in parts:
                 if part.startswith("Bf:"):
                     try:
-                        _, rx_free = part[3:].split(",", 1)
-                        rx_free = int(rx_free.strip())
+                        _, rx_free_text = part[3:].split(",", 1)
+                        rx_free = int(rx_free_text.strip())
                         if rx_free < 0:
                             rx_free = 0
                         with self._stream_lock:

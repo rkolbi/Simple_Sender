@@ -103,41 +103,44 @@ _RX_LOGGER_LOCK = threading.Lock()
 def _get_rx_logger():
     global _RX_LOGGER
     if _RX_LOGGER is not None:
-        return _RX_LOGGER
-    path = os.getenv("SIMPLE_SENDER_RX_LOG_PATH")
-    if not path:
-        _RX_LOGGER = False
-        return None
-    try:
-        max_bytes = int(os.getenv("SIMPLE_SENDER_RX_LOG_MAX_BYTES", "2097152"))
-    except Exception:
-        max_bytes = 2097152
-    try:
-        backup_count = int(os.getenv("SIMPLE_SENDER_RX_LOG_BACKUPS", "5"))
-    except Exception:
-        backup_count = 5
+        return _RX_LOGGER or None
     with _RX_LOGGER_LOCK:
         if _RX_LOGGER is not None:
             return _RX_LOGGER or None
-        try:
-            rx_logger = logging.getLogger("simple_sender.rxlog")
-            if not rx_logger.handlers:
-                handler = RotatingFileHandler(
-                    path,
-                    maxBytes=max_bytes,
-                    backupCount=backup_count,
-                    encoding="utf-8",
-                )
-                handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-                rx_logger.addHandler(handler)
-                rx_logger.setLevel(logging.INFO)
-                rx_logger.propagate = False
-            _RX_LOGGER = rx_logger
-            return rx_logger
-        except Exception as exc:
-            logger.warning("Failed to initialize RX log file: %s", exc)
-            _RX_LOGGER = False
-            return None
+        rx_logger = logging.getLogger("simple_sender.serial")
+        path = os.getenv("SIMPLE_SENDER_RX_LOG_PATH")
+        if path:
+            try:
+                max_bytes = int(os.getenv("SIMPLE_SENDER_RX_LOG_MAX_BYTES", "2097152"))
+            except Exception:
+                max_bytes = 2097152
+            try:
+                backup_count = int(os.getenv("SIMPLE_SENDER_RX_LOG_BACKUPS", "5"))
+            except Exception:
+                backup_count = 5
+            try:
+                handler_path = os.path.abspath(path)
+                has_handler = False
+                for handler in rx_logger.handlers:
+                    if isinstance(handler, RotatingFileHandler):
+                        if os.path.abspath(handler.baseFilename) == handler_path:
+                            has_handler = True
+                            break
+                if not has_handler:
+                    handler = RotatingFileHandler(
+                        handler_path,
+                        maxBytes=max_bytes,
+                        backupCount=backup_count,
+                        encoding="utf-8",
+                    )
+                    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+                    handler.setLevel(logging.INFO)
+                    handler.set_name("simple_sender_rx_override")
+                    rx_logger.addHandler(handler)
+            except Exception as exc:
+                logger.warning("Failed to initialize RX log file: %s", exc)
+        _RX_LOGGER = rx_logger
+        return rx_logger
 
 def _serial_exception_type():
     if serial is None:
@@ -592,13 +595,16 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
     def _write_line(
         self,
         line: str,
-        payload: Optional[bytes] = None
+        payload: Optional[bytes] = None,
+        *,
+        allow_abort: bool = False,
     ) -> bool:
         """Write line to serial port.
         
         Args:
             line: Line content (for logging)
             payload: Pre-encoded payload (optional)
+            allow_abort: Allow writes even if abort flag is set
             
         Returns:
             True if write succeeded, False otherwise
@@ -613,7 +619,7 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
 
             self._log_tx_line(line)
             with self._write_lock:
-                if self._abort_writes.is_set():
+                if self._abort_writes.is_set() and not allow_abort:
                     return False
                 ser = self.ser
                 if ser is None:

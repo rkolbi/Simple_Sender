@@ -25,6 +25,9 @@
 
 # Standard library imports
 import sys
+from typing import Any, cast
+
+from simple_sender.types import LineSource
 
 
 def _app_module(instance):
@@ -32,17 +35,20 @@ def _app_module(instance):
 
 
 class GcodeMixin:
+    _gcode_streaming_mode: bool
+    _gcode_source: LineSource | None
+
     def _show_resume_dialog(self):
         _app_module(self).show_resume_dialog(self)
 
     def _show_auto_level_dialog(self):
         _app_module(self).show_auto_level_dialog(self)
 
-    def _build_resume_preamble(self, lines: list[str], stop_index: int) -> tuple[list[str], bool]:
+    def _build_resume_preamble(self, lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
         source = lines
-        if getattr(self, "_gcode_streaming_mode", False) and getattr(self, "_gcode_source", None):
+        if self._gcode_streaming_mode and self._gcode_source is not None:
             source = self._gcode_source
-        return _app_module(self).build_resume_preamble(source, stop_index)
+        return cast(tuple[list[str], bool], _app_module(self).build_resume_preamble(source, stop_index))
 
     def _resume_from_line(self, start_index: int, preamble: list[str]):
         _app_module(self).resume_from_line(self, start_index, preamble)
@@ -95,10 +101,10 @@ class GcodeMixin:
         _app_module(self).finish_gcode_loading(self)
 
     def _format_throughput(self, bps: float) -> str:
-        return _app_module(self).format_throughput(bps)
+        return cast(str, _app_module(self).format_throughput(bps))
 
     def _estimate_factor_value(self) -> float:
-        return _app_module(self).estimate_factor_value(self)
+        return cast(float, _app_module(self).estimate_factor_value(self))
 
     def _refresh_gcode_stats_display(self):
         _app_module(self).refresh_gcode_stats_display(self)
@@ -107,18 +113,19 @@ class GcodeMixin:
         _app_module(self).refresh_dro_display(self)
 
     def _sync_tool_reference_label(self):
+        app = cast(Any, self)
         try:
-            with self.macro_executor.macro_vars() as macro_vars:
+            with app.macro_executor.macro_vars() as macro_vars:
                 macro_ns = macro_vars.get("macro")
                 state = getattr(macro_ns, "state", None)
                 tool_ref = getattr(state, "TOOL_REFERENCE", None) if state is not None else None
         except Exception:
             return
-        if tool_ref == getattr(self, "_tool_reference_last", None):
+        if tool_ref == getattr(app, "_tool_reference_last", None):
             return
-        self._tool_reference_last = tool_ref
+        app._tool_reference_last = tool_ref
         if tool_ref is None:
-            self.tool_reference_var.set("")
+            app.tool_reference_var.set("")
             return
         try:
             value = float(tool_ref)
@@ -126,7 +133,7 @@ class GcodeMixin:
             text = str(tool_ref)
         else:
             text = f"{value:.4f}"
-        self.tool_reference_var.set(f"Tool Ref: {text}")
+        app.tool_reference_var.set(f"Tool Ref: {text}")
 
     def _on_estimate_factor_change(self, _value=None):
         _app_module(self).on_estimate_factor_change(self, _value)
@@ -138,13 +145,13 @@ class GcodeMixin:
         _app_module(self).maybe_notify_job_completion(self, done, total)
 
     def _format_gcode_stats_text(self, stats: dict, rate_source: str | None) -> str:
-        return _app_module(self).format_gcode_stats_text(self, stats, rate_source)
+        return cast(str, _app_module(self).format_gcode_stats_text(self, stats, rate_source))
 
     def _apply_gcode_stats(self, token: int, stats: dict | None, rate_source: str | None):
         _app_module(self).apply_gcode_stats(self, token, stats, rate_source)
 
     def _get_fallback_rapid_rate(self) -> float | None:
-        return _app_module(self).get_fallback_rapid_rate(self)
+        return cast(float | None, _app_module(self).get_fallback_rapid_rate(self))
 
     def _get_rapid_rates_for_estimate(self):
         return _app_module(self).get_rapid_rates_for_estimate(self)

@@ -51,6 +51,9 @@ class LayoutMixin:
     def _export_session_diagnostics(self):
         _app_module(self).export_session_diagnostics(self)
 
+    def _show_logs_dialog(self):
+        _app_module(self).show_logs_dialog(self)
+
     def _position_all_stop_offset(self, event=None):
         _app_module(self).position_all_stop_offset(self, event)
 
