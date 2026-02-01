@@ -93,8 +93,18 @@ def save_settings(app):
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
     data.pop("console_status_enabled", None)
+    last_port = ""
+    try:
+        last_port = getattr(app, "_auto_reconnect_last_port", "") or ""
+    except Exception:
+        last_port = ""
+    if not last_port:
+        try:
+            last_port = app.current_port.get()
+        except Exception:
+            last_port = ""
     data.update({
-        "last_port": app.current_port.get(),
+        "last_port": str(last_port or ""),
         "unit_mode": app.unit_mode.get(),
         "step_xy": safe_float(
             app.step_xy,

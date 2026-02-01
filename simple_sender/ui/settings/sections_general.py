@@ -479,6 +479,10 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         if not confirm:
             return
         try:
+            app._save_settings()
+        except Exception:
+            pass
+        try:
             subprocess.Popen(["systemctl", action])
             _log_status(f"[system] {label} requested")
             return
