@@ -56,13 +56,15 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
-- Python 3.x, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
+- Python 3.10+, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+Development dependencies are pinned in `requirements-dev.txt` to match the current toolchain.
 
 Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the app folder.
 
@@ -543,6 +545,12 @@ python tools/profile_performance.py --mode streaming --sizes 1000,10000,100000 -
 
 # Full load pipeline timings (small files)
 python tools/profile_performance.py --mode full --sizes 1000,10000 --arc-every 20
+
+# Split-only timings (large files)
+python tools/profile_performance.py --mode split --sizes 1000,10000,100000
+
+# Streaming split timings (preserve raw comments)
+python tools/profile_performance.py --mode split-stream --sizes 1000,10000,100000 --preserve-raw
 
 # Memory baselines
 python tools/memory_profile.py --mode streaming --sizes 1000,10000,100000 --validate-streaming

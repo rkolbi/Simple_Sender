@@ -20,6 +20,25 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Split/compact G-code lines to fit GRBL's line-length limits.
+
+Algorithm overview:
+- Only "safe" word-only lines are eligible for compaction/splitting.
+- Lines are first compacted by trimming numeric formats and dropping N words.
+- Linear moves (G0/G1) may be split into multiple segments when needed.
+- Splitting is disabled for inverse-time feed (G93) and unsupported axes.
+- G92/G92.x offset handling is tracked to preserve coordinate semantics.
+
+Edge cases to be aware of:
+- Lines with comments or other non-word characters are not split; if too long,
+  they are reported as failures.
+- Unsupported axis words (A/B/C/etc.) block splitting for that line.
+- Arcs (G2/G3) are never split; they rely on compaction only.
+- In streaming mode with preserve_raw=True, long comment segments can still
+  trigger failures even if the compacted motion line would fit.
+- Length limits are measured in UTF-8 bytes and include the trailing newline.
+"""
+
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, List, Optional, Set
 

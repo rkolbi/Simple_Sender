@@ -32,23 +32,19 @@ import queue
 import re
 import threading
 import time
-import traceback
 from logging.handlers import RotatingFileHandler
 from collections import deque
 from typing import Any, Callable, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
 from .grbl_worker_commands import GrblWorkerCommandMixin
+from .grbl_worker_connection import (
+    GrblWorkerConnectionMixin,
+    _serial_exception_type,
+    _serial_timeout_exception_type,
+)
 from .grbl_worker_status import GrblWorkerStatusMixin
 from .grbl_worker_streaming import GrblWorkerStreamingMixin
 from .utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
-
-
-class _FallbackSerialException(Exception):
-    pass
-
-
-class _FallbackSerialTimeout(Exception):
-    pass
 
 try:
     import serial
@@ -72,28 +68,17 @@ else:
     SerialTimeoutExceptionType: TypeAlias = Exception
 
 from .utils.constants import (
-    BAUD_DEFAULT,
     RX_BUFFER_SIZE,
-    SERIAL_CONNECT_DELAY,
-    SERIAL_TIMEOUT,
-    SERIAL_WRITE_TIMEOUT,
-    THREAD_JOIN_TIMEOUT,
     BUFFER_EMIT_INTERVAL,
     TX_THROUGHPUT_WINDOW,
     TX_THROUGHPUT_EMIT_INTERVAL,
     STATUS_POLL_DEFAULT,
     RT_RESUME,
     RT_JOG_CANCEL,
+    THREAD_JOIN_TIMEOUT,
     WATCHDOG_HOMING_TIMEOUT,
 )
-from .utils.exceptions import (
-    SerialConnectionError,
-    SerialWriteError,
-)
-from .utils.validation import (
-    validate_port_name,
-    validate_baud_rate,
-)
+from .utils.exceptions import SerialWriteError
 
 logger = logging.getLogger(__name__)
 _RX_LOGGER = None
@@ -142,17 +127,6 @@ def _get_rx_logger():
         _RX_LOGGER = rx_logger
         return rx_logger
 
-def _serial_exception_type():
-    if serial is None:
-        return _FallbackSerialException
-    return getattr(serial, "SerialException", Exception)
-
-def _serial_timeout_exception_type():
-    if serial is None:
-        return _FallbackSerialTimeout
-    return getattr(serial, "SerialTimeoutException", Exception)
-
-
 _PAUSE_MCODE_MAP = {
     "0": "M0",
     "00": "M0",
@@ -165,7 +139,12 @@ _PAUSE_MCODE_PAT = re.compile(r"(?<![0-9])M(0|00|1|01|6|06)(?![0-9])")
 _SANITIZE_TOKEN_PAT = re.compile(r"[A-Za-z][+-]?(?:\d+\.?\d*|\.\d+)", re.ASCII)
 _DRY_RUN_M_CODES = {3, 4, 5, 6, 7, 8, 9}
 
-class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerStatusMixin):
+class GrblWorker(
+    GrblWorkerConnectionMixin,
+    GrblWorkerCommandMixin,
+    GrblWorkerStreamingMixin,
+    GrblWorkerStatusMixin,
+):
     """Manages serial communication with GRBL controller.
     
     This class handles:
@@ -173,6 +152,12 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
     - G-code streaming with buffer management
     - Status polling
     - Real-time command execution
+
+    Thread lifecycle:
+    - Threads (RX/TX/Status) are created and started in connect().
+    - Threads exit when _stop_evt is set, or on serial errors via _signal_disconnect().
+    - disconnect() sets _stop_evt, closes the serial port, joins threads, and clears refs.
+    - Threads are daemon threads; disconnect() is still the canonical cleanup path.
     
     Thread-safe and can be used as a context manager for automatic cleanup.
     
@@ -292,188 +277,6 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
             logger.error(f"Error during cleanup: {e}")
         return False  # Don't suppress exceptions
     
-    # ========================================================================
-    # CONNECTION MANAGEMENT
-    # ========================================================================
-    
-    def list_ports(self) -> list[str]:
-        """Get list of available serial ports.
-        
-        Returns:
-            List of port device names
-        """
-        if not SERIAL_AVAILABLE or list_ports is None:
-            return []
-        assert list_ports is not None
-        return [p.device for p in list_ports.comports()]
-    
-    def connect(self, port: str, baud: int = BAUD_DEFAULT) -> None:
-        """Connect to GRBL controller.
-        
-        Args:
-            port: Serial port name (e.g., 'COM3' or '/dev/ttyUSB0')
-            baud: Baud rate (default: 115200)
-            
-        Raises:
-            SerialConnectionError: If connection fails
-            ValueError: If parameters are invalid
-        """
-        if not SERIAL_AVAILABLE:
-            raise SerialConnectionError(
-                "pyserial is required to connect to GRBL. "
-                "Install with: pip install pyserial"
-            )
-        assert serial is not None
-        serial_exc = _serial_exception_type()
-        
-        # Validate inputs
-        port = validate_port_name(port)
-        baud = validate_baud_rate(baud)
-        
-        # Disconnect if already connected
-        if self.is_connected():
-            self.disconnect()
-        
-        # Reset state
-        self._stop_evt = threading.Event()
-        self._ready = False
-        self._alarm_active = False
-        self._status_query_failures = 0
-        self._last_rx_ts = time.time()
-        self._watchdog_paused = False
-        self._watchdog_trip_ts = 0.0
-        self._watchdog_ignore_until = 0.0
-        self._watchdog_ignore_reason = None
-        
-        try:
-            # Open serial port
-            self.ser = serial.Serial(
-                port,
-                baudrate=baud,
-                timeout=SERIAL_TIMEOUT,
-                write_timeout=SERIAL_WRITE_TIMEOUT
-            )
-            ser = self.ser
-            assert ser is not None
-            self._connect_started_ts = time.time()
-            
-            # Give GRBL time to reset (some boards reset on connection)
-            time.sleep(SERIAL_CONNECT_DELAY)
-            
-            # Clear buffers
-            try:
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-            except serial_exc as e:
-                logger.warning(f"Failed to reset buffers: {e}")
-            
-            # Start worker threads
-            stop_evt = self._stop_evt
-            self._rx_thread = threading.Thread(
-                target=self._rx_loop,
-                args=(stop_evt,),
-                daemon=True,
-                name="GRBL-RX"
-            )
-            self._tx_thread = threading.Thread(
-                target=self._tx_loop,
-                args=(stop_evt,),
-                daemon=True,
-                name="GRBL-TX"
-            )
-            self._status_thread = threading.Thread(
-                target=self._status_loop,
-                args=(stop_evt,),
-                daemon=True,
-                name="GRBL-Status"
-            )
-            
-            self._rx_thread.start()
-            self._tx_thread.start()
-            self._status_thread.start()
-            
-            self.ui_q.put(("conn", True, port))
-            logger.info(f"Connected to {port} at {baud} baud")
-            
-        except serial_exc as e:
-            self.ser = None
-            self._connect_started_ts = 0.0
-            raise SerialConnectionError(f"Failed to connect to {port}: {e}")
-        except Exception as e:
-            self.ser = None
-            self._connect_started_ts = 0.0
-            raise SerialConnectionError(f"Unexpected error connecting to {port}: {e}")
-    
-    def disconnect(self) -> None:
-        """Disconnect from GRBL controller.
-        
-        Stops all worker threads and closes the serial port.
-        Thread-safe and idempotent.
-        """
-        # Signal threads to stop
-        self._stop_evt.set()
-        
-        # Reset streaming state
-        self._streaming = False
-        self._paused = False
-        self._gcode = []
-        self._send_index = 0
-        self._ack_index = -1
-        self._reset_stream_buffer()
-        self._last_buffer_emit = None
-        self._last_buffer_emit_ts = 0.0
-        self._clear_outgoing()
-        self._emit_buffer_fill()
-        
-        # Reset state flags
-        self._ready = False
-        self._alarm_active = False
-        self._status_query_failures = 0
-        self._settings_dump_active = False
-        self._watchdog_paused = False
-        self._watchdog_trip_ts = 0.0
-        self._watchdog_ignore_until = 0.0
-        self._watchdog_ignore_reason = None
-        self._connect_started_ts = 0.0
-        
-        # Notify UI
-        self.ui_q.put(("ready", False))
-        self.ui_q.put(("stream_state", "stopped", None))
-        
-        # Close serial port
-        serial_exc = _serial_exception_type()
-        if self.ser:
-            try:
-                self.ser.close()
-                logger.info("Serial port closed")
-            except serial_exc as e:
-                logger.error(f"Error closing serial port: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error closing serial port: {e}")
-            finally:
-                self.ser = None
-        
-        # Wait for threads to finish
-        for thread in (self._rx_thread, self._tx_thread, self._status_thread):
-            if thread and thread.is_alive():
-                thread.join(timeout=THREAD_JOIN_TIMEOUT)
-                if thread.is_alive():
-                    logger.warning(f"Thread {thread.name} did not terminate")
-        
-        self._rx_thread = None
-        self._tx_thread = None
-        self._status_thread = None
-        
-        self.ui_q.put(("conn", False, None))
-    
-    def is_connected(self) -> bool:
-        """Check if connected to GRBL.
-        
-        Returns:
-            True if connected and serial port is open
-        """
-        return self.ser is not None and self.ser.is_open
-    
     def send_realtime(self, command: bytes) -> None:
         """Send real-time command (no newline).
         
@@ -513,54 +316,6 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
             logger.error(f"Unexpected write error: {e}")
             raise SerialWriteError(f"Unexpected error: {e}")
     
-    def _emit_exception(self, context: str, exc: BaseException) -> None:
-        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        try:
-            self.ui_q.put(("log", f"[worker] {context}: {exc}"))
-            for ln in tb.splitlines():
-                self.ui_q.put(("log", ln))
-        except Exception:
-            pass
-
-    def _signal_disconnect(self, reason: str | None = None) -> None:
-        """Signal an unexpected disconnect and reset internal state."""
-        was_streaming = self._streaming or self._paused
-        self._stop_evt.set()
-        try:
-            if self.ser is not None:
-                try:
-                    self.ser.close()
-                except Exception:
-                    pass
-        finally:
-            self.ser = None
-        self._streaming = False
-        self._paused = False
-        self._ready = False
-        self._alarm_active = False
-        self._status_query_failures = 0
-        self._settings_dump_active = False
-        self._watchdog_paused = False
-        self._watchdog_trip_ts = 0.0
-        self._watchdog_ignore_until = 0.0
-        self._watchdog_ignore_reason = None
-        self._connect_started_ts = 0.0
-        self._reset_stream_buffer()
-        self._clear_outgoing()
-        try:
-            if was_streaming:
-                self.ui_q.put(("stream_interrupted", True, reason))
-            self.ui_q.put(("ready", False))
-            self.ui_q.put(("stream_state", "stopped", reason))
-            self.ui_q.put(("conn", False, None))
-        except Exception:
-            pass
-        if reason:
-            try:
-                self.ui_q.put(("log", f"[disconnect] {reason}"))
-            except Exception:
-                pass
-
     def _clear_outgoing(self) -> None:
         """Clear the outgoing command queue."""
         try:

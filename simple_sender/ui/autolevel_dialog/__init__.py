@@ -20,15 +20,14 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import itertools
 import math
 import os
 import tempfile
 import threading
 import time
 import tkinter as tk
-from collections.abc import Callable, Iterable
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any
 from tkinter import ttk, messagebox, simpledialog
 
 from simple_sender.autolevel.grid import AdaptiveGridSpec, ProbeBounds, ProbeGrid, build_adaptive_grid
@@ -39,11 +38,25 @@ from simple_sender.autolevel.leveler import (
     level_gcode_lines,
     write_gcode_lines,
 )
-from simple_sender.gcode_parser import clean_gcode_line, split_gcode_lines, split_gcode_lines_stream
 from simple_sender.autolevel.probe_runner import ProbeRunSettings
-from .profiles import (
-    _merge_auto_level_job_prefs,
-    _select_auto_level_profile,
+from simple_sender.gcode_parser import (
+    clean_gcode_line,
+    split_gcode_lines,
+    split_gcode_lines_stream,
+)
+from simple_sender.ui.dro import convert_units
+from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.utils.config import DEFAULT_SETTINGS
+from simple_sender.utils.constants import (
+    AUTOLEVEL_SPACING_MIN,
+    AUTOLEVEL_START_STATE_POLL_MS,
+)
+
+from .calculations import (
+    _any_avoidance_enabled,
+    _apply_avoidance,
+    _coerce_avoidance,
+    _parse_avoidance_areas,
 )
 from .helpers import (
     parse_float_var,
@@ -59,83 +72,12 @@ from .io import (
     save_leveled as save_leveled_job,
 )
 from .prefs import pref_float, pref_interp
-from simple_sender.ui.dro import convert_units
-from simple_sender.ui.dialogs.popup_utils import center_window
-from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
-from simple_sender.utils.config import DEFAULT_SETTINGS
-from simple_sender.utils.constants import (
-    AUTOLEVEL_SPACING_MIN,
-    AUTOLEVEL_START_STATE_POLL_MS,
-    MAX_LINE_LENGTH,
+from .profiles import (
+    _merge_auto_level_job_prefs,
+    _select_auto_level_profile,
 )
-
-def _find_overlong_lines(
-    lines: list[str],
-    *,
-    fallback_index: int | None = None,
-    fallback_len: int | None = None,
-    fallback_count: int | None = None,
-) -> tuple[int, int | None, int | None]:
-    too_long = 0
-    first_idx = None
-    first_len = None
-    for idx, line in enumerate(lines):
-        line_len = len(line.encode("utf-8")) + 1
-        if line_len > MAX_LINE_LENGTH:
-            too_long += 1
-            if first_idx is None:
-                first_idx = idx
-                first_len = line_len
-    if too_long == 0 and fallback_index is not None:
-        too_long = fallback_count if fallback_count is not None else 1
-        first_idx = fallback_index
-        first_len = fallback_len
-    return too_long, first_idx, first_len
-
-
-def _format_overlong_error(
-    lines: list[str],
-    *,
-    fallback_index: int | None = None,
-    fallback_len: int | None = None,
-    fallback_count: int | None = None,
-    line_offset: int = 0,
-) -> str:
-    too_long, first_idx, first_len = _find_overlong_lines(
-        lines,
-        fallback_index=fallback_index,
-        fallback_len=fallback_len,
-        fallback_count=fallback_count,
-    )
-    idx_msg = "?"
-    len_msg = "?"
-    if first_idx is not None:
-        idx_msg = str(first_idx + 1 + line_offset)
-    if first_len is not None:
-        len_msg = str(first_len)
-    return (
-        f"{too_long} non-empty line(s) exceed GRBL's {MAX_LINE_LENGTH}-byte limit.\n"
-        f"First at line {idx_msg} ({len_msg} bytes including newline)."
-    )
-
-
-def _log_split_result(log_fn: Callable[[str], None] | None, split_result: Any) -> None:
-    if not log_fn or not getattr(split_result, "modified_count", 0):
-        return
-    if getattr(split_result, "split_count", 0):
-        msg = (
-            f"[gcode] Adjusted {split_result.modified_count} line(s) to fit "
-            f"{MAX_LINE_LENGTH}-byte limit (split {split_result.split_count})."
-        )
-    else:
-        msg = (
-            f"[gcode] Adjusted {split_result.modified_count} line(s) to fit "
-            f"{MAX_LINE_LENGTH}-byte limit."
-        )
-    try:
-        log_fn(msg)
-    except Exception:
-        pass
+from .ui_components import build_avoidance_tab, grid_row
+from .workflow import _apply_auto_level_to_path as _apply_auto_level_to_path_impl
 
 
 def _apply_auto_level_to_path(
@@ -151,213 +93,25 @@ def _apply_auto_level_to_path(
     streaming_mode: bool,
     log_fn: Callable[[str], None] | None = None,
 ) -> tuple[LevelFileResult, bool, str | None]:
-    def _level_and_write(target_path: str) -> LevelFileResult:
-        use_lines = (
-            not streaming_mode and isinstance(source_lines, list) and bool(source_lines)
-        )
-        if use_lines:
-            lines = cast(list[str], source_lines)
-            level_result = level_gcode_lines(
-                lines,
-                height_map,
-                arc_step_rad=arc_step_rad,
-                interpolation=interpolation,
-            )
-            if level_result.error:
-                return LevelFileResult(None, 0, level_result.error, False)
-            split_result = split_gcode_lines(level_result.lines, MAX_LINE_LENGTH)
-            if split_result.failed_index is not None:
-                error = _format_overlong_error(
-                    level_result.lines,
-                    fallback_index=split_result.failed_index,
-                    fallback_len=split_result.failed_len,
-                    line_offset=len(header_lines or []),
-                )
-                return LevelFileResult(None, 0, error, False)
-            _log_split_result(log_fn, split_result)
-            return write_gcode_lines(
-                target_path,
-                split_result.lines,
-                header_lines=header_lines,
-            )
-
-        result = level_gcode_file(
-            source_path,
-            target_path,
-            height_map,
-            arc_step_rad=arc_step_rad,
-            interpolation=interpolation,
-            header_lines=header_lines,
-        )
-        if result.error:
-            return result
-        expected_headers = [h.rstrip("\r\n") for h in header_lines or []]
-        try:
-            with open(target_path, "r", encoding="utf-8", errors="replace") as infile:
-                header_buffer: list[str] = []
-                matched_headers = True
-                for header in expected_headers:
-                    raw_header = infile.readline()
-                    if not raw_header:
-                        matched_headers = False
-                        break
-                    raw_header_text = raw_header.rstrip("\r\n")
-                    header_buffer.append(raw_header_text)
-                    if raw_header_text != header:
-                        matched_headers = False
-                        break
-                if matched_headers and expected_headers:
-                    header_count = len(header_buffer)
-                    raw_iter: Iterable[str] = infile
-                else:
-                    header_count = 0
-                    raw_iter = itertools.chain(header_buffer, infile)
-                stream_result = split_gcode_lines_stream(
-                    raw_iter,
-                    max_len=MAX_LINE_LENGTH,
-                    clean_line=clean_gcode_line,
-                    preserve_raw=True,
-                )
-        except Exception as exc:
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
-            return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
-
-        if stream_result.failed_index is not None:
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
-            error = _format_overlong_error(
-                [],
-                fallback_index=stream_result.failed_index,
-                fallback_len=stream_result.failed_len,
-                fallback_count=stream_result.too_long,
-                line_offset=header_count,
-            )
-            return LevelFileResult(None, 0, error, False)
-        if stream_result.modified_count == 0:
-            return result
-
-        header_lines_to_write: list[str] = []
-        header_count = 0
-        temp_path = None
-        try:
-            with open(target_path, "r", encoding="utf-8", errors="replace") as infile:
-                header_buffer = []
-                matched_headers = True
-                for header in expected_headers:
-                    raw_header = infile.readline()
-                    if not raw_header:
-                        matched_headers = False
-                        break
-                    raw_header_text = raw_header.rstrip("\r\n")
-                    header_buffer.append(raw_header_text)
-                    if raw_header_text != header:
-                        matched_headers = False
-                        break
-                if matched_headers and expected_headers:
-                    header_lines_to_write = header_buffer
-                    header_count = len(header_lines_to_write)
-                    rewrite_iter: Iterable[str] = infile
-                else:
-                    rewrite_iter = itertools.chain(header_buffer, infile)
-
-                dir_name = os.path.dirname(target_path) or "."
-                base_name = os.path.splitext(os.path.basename(target_path))[0]
-                ext = os.path.splitext(target_path)[1] or ".gcode"
-                temp_file = tempfile.NamedTemporaryFile(
-                    prefix=f"{base_name}_split_",
-                    suffix=ext,
-                    delete=False,
-                    dir=dir_name,
-                )
-                temp_path = temp_file.name
-                temp_file.close()
-                with open(temp_path, "w", encoding="utf-8", newline="") as outfile:
-                    def write_line(line: str) -> None:
-                        outfile.write(line.rstrip("\n"))
-                        outfile.write("\n")
-
-                    for header_line in header_lines_to_write:
-                        write_line(header_line)
-                    stream_result = split_gcode_lines_stream(
-                        rewrite_iter,
-                        max_len=MAX_LINE_LENGTH,
-                        clean_line=clean_gcode_line,
-                        preserve_raw=True,
-                        write_line=write_line,
-                    )
-        except Exception as exc:
-            if temp_path:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
-            return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
-
-        if stream_result.failed_index is not None:
-            if temp_path:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
-            error = _format_overlong_error(
-                [],
-                fallback_index=stream_result.failed_index,
-                fallback_len=stream_result.failed_len,
-                fallback_count=stream_result.too_long,
-                line_offset=header_count,
-            )
-            return LevelFileResult(None, 0, error, False)
-        _log_split_result(log_fn, stream_result)
-        try:
-            if temp_path:
-                os.replace(temp_path, target_path)
-        except Exception as exc:
-            if temp_path:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
-            return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
-        return LevelFileResult(
-            target_path,
-            stream_result.lines_written + header_count,
-            None,
-            False,
-        )
-
-    result = _level_and_write(output_path)
-    fallback_warning = None
-    is_temp = False
-    if result.error and result.io_error:
-        temp_path = temp_path_fn(source_path)
-        fallback = _level_and_write(temp_path)
-        if fallback.error is None:
-            result = fallback
-            is_temp = True
-            fallback_warning = (
-                "Could not write the leveled file next to the source file. "
-                "Saved a temporary leveled file instead. Use Save Leveled to keep a copy."
-            )
-        else:
-            result = fallback
-    return result, is_temp, fallback_warning
+    return _apply_auto_level_to_path_impl(
+        source_path=source_path,
+        source_lines=source_lines,
+        output_path=output_path,
+        temp_path_fn=temp_path_fn,
+        height_map=height_map,
+        arc_step_rad=arc_step_rad,
+        interpolation=interpolation,
+        header_lines=header_lines,
+        streaming_mode=streaming_mode,
+        log_fn=log_fn,
+        level_gcode_lines_fn=level_gcode_lines,
+        level_gcode_file_fn=level_gcode_file,
+        write_gcode_lines_fn=write_gcode_lines,
+        split_gcode_lines_fn=split_gcode_lines,
+        split_gcode_lines_stream_fn=split_gcode_lines_stream,
+        clean_gcode_line_fn=clean_gcode_line,
+        tempfile_module=tempfile,
+    )
 
 
 def show_auto_level_dialog(app: Any) -> None:
@@ -472,26 +226,6 @@ def show_auto_level_dialog(app: Any) -> None:
             {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""}
             for _ in range(avoidance_count)
         ]
-
-    def _coerce_avoidance(area: object, fallback: dict) -> dict:
-        if not isinstance(area, dict):
-            area = {}
-
-        def to_float(value: object, default: float) -> float:
-            try:
-                if isinstance(value, (int, float, str)):
-                    return float(value)
-            except Exception:
-                pass
-            return float(default)
-
-        return {
-            "enabled": bool(area.get("enabled", fallback.get("enabled", False))),
-            "x": to_float(area.get("x"), fallback.get("x", 0.0)),
-            "y": to_float(area.get("y"), fallback.get("y", 0.0)),
-            "radius": to_float(area.get("radius"), fallback.get("radius", 20.0)),
-            "note": str(area.get("note", fallback.get("note", "")) or ""),
-        }
 
     raw_avoidance = saved.get("avoidance_areas")
     avoidance_rows: list[dict] = []
@@ -671,65 +405,6 @@ def show_auto_level_dialog(app: Any) -> None:
             )
         return snapshot
 
-    def _parse_avoidance_areas() -> list[tuple[float, float, float]]:
-        areas: list[tuple[float, float, float]] = []
-        for idx, row in enumerate(avoidance_vars, start=1):
-            if not bool(row["enabled"].get()):
-                continue
-
-            def read_value(var: tk.Variable, label: str) -> float:
-                try:
-                    value = float(var.get())
-                except Exception as exc:
-                    raise ValueError(f"{label} must be a number.") from exc
-                if math.isnan(value) or math.isinf(value):
-                    raise ValueError(f"{label} must be a valid number.")
-                return value
-
-            x = read_value(row["x"], f"Area {idx} X")
-            y = read_value(row["y"], f"Area {idx} Y")
-            radius = read_value(row["radius"], f"Area {idx} radius")
-            if radius <= 0:
-                raise ValueError(f"Area {idx} radius must be > 0.")
-            areas.append((x, y, radius * radius))
-        return areas
-
-    def _any_avoidance_enabled() -> bool:
-        return any(bool(row["enabled"].get()) for row in avoidance_vars)
-
-    def _point_in_avoidance(px: float, py: float, areas: list[tuple[float, float, float]]) -> bool:
-        for ax, ay, r2 in areas:
-            dx = px - ax
-            dy = py - ay
-            if dx * dx + dy * dy <= r2:
-                return True
-        return False
-
-    def _apply_avoidance(
-        grid: ProbeGrid, areas: list[tuple[float, float, float]]
-    ) -> tuple[ProbeGrid, list[tuple[float, float]]]:
-        if not areas:
-            return grid, []
-        points: list[tuple[float, float]] = []
-        skipped: list[tuple[float, float]] = []
-        for px, py in grid.points:
-            if _point_in_avoidance(px, py, areas):
-                skipped.append((px, py))
-            else:
-                points.append((px, py))
-        if not skipped:
-            return grid, []
-        filtered = ProbeGrid(
-            bounds=grid.bounds,
-            xs=grid.xs,
-            ys=grid.ys,
-            points=points,
-            spacing_x=grid.spacing_x,
-            spacing_y=grid.spacing_y,
-            margin=grid.margin,
-        )
-        return filtered, skipped
-
     def _current_wpos_mm() -> tuple[float, float] | None:
         if not getattr(app, "connected", False):
             return None
@@ -822,7 +497,7 @@ def show_auto_level_dialog(app: Any) -> None:
             )
             max_points = parse_int_optional_var(max_points_var)
             path_order = _path_order_value(path_order_var.get())
-            avoidance_areas = _parse_avoidance_areas()
+            avoidance_areas = _parse_avoidance_areas(avoidance_vars)
         except ValueError as exc:
             preview_var.set(str(exc))
             bounds_var.set("")
@@ -883,11 +558,11 @@ def show_auto_level_dialog(app: Any) -> None:
     def start_probe() -> None:
         update_preview()
         try:
-            _parse_avoidance_areas()
+            _parse_avoidance_areas(avoidance_vars)
         except ValueError as exc:
             messagebox.showwarning("Auto-Level", str(exc))
             return
-        if not _any_avoidance_enabled():
+        if not _any_avoidance_enabled(avoidance_vars):
             proceed = messagebox.askokcancel(
                 "Auto-Level",
                 "No avoidance areas are configured. Continue anyway?\n"
@@ -1207,20 +882,6 @@ def show_auto_level_dialog(app: Any) -> None:
                 pass
         close_btn.config(text="Cancel" if not enabled else "Close")
 
-    def grid_row(
-        parent: ttk.Frame,
-        label: str,
-        var: tk.StringVar,
-        row: int,
-        *,
-        allow_decimal: bool = True,
-    ) -> ttk.Entry:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
-        entry = ttk.Entry(parent, textvariable=var, width=10)
-        entry.grid(row=row, column=1, sticky="w", pady=2)
-        attach_numeric_keypad(entry, allow_decimal=allow_decimal)
-        return entry
-
     frm.grid_columnconfigure(0, weight=1)
     notebook = ttk.Notebook(frm)
     notebook.grid(row=0, column=0, columnspan=2, sticky="ew")
@@ -1326,61 +987,12 @@ def show_auto_level_dialog(app: Any) -> None:
     )
     interp_combo.grid(row=15, column=1, sticky="w", pady=(4, 2))
     interp_combo.bind("<<ComboboxSelected>>", lambda _evt: update_preview())
-
-    avoidance_frame = ttk.Frame(avoidance_tab, padding=6)
-    avoidance_frame.grid(row=0, column=0, sticky="ew")
-    avoidance_frame.grid_columnconfigure(1, weight=1)
-    ttk.Label(avoidance_frame, text="").grid(row=0, column=0, sticky="w")
-    ttk.Label(avoidance_frame, text="Note").grid(row=0, column=1, sticky="w", padx=(2, 2))
-    ttk.Label(avoidance_frame, text="Y (mm)").grid(row=0, column=2, sticky="w", padx=(2, 2))
-    ttk.Label(avoidance_frame, text="X (mm)").grid(row=0, column=3, sticky="w", padx=(2, 2))
-    ttk.Label(avoidance_frame, text="Radius (mm)").grid(row=0, column=4, sticky="w", padx=(2, 2))
-
-    for idx, row in enumerate(avoidance_vars, start=1):
-        enabled_var = row["enabled"]
-        x_var = row["x"]
-        y_var = row["y"]
-        radius_var = row["radius"]
-        note_var = row["note"]
-        chk = ttk.Checkbutton(
-            avoidance_frame,
-            text=f"Area {idx}",
-            variable=enabled_var,
-            command=update_preview,
-        )
-        chk.grid(row=idx, column=0, sticky="w")
-        note_entry = ttk.Entry(avoidance_frame, textvariable=note_var, width=16)
-        note_entry.grid(row=idx, column=1, sticky="ew", padx=(2, 2))
-        y_entry = ttk.Entry(avoidance_frame, textvariable=y_var, width=10)
-        y_entry.grid(row=idx, column=2, sticky="w", padx=(2, 2))
-        x_entry = ttk.Entry(avoidance_frame, textvariable=x_var, width=10)
-        x_entry.grid(row=idx, column=3, sticky="w", padx=(2, 2))
-        radius_entry = ttk.Entry(avoidance_frame, textvariable=radius_var, width=10)
-        radius_entry.grid(row=idx, column=4, sticky="w", padx=(2, 2))
-        attach_numeric_keypad(x_entry, allow_decimal=True, allow_negative=True)
-        attach_numeric_keypad(y_entry, allow_decimal=True, allow_negative=True)
-        attach_numeric_keypad(radius_entry, allow_decimal=True)
-        def _make_set_position(row_index: int) -> Callable[[], None]:
-            return lambda: _set_avoidance_from_position(row_index)
-
-        set_btn = ttk.Button(
-            avoidance_frame,
-            text="Read Position",
-            command=_make_set_position(idx - 1),
-        )
-        set_btn.grid(row=idx, column=5, sticky="w", padx=(2, 0))
-        apply_tooltip(
-            set_btn,
-            "Populate the X and Y positions with the current position.",
-        )
-        avoidance_controls.extend(
-            [chk, note_entry, x_entry, y_entry, radius_entry, set_btn]
-        )
-        def _refresh_preview(_event: tk.Event | None = None) -> None:
-            update_preview()
-
-        for entry in (note_entry, x_entry, y_entry, radius_entry):
-            entry.bind("<KeyRelease>", _refresh_preview)
+    avoidance_controls = build_avoidance_tab(
+        avoidance_tab,
+        avoidance_vars,
+        update_preview,
+        _set_avoidance_from_position,
+    )
 
     ttk.Label(settings_tab, textvariable=preview_var, wraplength=460, justify="left").grid(
         row=16, column=0, columnspan=2, sticky="w", pady=(6, 0)
