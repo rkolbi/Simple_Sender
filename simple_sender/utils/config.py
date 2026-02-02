@@ -32,6 +32,7 @@ import os
 import sys
 import shutil
 import logging
+import tempfile
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -87,6 +88,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "estimate_rate_y": "",
     "estimate_rate_z": "",
     "fallback_rapid_rate": "5000.0",
+    "fullscreen_on_startup": True,
     "gui_logging_enabled": True,
     "job_completion_beep": False,
     "job_completion_popup": True,
@@ -235,25 +237,32 @@ def get_settings_path() -> str:
         Full path to settings file
     """
     base_dir = get_default_settings_dir()
-    
-    try:
-        os.makedirs(base_dir, exist_ok=True)
-        if os.path.exists(base_dir) and not os.access(base_dir, os.W_OK):
-            raise OSError("Settings directory is not writable")
-    except OSError as e:
-        logger.warning(f"Failed to use settings directory: {e}")
-        # Try fallback location
-        fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
+
+    def _ensure_writable_dir(path: str, label: str) -> str | None:
         try:
-            os.makedirs(fallback_dir, exist_ok=True)
-            if os.path.exists(fallback_dir) and not os.access(fallback_dir, os.W_OK):
-                raise OSError("Fallback settings directory is not writable")
-            base_dir = fallback_dir
-        except OSError:
-            # Last resort - current directory
-            base_dir = os.path.dirname(__file__)
-    
-    return os.path.join(base_dir, SETTINGS_FILENAME)
+            os.makedirs(path, exist_ok=True)
+            if os.path.exists(path) and os.access(path, os.W_OK):
+                return path
+            raise OSError(f"{label} settings directory is not writable")
+        except OSError as e:
+            logger.warning("Failed to use %s settings directory: %s", label, e)
+            return None
+
+    chosen = _ensure_writable_dir(base_dir, "primary")
+    if chosen is None:
+        fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
+        chosen = _ensure_writable_dir(fallback_dir, "fallback")
+    if chosen is None:
+        temp_dir = os.path.join(tempfile.gettempdir(), "SimpleSender")
+        chosen = _ensure_writable_dir(temp_dir, "temporary")
+    if chosen is None:
+        # Last resort - app directory (may still be read-only)
+        base_dir = os.path.dirname(__file__)
+        if not os.path.exists(base_dir) or not os.access(base_dir, os.W_OK):
+            logger.warning("Settings directory is not writable; using %s anyway", base_dir)
+        chosen = base_dir
+
+    return os.path.join(chosen, SETTINGS_FILENAME)
 
 
 class Settings:

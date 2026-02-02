@@ -177,6 +177,7 @@ def save_settings(app):
             "streaming line threshold",
         ),
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
+        "fullscreen_on_startup": bool(app.fullscreen_on_startup.get()),
         "theme": app.selected_theme.get(),
         "ui_scale": (
             safe_float(

@@ -57,13 +57,23 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     interface_frame = ttk.LabelFrame(parent, text="Interface", padding=8)
     interface_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     interface_frame.grid_columnconfigure(0, weight=1)
+    app.fullscreen_startup_check = ttk.Checkbutton(
+        interface_frame,
+        text="Start in fullscreen",
+        variable=app.fullscreen_on_startup,
+    )
+    app.fullscreen_startup_check.grid(row=0, column=0, sticky="w")
+    apply_tooltip(
+        app.fullscreen_startup_check,
+        "Enable fullscreen on startup (takes effect after restart).",
+    )
     app.resume_button_check = ttk.Checkbutton(
         interface_frame,
         text="Show 'Resume From...' button",
         variable=app.show_resume_from_button,
         command=app._on_resume_button_visibility_change,
     )
-    app.resume_button_check.grid(row=0, column=0, sticky="w")
+    app.resume_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.resume_button_check,
         "Toggle the visibility of the toolbar button that lets you resume from a specific line.",
@@ -74,7 +84,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.show_recover_button,
         command=app._on_recover_button_visibility_change,
     )
-    app.recover_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    app.recover_button_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.recover_button_check,
         "Show or hide the Recover button that brings up the alarm recovery dialog.",
@@ -85,13 +95,13 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.auto_level_enabled,
         command=app._on_auto_level_enabled_change,
     )
-    app.auto_level_enabled_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
+    app.auto_level_enabled_check.grid(row=3, column=0, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.auto_level_enabled_check,
         "Show Auto-Level in the toolbar after a job loads (disable to keep it hidden).",
     )
     perf_btn_frame = ttk.Frame(interface_frame)
-    perf_btn_frame.grid(row=3, column=0, sticky="w", pady=(6, 0))
+    perf_btn_frame.grid(row=4, column=0, sticky="w", pady=(6, 0))
     app.btn_performance_mode = ttk.Button(
         perf_btn_frame,
         text="Performance: On" if app.performance_mode.get() else "Performance: Off",
@@ -107,13 +117,13 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.gui_logging_enabled,
         command=app._on_gui_logging_change,
     )
-    app.logging_check.grid(row=4, column=0, sticky="w", pady=(8, 0))
+    app.logging_check.grid(row=5, column=0, sticky="w", pady=(8, 0))
     apply_tooltip(
         app.logging_check,
         "Record GUI button actions in the console log when enabled.",
     )
     logs_btn_row = ttk.Frame(interface_frame)
-    logs_btn_row.grid(row=5, column=0, sticky="w", pady=(6, 0))
+    logs_btn_row.grid(row=6, column=0, sticky="w", pady=(6, 0))
     def _show_logs():
         handler = getattr(app, "_show_logs_dialog", None)
         if callable(handler):
@@ -132,9 +142,9 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         "Open the application log viewer and export logs for diagnostics.",
     )
     indicator_label = ttk.Label(interface_frame, text="Status indicators")
-    indicator_label.grid(row=6, column=0, sticky="w", pady=(10, 0))
+    indicator_label.grid(row=7, column=0, sticky="w", pady=(10, 0))
     indicator_row = ttk.Frame(interface_frame)
-    indicator_row.grid(row=7, column=0, sticky="w", pady=(2, 0))
+    indicator_row.grid(row=8, column=0, sticky="w", pady=(2, 0))
     app.endstop_indicator_check = ttk.Checkbutton(
         indicator_row,
         text="Endstops",
@@ -161,9 +171,9 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     apply_tooltip(app.hold_indicator_check, "Show or hide the Hold status indicator.")
 
     quick_buttons_label = ttk.Label(interface_frame, text="Quick buttons (status bar)")
-    quick_buttons_label.grid(row=8, column=0, sticky="w", pady=(10, 0))
+    quick_buttons_label.grid(row=9, column=0, sticky="w", pady=(10, 0))
     quick_buttons_row = ttk.Frame(interface_frame)
-    quick_buttons_row.grid(row=9, column=0, sticky="w", pady=(2, 0))
+    quick_buttons_row.grid(row=10, column=0, sticky="w", pady=(2, 0))
     app.quick_tips_check = ttk.Checkbutton(
         quick_buttons_row,
         text="Tips",
@@ -212,7 +222,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
 
     toggle_btn_row = ttk.Frame(interface_frame)
-    toggle_btn_row.grid(row=10, column=0, sticky="w", pady=(10, 0))
+    toggle_btn_row.grid(row=11, column=0, sticky="w", pady=(10, 0))
     app.btn_toggle_tips_settings = ttk.Button(
         toggle_btn_row,
         text="Tips",

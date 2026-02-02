@@ -55,6 +55,7 @@ def init_basic_preferences(app, app_version: str, module):
         value=setting("streaming_line_threshold", GCODE_STREAMING_LINE_THRESHOLD)
     )
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
+    app.fullscreen_on_startup = tk.BooleanVar(value=setting("fullscreen_on_startup", True))
     app.zeroing_persistent = tk.BooleanVar(value=setting("zeroing_persistent", False))
     app.keyboard_bindings_enabled = tk.BooleanVar(
         value=setting("keyboard_bindings_enabled", True)
@@ -190,7 +191,7 @@ def init_basic_preferences(app, app_version: str, module):
         app._apply_scrollbar_width()
     except Exception:
         pass
-    app.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{app_version}")
+    app.version_var = tk.StringVar(value=f"Simple Sender (BETA)  -  Version: v{app_version}")
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))
     app.show_endstop_indicator = tk.BooleanVar(value=setting("show_endstop_indicator", True))

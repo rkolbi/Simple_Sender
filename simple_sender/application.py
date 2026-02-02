@@ -327,12 +327,16 @@ class App(
     _resume_job_name: str | None
     def __init__(self):
         super().__init__()
-        self.title("Simple Sender")
+        self.title("Simple Sender (BETA)")
         self.minsize(980, 620)
-        self.attributes("-fullscreen", True)
         self.bind("<Escape>", lambda _evt: self.attributes("-fullscreen", False))
         default_jog_feed_xy, default_jog_feed_z = init_settings_store(self, _SCRIPT_DIR)
         init_basic_preferences(self, __version__)
+        if bool(self.fullscreen_on_startup.get()):
+            try:
+                self.attributes("-fullscreen", True)
+            except tk.TclError:
+                pass
         self._apply_ui_scale(self.settings.get("ui_scale", 1.5))
         init_toolpath_settings(self)
         init_runtime_state(self, default_jog_feed_xy, default_jog_feed_z, _MACRO_SEARCH_DIRS)

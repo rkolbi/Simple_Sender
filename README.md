@@ -1,12 +1,12 @@
 # Simple Sender - Full Manual
 
-### Work in progress (alpha). Don't trust it until you've validated it a few times.
+### Work in progress (beta). Don't trust it until you've validated it a few times.
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
 ![-](pics/Slide8.JPG)
 
-> **Safety notice:** This is **alpha** software. Always test "in the air" with the spindle **off** before cutting material.
+> **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -64,7 +64,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender` or the app folder.
+Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the app folder.
 
 ## Launching
 ```powershell
@@ -150,7 +150,7 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender - Version: v<current>`, theme picker, UI scale slider (handy for high-DPI displays or making controls easier to read at the machine), estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, current-line highlight mode, 3D streaming refresh, streaming validation, streaming line threshold, Auto-Level enable toggle, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
+  - **App Settings:** Banner showing `Simple Sender (BETA) - Version: v<current>`, theme picker, UI scale slider (handy for high-DPI displays or making controls easier to read at the machine), startup fullscreen toggle, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, current-line highlight mode, 3D streaming refresh, streaming validation, streaming line threshold, Auto-Level enable toggle, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
   - **Checklists:** Release/run checklists, preflight check, diagnostics export, and safety settings (ALL STOP, dry run, homing watchdog, Training Wheels, auto-reconnect).
 
     ![-](pics/Slide6.JPG)
