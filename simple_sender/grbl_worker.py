@@ -252,6 +252,7 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
         self._watchdog_ignore_reason = None
         self._homing_watchdog_enabled = True
         self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
+        self._connect_started_ts = 0.0
 
     def _log_rx_line(self, line: str) -> None:
         if not line:
@@ -354,6 +355,7 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
             )
             ser = self.ser
             assert ser is not None
+            self._connect_started_ts = time.time()
             
             # Give GRBL time to reset (some boards reset on connection)
             time.sleep(SERIAL_CONNECT_DELAY)
@@ -395,9 +397,11 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
             
         except serial_exc as e:
             self.ser = None
+            self._connect_started_ts = 0.0
             raise SerialConnectionError(f"Failed to connect to {port}: {e}")
         except Exception as e:
             self.ser = None
+            self._connect_started_ts = 0.0
             raise SerialConnectionError(f"Unexpected error connecting to {port}: {e}")
     
     def disconnect(self) -> None:
@@ -430,6 +434,7 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._connect_started_ts = 0.0
         
         # Notify UI
         self.ui_q.put(("ready", False))
@@ -539,6 +544,7 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._connect_started_ts = 0.0
         self._reset_stream_buffer()
         self._clear_outgoing()
         try:
@@ -741,8 +747,10 @@ class GrblWorker(GrblWorkerCommandMixin, GrblWorkerStreamingMixin, GrblWorkerSta
                     time.sleep(0.05)
                     continue
                 if hasattr(ser, "is_open") and not ser.is_open:
-                    time.sleep(0.05)
-                    continue
+                    if not stop_evt.is_set():
+                        self._signal_disconnect("Serial port closed")
+                        stop_evt.set()
+                    break
                 try:
                     chunk = ser.read(256)
                 except timeout_exc:

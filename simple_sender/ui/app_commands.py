@@ -74,13 +74,24 @@ def _safe_initial_dir(path: str) -> str:
 
 def refresh_ports(app, auto_connect: bool = False):
     ports = app.grbl.list_ports()
+    last = ""
+    try:
+        last = getattr(app, "_auto_reconnect_last_port", "") or ""
+    except Exception:
+        last = ""
+    if not last:
+        last = (app.settings.get("last_port") or "").strip()
+    if os.name == "posix" and last and last in ports:
+        ports = [last] + [port for port in ports if port != last]
     app.port_combo["values"] = ports
     if ports and app.current_port.get() not in ports:
-        app.current_port.set(ports[0])
+        if last and last in ports:
+            app.current_port.set(last)
+        else:
+            app.current_port.set(ports[0])
     if not ports:
         app.current_port.set("")
     if auto_connect and (not app.connected):
-        last = (app.settings.get("last_port") or "").strip()
         if last and last in ports:
             app.current_port.set(last)
             try:
@@ -126,7 +137,7 @@ def start_connect_worker(
         except Exception as exc:
             if show_error:
                 try:
-                    app.after(0, lambda: messagebox.showerror("Connect failed", str(exc)))
+                    app.after(0, lambda exc=exc: messagebox.showerror("Connect failed", str(exc)))
                 except Exception:
                     pass
             callback = on_failure

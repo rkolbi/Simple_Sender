@@ -535,6 +535,9 @@ WATCHDOG_HOMING_TIMEOUT = 180.0
 WATCHDOG_ALARM_DISCONNECT_TIMEOUT = 60.0
 """Seconds without RX before disconnecting while in alarm state."""
 
+GRBL_STARTUP_TIMEOUT = 6.0
+"""Seconds to wait for GRBL banner/status before disconnecting."""
+
 RX_STATUS_LOG_INTERVAL = 0.2
 """Minimum seconds between status log entries in the UI console."""
 

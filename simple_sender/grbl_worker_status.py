@@ -36,6 +36,7 @@ from .utils.constants import (
     WATCHDOG_ALARM_DISCONNECT_TIMEOUT,
     WATCHDOG_DISCONNECT_TIMEOUT,
     WATCHDOG_RX_TIMEOUT,
+    GRBL_STARTUP_TIMEOUT,
 )
 from .utils.validation import validate_interval
 
@@ -87,6 +88,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         """Mark GRBL as ready (banner received)."""
         if not self._ready:
             self._ready = True
+            self._connect_started_ts = 0.0
             self.ui_q.put(("ready", True))
             logger.info("GRBL ready")
     
@@ -367,6 +369,15 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             while not stop_evt.is_set():
                 if self.is_connected():
                     now = time.time()
+                    connect_started_ts = float(getattr(self, "_connect_started_ts", 0.0))
+                    if (
+                        connect_started_ts
+                        and (not self._ready)
+                        and (now - connect_started_ts) >= GRBL_STARTUP_TIMEOUT
+                    ):
+                        self._signal_disconnect("No GRBL greeting received")
+                        stop_evt.set()
+                        break
                     watchdog_ignore_until = float(getattr(self, "_watchdog_ignore_until", 0.0))
                     watchdog_ignored = watchdog_ignore_until and (now < watchdog_ignore_until)
                     idle = now - self._last_rx_ts
