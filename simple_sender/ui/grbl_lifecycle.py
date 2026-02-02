@@ -104,6 +104,9 @@ def handle_connection_event(app, is_on: bool, port):
             app._resume_after_disconnect = False
             app._resume_from_index = None
             app._resume_job_name = None
+            app._auto_reconnect_pending = False
+            app._auto_reconnect_retry = 0
+            app._auto_reconnect_next_ts = 0.0
         if not app._user_disconnect:
             app._auto_reconnect_pending = True
             app._auto_reconnect_retry = 0
@@ -166,6 +169,8 @@ def handle_ready_event(app, ready):
 
 def maybe_auto_reconnect(app):
     if app.connected or app._closing or (not app._auto_reconnect_pending):
+        return
+    if getattr(app, "_user_disconnect", False):
         return
     if app._connecting:
         return
