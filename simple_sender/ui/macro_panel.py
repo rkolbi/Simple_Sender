@@ -34,7 +34,7 @@ class MacroPanel:
         self._right_frame: ttk.Frame | None = None
         self._macro_buttons: list[tk.Widget] = []
 
-    def attach_frames(self, left: ttk.Frame, right: ttk.Frame) -> None:
+    def attach_frames(self, left: ttk.Frame, right: ttk.Frame | None = None) -> None:
         self._left_frame = left
         self._right_frame = right
         self._load_macro_buttons()
@@ -91,7 +91,7 @@ class MacroPanel:
         self.app.macro_executor.run_macro(index)
 
     def _load_macro_buttons(self) -> None:
-        if not self._left_frame or not self._right_frame:
+        if not self._left_frame:
             return
         def _run_command(index: int) -> Callable[[], None]:
             return lambda: self._run_macro(index)
@@ -104,47 +104,35 @@ class MacroPanel:
         self._macro_buttons = []
         for w in self._left_frame.winfo_children():
             w.destroy()
-        for w in self._right_frame.winfo_children():
-            w.destroy()
-        self._right_frame.grid_columnconfigure(0, weight=1, uniform="macro_buttons", minsize=140)
-        self._right_frame.grid_columnconfigure(1, weight=1, uniform="macro_buttons", minsize=140)
-        self._right_frame.grid_rowconfigure(0, weight=0)
+        if self._right_frame:
+            for w in self._right_frame.winfo_children():
+                w.destroy()
 
-        for idx in (1, 2, 3):
+        entries: list[tuple[int, str]] = []
+        for idx in (1, 2, 3, 4, 5, 6, 7, 8):
             path = self._macro_path(idx)
-            if not path:
-                continue
+            if path:
+                entries.append((idx, path))
+
+        self._left_frame.grid_rowconfigure(0, weight=0)
+        for col in range(len(entries)):
+            self._left_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
+
+        for col, (idx, path) in enumerate(entries):
             name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(self._left_frame, text=name, command=_run_command(idx))
+            btn = ttk.Button(
+                self._left_frame,
+                text=name,
+                style=getattr(self.app, "macro_button_style", "TButton"),
+                command=_run_command(idx),
+            )
             set_kb_id(btn, f"macro_{idx}")
-            btn.pack(fill="x", pady=(0, 4))
+            padx = (0, 6) if col < len(entries) - 1 else 0
+            btn.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", _preview_bind(idx))
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
-
-        col = 0
-        row = 0
-        for idx in (4, 5, 6, 7):
-            path = self._macro_path(idx)
-            if not path:
-                continue
-            name, tip = self._read_macro_header(path, idx)
-            btn = ttk.Button(self._right_frame, text=name, command=_run_command(idx))
-            set_kb_id(btn, f"macro_{idx}")
-            if col == 0:
-                padx = (0, 8)
-            else:
-                padx = (20, 0)
-            btn.grid(row=row, column=col, padx=padx, pady=2, sticky="ew")
-            apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", _preview_bind(idx))
-            self.app._manual_controls.append(btn)
-            self._macro_buttons.append(btn)
-            col += 1
-            if col > 1:
-                col = 0
-                row += 1
         self.app._refresh_keyboard_table()
 
 

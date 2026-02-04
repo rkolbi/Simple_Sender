@@ -1,4 +1,4 @@
-Tool Change (Preserve Reference Tool Height)
+Tool Change
 Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.
 
 ; Keep these values aligned with Macro 1/2 so the tool sensor remains consistent; adjust SAFE_HEIGHT if clamps differ.

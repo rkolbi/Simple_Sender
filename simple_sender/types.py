@@ -116,6 +116,7 @@ class GrblWorkerState:
     _ready: bool
     _alarm_active: bool
     _settings_dump_active: bool
+    _settings_dump_seen: bool
     _last_manual_source: str | None
 
     _watchdog_paused: bool

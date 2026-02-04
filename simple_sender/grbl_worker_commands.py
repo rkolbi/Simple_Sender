@@ -69,8 +69,6 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         if not command:
             return
         cmd_upper = command.upper()
-        if cmd_upper == "$$":
-            self._settings_dump_active = True
 
         # During alarm, only allow unlock and home commands
         if self._alarm_active:
@@ -122,6 +120,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._settings_dump_active = False
+        self._settings_dump_seen = False
         was_streaming = self._streaming or self._paused
         with self._stream_lock:
             self._stream_token += 1

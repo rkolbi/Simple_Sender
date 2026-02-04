@@ -1,88 +1,19 @@
-Z Touch Plate & Reference Tool Setup
-Probes Z on the touch plate, then captures the reference tool height at the fixed sensor.
+Prompt Test Macro
+Presents a test prompt and message to verify the popup flow.
 
-; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe distance/feed).
-%macro.state.SAFE_HEIGHT = -5
-%macro.state.PROBE_X_LOCATION = -1.5
-%macro.state.PROBE_Y_LOCATION = -1224
-%macro.state.PROBE_Z_LOCATION = -5
-%macro.state.PROBE_DISTANCE = 150
-%macro.state.PROBE_RAPID_FEEDRATE = 200
-%macro.state.PLATE_THICKNESS = 11.95
-%macro.state.Z_FAST_PROBE_DISTANCE = 50
-%macro.state.X_PLATE_OFFSET = -13.175
-%macro.state.Y_PLATE_OFFSET = -13.175
-
-%wait
-%WCS = WCS
-%PLANE = plane
-%UNITS = units
-%DISTANCE = distance
-%FEEDMODE = feedmode
-%SPINDLE = spindle
-%COOLANT = coolant
-%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
-
-%macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
-%if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
-["PROMPT resumelabel=Proceed You are about to overwrite material and tool reference points. Are you sure you want to proceed?" if macro.prompt_tool_ref is not None else ""][""]
-M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
-G90
-G21
-G92 X0 Y0
-
-; Probe Z (touch plate)
-G91
-G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150
-G90
-G92 Z[macro.state.PLATE_THICKNESS]
-G1 Z14
-G91
-G38.2 Z-15 F40
-G0 Z2
-G4 P0.25
-G38.2 Z-3 F20
-G90
-G92 Z[macro.state.PLATE_THICKNESS]
-G0 Z16
-
-G0 Z20
-G0 X0 Y0
-%update
-%msg (After touch plate: wx=[wx] wy=[wy] wz=[wz])
-M0 (Stow the touch plate and clip; tool height will be measured next.)
+; First prompt uses the default Resume/Cancel UI.
+%msg (Press Resume or Cancel to confirm default behaviour.)
+M0 (Ensure the default Resume/Cancel prompt appears.)
 %wait
 
-G21
+; Second prompt exercises the custom title + button syntax.
+PROMPT [title(Custom Choice)] Pick an option from the custom buttons. [btn(Option One)a] [btn(Option Two)b] [btn(Option Three)c]
+%msg (Selected option key: [macro.prompt_choice_key] (label: [macro.prompt_choice_label]) index [macro.prompt_index])
+%wait
+
+; Third popup echoes the chosen option.
+PROMPT [title(Choice Made)] Your choice was: [macro.prompt_choice_key] [btn(OK)]
+%wait
+
+; Additional prompt to show Cancel handling remains at the end.
 M5
-G90
-G53 G0 Z[macro.state.SAFE_HEIGHT]
-G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
-%wait
-G53 Z[macro.state.PROBE_Z_LOCATION]
-
-G91
-G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
-G0 Z2
-G4 P0.25
-G38.2 Z-5 F40
-G4 P0.25
-G38.4 Z10 F20
-G4 P0.25
-G38.2 Z-2 F5
-G4 P0.25
-G38.4 Z10 F5
-G90
-%wait
-%update
-%macro.state.TOOL_REFERENCE = wz
-%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
-G91
-G0 Z5
-G90
-G53 Z[macro.state.SAFE_HEIGHT]
-%wait
-G0 X0 Y0
-STATE_RETURN
-
-

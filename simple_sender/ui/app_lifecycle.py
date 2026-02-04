@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
 import threading
 import traceback
 from tkinter import messagebox
@@ -81,6 +82,19 @@ def on_close(app):
         app.grbl.disconnect()
     except Exception as exc:
         app._log_exception("Shutdown failed", exc)
+    source = getattr(app, "_gcode_source", None)
+    if source is not None:
+        cleanup_path = getattr(source, "_cleanup_path", None)
+        try:
+            source.close()
+        except Exception:
+            pass
+        if cleanup_path:
+            try:
+                os.remove(cleanup_path)
+            except OSError:
+                pass
+        app._gcode_source = None
     app._stop_joystick_hold()
     app._stop_joystick_polling()
     py = app._get_pygame_module()

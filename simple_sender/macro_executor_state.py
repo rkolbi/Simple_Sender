@@ -101,7 +101,7 @@ class MacroStateMixin(MacroExecutorState):
             state=self._macro_saved_state,
         )
         self._macro_state_restored = restored
-        return True
+        return restored
 
     def _parse_timeout(self, cmd_parts: list[str], default: float) -> float:
         if len(cmd_parts) > 1:

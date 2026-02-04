@@ -562,7 +562,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._emit_buffer_fill()
                 break
 
+            is_settings_dump = line.strip().upper() == "$$"
+            if is_settings_dump:
+                self._settings_dump_active = True
+                self._settings_dump_seen = False
             if not self._write_line(line, payload, allow_abort=allowed_alarm_cmd):
+                if is_settings_dump:
+                    self._settings_dump_active = False
+                    self._settings_dump_seen = False
                 with self._stream_lock:
                     if self._stream_line_queue:
                         try:

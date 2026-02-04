@@ -55,11 +55,19 @@ def refresh_dro_display(app) -> None:
         app.wpos_z.set(format_dro_value(wpos[2], report_units, unit_mode))
 
 
-def dro_value_row(app, parent, axis, var, *, ttk_mod=None):
+def dro_value_row(app, parent, axis, var, *, ttk_mod=None, grid_info=None):
     if ttk_mod is None:
         ttk_mod = ttk
     row = ttk_mod.Frame(parent)
-    row.pack(fill="x", pady=2)
+    if grid_info:
+        row.grid(**grid_info)
+    else:
+        row.pack(fill="x", pady=2)
+    if hasattr(app, "_wpos_rows"):
+        try:
+            app._wpos_rows[axis] = row
+        except Exception:
+            pass
     ttk_mod.Label(row, text=f"{axis}:", width=3).grid(row=0, column=0, sticky="w")
     ttk_mod.Label(
         row,
@@ -79,13 +87,16 @@ def dro_value_row(app, parent, axis, var, *, ttk_mod=None):
     btn.grid(row=0, column=2, sticky="w")
 
 
-def dro_row(app, parent, axis, var, zero_cmd, *, ttk_mod=None, set_kb_id_func=None):
+def dro_row(app, parent, axis, var, zero_cmd, *, ttk_mod=None, set_kb_id_func=None, grid_info=None):
     if ttk_mod is None:
         ttk_mod = ttk
     if set_kb_id_func is None:
         set_kb_id_func = set_kb_id
     row = ttk_mod.Frame(parent)
-    row.pack(fill="x", pady=2)
+    if grid_info:
+        row.grid(**grid_info)
+    else:
+        row.pack(fill="x", pady=2)
     ttk_mod.Label(row, text=f"{axis}:", width=3).grid(row=0, column=0, sticky="w")
     value_label = ttk_mod.Label(
         row,

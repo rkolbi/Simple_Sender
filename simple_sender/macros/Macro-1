@@ -1,4 +1,4 @@
-Return to Work X & Y Zero (Safe Height)
+Park over WPos X/Y
 Raises to the safe height and then re-centers on the WCS origin without changing offsets.
 
 ; SAFE_HEIGHT should match the other macros so the return path clears all fixtures.

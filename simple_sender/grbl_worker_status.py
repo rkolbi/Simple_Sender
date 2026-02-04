@@ -240,14 +240,18 @@ class GrblWorkerStatusMixin(GrblWorkerState):
 
         line_lower = line.lower()
         self._log_rx_line(line)
+        if self._settings_dump_active and line.startswith("$") and "=" in line:
+            self._settings_dump_seen = True
         if line_lower == "ok":
             ok_summary = self._note_ok_log(now)
             if ok_summary:
                 self._safe_ui_put(("log_rx", ok_summary), context="ok summary")
             if getattr(self, "_settings_dump_active", False):
-                self._settings_dump_active = False
-                self._safe_ui_put(("settings_dump_done",), context="settings dump")
-                self._safe_ui_put(("log_rx", "ok"), context="settings ok")
+                if getattr(self, "_settings_dump_seen", False):
+                    self._settings_dump_active = False
+                    self._settings_dump_seen = False
+                    self._safe_ui_put(("settings_dump_done",), context="settings dump")
+                    self._safe_ui_put(("log_rx", "ok"), context="settings ok")
         else:
             ok_summary = self._flush_ok_log(now)
             if ok_summary:
@@ -270,6 +274,9 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         
         # Command acknowledgment
         if line_lower == "ok" or line_lower.startswith("error"):
+            if line_lower.startswith("error") and getattr(self, "_settings_dump_active", False):
+                self._settings_dump_active = False
+                self._settings_dump_seen = False
             ack_index = None
             ack_line_idx = None
             ack_line_text = None

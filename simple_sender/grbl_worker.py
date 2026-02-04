@@ -200,6 +200,7 @@ class GrblWorker(
         self._manual_pending_item: Optional[Tuple[str, bytes, int]] = None
         self._last_manual_source: str | None = None
         self._settings_dump_active = False
+        self._settings_dump_seen = False
         self._pause_after_idx: Optional[int] = None
         self._pause_after_reason: str | None = None
         self._resume_preamble: deque[str] = deque()

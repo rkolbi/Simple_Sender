@@ -90,13 +90,18 @@ class ControlsMixin:
     def _refresh_override_info(self) -> None:
         _app_module(self).refresh_override_info(self)
 
-    def _dro_value_row(self, parent: tk.Widget, axis: str, var: tk.StringVar) -> None:
-        _app_module(self).dro_value_row(self, parent, axis, var)
+    def _dro_value_row(self, parent: tk.Widget, axis: str, var: tk.StringVar, **kwargs: Any) -> None:
+        _app_module(self).dro_value_row(self, parent, axis, var, **kwargs)
 
     def _dro_row(
-        self, parent: tk.Widget, axis: str, var: tk.StringVar, zero_cmd: Callable[[], Any]
+        self,
+        parent: tk.Widget,
+        axis: str,
+        var: tk.StringVar,
+        zero_cmd: Callable[[], Any],
+        **kwargs: Any,
     ) -> Any:
-        return _app_module(self).dro_row(self, parent, axis, var, zero_cmd)
+        return _app_module(self).dro_row(self, parent, axis, var, zero_cmd, **kwargs)
 
     def _set_unit_mode(self, mode: str) -> None:
         _app_module(self).set_unit_mode(self, mode)

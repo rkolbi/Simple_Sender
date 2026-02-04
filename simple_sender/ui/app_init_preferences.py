@@ -155,8 +155,29 @@ def init_basic_preferences(app, app_version: str, module):
         app.home_button_style,
         anchor="center",
         justify="center",
-        padding=(9, 5),
+        padding=(10, 12),
         font=app.home_button_font,
+    )
+    app.mpos_button_style = "SimpleSender.MposButton.TButton"
+    app.macro_button_style = "SimpleSender.MacroButton.TButton"
+    touch_padding = (10, 12)
+    app.style.configure(
+        app.mpos_button_style,
+        anchor="center",
+        justify="center",
+        padding=touch_padding,
+    )
+    app.style.configure(
+        app.macro_button_style,
+        anchor="center",
+        justify="center",
+        padding=touch_padding,
+    )
+    app.style.configure(
+        "SimpleSender.UnitReported.TButton",
+        anchor="center",
+        justify="center",
+        padding=touch_padding,
     )
     dro_size = default_font.cget("size")
     if not isinstance(dro_size, int):
