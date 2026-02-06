@@ -21,12 +21,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import time
 from typing import Any
 
 from simple_sender.utils.constants import (
     JOYSTICK_AXIS_RELEASE_THRESHOLD,
     JOYSTICK_AXIS_THRESHOLD,
     JOYSTICK_HOLD_DEFINITIONS,
+    JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER,
     JOYSTICK_HOLD_MISS_LIMIT,
     JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
@@ -115,6 +117,7 @@ def start_hold(app, binding_id: str):
         return
     app._active_joystick_hold_binding = binding_id
     app._joystick_hold_missed_polls = 0
+    app._joystick_hold_last_ts = time.monotonic()
     app._send_hold_jog()
 
 
@@ -131,18 +134,26 @@ def send_hold_jog(app):
         return
     try:
         if app.grbl.manual_queue_backpressure():
+            app._joystick_hold_last_ts = time.monotonic()
             app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
             return
     except Exception:
         try:
             if app.grbl.manual_queue_busy():
+                app._joystick_hold_last_ts = time.monotonic()
                 app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
                 return
         except Exception:
             pass
     binding = app._joystick_bindings.get(binding_id)
     if not _joystick_binding_pressed(app, binding, release=True):
-        stop_hold(app, binding_id)
+        missed = getattr(app, "_joystick_hold_missed_polls", 0) + 1
+        app._joystick_hold_missed_polls = missed
+        if missed >= JOYSTICK_HOLD_MISS_LIMIT:
+            stop_hold(app, binding_id)
+            return
+        app._joystick_hold_last_ts = time.monotonic()
+        app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
         return
     app._joystick_hold_missed_polls = 0
     hold_axis = hold_vector_for_binding(app, binding_id)
@@ -151,7 +162,17 @@ def send_hold_jog(app):
         return
     axis, direction = hold_axis
     feed = jog_feed_for_axis(app, axis)
-    distance = (feed / 60.0) * (JOYSTICK_HOLD_REPEAT_MS / 1000.0)
+    now = time.monotonic()
+    last_ts = getattr(app, "_joystick_hold_last_ts", None)
+    if last_ts is None:
+        elapsed = JOYSTICK_HOLD_REPEAT_MS / 1000.0
+    else:
+        elapsed = max(0.0, now - last_ts)
+    app._joystick_hold_last_ts = now
+    max_elapsed = (JOYSTICK_HOLD_REPEAT_MS / 1000.0) * JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER
+    if elapsed > max_elapsed:
+        elapsed = max_elapsed
+    distance = (feed / 60.0) * elapsed
     if distance <= 0:
         stop_hold(app)
         return
@@ -190,6 +211,7 @@ def stop_hold(app, binding_id: str | None = None):
             pass
     app._active_joystick_hold_binding = None
     app._joystick_hold_missed_polls = 0
+    app._joystick_hold_last_ts = None
 
 
 def check_release(app):

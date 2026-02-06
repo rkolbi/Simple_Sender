@@ -1,4 +1,5 @@
 # Simple Sender - Full Manual
+![Release: 1.3.1b2](https://img.shields.io/badge/release-1.3.1b2-blue)
 
 ### Work in progress (beta). Don't trust it until you've validated it a few times.
 
@@ -152,8 +153,8 @@ This is a practical, end-to-end flow with rationale for key options.
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
     ![-](pics/Slide5.JPG)
-  - **App Settings:** Banner showing `Simple Sender (BETA) - Version: v<current>`, theme picker, UI scale slider (handy for high-DPI displays or making controls easier to read at the machine), startup fullscreen toggle, estimation factors/fallbacks + max-rate inputs, status polling controls, error dialog/job completion popup+beep toggles, jogging defaults, macro scripting/keybinding toggles, zeroing mode, current-line highlight mode, 3D streaming refresh, streaming validation, streaming line threshold, Auto-Level enable toggle, and the Interface block for Performance, button visibility, logging, status indicators, and quick buttons.
-  - **Checklists:** Release/run checklists, preflight check, diagnostics export, and safety settings (ALL STOP, dry run, homing watchdog, Training Wheels, auto-reconnect).
+  - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight/export/streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  - **Checklists:** Release/run checklists loaded from `checklist-*.chk` files, including the Release/Run checklist dialogs and the status-bar Release quick button.
 
     ![-](pics/Slide6.JPG)
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
@@ -163,10 +164,10 @@ This is a practical, end-to-end flow with rationale for key options.
 
     ![-](pics/Slide8.JPG)
 
-- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips/3DR/Keys/Release (toggleable in App Settings; logging/error-dialog controls live there too).
+- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
 ## Status Lights
-- **Placement:** The LEDs sit inline with the status bar so they stay next to the quick buttons (Tips/3DR/Keys/Release) and provide a quick glance of machine triggers.
+- **Placement:** The LEDs sit inline with the status bar so they stay next to the quick buttons (Tips, 3D Render, Keys, Auto-Level Overlay, Release) and provide a quick glance of machine triggers.
 - **Meaning & data source:** GRBL 1.1h status reports include a `Pn:` token (e.g., `<Idle|Pn:XYZPDHRS|...>`). The indicators derive their state directly from those flags:
   - `X`, `Y`, `Z` light the **Endstops** indicator whenever those limit pins feed a high signal.
   - `P` (or `_macro_vars["PRB"]`) lights the **Probe** indicator, showing when a probe touch or macro-supplied probe result is active.
@@ -179,7 +180,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
-- **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (Checklists tab).
+- **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (App Settings > Diagnostics).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Toggle with the Tips button in the status bar or App Settings.
@@ -187,7 +188,7 @@ This is a practical, end-to-end flow with rationale for key options.
 ## Jobs, Files, and Streaming
 - **Read Job:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
-- **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3DR toggle prompts before enabling a full 3D render.
+- **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
 - **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads use the same compaction/splitting rules; unsplittable lines are rejected if they exceed 80 bytes, and send-time checks enforce the limit. Auto-level output is post-processed to meet the 80-byte limit before it reloads.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
@@ -369,7 +370,7 @@ This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI pr
 
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
-- 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > 3D View. For streaming (large) loads, 3D rendering is off by default and the 3DR toggle prompts before enabling a full preview.
+- 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > Viewer. For streaming (large) loads, 3D rendering is off by default and the 3D Render (3DR) toggle prompts before enabling a full preview.
 - Renderer: Tk Canvas (no OpenGL backend in this build).
 
 ## Auto-Leveling
@@ -565,13 +566,13 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
-- Need a support bundle: use Checklists > Export session diagnostics.
+- Need a support bundle: use App Settings > Diagnostics > Export session diagnostics.
 
 ## Change Summary (since 1.2)
 - Auto-leveling: added RMS roughness + outlier stats in the height map summary.
 - Auto-leveling: optional spiral (center-out) probe order in addition to serpentine.
 - Auto-leveling: fixed dialog initialization error when opening after loading a job.
-- Checklists tab replaces the old dialog popups and now loads `checklist-*.chk` files from the macros folder.
+- Checklists tab loads `checklist-*.chk` files from the macros folder; Release/Run dialogs use the same files.
 - Diagnostics export bundles recent console/status history plus current settings; preflight check flags bounds/validation issues.
 - Auto-leveling now produces a `-AL` file, enforces GRBL's 80-byte limit in the output, and blocks re-leveling an already leveled file.
 - Streaming validation for large files is configurable, and streaming loads now preserve comments/blank lines when auto-leveling rewrites lines.
@@ -773,20 +774,24 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Theme
 - UI theme (dropdown): selects the ttk theme; some themes apply fully after restart.
-- UI scale: numeric scale factor (0.5-3.0) applied immediately.
+- UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
-- Apple 2.0x: quick preset that sets UI scale to 2.0 and applies it.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
+- Enable tooltips: toggles hover tips across the app.
+- Tooltip display duration (sec): auto-hide timer (0 keeps tooltips visible).
 - Enable numeric keypad popups: shows or hides the touch keypad on numeric fields.
+- Recommendation: increase UI scale and keep the keypad enabled on touchscreens; use 0 seconds if you want persistent hints.
 
 ### App Settings: Estimation
 - Fallback rapid rate: used for estimates when $110-112 are unavailable.
 - Estimator adjustment slider: multiplies the estimate (1.00x is default).
 - Max rates X/Y/Z: manual max rates used for estimates when GRBL rates are not available.
+- Recommendation: set max rates from your GRBL $110-$112 values and adjust the factor only if estimates are consistently off.
 
 ### App Settings: Status Polling
 - Status report interval: seconds between status requests.
 - Disconnect after failures: consecutive status query failures before disconnecting.
+- Recommendation: keep the default interval unless you need fewer updates on a slow connection.
 
 ### App Settings: Error Dialogs
 - Enable error dialogs: toggles modal error popups.
@@ -795,17 +800,21 @@ Macro UI is included below along with the rest of the interface.
 - Max dialogs per window: cap before suppression begins.
 - Show job completion dialog: toggles completion summary popup.
 - Play reminder beep on completion: toggles completion beep.
+- Recommendation: keep dialogs enabled; raise the minimum interval or burst window if you see repeated alerts.
 
 ### App Settings: Macros
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
+- Recommendation: leave scripting off unless you trust the macro source.
 
 ### App Settings: Zeroing
 - Use persistent zeroing (G10 L20): switches zeroing buttons from G92 to G10 L20.
+- Recommendation: use persistent zeroing when you want offsets to survive resets; use G92 for temporary offsets.
 
 ### App Settings: Jogging
 - Default jog feed (X/Y): baseline jog speed for XY.
 - Default jog feed (Z): baseline jog speed for Z.
-- Apply safe mode: sets conservative jog feeds and steps for first use.
+- Apply safe mode: sets conservative jog feeds and steps for first use (1000/200 mm/min and 1.0/0.1 mm).
+- Recommendation: use Safe mode for first-time setup or new machines.
 
 ### App Settings: Keyboard Shortcuts
 - Enabled: toggles shortcut processing.
@@ -821,48 +830,58 @@ Macro UI is included below along with the rest of the interface.
 - Clear Safety Button: clears the safety binding.
 - Stop joystick hold when app loses focus: ends held jog actions when focus leaves the window.
 - Live input state: read-only labels for current joystick/keyboard activity.
+- Recommendation: enable safety hold and stop-on-focus-loss when using a joystick.
 
-### App Settings: G-code View
-- Current line highlight (dropdown): selects whether Current highlights Processing or Sent lines.
+### App Settings: Viewer
+- Current line highlight (dropdown): selects whether Current highlights Processing (acked) or Sent (queued) lines.
+- 3D view streaming refresh (sec): minimum interval between 3D redraws while streaming (0.05 - 2.0).
+- Recommendation: increase the refresh interval if the 3D view stutters during streaming.
 
 ### App Settings: Interface
+- Start in fullscreen: opens the app in fullscreen on next launch.
 - Show "Resume From..." button: toggles the toolbar button.
 - Show "Recover" button: toggles the alarm recovery button.
 - Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
-- Performance toggle: batches console updates and reduces streaming log chatter.
+- Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
 - View Logs...: opens the log viewer with source/level filters and export.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
-- Quick buttons (Tips/3DR/Keys/ALO/Release): toggles each status-bar quick button.
-- Quick toggles (Tips/3DR/Keys/ALO): immediate action buttons to flip the corresponding feature.
+- Status bar quick buttons (Tips, 3D Render, Keys, Auto-Level Overlay, Release): toggles each status-bar quick button.
+- Status bar quick toggles (Tips, 3D Render, Keys, Auto-Level Overlay): immediate action buttons to flip the corresponding feature.
+- Recommendation: keep the indicators on and only hide quick buttons you never use.
 
 ### App Settings: Auto-Level Presets
-- Small max area: area threshold that selects the Small preset.
-- Large min area: area threshold that selects the Large preset.
+- Small max area: area threshold (mm^2) that selects the Small preset.
+- Large min area: area threshold (mm^2) that selects the Large preset.
 - Small/Large/Custom base spacing: base probe spacing for each preset.
-- Small/Large/Custom interpolation: interpolation method for each preset.
+- Small/Large/Custom interpolation: interpolation method for each preset (bilinear or bicubic).
+- Recommendation: decrease spacing for more accuracy, increase it for faster probing; Custom applies between the thresholds.
 
-### App Settings: 3D View
-- Streaming refresh (sec): minimum interval between 3D redraws while streaming.
-
-### Checklists Tab: Checklists
-- Checklist items: checkbox list loaded from checklist-*.chk files.
-
-### Checklists Tab: Diagnostics
+### App Settings: Diagnostics
 - Preflight check (Run check): scans the loaded job for bounds/validation warnings.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Validate streaming (large) G-code files: enables validation pass for large files.
 - Streaming line threshold: cleaned line count that forces streaming mode (0 disables).
+- Recommendation: keep streaming validation enabled if you rely on warnings; raise the threshold if you want more files to load in full mode.
 
-### Checklists Tab: Safety
+### App Settings: Safety
 - All Stop behavior (dropdown): selects ALL STOP mode (soft reset vs stop+reset).
 - Dry run sanitize: strips spindle/coolant/tool-change commands while streaming.
 - Suspend watchdog during homing: disables watchdog during $H.
 - Homing watchdog grace (seconds): delay before watchdog resumes after homing.
+- Recommendation: use Soft Reset for emergencies and Stop Stream + Reset when you want a gentler stop.
 
-### Checklists Tab: Safety Aids
+### App Settings: Safety Aids
 - Training Wheels: confirm top-bar actions.
 - Reconnect to last port on open: auto-connect on startup when possible.
+- Recommendation: keep Training Wheels on for new machines or operators.
+
+### App Settings: System (Linux only)
+- Shutdown: powers off the system after confirmation.
+- Reboot: reboots the system after confirmation.
+
+### Checklists Tab: Checklists
+- Checklist items: checkbox list loaded from checklist-*.chk files.
 
 ### Auto-Level Dialog: Settings Tab
 - Profile (dropdown): chooses Small/Large/Custom preset for spacing/interpolation.
@@ -938,7 +957,7 @@ Macro UI is included below along with the rest of the interface.
 - Throughput label: current transmit throughput.
 - Error dialog status: shows error dialog suppression state.
 - Endstops/Probe/Hold LEDs: reflect GRBL pin/status flags.
-- Tips/3DR/Keys/ALO/Release: quick buttons to toggle tips, 3D render, keybindings, auto-level overlay, and release checklist.
+- Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), Release: quick buttons to toggle tips, 3D rendering, keybindings, auto-level overlay, and the release checklist.
 
 ### Top View Tab
 - Toolpath canvas: read-only top view preview with job name, segment count, and optional Auto-Level overlay.

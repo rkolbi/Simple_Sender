@@ -182,6 +182,9 @@ CLEAR_ICON = "X"
 TOOLTIP_DELAY_MS = 1000
 """Default tooltip delay (ms)."""
 
+TOOLTIP_TIMEOUT_DEFAULT = 10.0
+"""Default tooltip display duration (seconds)."""
+
 STOP_SIGN_CUT_RATIO = 0.29289321881345254
 """Cut ratio for the stop-sign octagon geometry."""
 
@@ -219,6 +222,9 @@ JOYSTICK_HOLD_POLL_INTERVAL_MS = 20
 JOYSTICK_HOLD_MISS_LIMIT = 2
 """Number of missed polls before releasing a joystick hold."""
 
+JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER = 3.0
+"""Maximum multiple of the repeat interval used to compute hold jog distance."""
+
 
 def _is_raspberry_pi() -> bool:
     if not sys.platform.startswith("linux"):
@@ -249,6 +255,7 @@ if _is_raspberry_pi():
     JOYSTICK_POLL_INTERVAL_MS = 20
     JOYSTICK_HOLD_REPEAT_MS = 30
     JOYSTICK_HOLD_POLL_INTERVAL_MS = 10
+    JOYSTICK_HOLD_MISS_LIMIT = 5
 
 JOYSTICK_HOLD_DEFINITIONS = [
     ("X-", "jog_hold_x_minus", "X", -1),

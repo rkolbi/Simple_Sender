@@ -240,18 +240,19 @@ def on_ui_scale_change(app, _event=None):
 
 
 def toggle_performance(app):
-    current = bool(app.performance_mode.get())
-    new_val = not current
-    app.performance_mode.set(new_val)
-    try:
-        app.btn_performance_mode.config(
-            text="Performance: On" if new_val else "Performance: Off"
-        )
-    except Exception:
-        pass
+    app.performance_mode.set(not bool(app.performance_mode.get()))
+    on_performance_mode_change(app)
+
+
+def on_performance_mode_change(app):
+    new_val = bool(app.performance_mode.get())
     if not new_val:
         app.streaming_controller.flush_console()
     app._apply_status_poll_profile()
+    try:
+        app.status.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
+    except Exception:
+        pass
 
 
 def toggle_console_pos_status(app):

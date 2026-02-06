@@ -22,7 +22,11 @@
 
 from tkinter import ttk
 
-from simple_sender.utils.constants import CURRENT_LINE_CHOICES
+from simple_sender.utils.constants import (
+    CURRENT_LINE_CHOICES,
+    TOOLPATH_STREAMING_RENDER_INTERVAL_MAX,
+    TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
+)
 from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad, set_kb_id
 
 def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
@@ -79,11 +83,16 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
-    app.jog_feed_xy_entry = ttk.Entry(jog_frame, textvariable=app.jog_feed_xy, width=12)
-    app.jog_feed_xy_entry.grid(row=0, column=1, sticky="w", pady=4)
+    jog_xy_row = ttk.Frame(jog_frame)
+    jog_xy_row.grid(row=0, column=1, sticky="w", pady=4)
+    app.jog_feed_xy_entry = ttk.Entry(jog_xy_row, textvariable=app.jog_feed_xy, width=12)
+    app.jog_feed_xy_entry.pack(side="left")
     attach_numeric_keypad(app.jog_feed_xy_entry, allow_decimal=True)
     app.jog_feed_xy_entry.bind("<Return>", app._on_jog_feed_change_xy)
     app.jog_feed_xy_entry.bind("<FocusOut>", app._on_jog_feed_change_xy)
+    ttk.Label(jog_xy_row, text="Units: mm/min (in/min when in inches mode)").pack(
+        side="left", padx=(8, 0)
+    )
     ttk.Label(jog_frame, text="Default jog feed (Z)").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
@@ -92,9 +101,6 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     attach_numeric_keypad(app.jog_feed_z_entry, allow_decimal=True)
     app.jog_feed_z_entry.bind("<Return>", app._on_jog_feed_change_z)
     app.jog_feed_z_entry.bind("<FocusOut>", app._on_jog_feed_change_z)
-    ttk.Label(jog_frame, text="Units: mm/min (in/min when in inches mode)").grid(
-        row=0, column=2, sticky="w", padx=(8, 0), pady=4
-    )
     ttk.Label(
         jog_frame,
         text="Used by the jog buttons. Enter positive values.",
@@ -188,19 +194,25 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.joystick_device_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    joystick_btn_row = ttk.Frame(joystick_test_frame)
+    joystick_btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
     app.btn_refresh_joysticks = ttk.Button(
-        joystick_test_frame,
+        joystick_btn_row,
         text="Refresh joystick list",
         command=app._refresh_joystick_test_info,
     )
-    app.btn_refresh_joysticks.grid(row=2, column=0, sticky="w", pady=(6, 0))
+    app.btn_refresh_joysticks.pack(side="left")
+    apply_tooltip(
+        app.btn_refresh_joysticks,
+        "Rescan for connected joysticks (use after plugging in or swapping controllers).",
+    )
     app.btn_toggle_joystick_bindings = ttk.Button(
-        joystick_test_frame,
+        joystick_btn_row,
         text="Enable USB Joystick Bindings",
         command=app._toggle_joystick_bindings,
     )
     set_kb_id(app.btn_toggle_joystick_bindings, "toggle_joystick_bindings")
-    app.btn_toggle_joystick_bindings.grid(row=2, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+    app.btn_toggle_joystick_bindings.pack(side="left", padx=(8, 0))
     apply_tooltip(
         app.btn_toggle_joystick_bindings,
         "Enable or disable joystick shortcuts and capture new bindings from a USB joystick.",
@@ -231,18 +243,20 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.joystick_safety_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
+    joystick_safety_btn_row = ttk.Frame(joystick_test_frame)
+    joystick_safety_btn_row.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
     app.btn_set_joystick_safety = ttk.Button(
-        joystick_test_frame,
+        joystick_safety_btn_row,
         text="Set Safety Button",
         command=app._start_joystick_safety_capture,
     )
-    app.btn_set_joystick_safety.grid(row=6, column=0, sticky="w", pady=(6, 0))
+    app.btn_set_joystick_safety.pack(side="left")
     app.btn_clear_joystick_safety = ttk.Button(
-        joystick_test_frame,
+        joystick_safety_btn_row,
         text="Clear Safety Button",
         command=app._clear_joystick_safety_binding,
     )
-    app.btn_clear_joystick_safety.grid(row=6, column=1, sticky="e", padx=(6, 0), pady=(6, 0))
+    app.btn_clear_joystick_safety.pack(side="left", padx=(8, 0))
     apply_tooltip(app.btn_set_joystick_safety, "Capture a joystick button to use as a safety hold.")
     apply_tooltip(app.btn_clear_joystick_safety, "Clear the safety button binding.")
     app._refresh_joystick_safety_display()
@@ -278,8 +292,8 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
     return row + 1
 
 
-def build_gcode_view_section(app, parent: ttk.Frame, row: int) -> int:
-    view_frame = ttk.LabelFrame(parent, text="G-code view", padding=8)
+def build_viewer_section(app, parent: ttk.Frame, row: int) -> int:
+    view_frame = ttk.LabelFrame(parent, text="Viewer", padding=8)
     view_frame.grid(row=row, column=0, sticky="ew")
     view_frame.grid_columnconfigure(1, weight=1)
     ttk.Label(view_frame, text="Current line highlight").grid(
@@ -306,6 +320,35 @@ def build_gcode_view_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+    ttk.Separator(view_frame, orient="horizontal").grid(
+        row=2, column=0, columnspan=2, sticky="ew", pady=(8, 6)
+    )
+    ttk.Label(view_frame, text="3D view: streaming refresh (sec)").grid(
+        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    toolpath_interval_row = ttk.Frame(view_frame)
+    toolpath_interval_row.grid(row=3, column=1, sticky="w", pady=4)
+    app.toolpath_streaming_interval_entry = ttk.Entry(
+        toolpath_interval_row,
+        textvariable=app.toolpath_streaming_render_interval,
+        width=10,
+    )
+    app.toolpath_streaming_interval_entry.pack(side="left")
+    attach_numeric_keypad(app.toolpath_streaming_interval_entry, allow_decimal=True)
+    app.toolpath_streaming_interval_entry.bind(
+        "<Return>", app._apply_toolpath_streaming_render_interval
+    )
+    app.toolpath_streaming_interval_entry.bind(
+        "<FocusOut>", app._apply_toolpath_streaming_render_interval
+    )
+    ttk.Label(
+        toolpath_interval_row,
+        text=f"({TOOLPATH_STREAMING_RENDER_INTERVAL_MIN:g} - {TOOLPATH_STREAMING_RENDER_INTERVAL_MAX:g})",
+    ).pack(side="left", padx=(6, 0))
+    apply_tooltip(
+        app.toolpath_streaming_interval_entry,
+        "Minimum time between 3D redraws while streaming.",
+    )
     return row + 1
 
 

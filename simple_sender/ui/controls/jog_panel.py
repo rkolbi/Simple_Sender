@@ -483,7 +483,8 @@ def build_jog_panel(app, parent):
         if req > 0:
             align.grid_columnconfigure(9, minsize=req)
         try:
-            col_width = int(align.grid_bbox(9, 0)[2])
+            bbox = align.grid_bbox(9, 0)
+            col_width = int(bbox[2]) if bbox else 0
         except Exception:
             col_width = 0
         if col_width > 0:

@@ -31,6 +31,7 @@ from simple_sender.ui.app_exports import (
     install_dialog_loggers,
     on_error_dialogs_enabled_change,
     on_gui_logging_change,
+    on_performance_mode_change,
     on_quick_button_visibility_change,
     on_scrollbar_width_change,
     on_theme_change,
@@ -72,6 +73,9 @@ class UiTogglesMixin:
 
     def _on_gui_logging_change(self):
         on_gui_logging_change(self)
+
+    def _on_performance_mode_change(self):
+        on_performance_mode_change(self)
 
     def _on_theme_change(self, *_):
         on_theme_change(self)

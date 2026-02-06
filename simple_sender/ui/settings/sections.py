@@ -27,7 +27,7 @@ from .sections_advanced import (
     build_toolpath_settings_section,
 )
 from .sections_controls import (
-    build_gcode_view_section,
+    build_viewer_section,
     build_jogging_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
@@ -48,7 +48,7 @@ __all__ = [
     "build_diagnostics_section",
     "build_error_dialogs_section",
     "build_estimation_section",
-    "build_gcode_view_section",
+    "build_viewer_section",
     "build_interface_section",
     "build_jogging_section",
     "build_keyboard_shortcuts_section",

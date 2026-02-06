@@ -234,6 +234,10 @@ def handle_status_event(app, raw: str):
         else:
             if not getattr(app, "_macro_status_active", False):
                 app.machine_state.set(display_state)
+                try:
+                    app._ensure_state_label_width(display_state)
+                except Exception:
+                    pass
                 app._update_state_highlight(display_state)
         _maybe_restore_pending_g90(app)
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:

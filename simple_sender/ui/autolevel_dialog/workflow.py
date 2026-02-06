@@ -31,11 +31,13 @@ from typing import Any, cast
 from simple_sender.autolevel.height_map import HeightMap
 from simple_sender.autolevel.leveler import (
     LevelFileResult,
+    LevelResult,
     level_gcode_file,
     level_gcode_lines,
     write_gcode_lines,
 )
 from simple_sender.gcode_parser import clean_gcode_line, split_gcode_lines, split_gcode_lines_stream
+from simple_sender.gcode_parser_split import GcodeSplitResult, GcodeSplitStreamResult
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 
 from .calculations import _format_overlong_error, _log_split_result
@@ -53,12 +55,12 @@ def _apply_auto_level_to_path(
     header_lines: list[str] | None,
     streaming_mode: bool,
     log_fn: Callable[[str], None] | None = None,
-    level_gcode_lines_fn: Callable[..., Any] = level_gcode_lines,
-    level_gcode_file_fn: Callable[..., Any] = level_gcode_file,
-    write_gcode_lines_fn: Callable[..., Any] = write_gcode_lines,
-    split_gcode_lines_fn: Callable[..., Any] = split_gcode_lines,
-    split_gcode_lines_stream_fn: Callable[..., Any] = split_gcode_lines_stream,
-    clean_gcode_line_fn: Callable[..., Any] = clean_gcode_line,
+    level_gcode_lines_fn: Callable[..., LevelResult] = level_gcode_lines,
+    level_gcode_file_fn: Callable[..., LevelFileResult] = level_gcode_file,
+    write_gcode_lines_fn: Callable[..., LevelFileResult] = write_gcode_lines,
+    split_gcode_lines_fn: Callable[..., GcodeSplitResult] = split_gcode_lines,
+    split_gcode_lines_stream_fn: Callable[..., GcodeSplitStreamResult] = split_gcode_lines_stream,
+    clean_gcode_line_fn: Callable[..., str] = clean_gcode_line,
     tempfile_module: Any = tempfile,
 ) -> tuple[LevelFileResult, bool, str | None]:
     def _level_and_write(target_path: str) -> LevelFileResult:

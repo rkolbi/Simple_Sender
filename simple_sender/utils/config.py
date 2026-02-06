@@ -145,6 +145,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "toolpath_show_rapid": False,
     "toolpath_streaming_render_interval": 0.25,
     "tooltips_enabled": True,
+    "tooltip_timeout_sec": 10.0,
     "numeric_keypad_enabled": True,
     "training_wheels": True,
     "unit_mode": "mm",

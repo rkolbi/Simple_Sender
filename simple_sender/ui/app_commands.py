@@ -108,9 +108,14 @@ def toggle_connect(app):
         return
     if app.connected:
         app._user_disconnect = True
+        app._auto_reconnect_pending = False
+        app._auto_reconnect_retry = 0
+        app._auto_reconnect_next_ts = 0.0
+        app._auto_reconnect_blocked = True
         app._start_disconnect_worker()
         return
     app._user_disconnect = False
+    app._auto_reconnect_blocked = False
     port = app.current_port.get().strip()
     if not port:
         messagebox.showwarning("No port", "No serial port selected.")

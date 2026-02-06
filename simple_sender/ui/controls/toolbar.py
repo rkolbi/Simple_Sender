@@ -365,6 +365,11 @@ def build_toolbar(app):
         pass
     try:
         app._machine_state_max_chars = len("DISCONNECTED") + 2
+        app.machine_state_label.config(width=app._machine_state_max_chars)
+    except Exception:
+        pass
+    try:
+        app._ensure_state_label_width(app.machine_state.get())
     except Exception:
         pass
 

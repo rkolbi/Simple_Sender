@@ -105,6 +105,7 @@ def init_runtime_state(
     app._active_joystick_hold_binding = None
     app._joystick_hold_after_id = None
     app._joystick_hold_missed_polls = 0
+    app._joystick_hold_last_ts = None
     raw_safety = app.settings.get("joystick_safety_binding")
     app._joystick_safety_binding = dict(raw_safety) if isinstance(raw_safety, dict) else None
     app._joystick_safety_active = False
@@ -342,6 +343,7 @@ def init_runtime_state(
     app._auto_reconnect_delay = 3.0
     app._auto_reconnect_max_retry = 5
     app._auto_reconnect_next_ts = 0.0
+    app._auto_reconnect_blocked = False
     app._user_disconnect = False
     app._ui_throttle_ms = 100
     app._state_flash_after_id = None

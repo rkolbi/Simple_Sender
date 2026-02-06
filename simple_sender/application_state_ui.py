@@ -28,6 +28,7 @@ from simple_sender.ui.app_exports import (
     apply_state_fg,
     build_led_panel,
     cancel_state_flash,
+    ensure_state_label_width,
     on_autolevel_overlay_change,
     on_led_visibility_change,
     set_led_state,
@@ -73,6 +74,9 @@ class StateUiMixin:
 
     def _start_state_flash(self, color: str):
         start_state_flash(self, color)
+
+    def _ensure_state_label_width(self, text: str | None):
+        ensure_state_label_width(self, text)
 
     def _update_state_highlight(self, state: str | None):
         update_state_highlight(self, state)

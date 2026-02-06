@@ -35,6 +35,33 @@ def apply_state_fg(app, color: str | None, fg: str | None = None):
         pass
 
 
+def ensure_state_label_width(app, text: str | None) -> None:
+    lbl = getattr(app, "machine_state_label", None)
+    if not lbl:
+        return
+    text = str(text or "")
+    if not text:
+        return
+    try:
+        current = int(getattr(app, "_machine_state_max_chars", 0) or 0)
+    except Exception:
+        current = 0
+    needed = len(text)
+    width = current if current > 0 else needed
+    if needed > width:
+        width = needed
+        try:
+            app._machine_state_max_chars = width
+        except Exception:
+            pass
+    if width <= 0:
+        return
+    try:
+        lbl.config(width=width)
+    except tk.TclError:
+        pass
+
+
 def cancel_state_flash(app):
     if app._state_flash_after_id:
         try:

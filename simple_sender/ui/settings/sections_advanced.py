@@ -100,16 +100,51 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.auto_level_enabled_check,
         "Show Auto-Level in the toolbar after a job loads (disable to keep it hidden).",
     )
-    perf_btn_frame = ttk.Frame(interface_frame)
-    perf_btn_frame.grid(row=4, column=0, sticky="w", pady=(6, 0))
+    perf_row = ttk.Frame(interface_frame)
+    perf_row.grid(row=4, column=0, sticky="w", pady=(6, 0))
+    ttk.Label(perf_row, text="Performance mode (batch console updates)").pack(side="left")
+
+    def _refresh_performance_button() -> None:
+        try:
+            enabled = bool(app.performance_mode.get())
+        except Exception:
+            enabled = False
+        try:
+            app.btn_performance_mode.config(text=f"Performance: {'On' if enabled else 'Off'}")
+        except Exception:
+            pass
+
+    def _toggle_performance_mode() -> None:
+        before = False
+        try:
+            before = bool(app.performance_mode.get())
+        except Exception:
+            before = False
+        handler = getattr(app, "_toggle_performance", None)
+        if callable(handler):
+            handler()
+        else:
+            try:
+                app.performance_mode.set(not before)
+            except Exception:
+                pass
+            on_change = getattr(app, "_on_performance_mode_change", None)
+            if callable(on_change):
+                on_change()
+        _refresh_performance_button()
+
     app.btn_performance_mode = ttk.Button(
-        perf_btn_frame,
-        text="Performance: On" if app.performance_mode.get() else "Performance: Off",
-        command=app._toggle_performance,
+        perf_row,
+        text="Performance: Off",
+        command=_toggle_performance_mode,
     )
-    set_kb_id(app.btn_performance_mode, "toggle_performance")
-    app.btn_performance_mode.pack(side="left")
-    apply_tooltip(app.btn_performance_mode, "Enable performance mode (batch console updates).")
+    app.btn_performance_mode.pack(side="left", padx=(8, 0))
+    apply_tooltip(app.btn_performance_mode, "Toggle performance mode (batch console updates).")
+    _refresh_performance_button()
+    try:
+        app.performance_mode.trace_add("write", lambda *_args: _refresh_performance_button())
+    except Exception:
+        pass
 
     app.logging_check = ttk.Checkbutton(
         interface_frame,
@@ -170,8 +205,8 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     app.hold_indicator_check.pack(side="left", padx=(12, 0))
     apply_tooltip(app.hold_indicator_check, "Show or hide the Hold status indicator.")
 
-    quick_buttons_label = ttk.Label(interface_frame, text="Quick buttons (status bar)")
-    quick_buttons_label.grid(row=9, column=0, sticky="w", pady=(10, 0))
+    status_bar_label = ttk.Label(interface_frame, text="Status bar")
+    status_bar_label.grid(row=9, column=0, sticky="w", pady=(10, 0))
     quick_buttons_row = ttk.Frame(interface_frame)
     quick_buttons_row.grid(row=10, column=0, sticky="w", pady=(2, 0))
     app.quick_tips_check = ttk.Checkbutton(
@@ -189,7 +224,10 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         command=app._on_quick_button_visibility_change,
     )
     app.quick_3d_check.pack(side="left", padx=(12, 0))
-    apply_tooltip(app.quick_3d_check, "Show or hide the 3DR quick button in the status bar.")
+    apply_tooltip(
+        app.quick_3d_check,
+        "Show or hide the 3D Render quick button in the status bar.",
+    )
     app.quick_keys_check = ttk.Checkbutton(
         quick_buttons_row,
         text="Keys",
@@ -207,7 +245,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     app.quick_alo_check.pack(side="left", padx=(12, 0))
     apply_tooltip(
         app.quick_alo_check,
-        "Show or hide the ALO quick button in the status bar.",
+        "Show or hide the Auto-Level Overlay quick button in the status bar.",
     )
     app.quick_release_check = ttk.Checkbutton(
         quick_buttons_row,
@@ -221,8 +259,10 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         "Show or hide the Release checklist quick button in the status bar.",
     )
 
+    quick_toggle_label = ttk.Label(interface_frame, text="Status bar quick toggles")
+    quick_toggle_label.grid(row=11, column=0, sticky="w", pady=(6, 0))
     toggle_btn_row = ttk.Frame(interface_frame)
-    toggle_btn_row.grid(row=11, column=0, sticky="w", pady=(10, 0))
+    toggle_btn_row.grid(row=12, column=0, sticky="w", pady=(2, 0))
     app.btn_toggle_tips_settings = ttk.Button(
         toggle_btn_row,
         text="Tips",
@@ -230,7 +270,10 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     set_kb_id(app.btn_toggle_tips_settings, "toggle_tooltips_settings")
     app.btn_toggle_tips_settings.pack(side="left")
-    apply_tooltip(app.btn_toggle_tips_settings, "Toggle tool tips.")
+    apply_tooltip(
+        app.btn_toggle_tips_settings,
+        "Toggle tooltips on/off (same as the Tips quick button).",
+    )
     app.btn_toggle_3d_settings = ttk.Button(
         toggle_btn_row,
         text="3DR",
@@ -238,7 +281,10 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     set_kb_id(app.btn_toggle_3d_settings, "toggle_render_3d_settings")
     app.btn_toggle_3d_settings.pack(side="left", padx=(8, 0))
-    apply_tooltip(app.btn_toggle_3d_settings, "Toggle 3D toolpath rendering.")
+    apply_tooltip(
+        app.btn_toggle_3d_settings,
+        "Toggle the 3D render preview (same as the 3D Render quick button).",
+    )
     app.btn_toggle_keybinds_settings = ttk.Button(
         toggle_btn_row,
         text="Keys",
@@ -246,7 +292,10 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     set_kb_id(app.btn_toggle_keybinds_settings, "toggle_keybindings_settings")
     app.btn_toggle_keybinds_settings.pack(side="left", padx=(8, 0))
-    apply_tooltip(app.btn_toggle_keybinds_settings, "Toggle keyboard shortcuts.")
+    apply_tooltip(
+        app.btn_toggle_keybinds_settings,
+        "Toggle keyboard shortcuts on/off (same as the Keys quick button).",
+    )
     app.btn_toggle_autolevel_overlay_settings = ttk.Button(
         toggle_btn_row,
         text="ALO",
@@ -256,7 +305,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     app.btn_toggle_autolevel_overlay_settings.pack(side="left", padx=(8, 0))
     apply_tooltip(
         app.btn_toggle_autolevel_overlay_settings,
-        "Toggle auto-level overlay in the toolpath views.",
+        "Toggle the Auto-Level overlay in the toolpath views (same as the Auto-Level Overlay quick button).",
     )
     return row + 1
 
@@ -370,17 +419,21 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
         "Min job area (mm^2) that uses the Large preset.",
     )
     ttk.Label(auto_level_frame, text="Preset").grid(row=3, column=0, sticky="w", pady=(8, 2))
-    ttk.Label(auto_level_frame, text="Base spacing (mm)").grid(row=3, column=1, sticky="w", pady=(8, 2))
-    ttk.Label(auto_level_frame, text="Interpolation").grid(row=3, column=2, sticky="w", pady=(8, 2))
+    preset_header = ttk.Frame(auto_level_frame)
+    preset_header.grid(row=3, column=1, sticky="w", pady=(8, 2))
+    ttk.Label(preset_header, text="Base spacing (mm)").pack(side="left")
+    ttk.Label(preset_header, text="Interpolation").pack(side="left", padx=(18, 0))
 
     ttk.Label(auto_level_frame, text="Small").grid(row=4, column=0, sticky="w", pady=2)
-    small_spacing_entry = ttk.Entry(auto_level_frame, textvariable=small_spacing_var, width=12)
-    small_spacing_entry.grid(row=4, column=1, sticky="w", pady=2)
+    small_row = ttk.Frame(auto_level_frame)
+    small_row.grid(row=4, column=1, sticky="w", pady=2)
+    small_spacing_entry = ttk.Entry(small_row, textvariable=small_spacing_var, width=12)
+    small_spacing_entry.pack(side="left")
     attach_numeric_keypad(small_spacing_entry, allow_decimal=True)
     small_interp_combo = ttk.Combobox(
-        auto_level_frame, textvariable=small_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
+        small_row, textvariable=small_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
-    small_interp_combo.grid(row=4, column=2, sticky="w", pady=2)
+    small_interp_combo.pack(side="left", padx=(12, 0))
     apply_tooltip(
         small_spacing_entry,
         "Base spacing used for Small jobs before adaptive scaling.",
@@ -391,13 +444,15 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
 
     ttk.Label(auto_level_frame, text="Large").grid(row=5, column=0, sticky="w", pady=2)
-    large_spacing_entry = ttk.Entry(auto_level_frame, textvariable=large_spacing_var, width=12)
-    large_spacing_entry.grid(row=5, column=1, sticky="w", pady=2)
+    large_row = ttk.Frame(auto_level_frame)
+    large_row.grid(row=5, column=1, sticky="w", pady=2)
+    large_spacing_entry = ttk.Entry(large_row, textvariable=large_spacing_var, width=12)
+    large_spacing_entry.pack(side="left")
     attach_numeric_keypad(large_spacing_entry, allow_decimal=True)
     large_interp_combo = ttk.Combobox(
-        auto_level_frame, textvariable=large_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
+        large_row, textvariable=large_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
-    large_interp_combo.grid(row=5, column=2, sticky="w", pady=2)
+    large_interp_combo.pack(side="left", padx=(12, 0))
     apply_tooltip(
         large_spacing_entry,
         "Base spacing used for Large jobs before adaptive scaling.",
@@ -408,13 +463,15 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
 
     ttk.Label(auto_level_frame, text="Custom").grid(row=6, column=0, sticky="w", pady=2)
-    custom_spacing_entry = ttk.Entry(auto_level_frame, textvariable=custom_spacing_var, width=12)
-    custom_spacing_entry.grid(row=6, column=1, sticky="w", pady=2)
+    custom_row = ttk.Frame(auto_level_frame)
+    custom_row.grid(row=6, column=1, sticky="w", pady=2)
+    custom_spacing_entry = ttk.Entry(custom_row, textvariable=custom_spacing_var, width=12)
+    custom_spacing_entry.pack(side="left")
     attach_numeric_keypad(custom_spacing_entry, allow_decimal=True)
     custom_interp_combo = ttk.Combobox(
-        auto_level_frame, textvariable=custom_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
+        custom_row, textvariable=custom_interp_var, values=("bilinear", "bicubic"), state="readonly", width=10
     )
-    custom_interp_combo.grid(row=6, column=2, sticky="w", pady=2)
+    custom_interp_combo.pack(side="left", padx=(12, 0))
     apply_tooltip(
         custom_spacing_entry,
         "Base spacing used for Custom jobs before adaptive scaling.",
@@ -452,12 +509,14 @@ def build_toolpath_settings_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(toolpath_settings, text="Streaming refresh (sec)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    toolpath_interval_row = ttk.Frame(toolpath_settings)
+    toolpath_interval_row.grid(row=0, column=1, sticky="w", pady=4)
     app.toolpath_streaming_interval_entry = ttk.Entry(
-        toolpath_settings,
+        toolpath_interval_row,
         textvariable=app.toolpath_streaming_render_interval,
         width=10,
     )
-    app.toolpath_streaming_interval_entry.grid(row=0, column=1, sticky="w", pady=4)
+    app.toolpath_streaming_interval_entry.pack(side="left")
     attach_numeric_keypad(app.toolpath_streaming_interval_entry, allow_decimal=True)
     app.toolpath_streaming_interval_entry.bind(
         "<Return>", app._apply_toolpath_streaming_render_interval
@@ -466,11 +525,9 @@ def build_toolpath_settings_section(app, parent: ttk.Frame, row: int) -> int:
         "<FocusOut>", app._apply_toolpath_streaming_render_interval
     )
     ttk.Label(
-        toolpath_settings,
+        toolpath_interval_row,
         text=f"({TOOLPATH_STREAMING_RENDER_INTERVAL_MIN:g} - {TOOLPATH_STREAMING_RENDER_INTERVAL_MAX:g})",
-    ).grid(
-        row=0, column=2, sticky="w", padx=(6, 0), pady=4
-    )
+    ).pack(side="left", padx=(6, 0))
     apply_tooltip(
         app.toolpath_streaming_interval_entry,
         "Minimum time between 3D redraws while streaming.",

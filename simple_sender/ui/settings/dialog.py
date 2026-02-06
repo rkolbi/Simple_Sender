@@ -25,17 +25,19 @@ from tkinter import ttk
 
 from .sections import (
     build_auto_level_section,
+    build_diagnostics_section,
     build_error_dialogs_section,
     build_estimation_section,
-    build_gcode_view_section,
     build_interface_section,
     build_jogging_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
     build_power_section,
+    build_safety_aids_section,
+    build_safety_section,
     build_status_polling_section,
     build_theme_section,
-    build_toolpath_settings_section,
+    build_viewer_section,
     build_zeroing_section,
 )
 
@@ -76,20 +78,27 @@ def build_app_settings_tab(app, notebook):
     version_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
     next_row = 1
+    next_row = build_interface_section(app, app._app_settings_inner, next_row)
     next_row = build_theme_section(app, app._app_settings_inner, next_row)
+    next_row = build_viewer_section(app, app._app_settings_inner, next_row)
+
+    next_row += 1
+    next_row = build_jogging_section(app, app._app_settings_inner, next_row)
+    next_row = build_zeroing_section(app, app._app_settings_inner, next_row)
+    next_row = build_keyboard_shortcuts_section(app, app._app_settings_inner, next_row)
+    next_row = build_macros_section(app, app._app_settings_inner, next_row)
+
+    next_row += 1
     next_row = build_estimation_section(app, app._app_settings_inner, next_row)
+    next_row = build_auto_level_section(app, app._app_settings_inner, next_row)
+    next_row = build_diagnostics_section(app, app._app_settings_inner, next_row)
+
+    next_row += 1
+    next_row = build_safety_section(app, app._app_settings_inner, next_row)
+    next_row = build_safety_aids_section(app, app._app_settings_inner, next_row)
     next_row = build_status_polling_section(app, app._app_settings_inner, next_row)
     next_row = build_error_dialogs_section(app, app._app_settings_inner, next_row)
 
-    next_row = build_macros_section(app, app._app_settings_inner, next_row)
-    next_row = build_zeroing_section(app, app._app_settings_inner, next_row)
-    next_row = build_jogging_section(app, app._app_settings_inner, next_row)
-    next_row = build_keyboard_shortcuts_section(app, app._app_settings_inner, next_row)
-    next_row = build_gcode_view_section(app, app._app_settings_inner, next_row)
-
     next_row += 1
-    next_row = build_interface_section(app, app._app_settings_inner, next_row)
-    next_row = build_auto_level_section(app, app._app_settings_inner, next_row)
-    next_row = build_toolpath_settings_section(app, app._app_settings_inner, next_row)
     build_power_section(app, app._app_settings_inner, next_row)
 

@@ -25,7 +25,7 @@ from tkinter import ttk
 from typing import Any, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
-from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS
+from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
 
 class ToolTip:
     def __init__(self, widget, text: str, delay_ms: int = TOOLTIP_DELAY_MS):
@@ -34,6 +34,7 @@ class ToolTip:
         self._tip: tk.Toplevel | None = None
         self.delay_ms = delay_ms
         self._after_id: Any | None = None
+        self._timeout_after_id: Any | None = None
         widget.bind("<Enter>", self._schedule_show)
         widget.bind("<Leave>", self._hide)
 
@@ -81,13 +82,42 @@ class ToolTip:
                 padding=(6, 3),
             )
             label.pack()
+            self._schedule_timeout()
         except tk.TclError:
             self._tip = None
+
+    def _schedule_timeout(self):
+        if self._timeout_after_id is not None:
+            try:
+                self.widget.after_cancel(self._timeout_after_id)
+            except Exception:
+                pass
+            self._timeout_after_id = None
+        owner = _resolve_owner(self.widget, "tooltip_timeout_sec")
+        try:
+            duration = float(owner.tooltip_timeout_sec.get()) if owner is not None else TOOLTIP_TIMEOUT_DEFAULT
+        except Exception:
+            duration = TOOLTIP_TIMEOUT_DEFAULT
+        if duration <= 0:
+            return
+        try:
+            self._timeout_after_id = self.widget.after(
+                int(duration * 1000),
+                self._hide,
+            )
+        except Exception:
+            self._timeout_after_id = None
 
     def _hide(self, _event=None):
         if self._after_id is not None:
             self.widget.after_cancel(self._after_id)
             self._after_id = None
+        if self._timeout_after_id is not None:
+            try:
+                self.widget.after_cancel(self._timeout_after_id)
+            except Exception:
+                pass
+            self._timeout_after_id = None
         if self._tip is not None:
             self._tip.destroy()
             self._tip = None

@@ -31,13 +31,13 @@ from simple_sender.ui.dialogs.diagnostics import export_session_diagnostics, ope
 from simple_sender.ui.dialogs.popup_utils import patch_messagebox, set_default_parent
 from simple_sender.ui.gcode.loading import ensure_gcode_loading_popup, finish_gcode_loading, hide_gcode_loading, set_gcode_loading_indeterminate, set_gcode_loading_progress, show_gcode_loading
 from simple_sender.ui.settings import bind_app_settings_mousewheel, bind_app_settings_touch_scroll, on_app_settings_mousewheel, on_app_settings_touch_end, on_app_settings_touch_move, on_app_settings_touch_start, unbind_app_settings_mousewheel, unbind_app_settings_touch_scroll, update_app_settings_scrollregion
-from simple_sender.ui.status.state_flash import apply_state_fg, cancel_state_flash, start_state_flash, toggle_state_flash, update_state_highlight
+from simple_sender.ui.status.state_flash import apply_state_fg, cancel_state_flash, ensure_state_label_width, start_state_flash, toggle_state_flash, update_state_highlight
 from simple_sender.ui.status.bar import on_quick_button_visibility_change, update_quick_button_visibility
 from simple_sender.ui.toggle_text import refresh_autolevel_overlay_toggle_text, refresh_keybindings_toggle_text, refresh_render_3d_toggle_text, refresh_tooltips_toggle_text
 from simple_sender.ui.theme_helpers import apply_theme, refresh_stop_button_backgrounds
 from simple_sender.ui.toolpath.toolpath_settings import apply_toolpath_arc_detail, apply_toolpath_draw_limits, apply_toolpath_performance, apply_toolpath_streaming_render_interval, clamp_arc_detail, clamp_toolpath_performance, clamp_toolpath_streaming_render_interval, init_toolpath_settings, load_3d_view, on_arc_detail_scale_key_release, on_arc_detail_scale_move, on_toolpath_lightweight_change, on_toolpath_performance_key_release, on_toolpath_performance_move, run_toolpath_arc_detail_reparse, save_3d_view, schedule_toolpath_arc_detail_reparse, toggle_render_3d, toolpath_limit_value, toolpath_perf_values
 from simple_sender.ui.dialogs.error_dialogs_ui import apply_error_dialog_settings, install_dialog_loggers, on_error_dialogs_enabled_change, reset_error_dialog_state, set_error_dialog_status, should_show_error_dialog, toggle_error_dialogs
-from simple_sender.ui.ui_actions import apply_scrollbar_width, apply_ui_scale, confirm_and_run, on_autolevel_overlay_change, on_gui_logging_change, on_scrollbar_width_change, on_theme_change, on_ui_scale_change, require_grbl_connection, run_if_connected, send_manual, start_homing, toggle_autolevel_overlay, toggle_console_pos_status, toggle_performance, toggle_tooltips, toggle_unit_mode
+from simple_sender.ui.ui_actions import apply_scrollbar_width, apply_ui_scale, confirm_and_run, on_autolevel_overlay_change, on_gui_logging_change, on_performance_mode_change, on_scrollbar_width_change, on_theme_change, on_ui_scale_change, require_grbl_connection, run_if_connected, send_manual, start_homing, toggle_autolevel_overlay, toggle_console_pos_status, toggle_performance, toggle_tooltips, toggle_unit_mode
 from simple_sender.ui.app_commands import open_gcode, pause_job, refresh_ports, resume_job, run_job, start_connect_worker, start_disconnect_worker, stop_job, toggle_connect
 from simple_sender.ui.app_init import init_basic_preferences, init_runtime_state, init_settings_store
 from simple_sender.ui.app_lifecycle import log_exception, on_close, tk_report_callback_exception
@@ -108,6 +108,7 @@ __all__ = [
     'update_app_settings_scrollregion',
     'apply_state_fg',
     'cancel_state_flash',
+    'ensure_state_label_width',
     'start_state_flash',
     'toggle_state_flash',
     'update_state_highlight',
@@ -153,6 +154,7 @@ __all__ = [
     'confirm_and_run',
     'on_autolevel_overlay_change',
     'on_gui_logging_change',
+    'on_performance_mode_change',
     'on_theme_change',
     'apply_scrollbar_width',
     'apply_ui_scale',

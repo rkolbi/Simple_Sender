@@ -152,6 +152,10 @@ class UiEventsMixin:
             app._macro_status_scroll_index += 1
         try:
             app.machine_state.set(display)
+            try:
+                app._ensure_state_label_width(display)
+            except Exception:
+                pass
         except Exception:
             pass
         app._macro_status_after_id = app.after(200, self._update_macro_status_display)
@@ -169,6 +173,10 @@ class UiEventsMixin:
                 pass
         app._macro_status_after_id = None
         app.machine_state.set(app._machine_state_text)
+        try:
+            app._ensure_state_label_width(app._machine_state_text)
+        except Exception:
+            pass
         app._update_state_highlight(app._machine_state_text)
 
     def _on_resume_button_visibility_change(self):

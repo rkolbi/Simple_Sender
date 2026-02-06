@@ -40,6 +40,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._auto_reconnect_retry = 0
         app._auto_reconnect_delay = 3.0
         app._auto_reconnect_next_ts = 0.0
+        app._auto_reconnect_blocked = False
         app._report_units = None
         try:
             app._update_unit_toggle_display()
@@ -54,6 +55,10 @@ def handle_connection_event(app, is_on: bool, port):
         app._status_seen = False
         app.machine_state.set(f"CONNECTED ({port})")
         app._machine_state_text = f"CONNECTED ({port})"
+        try:
+            app._ensure_state_label_width(app._machine_state_text)
+        except Exception:
+            pass
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text=f"Connected: {port} (waiting for Grbl)")
         app.btn_stop.config(state="normal")
@@ -89,6 +94,10 @@ def handle_connection_event(app, is_on: bool, port):
             pass
         app.machine_state.set("DISCONNECTED")
         app._machine_state_text = "DISCONNECTED"
+        try:
+            app._ensure_state_label_width(app._machine_state_text)
+        except Exception:
+            pass
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text="Disconnected")
         disable_job_controls(app)
@@ -107,6 +116,7 @@ def handle_connection_event(app, is_on: bool, port):
             app._auto_reconnect_pending = False
             app._auto_reconnect_retry = 0
             app._auto_reconnect_next_ts = 0.0
+            app._auto_reconnect_blocked = True
         if not app._user_disconnect:
             app._auto_reconnect_pending = True
             app._auto_reconnect_retry = 0
@@ -171,6 +181,8 @@ def maybe_auto_reconnect(app):
     if app.connected or app._closing or (not app._auto_reconnect_pending):
         return
     if getattr(app, "_user_disconnect", False):
+        return
+    if getattr(app, "_auto_reconnect_blocked", False):
         return
     if app._connecting:
         return

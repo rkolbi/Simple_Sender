@@ -89,6 +89,22 @@ def save_settings(app):
         logger.exception("Failed to create settings directory: %s", exc)
 
     pos_status_enabled = bool(app.console_positions_enabled.get())
+    tooltip_timeout_var = getattr(app, "tooltip_timeout_sec", None)
+    if tooltip_timeout_var is None:
+        tooltip_timeout_value = app.settings.get(
+            "tooltip_timeout_sec",
+            DEFAULT_SETTINGS.get("tooltip_timeout_sec", 10.0),
+        )
+    else:
+        tooltip_timeout_value = safe_float(
+            tooltip_timeout_var,
+            app.settings.get(
+                "tooltip_timeout_sec",
+                DEFAULT_SETTINGS.get("tooltip_timeout_sec", 10.0),
+            ),
+            "tooltip timeout",
+        )
+    tooltip_timeout_value = max(0.0, float(tooltip_timeout_value))
 
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
@@ -129,6 +145,7 @@ def save_settings(app):
         "last_gcode_dir": app.settings.get("last_gcode_dir", ""),
         "window_geometry": app.geometry(),
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
+        "tooltip_timeout_sec": tooltip_timeout_value,
         "numeric_keypad_enabled": bool(
             app.numeric_keypad_enabled.get()
             if hasattr(app, "numeric_keypad_enabled")

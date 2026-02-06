@@ -34,6 +34,7 @@ def init_basic_preferences(app, app_version: str, module):
         return app.settings.get(key, DEFAULT_SETTINGS.get(key, fallback))
 
     app.tooltip_enabled = tk.BooleanVar(value=setting("tooltips_enabled", True))
+    app.tooltip_timeout_sec = tk.DoubleVar(value=setting("tooltip_timeout_sec", 10.0))
     app.numeric_keypad_enabled = tk.BooleanVar(
         value=setting("numeric_keypad_enabled", True)
     )

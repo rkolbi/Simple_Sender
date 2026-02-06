@@ -26,6 +26,10 @@ from __future__ import annotations
 
 import logging
 import traceback
+import threading
+from typing import Any, TYPE_CHECKING
+
+from simple_sender.types import GrblWorkerState
 
 from .utils.constants import (
     BAUD_DEFAULT,
@@ -66,8 +70,20 @@ def _serial_timeout_exception_type():
     return getattr(grbl_worker.serial, "SerialTimeoutException", Exception)
 
 
-class GrblWorkerConnectionMixin:
+class GrblWorkerConnectionMixin(GrblWorkerState):
     """Connection lifecycle support for GRBL worker."""
+    ser: Any | None
+    _rx_thread: threading.Thread | None
+    _tx_thread: threading.Thread | None
+    _status_thread: threading.Thread | None
+    _stop_evt: threading.Event
+    _last_buffer_emit: tuple[int, int, int] | None
+    _last_buffer_emit_ts: float
+    _connect_started_ts: float
+    if TYPE_CHECKING:
+        def _rx_loop(self, stop_evt: threading.Event) -> None: ...
+        def _tx_loop(self, stop_evt: threading.Event) -> None: ...
+        def _status_loop(self, stop_evt: threading.Event) -> None: ...
 
     def list_ports(self) -> list[str]:
         """Get list of available serial ports.

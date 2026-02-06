@@ -309,6 +309,7 @@ class App(
     macro_executor: "MacroExecutor"
     settings: dict[str, Any]
     reconnect_on_open: tk.BooleanVar
+    fullscreen_on_startup: tk.BooleanVar
     stop_hold_on_focus_loss: tk.BooleanVar
     validate_streaming_gcode: tk.BooleanVar
     streaming_controller: Any

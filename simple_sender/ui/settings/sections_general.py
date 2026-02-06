@@ -95,6 +95,10 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.scrollbar_width = tk.StringVar(master=parent, value="wide")
     if not hasattr(app, "numeric_keypad_enabled"):
         app.numeric_keypad_enabled = tk.BooleanVar(master=parent, value=True)
+    if not hasattr(app, "tooltip_enabled"):
+        app.tooltip_enabled = tk.BooleanVar(master=parent, value=True)
+    if not hasattr(app, "tooltip_timeout_sec"):
+        app.tooltip_timeout_sec = tk.DoubleVar(master=parent, value=10.0)
     ttk.Label(theme_frame, text="UI theme").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
     app.theme_combo = ttk.Combobox(
         theme_frame,
@@ -111,27 +115,23 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         "Pick a ttk theme; some themes require a restart for best results.",
     )
     ttk.Label(theme_frame, text="UI scale").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
-    app.ui_scale_entry = ttk.Entry(theme_frame, textvariable=app.ui_scale, width=10)
-    app.ui_scale_entry.grid(row=1, column=1, sticky="w", pady=4)
+    ui_scale_row = ttk.Frame(theme_frame)
+    ui_scale_row.grid(row=1, column=1, sticky="w", pady=4)
+    app.ui_scale_entry = ttk.Entry(ui_scale_row, textvariable=app.ui_scale, width=10)
+    app.ui_scale_entry.pack(side="left")
     attach_numeric_keypad(app.ui_scale_entry, allow_decimal=True)
-    ttk.Label(theme_frame, text="(0.5 - 3.0)").grid(row=1, column=2, sticky="w", padx=(6, 0), pady=4)
+    ttk.Label(ui_scale_row, text="(0.5 - 3.0)").pack(side="left", padx=(6, 0))
     on_ui_scale_change = getattr(app, "_on_ui_scale_change", lambda *_args, **_kwargs: None)
     app.ui_scale_entry.bind("<Return>", on_ui_scale_change)
     app.ui_scale_entry.bind("<FocusOut>", on_ui_scale_change)
-    app.ui_scale_apply_btn = ttk.Button(theme_frame, text="Apply", command=on_ui_scale_change)
-    app.ui_scale_apply_btn.grid(row=1, column=3, sticky="w", padx=(8, 0), pady=4)
+    app.ui_scale_apply_btn = ttk.Button(ui_scale_row, text="Apply", command=on_ui_scale_change)
+    app.ui_scale_apply_btn.pack(side="left", padx=(8, 0))
     def _apply_scale_preset(value: float) -> None:
         try:
             app.ui_scale.set(value)
         except Exception:
             pass
         on_ui_scale_change()
-    app.ui_scale_apple_btn = ttk.Button(
-        theme_frame,
-        text="Apple 2.0x",
-        command=lambda: _apply_scale_preset(2.0),
-    )
-    app.ui_scale_apple_btn.grid(row=1, column=4, sticky="w", padx=(8, 0), pady=4)
     apply_tooltip(
         app.ui_scale_entry,
         "Scale the UI; changes apply immediately.",
@@ -139,10 +139,6 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     apply_tooltip(
         app.ui_scale_apply_btn,
         "Apply the UI scale immediately.",
-    )
-    apply_tooltip(
-        app.ui_scale_apple_btn,
-        "Set the UI scale to 2.0x and apply it.",
     )
     ttk.Label(theme_frame, text="Scrollbar width").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
     app.scrollbar_width_combo = ttk.Combobox(
@@ -163,12 +159,61 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.scrollbar_width_combo,
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
+    def _sync_tooltip_timeout_state() -> None:
+        try:
+            enabled = bool(app.tooltip_enabled.get())
+        except Exception:
+            enabled = True
+        state = "normal" if enabled else "disabled"
+        try:
+            app.tooltip_timeout_entry.configure(state=state)
+        except Exception:
+            pass
+
+    def _on_tooltip_setting_change() -> None:
+        refresh_tooltips = getattr(app, "_refresh_tooltips_toggle_text", None)
+        if callable(refresh_tooltips):
+            refresh_tooltips()
+        _sync_tooltip_timeout_state()
+
+    app.tooltips_enabled_check = ttk.Checkbutton(
+        theme_frame,
+        text="Enable tooltips",
+        variable=app.tooltip_enabled,
+        command=_on_tooltip_setting_change,
+    )
+    app.tooltips_enabled_check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    apply_tooltip(
+        app.tooltips_enabled_check,
+        "Show tooltips on hover (disabled controls include the reason).",
+    )
+    try:
+        app.tooltip_enabled.trace_add("write", lambda *_args: _sync_tooltip_timeout_state())
+    except Exception:
+        pass
+
+    ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
+        row=4, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    tooltip_timeout_row = ttk.Frame(theme_frame)
+    tooltip_timeout_row.grid(row=4, column=1, sticky="w", pady=4)
+    app.tooltip_timeout_entry = ttk.Entry(
+        tooltip_timeout_row, textvariable=app.tooltip_timeout_sec, width=10
+    )
+    app.tooltip_timeout_entry.pack(side="left")
+    attach_numeric_keypad(app.tooltip_timeout_entry, allow_decimal=True)
+    ttk.Label(tooltip_timeout_row, text="(0 = no auto-hide)").pack(side="left", padx=(6, 0))
+    apply_tooltip(
+        app.tooltip_timeout_entry,
+        "How long tooltips stay visible before hiding automatically (0 keeps them open).",
+    )
+    _sync_tooltip_timeout_state()
     app.numeric_keypad_check = ttk.Checkbutton(
         theme_frame,
         text="Enable numeric keypad popups",
         variable=app.numeric_keypad_enabled,
     )
-    app.numeric_keypad_check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.numeric_keypad_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.numeric_keypad_check,
         "Show the touch keypad when tapping numeric fields.",
@@ -189,7 +234,10 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.all_stop_combo.grid(row=0, column=1, sticky="w", pady=4)
     app.all_stop_combo.bind("<<ComboboxSelected>>", app._on_all_stop_mode_change)
-    apply_tooltip(app.all_stop_combo, "Select how the ALL STOP button behaves.")
+    apply_tooltip(
+        app.all_stop_combo,
+        "Select how ALL STOP behaves: Soft Reset (Ctrl-X) immediately resets, Stop Stream + Reset halts sending first.",
+    )
     app._sync_all_stop_mode_combo()
     app.all_stop_desc = ttk.Label(
         safety,
@@ -359,12 +407,14 @@ def build_status_polling_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(status_frame, text="Disconnect after failures").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    status_fail_row = ttk.Frame(status_frame)
+    status_fail_row.grid(row=1, column=1, sticky="w", pady=4)
     app.status_fail_limit_entry = ttk.Entry(
-        status_frame, textvariable=app.status_query_failure_limit, width=12
+        status_fail_row, textvariable=app.status_query_failure_limit, width=12
     )
-    app.status_fail_limit_entry.grid(row=1, column=1, sticky="w", pady=4)
+    app.status_fail_limit_entry.pack(side="left")
     attach_numeric_keypad(app.status_fail_limit_entry, allow_decimal=False)
-    ttk.Label(status_frame, text="(1-10)").grid(row=1, column=2, sticky="w", padx=(6, 0))
+    ttk.Label(status_fail_row, text="(1-10)").pack(side="left", padx=(6, 0))
     app.status_fail_limit_entry.bind("<Return>", app._on_status_failure_limit_change)
     app.status_fail_limit_entry.bind("<FocusOut>", app._on_status_failure_limit_change)
     apply_tooltip(
@@ -389,34 +439,40 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(dialog_frame, text="Minimum interval (seconds)").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    error_interval_row = ttk.Frame(dialog_frame)
+    error_interval_row.grid(row=1, column=1, sticky="w", pady=4)
     app.error_dialog_interval_entry = ttk.Entry(
-        dialog_frame, textvariable=app.error_dialog_interval_var, width=12
+        error_interval_row, textvariable=app.error_dialog_interval_var, width=12
     )
-    app.error_dialog_interval_entry.grid(row=1, column=1, sticky="w", pady=4)
+    app.error_dialog_interval_entry.pack(side="left")
     attach_numeric_keypad(app.error_dialog_interval_entry, allow_decimal=True)
-    ttk.Label(dialog_frame, text="sec").grid(row=1, column=2, sticky="w", padx=(6, 0))
+    ttk.Label(error_interval_row, text="sec").pack(side="left", padx=(6, 0))
     app.error_dialog_interval_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_interval_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
     ttk.Label(dialog_frame, text="Burst window (seconds)").grid(
         row=2, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    error_window_row = ttk.Frame(dialog_frame)
+    error_window_row.grid(row=2, column=1, sticky="w", pady=4)
     app.error_dialog_window_entry = ttk.Entry(
-        dialog_frame, textvariable=app.error_dialog_burst_window_var, width=12
+        error_window_row, textvariable=app.error_dialog_burst_window_var, width=12
     )
-    app.error_dialog_window_entry.grid(row=2, column=1, sticky="w", pady=4)
+    app.error_dialog_window_entry.pack(side="left")
     attach_numeric_keypad(app.error_dialog_window_entry, allow_decimal=True)
-    ttk.Label(dialog_frame, text="sec").grid(row=2, column=2, sticky="w", padx=(6, 0))
+    ttk.Label(error_window_row, text="sec").pack(side="left", padx=(6, 0))
     app.error_dialog_window_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_window_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
     ttk.Label(dialog_frame, text="Max dialogs per window").grid(
         row=3, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    error_limit_row = ttk.Frame(dialog_frame)
+    error_limit_row.grid(row=3, column=1, sticky="w", pady=4)
     app.error_dialog_limit_entry = ttk.Entry(
-        dialog_frame, textvariable=app.error_dialog_burst_limit_var, width=12
+        error_limit_row, textvariable=app.error_dialog_burst_limit_var, width=12
     )
-    app.error_dialog_limit_entry.grid(row=3, column=1, sticky="w", pady=4)
+    app.error_dialog_limit_entry.pack(side="left")
     attach_numeric_keypad(app.error_dialog_limit_entry, allow_decimal=False)
-    ttk.Label(dialog_frame, text="count").grid(row=3, column=2, sticky="w", padx=(6, 0))
+    ttk.Label(error_limit_row, text="count").pack(side="left", padx=(6, 0))
     app.error_dialog_limit_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_limit_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
     apply_tooltip(
