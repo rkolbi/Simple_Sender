@@ -28,6 +28,7 @@ from typing import Any, Iterable, Optional
 from simple_sender.autolevel.grid import ProbeGrid
 from .toolpath_3d import Toolpath3D
 from .toolpath_top_view import TopViewPanel
+from simple_sender.ui.widgets import set_tab_tooltip
 from simple_sender.utils.constants import (
     VIEW_3D_ARC_STEP_DEFAULT,
     VIEW_3D_DRAW_PERCENT_DEFAULT,
@@ -53,6 +54,7 @@ class ToolpathPanel:
     def build_tab(self, notebook: ttk.Notebook):
         top_tab = ttk.Frame(notebook, padding=6)
         notebook.add(top_tab, text="Top View")
+        set_tab_tooltip(notebook, top_tab, "2D top-down toolpath preview and bounds.")
         self.top_view = TopViewPanel(top_tab)
         self.top_view.pack(fill="both", expand=True)
         if self._pending_top_overlay is not None:
@@ -61,6 +63,7 @@ class ToolpathPanel:
 
         tab = ttk.Frame(notebook, padding=6)
         notebook.add(tab, text="3D View")
+        set_tab_tooltip(notebook, tab, "Interactive 3D toolpath preview and render controls.")
         self.tab = tab
         self.view = Toolpath3D(
             tab,

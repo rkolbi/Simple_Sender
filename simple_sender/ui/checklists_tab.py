@@ -34,6 +34,7 @@ from simple_sender.ui.checklist_files import (
     format_checklist_title,
     load_checklist_items,
 )
+from simple_sender.ui.widgets import set_tab_tooltip
 
 
 def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
@@ -87,6 +88,7 @@ def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
 def build_checklists_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
     tab = ttk.Frame(notebook, padding=8)
     notebook.add(tab, text="Checklists")
+    set_tab_tooltip(notebook, tab, "Run setup and safety checklists.")
     tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(0, weight=1)
     canvas = tk.Canvas(tab, highlightthickness=0)

@@ -40,6 +40,7 @@ from .sections import (
     build_viewer_section,
     build_zeroing_section,
 )
+from simple_sender.ui.widgets import set_tab_tooltip
 
 
 def build_app_settings_tab(app, notebook):
@@ -47,6 +48,7 @@ def build_app_settings_tab(app, notebook):
     # App Settings tab
     sstab = ttk.Frame(nb, padding=8)
     nb.add(sstab, text="App Settings")
+    set_tab_tooltip(nb, sstab, "Configure app preferences, UI, and safety settings.")
     sstab.grid_columnconfigure(0, weight=1)
     sstab.grid_rowconfigure(0, weight=1)
     app.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)

@@ -23,12 +23,13 @@
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id, set_tab_tooltip
 
 
 def build_console_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
     ctab = ttk.Frame(notebook, padding=6)
     notebook.add(ctab, text="Console")
+    set_tab_tooltip(notebook, ctab, "Send manual commands and view GRBL responses.")
 
     app.console = tk.Text(ctab, wrap="word", height=12, state="disabled", font=app.console_font)
     csb = ttk.Scrollbar(ctab, orient="vertical", command=app.console.yview)

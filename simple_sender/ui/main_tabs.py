@@ -30,6 +30,7 @@ from simple_sender.ui.console import build_console_tab
 from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
+from simple_sender.ui.widgets import set_tab_tooltip
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def build_gcode_tab(app, notebook):
     # Gcode tab
     gtab = ttk.Frame(nb, padding=6)
     nb.add(gtab, text="G-code")
+    set_tab_tooltip(nb, gtab, "Preview the loaded G-code and job stats.")
     app.gcode_tab = gtab
     stats_row = ttk.Frame(gtab)
     stats_row.pack(fill="x", pady=(0, 6))
@@ -104,11 +106,13 @@ def build_main_tabs(app, parent):
     # Logs tab
     ltab = ttk.Frame(nb, padding=6)
     nb.add(ltab, text="Logs")
+    set_tab_tooltip(nb, ltab, "Review streaming and UI log output.")
     app.logs_viewer = LogViewer(ltab, app)
     app.logs_viewer.pack(fill="both", expand=True)
 
     otab = ttk.Frame(nb, padding=6)
     nb.add(otab, text="Overdrive")
+    set_tab_tooltip(nb, otab, "Adjust feed/spindle overrides and quick controls.")
     build_overdrive_tab(app, otab)
     app.settings_controller.build_tabs(nb)
 

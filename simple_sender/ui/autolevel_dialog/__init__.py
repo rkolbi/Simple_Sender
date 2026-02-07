@@ -46,6 +46,7 @@ from simple_sender.gcode_parser import (
 )
 from simple_sender.ui.dro import convert_units
 from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.widgets import set_tab_tooltip
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import (
     AUTOLEVEL_SPACING_MIN,
@@ -889,6 +890,16 @@ def show_auto_level_dialog(app: Any) -> None:
     avoidance_tab = ttk.Frame(notebook)
     notebook.add(settings_tab, text="Settings")
     notebook.add(avoidance_tab, text="Avoidance Areas")
+    set_tab_tooltip(
+        notebook,
+        settings_tab,
+        "Configure grid spacing, probe order, and probe settings.",
+    )
+    set_tab_tooltip(
+        notebook,
+        avoidance_tab,
+        "Define areas to skip during probing.",
+    )
     settings_tab.grid_columnconfigure(1, weight=1)
     avoidance_tab.grid_columnconfigure(0, weight=1)
 

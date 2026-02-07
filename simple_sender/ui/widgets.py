@@ -130,6 +130,274 @@ class ToolTip:
             pass
 
 
+class _NotebookTabTooltips:
+    def __init__(self, notebook):
+        self.notebook = notebook
+        self.tooltips: dict[str, str] = {}
+        self._active_tab: str | None = None
+        self._active_text: str = ""
+        self._tip: tk.Toplevel | None = None
+        self._after_id: Any | None = None
+        self._timeout_after_id: Any | None = None
+        self._pending_tab: str | None = None
+        self._pending_text: str = ""
+        self._pending_xy: tuple[int | None, int | None] = (None, None)
+        self._poll_after_id: Any | None = None
+        self._poll_interval_ms = 120
+        self._root = None
+        try:
+            self._root = notebook.winfo_toplevel()
+        except Exception:
+            self._root = notebook
+        try:
+            self._root.bind("<Motion>", self._on_motion, add="+")
+            self._root.bind("<ButtonPress>", self._on_leave, add="+")
+        except Exception:
+            notebook.bind("<Motion>", self._on_motion, add="+")
+            notebook.bind("<ButtonPress>", self._on_leave, add="+")
+        notebook.bind("<<NotebookTabChanged>>", self._on_leave, add="+")
+        self._schedule_poll()
+
+    def set_tab_tooltip(self, tab, text: str) -> None:
+        if not text:
+            return
+        tab_id = str(tab)
+        self.tooltips[tab_id] = text
+
+    def _is_descendant(self, widget) -> bool:
+        current = widget
+        for _ in range(8):
+            if current is None:
+                break
+            if current == self.notebook:
+                return True
+            try:
+                current = current.master
+            except Exception:
+                current = None
+        return False
+
+    def _tooltips_enabled(self) -> bool:
+        owner = _resolve_owner(self.notebook, "tooltip_enabled")
+        if owner is not None:
+            try:
+                return bool(owner.tooltip_enabled.get())
+            except Exception:
+                return True
+        return True
+
+    def _cancel_pending(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.notebook.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        if self._poll_after_id is not None:
+            try:
+                self.notebook.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+            self._poll_after_id = None
+
+    def _schedule_timeout(self) -> None:
+        if self._timeout_after_id is not None:
+            try:
+                self.notebook.after_cancel(self._timeout_after_id)
+            except Exception:
+                pass
+            self._timeout_after_id = None
+        owner = _resolve_owner(self.notebook, "tooltip_timeout_sec")
+        try:
+            duration = float(owner.tooltip_timeout_sec.get()) if owner is not None else TOOLTIP_TIMEOUT_DEFAULT
+        except Exception:
+            duration = TOOLTIP_TIMEOUT_DEFAULT
+        if duration <= 0:
+            return
+        try:
+            self._timeout_after_id = self.notebook.after(
+                int(duration * 1000),
+                self._hide_tip,
+            )
+        except Exception:
+            self._timeout_after_id = None
+
+    def _show_tip(self, text: str, x_root: int | None, y_root: int | None) -> None:
+        if not self._tooltips_enabled():
+            return
+        text = _resolve_tooltip_text(self.notebook, text)
+        if not text:
+            return
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+        try:
+            if x_root is None or y_root is None:
+                x_root = self.notebook.winfo_pointerx()
+                y_root = self.notebook.winfo_pointery()
+        except Exception:
+            x_root = y_root = None
+        if x_root is None or y_root is None:
+            return
+        x = int(x_root) + 16
+        y = int(y_root) + 12
+        try:
+            self._tip = tk.Toplevel(self.notebook)
+            self._tip.wm_overrideredirect(True)
+            self._tip.wm_geometry(f"+{x}+{y}")
+            label = ttk.Label(
+                self._tip,
+                text=text,
+                background="#ffffe0",
+                relief="solid",
+                padding=(6, 3),
+            )
+            label.pack()
+            self._schedule_timeout()
+        except tk.TclError:
+            self._tip = None
+
+    def _show_pending(self) -> None:
+        self._after_id = None
+        if self._pending_tab is None or not self._pending_text:
+            return
+        if self._pending_tab != self._active_tab or self._pending_text != self._active_text:
+            return
+        x_root, y_root = self._pending_xy
+        self._show_tip(self._pending_text, x_root, y_root)
+
+    def _pointer_over_notebook(self, x_root: int | None, y_root: int | None) -> bool:
+        if x_root is None or y_root is None:
+            return False
+        widget = None
+        try:
+            widget = self.notebook.winfo_containing(x_root, y_root)
+        except Exception:
+            widget = None
+        if widget is None and self._root is not None:
+            try:
+                widget = self._root.winfo_containing(x_root, y_root)
+            except Exception:
+                widget = None
+        if widget is None:
+            return False
+        return self._is_descendant(widget)
+
+    def _tab_id_at_root(self, x_root: int, y_root: int) -> str | None:
+        tabs = self.notebook.tabs()
+        if not tabs:
+            return None
+        try:
+            nx = self.notebook.winfo_rootx()
+            ny = self.notebook.winfo_rooty()
+        except Exception:
+            return None
+        for tab_id in tabs:
+            try:
+                bbox = self.notebook.bbox(tab_id)
+            except Exception:
+                bbox = None
+            if not bbox:
+                continue
+            bx, by, bw, bh = bbox
+            rx0 = nx + bx
+            ry0 = ny + by
+            rx1 = rx0 + bw
+            ry1 = ry0 + bh
+            if rx0 <= x_root <= rx1 and ry0 <= y_root <= ry1:
+                return tab_id
+        try:
+            rx = int(x_root - nx)
+            ry = int(y_root - ny)
+            idx = self.notebook.index(f"@{rx},{ry}")
+            if 0 <= idx < len(tabs):
+                return tabs[idx]
+        except Exception:
+            pass
+        return None
+
+    def _hide_tip(self) -> None:
+        self._active_tab = None
+        self._active_text = ""
+        self._pending_tab = None
+        self._pending_text = ""
+        self._pending_xy = (None, None)
+        self._cancel_pending()
+        if self._timeout_after_id is not None:
+            try:
+                self.notebook.after_cancel(self._timeout_after_id)
+            except Exception:
+                pass
+            self._timeout_after_id = None
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+    def _on_leave(self, _event=None) -> None:
+        self._hide_tip()
+
+    def _process_hover(self, x_root: int | None = None, y_root: int | None = None) -> None:
+        if x_root is None or y_root is None:
+            try:
+                x_root = self.notebook.winfo_pointerx()
+                y_root = self.notebook.winfo_pointery()
+            except Exception:
+                return
+        if x_root is None or y_root is None:
+            if self._active_tab is not None:
+                self._hide_tip()
+            return
+        tab_id = self._tab_id_at_root(int(x_root), int(y_root))
+        if not tab_id:
+            if self._active_tab is not None:
+                self._hide_tip()
+            return
+        text = self.tooltips.get(tab_id, "")
+        if not text:
+            if self._active_tab is not None:
+                self._hide_tip()
+            return
+        if tab_id == self._active_tab and text == self._active_text:
+            return
+        self._active_tab = tab_id
+        self._active_text = text
+        self._pending_tab = tab_id
+        self._pending_text = text
+        self._pending_xy = (x_root, y_root)
+        self._cancel_pending()
+        try:
+            self._after_id = self.notebook.after(TOOLTIP_DELAY_MS, self._show_pending)
+        except Exception:
+            self._after_id = None
+
+    def _on_motion(self, event) -> None:
+        self._process_hover(getattr(event, "x_root", None), getattr(event, "y_root", None))
+
+    def _schedule_poll(self) -> None:
+        if self._poll_after_id is not None:
+            return
+        try:
+            self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
+        except Exception:
+            self._poll_after_id = None
+
+    def _poll(self) -> None:
+        self._poll_after_id = None
+        try:
+            if not self.notebook.winfo_exists():
+                return
+        except Exception:
+            return
+        self._process_hover()
+        try:
+            self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
+        except Exception:
+            self._poll_after_id = None
+
+
 def _resolve_widget_bg(widget):
     if widget:
         try:
@@ -330,6 +598,19 @@ def apply_tooltip(widget, text: str):
     except Exception:
         pass
     return tip
+
+
+def set_tab_tooltip(notebook, tab, text: str):
+    if not text:
+        return
+    handler = getattr(notebook, "_tab_tooltip_handler", None)
+    if handler is None or not isinstance(handler, _NotebookTabTooltips):
+        handler = _NotebookTabTooltips(notebook)
+        try:
+            notebook._tab_tooltip_handler = handler
+        except Exception:
+            pass
+    handler.set_tab_tooltip(tab, text)
 
 
 def attach_numeric_keypad(

@@ -33,6 +33,7 @@ from simple_sender.ui.widgets import (
     attach_log_gcode,
     attach_numeric_keypad,
     set_kb_id,
+    set_tab_tooltip,
 )
 from simple_sender.utils.constants import (
     GRBL_NON_NUMERIC_SETTINGS,
@@ -66,6 +67,7 @@ class GRBLSettingsController:
     def build_tabs(self, notebook: ttk.Notebook) -> None:
         rtab = ttk.Frame(notebook, padding=6)
         notebook.add(rtab, text="Raw $$")
+        set_tab_tooltip(notebook, rtab, "View the raw $$ settings dump from GRBL.")
         self.settings_raw_text = tk.Text(rtab, wrap="word", height=12, state="disabled")
         rsb = ttk.Scrollbar(rtab, orient="vertical", command=self.settings_raw_text.yview)
         self.settings_raw_text.configure(yscrollcommand=rsb.set)
@@ -76,6 +78,7 @@ class GRBLSettingsController:
 
         stab = ttk.Frame(notebook, padding=6)
         notebook.add(stab, text="GRBL Settings")
+        set_tab_tooltip(notebook, stab, "Edit GRBL configuration values and save changes.")
         sbar = ttk.Frame(stab)
         sbar.pack(fill="x", pady=(0, 6))
         self.btn_refresh = ttk.Button(
