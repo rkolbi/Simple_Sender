@@ -106,6 +106,7 @@ def init_runtime_state(
     app._joystick_hold_after_id = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None
+    app._joystick_hold_jog_sent = False
     raw_safety = app.settings.get("joystick_safety_binding")
     app._joystick_safety_binding = dict(raw_safety) if isinstance(raw_safety, dict) else None
     app._joystick_safety_active = False

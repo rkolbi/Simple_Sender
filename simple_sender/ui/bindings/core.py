@@ -140,6 +140,7 @@ def update_joystick_polling_state(app):
         app.joystick_bindings_enabled.set(False)
         app._refresh_joystick_toggle_text()
         app._stop_joystick_polling()
+        app._stop_joystick_hold()
         return
     app._start_joystick_polling()
 

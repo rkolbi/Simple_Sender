@@ -31,6 +31,8 @@ from simple_sender.utils.constants import STATUS_POLL_DEFAULT
 
 def handle_connection_event(app, is_on: bool, port):
     app.connected = bool(is_on)
+    app._connecting = False
+    app._disconnecting = False
     app._homing_in_progress = False
     app._homing_state_seen = False
     if app.connected:
@@ -46,7 +48,15 @@ def handle_connection_event(app, is_on: bool, port):
             app._update_unit_toggle_display()
         except Exception:
             pass
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Disconnect"))
+        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Disconnect"), state="normal")
+        try:
+            app.btn_refresh.config(state="normal")
+        except Exception:
+            pass
+        try:
+            app.port_combo.config(state="readonly")
+        except Exception:
+            pass
         app._connected_port = port
         app._grbl_ready = False
         app._alarm_locked = False
@@ -80,7 +90,15 @@ def handle_connection_event(app, is_on: bool, port):
             app._stop_macro_status()
         except Exception:
             pass
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"))
+        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"), state="normal")
+        try:
+            app.btn_refresh.config(state="normal")
+        except Exception:
+            pass
+        try:
+            app.port_combo.config(state="readonly")
+        except Exception:
+            pass
         app._connected_port = None
         app._grbl_ready = False
         app._alarm_locked = False

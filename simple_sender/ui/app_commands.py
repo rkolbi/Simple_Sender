@@ -26,6 +26,7 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
+from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.utils.constants import BAUD_DEFAULT
 
 
@@ -100,26 +101,80 @@ def refresh_ports(app, auto_connect: bool = False):
                 pass
 
 
+def _set_connection_controls_pending(app, label: str) -> None:
+    try:
+        app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state="disabled")
+    except Exception:
+        pass
+    try:
+        app.btn_refresh.config(state="disabled")
+    except Exception:
+        pass
+    try:
+        app.port_combo.config(state="disabled")
+    except Exception:
+        pass
+
+
+def _sync_connection_controls(app) -> None:
+    try:
+        connected = bool(getattr(app, "connected", False))
+    except Exception:
+        connected = False
+    try:
+        is_streaming = bool(app.grbl.is_streaming())
+    except Exception:
+        is_streaming = False
+    btn_state = "disabled" if is_streaming else "normal"
+    label = "Disconnect" if connected else "Connect"
+    try:
+        app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state=btn_state)
+    except Exception:
+        pass
+    try:
+        app.btn_refresh.config(state=btn_state)
+    except Exception:
+        pass
+    try:
+        app.port_combo.config(state="disabled" if is_streaming else "readonly")
+    except Exception:
+        pass
+
+
 def toggle_connect(app):
     if not app._ensure_serial_available():
+        return
+    if getattr(app, "_connecting", False):
+        _set_connection_controls_pending(app, "Connecting...")
+        return
+    if getattr(app, "_disconnecting", False):
+        _set_connection_controls_pending(app, "Disconnecting...")
         return
     if app.grbl.is_streaming():
         messagebox.showwarning("Busy", "Stop the stream before disconnecting.")
         return
-    if app.connected:
+    is_connected = bool(getattr(app, "connected", False))
+    try:
+        is_connected = is_connected or bool(app.grbl.is_connected())
+    except Exception:
+        pass
+    if is_connected:
         app._user_disconnect = True
         app._auto_reconnect_pending = False
         app._auto_reconnect_retry = 0
         app._auto_reconnect_next_ts = 0.0
         app._auto_reconnect_blocked = True
+        _set_connection_controls_pending(app, "Disconnecting...")
         app._start_disconnect_worker()
         return
     app._user_disconnect = False
     app._auto_reconnect_blocked = False
     port = app.current_port.get().strip()
     if not port:
+        _sync_connection_controls(app)
         messagebox.showwarning("No port", "No serial port selected.")
         return
+    _set_connection_controls_pending(app, "Connecting...")
     app._start_connect_worker(port)
 
 
@@ -131,15 +186,18 @@ def start_connect_worker(
     on_failure: Callable[[Exception], Any] | None = None,
 ):
     if app._connecting:
+        _set_connection_controls_pending(app, "Connecting...")
         return
 
     def worker():
+        connected_ok = False
         try:
             try:
                 baud = int(app.settings.get("baud_rate", BAUD_DEFAULT))
             except Exception:
                 baud = BAUD_DEFAULT
             app.grbl.connect(port, baud)
+            connected_ok = True
         except Exception as exc:
             if show_error:
                 try:
@@ -154,25 +212,40 @@ def start_connect_worker(
                     pass
         finally:
             app._connecting = False
+            if not connected_ok:
+                try:
+                    app.after(0, lambda: _sync_connection_controls(app))
+                except Exception:
+                    pass
 
     app._connecting = True
+    _set_connection_controls_pending(app, "Connecting...")
     app._connect_thread = threading.Thread(target=worker, daemon=True)
     app._connect_thread.start()
 
 
 def start_disconnect_worker(app):
     if app._disconnecting:
+        _set_connection_controls_pending(app, "Disconnecting...")
         return
 
     def worker():
+        disconnected_ok = False
         try:
             app.grbl.disconnect()
+            disconnected_ok = True
         except Exception as exc:
             app.ui_q.put(("log", f"[disconnect] {exc}"))
         finally:
             app._disconnecting = False
+            if not disconnected_ok:
+                try:
+                    app.after(0, lambda: _sync_connection_controls(app))
+                except Exception:
+                    pass
 
     app._disconnecting = True
+    _set_connection_controls_pending(app, "Disconnecting...")
     app._disconnect_thread = threading.Thread(target=worker, daemon=True)
     app._disconnect_thread.start()
 

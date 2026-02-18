@@ -28,7 +28,6 @@ from simple_sender.utils.constants import (
     JOYSTICK_AXIS_RELEASE_THRESHOLD,
     JOYSTICK_AXIS_THRESHOLD,
     JOYSTICK_HOLD_DEFINITIONS,
-    JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER,
     JOYSTICK_HOLD_MISS_LIMIT,
     JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
@@ -37,6 +36,10 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
+JOYSTICK_HOLD_LIMIT_MARGIN_MM = 0.25
+JOYSTICK_HOLD_FALLBACK_DISTANCE_MM = 5000.0
+JOYSTICK_HOLD_AXIS_LIMIT_KEYS = {"X": "$130", "Y": "$131", "Z": "$132"}
+JOYSTICK_HOLD_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 
 
 def is_virtual_hold_button(btn) -> bool:
@@ -57,6 +60,82 @@ def jog_feed_for_axis(app, axis: str) -> float:
         return float(feed)
     except Exception:
         return 0.0
+
+
+def _to_mm(value: float, units: str) -> float:
+    return float(value) * 25.4 if str(units).lower() == "inch" else float(value)
+
+
+def _from_mm(value_mm: float, units: str) -> float:
+    if str(units).lower() == "inch":
+        return float(value_mm) / 25.4
+    return float(value_mm)
+
+
+def _axis_limit_mm(app, axis: str) -> float | None:
+    key = JOYSTICK_HOLD_AXIS_LIMIT_KEYS.get(axis)
+    if not key:
+        return None
+    controller = getattr(app, "settings_controller", None)
+    if controller is None:
+        return None
+    raw_data = getattr(controller, "_settings_data", None)
+    if not isinstance(raw_data, dict):
+        return None
+    value = raw_data.get(key)
+    if not value or not isinstance(value, tuple):
+        return None
+    try:
+        limit_mm = float(value[0])
+    except Exception:
+        return None
+    if limit_mm <= 0:
+        return None
+    return limit_mm
+
+
+def _axis_position_mm(app, axis: str) -> float | None:
+    idx = JOYSTICK_HOLD_AXIS_INDEX.get(axis)
+    if idx is None:
+        return None
+    pos = getattr(app, "_mpos_raw", None)
+    if not isinstance(pos, (list, tuple)) or len(pos) <= idx:
+        return None
+    try:
+        raw_pos = float(pos[idx])
+    except Exception:
+        return None
+    report_units = getattr(app, "_report_units", None)
+    if not report_units:
+        try:
+            report_units = app.unit_mode.get()
+        except Exception:
+            report_units = "mm"
+    return _to_mm(raw_pos, str(report_units))
+
+
+def max_hold_distance(app, axis: str, direction: int) -> float:
+    """Return one-shot hold jog distance in the app's current unit mode."""
+    unit_mode = "mm"
+    try:
+        unit_mode = str(app.unit_mode.get())
+    except Exception:
+        pass
+    fallback = _from_mm(JOYSTICK_HOLD_FALLBACK_DISTANCE_MM, unit_mode)
+    min_distance = max(float(JOYSTICK_HOLD_MIN_DISTANCE), 0.0001)
+    limit_mm = _axis_limit_mm(app, axis)
+    pos_mm = _axis_position_mm(app, axis)
+    if limit_mm is None or pos_mm is None:
+        return max(fallback, min_distance)
+    if direction > 0:
+        remaining_mm = limit_mm - pos_mm
+    else:
+        remaining_mm = pos_mm
+    remaining_mm -= JOYSTICK_HOLD_LIMIT_MARGIN_MM
+    if remaining_mm <= 0:
+        return min_distance
+    distance = _from_mm(remaining_mm, unit_mode)
+    return max(float(distance), min_distance)
 
 
 def _joystick_binding_pressed(app, binding: dict[str, Any] | None, *, release: bool = False) -> bool:
@@ -118,6 +197,7 @@ def start_hold(app, binding_id: str):
     app._active_joystick_hold_binding = binding_id
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = time.monotonic()
+    app._joystick_hold_jog_sent = False
     app._send_hold_jog()
 
 
@@ -127,6 +207,8 @@ def send_hold_jog(app):
         return
     if not app.joystick_bindings_enabled.get():
         stop_hold(app, binding_id)
+        return
+    if getattr(app, "_joystick_hold_jog_sent", False):
         return
     state_text = str(getattr(app, "_machine_state_text", "")).strip().lower()
     if state_text and not (state_text.startswith("idle") or state_text.startswith("jog")):
@@ -140,7 +222,6 @@ def send_hold_jog(app):
     except Exception:
         try:
             if app.grbl.manual_queue_busy():
-                app._joystick_hold_last_ts = time.monotonic()
                 app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
                 return
         except Exception:
@@ -162,21 +243,10 @@ def send_hold_jog(app):
         return
     axis, direction = hold_axis
     feed = jog_feed_for_axis(app, axis)
-    now = time.monotonic()
-    last_ts = getattr(app, "_joystick_hold_last_ts", None)
-    if last_ts is None:
-        elapsed = JOYSTICK_HOLD_REPEAT_MS / 1000.0
-    else:
-        elapsed = max(0.0, now - last_ts)
-    app._joystick_hold_last_ts = now
-    max_elapsed = (JOYSTICK_HOLD_REPEAT_MS / 1000.0) * JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER
-    if elapsed > max_elapsed:
-        elapsed = max_elapsed
-    distance = (feed / 60.0) * elapsed
+    distance = max_hold_distance(app, axis, direction)
     if distance <= 0:
         stop_hold(app)
         return
-    distance = max(distance, JOYSTICK_HOLD_MIN_DISTANCE)
     dx = dy = dz = 0.0
     if axis == "X":
         dx = direction * distance
@@ -188,7 +258,7 @@ def send_hold_jog(app):
         app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get())
     except Exception:
         pass
-    app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
+    app._joystick_hold_jog_sent = True
 
 
 def stop_hold(app, binding_id: str | None = None):
@@ -212,6 +282,7 @@ def stop_hold(app, binding_id: str | None = None):
     app._active_joystick_hold_binding = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None
+    app._joystick_hold_jog_sent = False
 
 
 def check_release(app):

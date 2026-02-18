@@ -1,11 +1,12 @@
 # Simple Sender - Full Manual
 ![Release: 1.3.1b2](https://img.shields.io/badge/release-1.3.1b2-blue)
+![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Don't trust it until you've validated it a few times.
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-![-](pics/Slide8.JPG)
+![](D:\simple_sender_refactored\pics\3d view tab.JPG)
 
 > **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
 
@@ -86,7 +87,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
 1) **Connect and handshake**
    - Pick your COM port (auto-selects last if "Reconnect to last port on open" is enabled in App Settings).
-   - Click Connect (Training Wheels may prompt). The app waits for the GRBL banner and first status before enabling controls and $$; this avoids startup races.
+   - Click Connect (Training Wheels may prompt). The button enters a short `Connecting...`/`Disconnecting...` pending state to prevent double-click races, and the app waits for the GRBL banner and first status before enabling controls and $$.
 2) **Confirm machine readiness**
    - If the state is Alarm, use **Unlock ($X)** or **Home ($H)**. The top-bar Unlock is always available; it is safest to home if switches exist.
    - Use **Recover** to see alarm recovery steps and quick actions.
@@ -134,36 +135,52 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## UI Tour
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
-- **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.).
+
+- **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen.
+
 - **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (−/+ with indicator), Macro buttons (if Macro-1..Macro-7 files exist).
+
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
 
-    ![-](pics/Slide1.JPG)
+    ![](D:\simple_sender_refactored\pics\g-code tab.jpg)
+  
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
-
-    ![-](pics/Slide2.JPG)
+  
+    ![-](D:\simple_sender_refactored\pics\console tab.JPG)
+    
   - **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
+  
+    ![](D:\simple_sender_refactored\pics\logs tab.JPG)
+
   - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
-
-    ![-](pics/Slide3.JPG)
+  
+    ![-](D:\simple_sender_refactored\pics\overdrive tab.JPG)
+    
   - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
-
-    ![-](pics/Slide4.JPG)
+  
+    ![-](D:\simple_sender_refactored\pics\raw tab.JPG)
+    
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
-    ![-](pics/Slide5.JPG)
+    ![-](D:\simple_sender_refactored\pics\grbl settings tab.JPG)
+    
   - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight/export/streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  
+    ![](D:\simple_sender_refactored\pics\app settings tab.JPG)
+  
   - **Checklists:** Release/run checklists loaded from `checklist-*.chk` files, including the Release/Run checklist dialogs and the status-bar Release quick button.
-
-    ![-](pics/Slide6.JPG)
+  
+    ![-](D:\simple_sender_refactored\pics\checklists tab.JPG)
+    
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
-
-    ![-](pics/Slide7.JPG)
+  
+    ![-](D:\simple_sender_refactored\pics\2d view tab.JPG)
+    
   - **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
-
-    ![-](pics/Slide8.JPG)
-
+  
+    ![-](D:\simple_sender_refactored\pics\3d view tab.JPG)
+  
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
 ## Status Lights
@@ -176,6 +193,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Core Behaviors
 - **Handshake:** Waits for GRBL banner or status + first status report before enabling controls/$$.
+- **Connect lifecycle:** Connect/Disconnect enters a temporary pending state (`Connecting...` / `Disconnecting...`) so repeated clicks do not start overlapping workers.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
@@ -183,7 +201,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (App Settings > Diagnostics).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
-- **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Toggle with the Tips button in the status bar or App Settings.
+- **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. Toggle with the Tips button in the status bar or App Settings.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
@@ -203,6 +221,9 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Jogging & Units
 - $J= incremental jogs (G91) with unit-aware G20/G21; jog cancel RT 0x85.
+- Joystick hold-jog bindings (`X/Y/Z +/- (Hold)`) send one long jog command per press, then stop with jog-cancel on release.
+- Hold-jog distance targets remaining travel when GRBL max travel (`$130/$131/$132`) and machine position are known; otherwise a conservative long move is used and release still cancels motion.
+- If joystick communication/backend is lost during hold-jog (device unplugged, backend failure, polling error, or bindings disabled), the active jog is cancelled immediately.
 - Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.
 - Safe mode (App Settings > Jogging) sets conservative jog feeds and steps for first-time setup.
 
@@ -220,9 +241,9 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations.
+Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
 
-![-](pics/Slide9.JPG)
+![-](D:\simple_sender_refactored\pics\macros.jpg)
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
@@ -479,7 +500,8 @@ If you prefer guided probing, the macro set includes touch-plate and reference-t
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
 - The Live input state panel reports joystick axes/buttons/hats and the latest keyboard input while testing; hot-plug status updates when devices connect/disconnect.
 - When the toggle is left on before closing, the app now reopens with joystick capturing enabled automatically (just like auto-reconnecting to the last serial port), so you can pick up where you left off without another click.
-- The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When you bind a joystick button to one of them and hold the button, the matching axis jogs continuously (the same feed rates as the jog buttons); the motion stops as soon as the button is released, giving you a "jog-to-hold" behavior from the joystick.
+- The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When one is held, the sender issues a single long jog move at the jog feed and stops it on release with jog-cancel (`0x85`) for smoother motion on lower-power hosts.
+- If USB joystick communication drops during a hold jog (unplug/hot-plug loss, backend failure, or polling exception), the sender automatically issues the same jog stop/cancel path.
 - The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.
 - Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
 
@@ -697,7 +719,7 @@ Macro UI is included below along with the rest of the interface.
 ### Top Toolbar
 - Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
 - Refresh: rescans serial ports and repopulates the port list.
-- Connect/Disconnect: opens or closes the selected port; waits for banner/status before enabling controls.
+- Connect/Disconnect: opens or closes the selected port; shows `Connecting...` / `Disconnecting...` while workers run, then waits for banner/status before enabling controls.
 - Read Job / Auto-Level: reads a G-code file into the viewer; after a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
 - Clear Job: unloads the current job and resets previews/state.
 - Run: starts streaming the loaded job to GRBL.
@@ -824,11 +846,12 @@ Macro UI is included below along with the rest of the interface.
 - Remove/Clear Binding: clears the selected row binding.
 - Joystick testing: status labels show detected devices and last input.
 - Refresh joystick list: rescans for connected joysticks.
-- Enable USB Joystick Bindings: toggles joystick polling and bindings.
+- Enable USB Joystick Bindings: toggles joystick polling and bindings; turning it off stops any active hold jog immediately.
 - Require safety hold for joystick actions: requires holding a safety button to allow joystick actions.
 - Set Safety Button: captures the safety-hold joystick button.
 - Clear Safety Button: clears the safety binding.
 - Stop joystick hold when app loses focus: ends held jog actions when focus leaves the window.
+- USB device-loss safety: if the joystick backend/device disappears during a hold jog, the app cancels the active jog.
 - Live input state: read-only labels for current joystick/keyboard activity.
 - Recommendation: enable safety hold and stop-on-focus-loss when using a joystick.
 

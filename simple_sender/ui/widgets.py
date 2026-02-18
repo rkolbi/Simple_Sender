@@ -27,6 +27,58 @@ from typing import Any, cast
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
 from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
 
+
+def _clamp_tooltip_position(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    screen_width: int,
+    screen_height: int,
+    *,
+    margin: int = 8,
+) -> tuple[int, int]:
+    if screen_width <= 0 or screen_height <= 0:
+        return (max(0, x), max(0, y))
+    w = max(0, int(width))
+    h = max(0, int(height))
+    max_x = max(margin, screen_width - w - margin)
+    max_y = max(margin, screen_height - h - margin)
+    clamped_x = min(max(margin, int(x)), max_x)
+    clamped_y = min(max(margin, int(y)), max_y)
+    return clamped_x, clamped_y
+
+
+def _tooltip_wraplength(widget, *, min_px: int = 240, max_px: int = 700, margin: int = 40) -> int | None:
+    try:
+        screen_width = int(widget.winfo_screenwidth())
+    except Exception:
+        return None
+    usable = max(min_px, screen_width - max(0, margin))
+    return max(min_px, min(max_px, usable))
+
+
+def _place_tooltip_window(widget, tip: tk.Toplevel, x: int, y: int) -> None:
+    try:
+        tip.update_idletasks()
+        width = tip.winfo_width() or tip.winfo_reqwidth()
+        height = tip.winfo_height() or tip.winfo_reqheight()
+        screen_width = int(widget.winfo_screenwidth())
+        screen_height = int(widget.winfo_screenheight())
+    except Exception:
+        tip.wm_geometry(f"+{int(x)}+{int(y)}")
+        return
+    final_x, final_y = _clamp_tooltip_position(
+        int(x),
+        int(y),
+        int(width),
+        int(height),
+        screen_width,
+        screen_height,
+    )
+    tip.wm_geometry(f"+{final_x}+{final_y}")
+
+
 class ToolTip:
     def __init__(self, widget, text: str, delay_ms: int = TOOLTIP_DELAY_MS):
         self.widget = widget
@@ -74,14 +126,21 @@ class ToolTip:
             self._tip = tk.Toplevel(self.widget)
             self._tip.wm_overrideredirect(True)
             self._tip.wm_geometry(f"+{x}+{y}")
+            wraplength = _tooltip_wraplength(self.widget)
+            label_kwargs: dict[str, Any] = {}
+            if wraplength is not None:
+                label_kwargs["wraplength"] = wraplength
+                label_kwargs["justify"] = "left"
             label = ttk.Label(
                 self._tip,
                 text=text,
                 background="#ffffe0",
                 relief="solid",
                 padding=(6, 3),
+                **label_kwargs,
             )
             label.pack()
+            _place_tooltip_window(self.widget, self._tip, int(x), int(y))
             self._schedule_timeout()
         except tk.TclError:
             self._tip = None
@@ -245,14 +304,21 @@ class _NotebookTabTooltips:
             self._tip = tk.Toplevel(self.notebook)
             self._tip.wm_overrideredirect(True)
             self._tip.wm_geometry(f"+{x}+{y}")
+            wraplength = _tooltip_wraplength(self.notebook)
+            label_kwargs: dict[str, Any] = {}
+            if wraplength is not None:
+                label_kwargs["wraplength"] = wraplength
+                label_kwargs["justify"] = "left"
             label = ttk.Label(
                 self._tip,
                 text=text,
                 background="#ffffe0",
                 relief="solid",
                 padding=(6, 3),
+                **label_kwargs,
             )
             label.pack()
+            _place_tooltip_window(self.notebook, self._tip, int(x), int(y))
             self._schedule_timeout()
         except tk.TclError:
             self._tip = None

@@ -56,6 +56,8 @@ def poll_joystick_events(
     app._joystick_poll_id = None
     py = app._get_pygame_module()
     if py is None or not app._ensure_joystick_backend():
+        if getattr(app, "_active_joystick_hold_binding", None):
+            app._stop_joystick_hold()
         return
     try:
         py.event.pump()
@@ -84,6 +86,10 @@ def poll_joystick_events(
         elif device_removed_evt:
             reason = "device removed"
         maybe_refresh_joystick_devices(app, py, force=device_change, reason=reason)
+        if (not getattr(app, "_joystick_instances", None)) and getattr(
+            app, "_active_joystick_hold_binding", None
+        ):
+            app._stop_joystick_hold()
         update_joystick_live_status(app, py)
         for event in events:
             app._handle_joystick_event(event)
@@ -105,6 +111,8 @@ def poll_joystick_events(
                 pass
     except Exception as exc:
         logger.exception("Joystick polling failed: %s", exc)
+        if getattr(app, "_active_joystick_hold_binding", None):
+            app._stop_joystick_hold()
     finally:
         if app.joystick_bindings_enabled.get() or app._joystick_capture_state:
             interval = JOYSTICK_POLL_INTERVAL_MS
