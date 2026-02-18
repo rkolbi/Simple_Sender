@@ -6,7 +6,7 @@
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-![](pics\3dviewtab.JPG)
+![](pics/3dviewtab.JPG)
 
 > **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
 
@@ -143,43 +143,43 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
 
-    ![](pics\g-codetab.jpg)
+    ![](pics/g-codetab.jpg)
   
   - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
-    ![-](pics\consoletab.JPG)
+    ![-](pics/consoletab.JPG)
     
   - **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
   
-    ![](pics\logstab.JPG)
+    ![](pics/logstab.JPG)
 
   - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
   
-    ![-](pics\overdrivetab.JPG)
+    ![-](pics/overdrivetab.JPG)
     
   - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
   
-    ![-](pics\rawtab.JPG)
+    ![-](pics/rawtab.JPG)
     
   - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
 
-    ![-](pics\grblsettingstab.JPG)
+    ![-](pics/grblsettingstab.JPG)
     
   - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight/export/streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
-    ![](pics\appsettingstab.JPG)
+    ![](pics/appsettingstab.JPG)
   
   - **Checklists:** Release/run checklists loaded from `checklist-*.chk` files, including the Release/Run checklist dialogs and the status-bar Release quick button.
   
-    ![-](pics\checkliststab.JPG)
+    ![-](pics/checkliststab.JPG)
     
   - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
   
-    ![-](pics\2dviewtab.JPG)
+    ![-](pics/2dviewtab.JPG)
     
   - **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
   
-    ![-](pics\3dviewtab.JPG)
+    ![-](pics/3dviewtab.JPG)
   
 - **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
@@ -243,7 +243,7 @@ This is a practical, end-to-end flow with rationale for key options.
 ## Macros
 Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
 
-![-](pics\macros.jpg)
+![-](pics/macros.jpg)
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
