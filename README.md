@@ -6,7 +6,7 @@
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-![](D:\simple_sender_refactored\pics\3d_view_tab.JPG)
+![](pics\3d_view_tab.JPG)
 
 > **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
 
