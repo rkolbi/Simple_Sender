@@ -1,53 +1,38 @@
-# CNC Reference Macros
+﻿# CNC Reference Macros
 
-These macros implement the CNCjs workflow documented in `ref/cncjs_macros.md`. They automate touch-plate probing, reference-tool capture, safe park/return motions, and TOOL_REFERENCE recovery using the sender's existing macro engine.
+This folder contains the default sample macros shipped with Simple Sender.
+
+The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names and optional `.txt` extensions) from:
+- `simple_sender/macros/`
+- `macros/` beside `main.py`
+- the directory that contains `main.py`
 
 ## Setup
 
-1. Enable **"Allow macro scripting (Python/eval)"** in the app settings so the macros can read/write `macro.state.*` variables and the `[macro.state.<name>]` expressions used in the G-code.
-2. Home the machine and make sure the fixed tool-height sensor, touch plate, and clip are installed/clean.
-3. Run the macros in the order described here, choosing Macro 2 in place of Macro 1 only when X/Y probing is not possible.
+1. Enable **Allow macro scripting (Python/eval)** in App Settings > Macros.
+2. Home the machine and verify your touch plate, clip, and fixed sensor are installed and clean.
+3. Edit machine-specific values inside the macro files (`SAFE_HEIGHT`, `PROBE_*`, `PLATE_THICKNESS`, feedrates, etc.) before use.
 
-## Macro 1 - Park over WPos X/Y
+## Shipped Macros
 
-- **Purpose:** Raises to a safe Z height, then returns to WCS X0 Y0 without changing offsets.
-- **How it works:** Stops the spindle, moves to `macro.state.SAFE_HEIGHT` in `G53`, then rapids to `X0 Y0` in the active WCS.
-- **Usage:** Use when you need a safe return to the origin between operations. Avoid while an active job is running.
+- `Macro-1` - **Park over WPos X/Y**: lifts to safe machine Z and returns to WCS X0/Y0.
+- `Macro-2` - **Park over Bit Setter**: parks over fixed sensor coordinates in machine coordinates.
+- `Macro-3` - **XYZ Touch Plate**: probes touch-plate Z/X/Y, then captures `macro.state.TOOL_REFERENCE` at the fixed sensor.
+- `Macro-4` - **Z Touch Plate**: probes touch-plate Z only, then captures `macro.state.TOOL_REFERENCE` at the fixed sensor.
+- `Macro-5` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`.
+- `Macro-6` - **Prompt Test Macro**: exercises default/custom prompt dialogs and prompt-choice variables.
+- `Macro-7` - **Prompt Test Macro**: duplicate prompt-test sample slot.
 
-## Macro 2 - Park over Bit Setter
+No `Macro-8` file is shipped by default; add one if you want an eighth macro button.
 
-- **Purpose:** Moves to the fixed sensor location for inspections, cleaning, or staging.
-- **How it works:** Stops the spindle, raises to `macro.state.SAFE_HEIGHT`, then parks at the configured sensor coordinates in `G53`.
-- **Usage:** Use during setup or maintenance when you need clear access to the tool or sensor.
+## Recommended Flow
 
-## Macro 3 - XYZ Touch Plate
-
-- **Purpose:** Probes X/Y/Z on the touch plate and captures the reference tool height at the fixed sensor.
-- **How it works:** Uses fast/slow probes for Z, then X and Y touch-plate probing, and finally measures the reference tool at the sensor.
-- **Usage:** Run during initial setup or any time your touch plate or sensor offsets change. If `TOOL_REFERENCE` is already set, you'll be prompted to confirm overwriting it.
-
-## Macro 4 - Z Touch Plate
-
-- **Purpose:** Probes Z on the touch plate and captures the reference tool height; identical to Macro 4 except X/Y probing is skipped.
-- **How it works:** Runs the same Z fast/slow probe sequence, then measures the reference tool at the fixed sensor.
-- **Usage:** Use when X/Y probing is not possible but you still want to capture Z and `TOOL_REFERENCE`. If `TOOL_REFERENCE` is already set, you'll be prompted to confirm overwriting it.
-
-## Macro 5 - Tool Change
-
-- **Purpose:** Swaps tools and restores the reference tool height without re-probing the touch plate.
-- **How it works:** Moves to the sensor, prompts for a tool swap, re-probes, and applies `G10 L20 Z[macro.state.TOOL_REFERENCE]`.
-- **Usage:** Run for every tool change once `TOOL_REFERENCE` is captured by Macro 4 or Macro 6.
+1. Use `Macro-3` (or `Macro-4` if you only need Z probing) to establish/update `TOOL_REFERENCE`.
+2. Use `Macro-5` for subsequent tool changes.
+3. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
 
 ## Notes
 
-- Each macro relies on `%macro.state` parameters (`SAFE_HEIGHT`, `PROBE_*`, `PLATE_THICKNESS`, etc.). Adjust those defaults directly inside the macro file to match your machine before using them.
-- The macro runner snapshots modal state before each macro, forces `G21` (mm), and restores the original units afterward; use `STATE_RETURN` (or `%state_return`) in a macro to restore the full modal snapshot.
-- The macros log progress via `%msg` so you can see when each probe or wait occurs in the console.
-
-## Checklists
-
-- Checklist files live in this folder and use the `checklist-*.chk` naming format.
-- Each non-empty line becomes a checklist item with a checkbox in the Checklists tab.
-
-
-
+- The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
+- `%msg` lines log progress in the console.
+- Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab and release/run checklist dialogs.

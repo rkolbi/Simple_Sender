@@ -1,4 +1,4 @@
-# Simple Sender - Full Manual
+﻿# Simple Sender - Full Manual
 ![Release: 1.6.0](https://img.shields.io/badge/release-1.6.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
@@ -138,7 +138,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
 - **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again.
 
-- **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (−/+ with indicator), Macro buttons (if Macro-1..Macro-7 files exist).
+- **Left panels:** MPos (Home/Unit toggle/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro buttons (if Macro-1..Macro-8 files exist).
 
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
@@ -241,7 +241,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-7` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
+Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
 
 ![-](pics/macros.jpg)
 
@@ -524,24 +524,24 @@ Tests are grouped by scope:
 
 Run the suite:
 ```powershell
-pytest
+python -m pytest
 ```
 
 Run a subset:
 ```powershell
 # Unit
-pytest tests/unit
+python -m pytest tests/unit
 
 # Integration
-pytest tests/integration
+python -m pytest tests/integration
 
 # UI
-pytest tests/ui
+python -m pytest tests/ui
 ```
 
 Coverage:
 ```powershell
-pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
+python -m pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
 ```
 
 Type checking (mypy):
@@ -549,11 +549,16 @@ Type checking (mypy):
 python -m mypy
 ```
 
+Import stability check (same gate used in CI):
+```powershell
+python -c "import simple_sender.ui.settings"
+```
+
 ## Module Layout
 - `simple_sender/application.py`: Tkinter app class with UI orchestration and delegates.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
 - `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
-- `simple_sender/ui/gcode_viewer.py`: G-code viewer widget and run-reset helper.
+- `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
@@ -704,15 +709,17 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 
 ## Appendix C: Macro Reference
 
+The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships `Macro-1` through `Macro-7`.
+
 | Macro | Purpose | When to use | When to avoid | Code notes |
 | --- | --- | --- | --- | --- |
-| Macro-1: Return to Work X & Y Zero (Safe Height) | Raises to a safe Z before moving to X0 Y0 so you can reset work coordinates without crashing. | When you need a quick safe return to the origin before setting offsets. | Avoid while actively executing a job; use only when motion is paused. | Defines `%macro.state.SAFE_HEIGHT` and uses `M5`, `G53 G0`, and `%wait` so moves execute away from the workpiece. |
-| Macro-2: Park Spindle over Tool Sensor | Drives to the fixed probe location so you can clean the sensor or stage fixtures. | Park the spindle for maintenance or measurement after a job finishes. | Don't use while cutting or while the spindle is still rotating. | Stores `PROBE_X/Y_LOCATION` in `%macro.state` and issues `G53 G0` so the coordinates ignore any applied offsets. |
-| Macro-3: Attempt Reference Tool Recovery | Re-probes the reference tool when the stored `TOOL_REFERENCE` is missing, then saves the result. | Run after a crash or failed recovery to restore the reference measurement. | Skip if `macro.state.TOOL_REFERENCE` already exists; the macro exits early if the reference is present. | Guards with `%if getattr(macro.state, "TOOL_REFERENCE", None) is not None` and stores `TOOL_REFERENCE` from `wz` (work Z) so `G10 L20` uses the correct WCS. |
-| Macro-4: XYZ Touch Plate & Reference Tool Setup | Probes the touch plate (Z/X/Y) and captures the reference tool height for later restorations. | Use during initial calibration or whenever the touch plate setup changes. | Don't run during a production cycle; the routine assumes the tool is free to move to the plate. | Mixes fast and slow probing commands with `G92` offsets before updating `%macro.state.TOOL_REFERENCE` from `wz` (work Z). |
-| Macro-5: Tool Change (Preserve Reference Tool Height) | Moves to the sensor, prompts for a tool swap, re-probes, and applies the stored reference height again. | Run every time you need to change tools without losing reference height. | Avoid if the reference tool hasn't been captured yet; the macro prompts you to run Macro-1/2/4 first. | Uses `%msg` + `PROMPT` to warn about missing references, then sends `G10 L20 Z[macro.state.TOOL_REFERENCE]` after probing to keep offsets consistent. |
-| Macro-6: Z Touch Plate & Reference Tool Setup | Sets X/Y manually, runs a Z touch-plate probe, and restores the reference tool height. | Useful when job-specific positions require manual X/Y placement before probing Z. | Don't run if you expect the machine to maintain `wx/wy` automatically; it stores the start position in `%macro.state.START_X/Y`. | Captures `wx`/`wy`, probes Z with `G38.2`, stores `%macro.state.TOOL_REFERENCE` from `wz`, and logs the new height. |
-| Macro-7: Prompt Test Macro | Validates the new modal/dialog helpers (default Resume/Cancel, `[btn(...)]` choices, and follow-up confirmations). | Run when you want to test the prompt UX or document how custom buttons behave. | Not for production motion; it's purely a UI verification script. | Demonstrates `[title(...)]`, `[btn(...)]`, and reads `macro.prompt_choice_key`/`macro.prompt_choice_label` in follow-up `%msg`/`PROMPT` lines. |
+| Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Avoid while a stream is active; it's a manual setup macro. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
+| Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Avoid while cutting or with spindle running. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
+| Macro-3: XYZ Touch Plate | Probes Z/X/Y on the touch plate, then captures reference tool height on the fixed sensor. | Initial setup and full XYZ touch-plate calibration workflows. | Avoid during production runs; requires plate/clip interaction and operator prompts. | Includes `PROMPT`/`M0`, staged probing (`G38.2`/`G38.4`), `%update`, and stores `macro.state.TOOL_REFERENCE = wz`. |
+| Macro-4: Z Touch Plate | Probes touch-plate Z only, then captures reference tool height on the fixed sensor. | Z-only calibration when X/Y edge probing is not needed. | Avoid if XY edge probing is required for your setup. | Similar to Macro-3 but skips X/Y edge probing; still updates `TOOL_REFERENCE` from `wz`. |
+| Macro-5: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, probes at sensor, then applies `G10 L20 Z[...]`. |
+| Macro-6: Prompt Test Macro | Exercises default and custom macro prompts/dialog choices. | Verifying prompt UI behavior and choice-variable plumbing. | Not intended for machine motion workflows. | Demonstrates `M0`, `PROMPT`, custom `[title(...)]`/`[btn(...)]`, and logs `macro.prompt_choice_*`. |
+| Macro-7: Prompt Test Macro | Same as Macro-6 (duplicate shipped sample). | Backup/sample prompt test slot. | Not intended for machine motion workflows. | Current repository copy matches Macro-6 content. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -748,12 +755,11 @@ Macro UI is included below along with the rest of the interface.
 - JOG STOP: cancels an active jog (RT 0x85) and stops pending jogs.
 - Tool reference label: displays the stored tool reference height used by probing workflows.
 - ALL STOP: immediate stop using the selected ALL STOP behavior.
-- XY Step adjuster (−/+ with indicator): sets the XY jog step value used by the jog pad.
-- Z Step adjuster (−/+ with indicator): sets the Z jog step value used by the jog pad.
+- XY Step adjuster (-/+ with indicator): sets the XY jog step value used by the jog pad.
+- Z Step adjuster (-/+ with indicator): sets the Z jog step value used by the jog pad.
 
 ### Macro Panel (Jog Area)
-- Macro buttons (1-3): left-column buttons shown when Macro-1..3 files exist; left-click runs the macro.
-- Macro buttons (4-7): right-grid buttons shown when Macro-4..7 files exist; left-click runs the macro.
+- Macro buttons (1-8): one button per existing `Macro-<n>` file; buttons appear in a single row and left-click runs the macro.
 - Right-click preview: opens a read-only preview of the selected macro.
 - Tooltips: show the second line of each macro file as a hint.
 - Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
@@ -996,3 +1002,4 @@ Macro UI is included below along with the rest of the interface.
 - Save View: stores the current 3D camera/view state.
 - Load View: restores the saved 3D view state.
 - Reset View: returns the 3D view to defaults.
+

@@ -27,7 +27,7 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from tkinter import ttk, messagebox, simpledialog
 
 from simple_sender.autolevel.grid import AdaptiveGridSpec, ProbeBounds, ProbeGrid, build_adaptive_grid
@@ -94,7 +94,9 @@ def _apply_auto_level_to_path(
     streaming_mode: bool,
     log_fn: Callable[[str], None] | None = None,
 ) -> tuple[LevelFileResult, bool, str | None]:
-    return _apply_auto_level_to_path_impl(
+    return cast(
+        tuple[LevelFileResult, bool, str | None],
+        _apply_auto_level_to_path_impl(
         source_path=source_path,
         source_lines=source_lines,
         output_path=output_path,
@@ -112,6 +114,7 @@ def _apply_auto_level_to_path(
         split_gcode_lines_stream_fn=split_gcode_lines_stream,
         clean_gcode_line_fn=clean_gcode_line,
         tempfile_module=tempfile,
+        ),
     )
 
 

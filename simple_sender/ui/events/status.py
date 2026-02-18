@@ -21,10 +21,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import time
+import logging
 from typing import cast
 
 from simple_sender.ui.dro import convert_units, format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _maybe_restore_pending_g90(app) -> None:
@@ -38,13 +50,14 @@ def _maybe_restore_pending_g90(app) -> None:
         return
     try:
         app.grbl.send_immediate("G90", source="autolevel")
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed to restore pending G90", exc)
         return
     app._pending_force_g90 = False
     try:
         app.ui_q.put(("log", "[autolevel] Restored G90 after alarm clear."))
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to queue G90 restore log message", exc)
 
 
 def _parse_modal_units(app, raw: str) -> None:
@@ -95,8 +108,8 @@ def _parse_modal_units(app, raw: str) -> None:
         app._modal_units = modal_units
         try:
             app._set_unit_mode(modal_units)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed to apply modal unit mode", exc)
     if modal_state or modal_units:
         with app.macro_executor.macro_vars() as macro_vars:
             for key, value in modal_state.items():
@@ -113,29 +126,31 @@ def _parse_report_units_setting(app, raw: str) -> None:
         raw_val = raw_val.split(" ", 1)[0]
         raw_val = raw_val.split("(", 1)[0].strip()
         val = int(raw_val)
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed parsing $13 report-units setting", exc)
         return
     app._report_units = "inch" if val == 1 else "mm"
     try:
         app._update_unit_toggle_display()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating unit toggle display from $13", exc)
     try:
         status_text = ""
         try:
             status_text = app.status.cget("text")
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading status label text for $13 update", exc)
             status_text = ""
         if getattr(app, "_connected_port", None) and status_text.startswith("Connected"):
             app.status.config(
                 text=f"Connected: {app._connected_port} | Report: {app._report_units}"
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating connected status label after $13 update", exc)
     try:
         app._refresh_dro_display()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed refreshing DRO display after $13 update", exc)
 
 
 def handle_status_event(app, raw: str):
@@ -172,15 +187,15 @@ def handle_status_event(app, raw: str):
                 f_str, s_str = p[3:].split(",", 1)
                 feed = float(f_str)
                 spindle = float(s_str)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed parsing FS field from status line", exc)
         elif p.startswith("Bf:"):
             try:
                 bf_planner, bf_rx = p[3:].split(",", 1)
                 planner = int(bf_planner)
                 rxbytes = int(bf_rx)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed parsing Bf field from status line", exc)
         elif p.startswith("WCO:"):
             wco = p[4:]
         elif p.startswith("Ov:"):
@@ -205,8 +220,8 @@ def handle_status_event(app, raw: str):
                 display_state = state
                 try:
                     app.grbl.clear_watchdog_ignore("homing")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed clearing homing watchdog ignore on idle", exc)
             else:
                 display_state = "Homing"
         elif state_lower.startswith("alarm") or state_lower.startswith("door"):
@@ -215,16 +230,16 @@ def handle_status_event(app, raw: str):
             display_state = state
             try:
                 app.grbl.clear_watchdog_ignore("homing")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed clearing homing watchdog ignore on alarm/door", exc)
         else:
             app._homing_in_progress = False
             app._homing_state_seen = False
             display_state = state
             try:
                 app.grbl.clear_watchdog_ignore("homing")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed clearing homing watchdog ignore on other state", exc)
     app._machine_state_text = state
     if state_lower.startswith("alarm"):
         app._set_alarm_lock(True, state)
@@ -236,8 +251,8 @@ def handle_status_event(app, raw: str):
                 app.machine_state.set(display_state)
                 try:
                     app._ensure_state_label_width(display_state)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed adjusting machine state label width", exc)
                 app._update_state_highlight(display_state)
         _maybe_restore_pending_g90(app)
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
@@ -264,7 +279,8 @@ def handle_status_event(app, raw: str):
             return None
         try:
             return [float(parts[0]), float(parts[1]), float(parts[2])]
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed parsing XYZ triplet", exc)
             return None
 
     wco_vals = parse_xyz(wco) if wco else None
@@ -310,8 +326,8 @@ def handle_status_event(app, raw: str):
                 macro_vars["mx"] = to_modal(mpos_vals[0])
                 macro_vars["my"] = to_modal(mpos_vals[1])
                 macro_vars["mz"] = to_modal(mpos_vals[2])
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating machine-position DRO values", exc)
     elif mpos_calc:
         try:
             app.mpos_x.set(format_dro_value(mpos_calc[0], report_units, modal_units))
@@ -321,8 +337,8 @@ def handle_status_event(app, raw: str):
                 macro_vars["mx"] = to_modal(mpos_calc[0])
                 macro_vars["my"] = to_modal(mpos_calc[1])
                 macro_vars["mz"] = to_modal(mpos_calc[2])
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating computed machine-position DRO values", exc)
     def flash_wpos_labels():
         labels = getattr(app, "_wpos_value_labels", None)
         if not labels:
@@ -331,21 +347,24 @@ def handle_status_event(app, raw: str):
             default_fg = ""
             try:
                 default_fg = app._wpos_label_default_fg.get(axis, "")
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed reading default WPos label color", exc)
                 default_fg = ""
             after_id = None
             try:
                 after_id = app._wpos_flash_after_ids.get(axis)
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed reading pending WPos flash id", exc)
                 after_id = None
             if after_id:
                 try:
                     app.after_cancel(after_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed cancelling previous WPos flash timer", exc)
             try:
                 label.configure(foreground="#2196f3")
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed applying WPos flash color", exc)
                 continue
 
             def restore(target=label, axis_key=axis, fg=default_fg):
@@ -354,17 +373,17 @@ def handle_status_event(app, raw: str):
                         target.configure(foreground=fg)
                     else:
                         target.configure(foreground="")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed restoring WPos label color", exc)
                 try:
                     app._wpos_flash_after_ids[axis_key] = None
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed clearing WPos flash timer id", exc)
 
             try:
                 app._wpos_flash_after_ids[axis] = app.after(150, restore)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed scheduling WPos flash restore timer", exc)
 
     if wpos_vals:
         try:
@@ -382,10 +401,10 @@ def handle_status_event(app, raw: str):
                     to_mm(wpos_vals[1]),
                     to_mm(wpos_vals[2]),
                 )
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                _log_suppressed("Failed updating toolpath position from WPos", exc)
+        except Exception as exc:
+            _log_suppressed("Failed updating WPos DRO values", exc)
         flash_wpos_labels()
     elif wpos_calc:
         try:
@@ -403,10 +422,10 @@ def handle_status_event(app, raw: str):
                     to_mm(wpos_calc[1]),
                     to_mm(wpos_calc[2]),
                 )
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                _log_suppressed("Failed updating toolpath position from computed WPos", exc)
+        except Exception as exc:
+            _log_suppressed("Failed updating computed WPos DRO values", exc)
     if feed is not None:
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["curfeed"] = feed
@@ -443,8 +462,8 @@ def handle_status_event(app, raw: str):
                     macro_vars["OvRapid"] = ov_parts[1]
                     macro_vars["OvSpindle"] = ov_parts[2]
                     macro_vars["_OvChanged"] = bool(changed)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed parsing override values from status line", exc)
         else:
             if feed_val is not None:
                 app._set_feed_override_slider_value(feed_val)

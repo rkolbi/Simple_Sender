@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
+import logging
 from tkinter import ttk
 
 from simple_sender.ui.icons import ICON_HOME, ICON_HOLD, ICON_RESUME, icon_label
@@ -37,6 +38,18 @@ from simple_sender.utils.constants import (
     JOG_STEP_XY_VALUES,
     JOG_STEP_Z_VALUES,
 )
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def build_jog_panel(app, parent):
     top = ttk.Frame(parent)
@@ -187,14 +200,16 @@ def build_jog_panel(app, parent):
         try:
             mpos_bbox = align.grid_bbox(0, 1)
             wpos_bbox = align.grid_bbox(2, 1)
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading MPos/WPos column geometry", exc)
             return
         if not mpos_bbox or not wpos_bbox:
             return
         try:
             mpos_w = int(mpos_bbox[2])
             wpos_w = int(wpos_bbox[2])
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed converting MPos/WPos column widths", exc)
             return
         target = max(mpos_w, wpos_w)
         if target <= 0:
@@ -252,17 +267,18 @@ def build_jog_panel(app, parent):
     for sep in (sep_mpos, sep_wpos):
         try:
             sep.configure(style="JogSeparator.TSeparator")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed applying jog separator style", exc)
     try:
         sep_jog_line.configure(bg=sep_color)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed applying jog separator line color", exc)
 
     def _position_jog_separator(_event=None):
         try:
             height = int(align.winfo_height())
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading jog separator container height", exc)
             height = 0
         if height <= 0:
             return
@@ -274,13 +290,15 @@ def build_jog_panel(app, parent):
                 x2 = z_steps.winfo_x() + app._z_step_minus.winfo_x() + app._z_step_minus.winfo_width() // 2
                 if x1 > 0 and x2 > 0:
                     cx = (x1 + x2) // 2
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed deriving jog separator center from step controls", exc)
             cx = None
 
         if cx is None:
             try:
                 bbox = align.grid_bbox(8, 1)
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed reading jog separator grid bbox", exc)
                 return
             if not bbox:
                 return
@@ -297,8 +315,8 @@ def build_jog_panel(app, parent):
         app.grbl.jog_cancel()
         try:
             app.grbl.cancel_pending_jogs()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed cancelling pending jog queue", exc)
 
     app.btn_jog_cancel = StopSignButton(
         align,
@@ -372,7 +390,8 @@ def build_jog_panel(app, parent):
     def _xy_step_index_for(value: float) -> int:
         try:
             val = float(value)
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Invalid XY step value; falling back to default", exc)
             val = app._xy_step_values[0]
         return min(range(len(app._xy_step_values)), key=lambda i: abs(app._xy_step_values[i] - val))
 
@@ -428,7 +447,8 @@ def build_jog_panel(app, parent):
     def _z_step_index_for(value: float) -> int:
         try:
             val = float(value)
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Invalid Z step value; falling back to default", exc)
             val = app._z_step_values[0]
         return min(range(len(app._z_step_values)), key=lambda i: abs(app._z_step_values[i] - val))
 
@@ -479,14 +499,16 @@ def build_jog_panel(app, parent):
     def _ensure_z_steps_width():
         try:
             req = int(z_steps.winfo_reqwidth())
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading requested width for Z step controls", exc)
             return
         if req > 0:
             align.grid_columnconfigure(9, minsize=req)
         try:
             bbox = align.grid_bbox(9, 0)
             col_width = int(bbox[2]) if bbox else 0
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading Z step column width", exc)
             col_width = 0
         if col_width > 0:
             padx = max(0, (col_width - 48) // 2)
@@ -499,7 +521,8 @@ def build_jog_panel(app, parent):
     def _ensure_xy_steps_width():
         try:
             req = int(xy_steps.winfo_reqwidth())
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading requested width for XY step controls", exc)
             return
         if req > 0:
             per = (req + 2) // 3
@@ -508,7 +531,8 @@ def build_jog_panel(app, parent):
         try:
             bbox = align.grid_bbox(4, 0)
             bbox_w = int(bbox[2]) if bbox else 0
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading XY jog column width", exc)
             bbox_w = 0
         if bbox_w > 0:
             pad = max(0, (bbox_w - 48) // 2)
@@ -534,13 +558,15 @@ def build_jog_panel(app, parent):
         try:
             if z_steps.winfo_ismapped():
                 x = z_steps.winfo_rootx() + z_steps.winfo_width() + gap
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed deriving jog stop X from Z steps", exc)
             x = None
         if x is None:
             try:
                 if app.btn_jog_z_minus.winfo_ismapped():
                     x = app.btn_jog_z_minus.winfo_rootx() + app.btn_jog_z_minus.winfo_width() + gap
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed deriving jog stop X from Z- button", exc)
                 x = None
 
         if x is None:
@@ -553,8 +579,8 @@ def build_jog_panel(app, parent):
                 max_x = all_btn.winfo_rootx() - btn.winfo_width() - gap
                 if x > max_x:
                     x = max_x
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clamping jog stop X against all-stop button", exc)
 
         y = None
         anchor = "n"
@@ -566,7 +592,8 @@ def build_jog_panel(app, parent):
                 slot = getattr(app, "_all_stop_slot", None)
                 if slot is not None and slot.winfo_ismapped():
                     y = slot.winfo_rooty()
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed deriving jog stop Y from all-stop controls", exc)
             y = None
 
         if y is None:
@@ -575,14 +602,16 @@ def build_jog_panel(app, parent):
                 y2 = app.btn_jog_y_minus.winfo_rooty() + app.btn_jog_y_minus.winfo_height() // 2
                 y = (y1 + y2) // 2
                 anchor = "center"
-            except Exception:
+            except Exception as exc:
+                _log_suppressed("Failed deriving jog stop Y from Y jog buttons", exc)
                 app.after(50, _position_jog_stop)
                 return
 
         try:
             root_x = align.winfo_rootx()
             root_y = align.winfo_rooty()
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed reading jog panel root coordinates", exc)
             root_x = 0
             root_y = 0
 
@@ -592,14 +621,14 @@ def build_jog_panel(app, parent):
             width = align.winfo_width()
             if width > 0:
                 x = max(0, min(x, width - btn.winfo_width()))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clamping jog stop position to panel bounds", exc)
 
         btn.place(in_=align, x=x, y=y, anchor=anchor)
         try:
             btn.tk.call("raise", btn._w)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed raising jog stop button above peers", exc)
 
     align.bind("<Configure>", _position_jog_stop, add="+")
     app.after(0, _position_jog_stop)

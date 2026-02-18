@@ -22,6 +22,7 @@
 
 import os
 import queue
+import logging
 from typing import Any, cast
 from tkinter import messagebox
 
@@ -37,11 +38,17 @@ from simple_sender.utils.constants import MAX_LINE_LENGTH
 from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 from simple_sender.types import UiEvent
 
+logger = logging.getLogger(__name__)
+
 
 _JOG_LIMIT_ERROR_HINT = (
     "Jog blocked by travel limits (error:15). "
     "Move away from axis limits or verify homing and $130-$132."
 )
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _is_error_15(message: str | None) -> bool:
@@ -61,20 +68,20 @@ def set_streaming_lock(app: Any, locked: bool):
     state = "disabled" if locked else "normal"
     try:
         app.btn_conn.config(state=state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to update connect button state", exc)
     try:
         app.btn_refresh.config(state=state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to update refresh button state", exc)
     try:
         app.port_combo.config(state="disabled" if locked else "readonly")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to update port combo state", exc)
     try:
         app.btn_unit_toggle.config(state=state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to update unit toggle state", exc)
 
 
 def handle_event(app: Any, evt: UiEvent):
@@ -165,8 +172,8 @@ def handle_event(app: Any, evt: UiEvent):
         case ("settings_dump_done",):
             try:
                 app.settings_controller.handle_line("ok")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed to process settings dump completion", exc)
             return
         case ("manual_error", msg, source):
             raw_msg = cast(str, msg)
@@ -179,21 +186,21 @@ def handle_event(app: Any, evt: UiEvent):
                 app._homing_state_seen = False
                 try:
                     app.grbl.clear_watchdog_ignore("homing")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed clearing homing watchdog ignore after manual error", exc)
             try:
                 if show_jog_limit_hint:
                     app.status.config(text=_JOG_LIMIT_ERROR_HINT)
                 else:
                     app.status.config(text=f"{prefix}: {msg}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed to update status for manual error", exc)
             if show_jog_limit_hint and label.lower().startswith("joystick"):
                 try:
                     if hasattr(app, "joystick_event_status"):
                         app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed to update joystick status hint", exc)
             return
         case ("ready", is_ready):
             handle_ready_event(app, is_ready)
@@ -205,8 +212,8 @@ def handle_event(app: Any, evt: UiEvent):
                 app._homing_state_seen = False
                 try:
                     app.grbl.clear_watchdog_ignore("homing")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed clearing homing watchdog ignore after alarm", exc)
             app._set_alarm_lock(True, msg)
             app.macro_executor.notify_alarm(msg)
             app._apply_status_poll_profile()
@@ -236,15 +243,15 @@ def handle_event(app: Any, evt: UiEvent):
                 app._last_error_index = err_idx
             try:
                 app.status.config(text=f"Stream error: {msg}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed to update stream error status", exc)
             return
         case ("stream_pause_reason", reason):
             if reason:
                 try:
                     app.status.config(text=f"Paused ({reason})")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed to update pause reason status", exc)
             return
         case ("gcode_sent", idx, _line):
             app.streaming_controller.handle_gcode_sent(idx)
@@ -288,8 +295,8 @@ def handle_macro_prompt(app, title, message, choices, cancel_label, result_q):
     except Exception as exc:
         try:
             app.streaming_controller.log(f"[macro] Prompt failed: {exc}")
-        except Exception:
-            pass
+        except Exception as log_exc:
+            _log_suppressed("Failed to log macro prompt failure to UI console", log_exc)
         try:
             result_q.put_nowait(cancel_label)
         except queue.Full:
@@ -301,8 +308,8 @@ def handle_gcode_load_progress(app, token, done, total, label):
         return
     try:
         app._set_gcode_loading_progress(done, total, label)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed to update G-code loading progress", exc)
 
 
 def handle_streaming_validation_prompt(
@@ -326,7 +333,8 @@ def handle_streaming_validation_prompt(
     )
     try:
         allow = messagebox.askyesno("Validate large file?", msg)
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed to show streaming validation prompt", exc)
         allow = False
     try:
         result_q.put_nowait(allow)
@@ -355,12 +363,12 @@ def handle_gcode_loaded_stream(app, evt):
         if cleanup_path and source is not None:
             try:
                 source.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed to close stale streaming source", exc)
             try:
                 os.remove(cleanup_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                _log_suppressed("Failed to remove stale streamed temp file", exc)
         return
     path = evt[2]
     source = evt[3]
@@ -450,8 +458,8 @@ def _clear_autolevel_restore(app) -> None:
     if restore.get("leveled_temp") and leveled_path:
         try:
             os.remove(leveled_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            _log_suppressed("Failed removing autolevel temp restore file", exc)
     app._auto_level_leveled_lines = None
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
