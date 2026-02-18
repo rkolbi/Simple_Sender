@@ -26,26 +26,6 @@ from simple_sender.ui.dro import convert_units, format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 
 
-def _maybe_restore_pending_g90(app) -> None:
-    if not getattr(app, "_pending_force_g90", False):
-        return
-    if not app.grbl.is_connected():
-        return
-    if getattr(app, "_alarm_locked", False):
-        return
-    if app.grbl.is_streaming() or app._stream_state in ("running", "paused"):
-        return
-    try:
-        app.grbl.send_immediate("G90", source="autolevel")
-    except Exception:
-        return
-    app._pending_force_g90 = False
-    try:
-        app.ui_q.put(("log", "[autolevel] Restored G90 after alarm clear."))
-    except Exception:
-        pass
-
-
 def _parse_modal_units(app, raw: str) -> None:
     line = raw.strip()
     if not (line.startswith("[GC:") and line.endswith("]")):
@@ -234,7 +214,6 @@ def handle_status_event(app, raw: str):
             if not getattr(app, "_macro_status_active", False):
                 app.machine_state.set(display_state)
                 app._update_state_highlight(display_state)
-        _maybe_restore_pending_g90(app)
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
         if app._stream_state in ("running", "paused") or app.grbl.is_streaming():
             return

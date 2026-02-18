@@ -46,6 +46,48 @@ def _save_bindings(app) -> None:
             pass
 
 
+def _single_connected_joy_id(app) -> Any | None:
+    instances = getattr(app, "_joystick_instances", None)
+    if not isinstance(instances, dict) or len(instances) != 1:
+        return None
+    return next(iter(instances.keys()))
+
+
+def _canonicalize_joy_id(app, joy_id: Any | None) -> Any | None:
+    if joy_id is None:
+        return None
+    instances = getattr(app, "_joystick_instances", None)
+    if isinstance(instances, dict) and joy_id in instances:
+        return joy_id
+    single = _single_connected_joy_id(app)
+    if single is not None:
+        return single
+    return joy_id
+
+
+def _canonicalize_binding_key(app, key: tuple[Any, ...] | None) -> tuple[Any, ...] | None:
+    if not key or len(key) < 2:
+        return key
+    joy_id = _canonicalize_joy_id(app, key[1])
+    if joy_id == key[1]:
+        return key
+    return (key[0], joy_id, *key[2:])
+
+
+def _event_joy_id(event) -> Any | None:
+    joy_id = getattr(event, "joy", None)
+    if joy_id is not None:
+        return joy_id
+    return getattr(event, "instance_id", None)
+
+
+def _lookup_bound_button(app, key: tuple[Any, ...] | None):
+    canonical_key = _canonicalize_binding_key(app, key)
+    if not canonical_key:
+        return canonical_key, None
+    return canonical_key, app._joystick_binding_map.get(canonical_key)
+
+
 def poll_joystick_events(
     app,
     *,
@@ -166,7 +208,7 @@ def handle_joystick_event(
     key: tuple[Any, ...] | None = None
     button_down_event = False
     if event.type == py.JOYBUTTONUP:
-        joy = getattr(event, "joy", None)
+        joy = _canonicalize_joy_id(app, _event_joy_id(event))
         button = getattr(event, "button", None)
         if joy is not None and button is not None:
             key = ("button", joy, button)
@@ -175,14 +217,18 @@ def handle_joystick_event(
                 if getattr(app, "_active_joystick_hold_binding", None):
                     app._stop_joystick_hold()
                 return
-            app._handle_joystick_button_release(("button", joy, button))
+            app._handle_joystick_button_release(key)
         return
     if event.type == py.JOYBUTTONDOWN:
-        key = ("button", event.joy, event.button)
+        joy = _canonicalize_joy_id(app, _event_joy_id(event))
+        button = getattr(event, "button", None)
+        if joy is None or button is None:
+            return
+        key = ("button", joy, button)
         button_down_event = True
     elif event.type == py.JOYAXISMOTION:
         axis_value = getattr(event, "value", 0.0)
-        joy = getattr(event, "joy", None)
+        joy = _canonicalize_joy_id(app, _event_joy_id(event))
         axis = getattr(event, "axis", None)
         if joy is None or axis is None:
             return
@@ -200,7 +246,7 @@ def handle_joystick_event(
         app._joystick_axis_active.add(axis_state_key)
         button_down_event = True
     elif event.type == py.JOYHATMOTION:
-        joy = getattr(event, "joy", None)
+        joy = _canonicalize_joy_id(app, _event_joy_id(event))
         hat_index = getattr(event, "hat", None)
         raw_value = getattr(event, "value", (0, 0))
         if joy is None or hat_index is None:
@@ -221,6 +267,9 @@ def handle_joystick_event(
             return
         app._joystick_hat_active.add(hat_state_key)
         button_down_event = True
+    if key is None:
+        return
+    key = _canonicalize_binding_key(app, key)
     if key is None:
         return
     capture_state = app._joystick_capture_state
@@ -266,13 +315,30 @@ def handle_joystick_event(
         return
     if app.joystick_safety_enabled.get() and safety_key and not app._joystick_safety_active:
         return
-    btn = app._joystick_binding_map.get(key)
+    key, btn = _lookup_bound_button(app, key)
     if btn:
         if app._is_virtual_hold_button(btn):
             app._log_button_action(btn)
             app._start_joystick_hold(app._button_binding_id(btn))
             return
-        app._on_key_binding(btn)
+        try:
+            if btn.cget("state") == "disabled":
+                return
+        except Exception:
+            return
+        app._log_button_action(btn)
+        prior_source = getattr(app, "_manual_input_source", None)
+        try:
+            app._manual_input_source = "joystick"
+            app._invoke_button(btn)
+        finally:
+            if prior_source is None:
+                try:
+                    delattr(app, "_manual_input_source")
+                except Exception:
+                    pass
+            else:
+                app._manual_input_source = prior_source
 
 
 def is_virtual_hold_button(app, btn) -> bool:
@@ -280,7 +346,7 @@ def is_virtual_hold_button(app, btn) -> bool:
 
 
 def handle_joystick_button_release(app, key: tuple) -> None:
-    btn = app._joystick_binding_map.get(key)
+    _resolved_key, btn = _lookup_bound_button(app, key)
     if not btn or not app._is_virtual_hold_button(btn):
         return
     binding_id = app._button_binding_id(btn)

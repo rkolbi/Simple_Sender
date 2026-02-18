@@ -216,7 +216,8 @@ def build_jog_panel(app, parent):
             app.streaming_controller.log("Jog ignored - GRBL is not connected.")
             return
         feed = _jog_feed_for_move(dx, dy, dz)
-        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get())
+        source = getattr(app, "_manual_input_source", None) or "jog"
+        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source)
 
     def jog_cmd(dx, dy, dz):
         feed = _jog_feed_for_move(dx, dy, dz)

@@ -87,15 +87,27 @@ class ToolTip:
         self.delay_ms = delay_ms
         self._after_id: Any | None = None
         self._timeout_after_id: Any | None = None
+        self._suppress_until_leave = False
         widget.bind("<Enter>", self._schedule_show)
-        widget.bind("<Leave>", self._hide)
+        widget.bind("<Leave>", self._on_leave)
+        widget.bind("<ButtonPress>", self._on_press, add="+")
 
     def _schedule_show(self, _event=None):
+        if self._suppress_until_leave:
+            return
         # Always reset any existing tooltip so movement can update content/position.
         self._hide()
         if self._after_id is not None:
             self.widget.after_cancel(self._after_id)
         self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _on_leave(self, _event=None):
+        self._suppress_until_leave = False
+        self._hide()
+
+    def _on_press(self, _event=None):
+        self._suppress_until_leave = True
+        self._hide()
 
     def _show(self):
         try:

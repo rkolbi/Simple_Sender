@@ -114,6 +114,34 @@ def _axis_position_mm(app, axis: str) -> float | None:
     return _to_mm(raw_pos, str(report_units))
 
 
+def _homing_enabled(app) -> bool | None:
+    controller = getattr(app, "settings_controller", None)
+    if controller is None:
+        return None
+    raw_data = getattr(controller, "_settings_data", None)
+    if not isinstance(raw_data, dict):
+        return None
+    value = raw_data.get("$22")
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        value = value[0]
+    try:
+        return int(str(value).strip()) != 0
+    except Exception:
+        return None
+
+
+def _remaining_mm(limit_mm: float, pos_mm: float, direction: int, *, negative_space: bool) -> float:
+    if direction > 0:
+        if negative_space:
+            return 0.0 - pos_mm
+        return limit_mm - pos_mm
+    if negative_space:
+        return pos_mm - (-limit_mm)
+    return pos_mm
+
+
 def max_hold_distance(app, axis: str, direction: int) -> float:
     """Return one-shot hold jog distance in the app's current unit mode."""
     unit_mode = "mm"
@@ -127,10 +155,32 @@ def max_hold_distance(app, axis: str, direction: int) -> float:
     pos_mm = _axis_position_mm(app, axis)
     if limit_mm is None or pos_mm is None:
         return max(fallback, min_distance)
-    if direction > 0:
-        remaining_mm = limit_mm - pos_mm
+    homing = _homing_enabled(app)
+    if homing is True:
+        primary_negative = True
+    elif homing is False:
+        primary_negative = False
     else:
-        remaining_mm = pos_mm
+        # If homing status is unknown, infer the most plausible convention from the current position.
+        in_negative_span = (-limit_mm - 1.0) <= pos_mm <= 1.0
+        in_positive_span = -1.0 <= pos_mm <= (limit_mm + 1.0)
+        primary_negative = in_negative_span and not in_positive_span
+    remaining_primary = _remaining_mm(
+        limit_mm,
+        pos_mm,
+        direction,
+        negative_space=primary_negative,
+    )
+    remaining_secondary = _remaining_mm(
+        limit_mm,
+        pos_mm,
+        direction,
+        negative_space=not primary_negative,
+    )
+    candidates = [value for value in (remaining_primary, remaining_secondary) if value > 0]
+    if not candidates:
+        return min_distance
+    remaining_mm = min(candidates)
     remaining_mm -= JOYSTICK_HOLD_LIMIT_MARGIN_MM
     if remaining_mm <= 0:
         return min_distance
@@ -255,7 +305,7 @@ def send_hold_jog(app):
     elif axis == "Z":
         dz = direction * distance
     try:
-        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get())
+        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source="joystick")
     except Exception:
         pass
     app._joystick_hold_jog_sent = True

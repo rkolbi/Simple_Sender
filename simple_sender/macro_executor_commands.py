@@ -23,11 +23,14 @@
     Simple Sender - GRBL 1.1h CNC Controller
 """
 
+import logging
 from typing import cast
 
 from simple_sender.macro_commands import execute_macro_command
 from simple_sender.macro_parser import bcnc_compile_line, bcnc_evaluate_line
 from simple_sender.types import MacroExecutorState
+
+logger = logging.getLogger(__name__)
 
 
 class MacroCommandMixin(MacroExecutorState):
@@ -59,13 +62,21 @@ class MacroCommandMixin(MacroExecutorState):
         )
 
     def _bcnc_evaluate_line(self, compiled):
-        return bcnc_evaluate_line(
-            compiled,
-            macro_vars_lock=self._macro_vars_lock,
-            macro_local_vars=self._macro_local_vars,
-            eval_globals=self._macro_eval_globals,
-            exec_globals=self._macro_exec_globals,
-        )
+        try:
+            return bcnc_evaluate_line(
+                compiled,
+                macro_vars_lock=self._macro_vars_lock,
+                macro_local_vars=self._macro_local_vars,
+                eval_globals=self._macro_eval_globals,
+                exec_globals=self._macro_exec_globals,
+            )
+        except Exception as exc:
+            logger.exception("Macro expression evaluation failed")
+            try:
+                self.ui_q.put(("log", f"[macro] Expression evaluation failed: {exc}"))
+            except Exception:
+                pass
+            raise
 
     def _macro_eval_globals(self) -> dict:
         return cast(dict, self._macro_vars)

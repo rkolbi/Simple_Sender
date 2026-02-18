@@ -189,7 +189,9 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         dy: float,
         dz: float,
         feed: float,
-        unit_mode: str
+        unit_mode: str,
+        *,
+        source: str | None = None,
     ) -> None:
         """Execute incremental jog move.
         
@@ -213,7 +215,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         
         gunit = "G21" if unit_mode == "mm" else "G20"
         cmd = f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
-        self.send_immediate(cmd)
+        cmd_source = source if source else "jog"
+        self.send_immediate(cmd, source=cmd_source)
     
     # ========================================================================
     # G-CODE STREAMING

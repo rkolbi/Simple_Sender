@@ -223,24 +223,24 @@ def handle_joystick_event(
                 app.after_cancel(timer_id)
             except Exception:
                 pass
-        if capture_state.get("mode") == "safety":
-            binding = app._joystick_binding_from_event(key)
-            if binding:
-                app._joystick_safety_binding = binding
-                app._joystick_safety_active = False
-                app._refresh_joystick_safety_display()
-                _save_bindings(app)
-        else:
-            binding = app._joystick_binding_from_event(key)
-            if binding:
-                app._joystick_bindings[capture_state["binding_id"]] = binding
-                app._clear_duplicate_joystick_binding(key, capture_state["binding_id"])
-                _save_bindings(app)
-        if key[0] == "axis":
-            app._reset_joystick_axis_state(key[1], key[2])
-        if key[0] == "hat":
-            app._reset_joystick_hat_state(key[1], key[2])
-        app._apply_keyboard_bindings()
+            if capture_state.get("mode") == "safety":
+                binding = app._joystick_binding_from_event(key)
+                if binding:
+                    app._joystick_safety_binding = binding
+                    app._joystick_safety_active = False
+                    app._refresh_joystick_safety_display()
+                    _save_bindings(app)
+            else:
+                binding = app._joystick_binding_from_event(key)
+                if binding:
+                    app._joystick_bindings[capture_state["binding_id"]] = binding
+                    app._clear_duplicate_joystick_binding(key, capture_state["binding_id"])
+                    _save_bindings(app)
+            if key[0] == "axis":
+                app._reset_joystick_axis_state(key[1], key[2])
+            if key[0] == "hat":
+                app._reset_joystick_hat_state(key[1], key[2])
+            app._apply_keyboard_bindings()
         app._joystick_capture_state = None
         return
     if not app.joystick_bindings_enabled.get():

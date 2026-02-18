@@ -38,6 +38,25 @@ from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_e
 from simple_sender.types import UiEvent
 
 
+_JOG_LIMIT_ERROR_HINT = (
+    "Jog blocked by travel limits (error:15). "
+    "Move away from axis limits or verify homing and $130-$132."
+)
+
+
+def _is_error_15(message: str | None) -> bool:
+    if not message:
+        return False
+    return "error:15" in str(message).lower()
+
+
+def _is_jog_source(source: str | None) -> bool:
+    if not source:
+        return False
+    normalized = str(source).strip().lower()
+    return normalized in {"joystick", "jog", "jog_hold", "jog_button"}
+
+
 def set_streaming_lock(app: Any, locked: bool):
     state = "disabled" if locked else "normal"
     try:
@@ -150,9 +169,11 @@ def handle_event(app: Any, evt: UiEvent):
                 pass
             return
         case ("manual_error", msg, source):
-            msg = annotate_grbl_error(cast(str, msg))
+            raw_msg = cast(str, msg)
+            msg = annotate_grbl_error(raw_msg)
             label = str(source).strip() if source else ""
             prefix = f"GRBL error ({label})" if label else "GRBL error"
+            show_jog_limit_hint = _is_jog_source(label) and (_is_error_15(raw_msg) or _is_error_15(msg))
             if getattr(app, "_homing_in_progress", False):
                 app._homing_in_progress = False
                 app._homing_state_seen = False
@@ -161,9 +182,18 @@ def handle_event(app: Any, evt: UiEvent):
                 except Exception:
                     pass
             try:
-                app.status.config(text=f"{prefix}: {msg}")
+                if show_jog_limit_hint:
+                    app.status.config(text=_JOG_LIMIT_ERROR_HINT)
+                else:
+                    app.status.config(text=f"{prefix}: {msg}")
             except Exception:
                 pass
+            if show_jog_limit_hint and label.lower().startswith("joystick"):
+                try:
+                    if hasattr(app, "joystick_event_status"):
+                        app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
+                except Exception:
+                    pass
             return
         case ("ready", is_ready):
             handle_ready_event(app, is_ready)
