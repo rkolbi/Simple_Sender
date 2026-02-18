@@ -98,9 +98,9 @@ class AutoLevelProbeRunner:
         ok = False
         reason = None
         force_g90_on_exit = False
+        prev_units, prev_distance = self._snapshot_modal_state()
         try:
             self.app.probe_controller.clear()
-            prev_units, prev_distance = self._snapshot_modal_state()
             if not self._send_and_wait("G21", settings.idle_timeout):
                 reason = "Failed to set units."
                 return
@@ -132,10 +132,19 @@ class AutoLevelProbeRunner:
                     except Exception:
                         pass
             ok = True
+        except Exception as exc:
+            reason = reason or f"Error: {exc}"
+            self._log(f"[autolevel] Probe run failed: {exc}")
         finally:
-            self._restore_modal_state(prev_units, prev_distance, settings.idle_timeout)
+            try:
+                self._restore_modal_state(prev_units, prev_distance, settings.idle_timeout)
+            except Exception as exc:
+                self._log(f"[autolevel] Modal restore failed: {exc}")
             if force_g90_on_exit:
-                self._force_g90_restore()
+                try:
+                    self._force_g90_restore()
+                except Exception as exc:
+                    self._log(f"[autolevel] Force G90 restore failed: {exc}")
             self._running = False
             if on_done:
                 try:

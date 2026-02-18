@@ -24,6 +24,7 @@
 """
 
 # Standard library imports
+import logging
 from typing import Any
 
 from simple_sender.macro_prompt import (
@@ -32,6 +33,8 @@ from simple_sender.macro_prompt import (
     strip_prompt_tokens,
 )
 from simple_sender.types import MacroExecutorState
+
+logger = logging.getLogger(__name__)
 
 
 class MacroPromptMixin(MacroExecutorState):
@@ -71,7 +74,14 @@ class MacroPromptMixin(MacroExecutorState):
                         with self._macro_vars_lock:
                             globals_ctx = self._macro_eval_globals()
                             result = eval(expr_text, globals_ctx, self._macro_local_vars)
-                    except Exception:
+                    except Exception as exc:
+                        logger.exception("Macro message expression failed: [%s]", expr_text)
+                        try:
+                            self.ui_q.put(
+                                ("log", f"[macro] Message expression error [{expr_text}]: {exc}")
+                            )
+                        except Exception:
+                            pass
                         result = ""
                     if isinstance(result, float):
                         out.append(str(round(result, 4)))

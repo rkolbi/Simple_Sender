@@ -202,11 +202,11 @@ def format_gcode_stats_text(app, stats: dict, rate_source: str | None) -> str:
     minx, maxx = minx / unit_scale, maxx / unit_scale
     miny, maxy = miny / unit_scale, maxy / unit_scale
     minz, maxz = minz / unit_scale, maxz / unit_scale
-    minx = math.ceil(minx)
+    minx = math.floor(minx)
     maxx = math.ceil(maxx)
-    miny = math.ceil(miny)
+    miny = math.floor(miny)
     maxy = math.ceil(maxy)
-    minz = math.ceil(minz)
+    minz = math.floor(minz)
     maxz = math.ceil(maxz)
     factor = estimate_factor_value(app)
     time_min = stats.get("time_min")
