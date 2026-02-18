@@ -1,5 +1,5 @@
 # Simple Sender - Full Manual
-![Release: 1.3.1b2](https://img.shields.io/badge/release-1.3.1b2-blue)
+![Release: 1.6.0](https://img.shields.io/badge/release-1.6.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Don't trust it until you've validated it a few times.
@@ -136,7 +136,7 @@ This is a practical, end-to-end flow with rationale for key options.
 ## UI Tour
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
 
-- **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen.
+- **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again.
 
 - **Left panels:** MPos (Home/Unlock/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (−/+ with indicator), Macro buttons (if Macro-1..Macro-7 files exist).
 
@@ -201,7 +201,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (App Settings > Diagnostics).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
-- **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. Toggle with the Tips button in the status bar or App Settings.
+- **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
@@ -247,6 +247,8 @@ Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the direct
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
+
+Macro scripting remains fully open, and runtime hardening is applied around it: line-level failures are logged with line numbers, audit entries (`[macro][audit]`) record raw/evaluated/outcome details (with GUI logging enabled), and timeout guards can abort stalled runs. By default both macro timeouts are disabled (`0`), and you can tune them in App Settings > Macros (line timeout and total timeout).
 
 `App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed; `_` lines, `[expression]`, and assignments inside non-comment lines are blocked. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
@@ -553,7 +555,7 @@ python -m mypy
 - `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
 - `simple_sender/ui/gcode_viewer.py`: G-code viewer widget and run-reset helper.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
-- `simple_sender/ui/event_router.py`: UI state updates from GRBL events (includes streaming lock helper).
+- `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
@@ -799,7 +801,7 @@ Macro UI is included below along with the rest of the interface.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
-- Enable tooltips: toggles hover tips across the app.
+- Enable tooltips: toggles hover tips across the app (clicked controls suppress their tooltip until pointer leave/re-enter).
 - Tooltip display duration (sec): auto-hide timer (0 keeps tooltips visible).
 - Enable numeric keypad popups: shows or hides the touch keypad on numeric fields.
 - Recommendation: increase UI scale and keep the keypad enabled on touchscreens; use 0 seconds if you want persistent hints.
@@ -826,6 +828,8 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Macros
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
+- Line timeout (sec): maximum time allowed for each macro line (`0` disables; old-style behavior).
+- Total timeout (sec): maximum time allowed for a full macro run (`0` disables; old-style behavior).
 - Recommendation: leave scripting off unless you trust the macro source.
 
 ### App Settings: Zeroing

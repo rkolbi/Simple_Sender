@@ -32,23 +32,51 @@ from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad, set_k
 def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     macro_frame = ttk.LabelFrame(parent, text="Macros", padding=8)
     macro_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-    macro_frame.grid_columnconfigure(0, weight=1)
+    macro_frame.grid_columnconfigure(1, weight=1)
     app.macros_allow_python_check = ttk.Checkbutton(
         macro_frame,
         text="Allow macro scripting (Python/eval)",
         variable=app.macros_allow_python,
     )
-    app.macros_allow_python_check.grid(row=0, column=0, sticky="w", pady=(0, 4))
+    app.macros_allow_python_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
     apply_tooltip(
         app.macros_allow_python_check,
         "Disable to allow only plain G-code lines in macros (no scripting or expressions).",
     )
+    ttk.Label(macro_frame, text="Line timeout (sec)").grid(row=1, column=0, sticky="w", pady=4)
+    app.macro_line_timeout_entry = ttk.Entry(
+        macro_frame,
+        textvariable=app.macro_line_timeout_sec,
+        width=12,
+    )
+    app.macro_line_timeout_entry.grid(row=1, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.macro_line_timeout_entry, allow_decimal=True)
+    ttk.Label(macro_frame, text="0 disables").grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
+    apply_tooltip(
+        app.macro_line_timeout_entry,
+        "Maximum allowed time per macro line in seconds. Set 0 to disable.",
+    )
+
+    ttk.Label(macro_frame, text="Total timeout (sec)").grid(row=2, column=0, sticky="w", pady=4)
+    app.macro_total_timeout_entry = ttk.Entry(
+        macro_frame,
+        textvariable=app.macro_total_timeout_sec,
+        width=12,
+    )
+    app.macro_total_timeout_entry.grid(row=2, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.macro_total_timeout_entry, allow_decimal=True)
+    ttk.Label(macro_frame, text="0 disables").grid(row=2, column=2, sticky="w", padx=(8, 0), pady=4)
+    apply_tooltip(
+        app.macro_total_timeout_entry,
+        "Maximum allowed time for a full macro run in seconds. Set 0 to disable.",
+    )
+
     ttk.Label(
         macro_frame,
         text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
         wraplength=560,
         justify="left",
-    ).grid(row=1, column=0, sticky="w")
+    ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
     return row + 1
 
 

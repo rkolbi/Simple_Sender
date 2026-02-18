@@ -41,6 +41,18 @@ def init_basic_preferences(app, app_version: str, module):
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
     app.macros_allow_python = tk.BooleanVar(value=setting("macros_allow_python", False))
+    app.macro_line_timeout_sec = tk.DoubleVar(
+        value=setting(
+            "macro_line_timeout_sec",
+            DEFAULT_SETTINGS.get("macro_line_timeout_sec", 0.0),
+        )
+    )
+    app.macro_total_timeout_sec = tk.DoubleVar(
+        value=setting(
+            "macro_total_timeout_sec",
+            DEFAULT_SETTINGS.get("macro_total_timeout_sec", 0.0),
+        )
+    )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
     app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
     app._render3d_blocked = False

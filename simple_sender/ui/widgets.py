@@ -362,7 +362,7 @@ class _NotebookTabTooltips:
         return self._is_descendant(widget)
 
     def _tab_id_at_root(self, x_root: int, y_root: int) -> str | None:
-        tabs = self.notebook.tabs()
+        tabs = tuple(str(tab_id) for tab_id in self.notebook.tabs())
         if not tabs:
             return None
         try:
@@ -387,7 +387,7 @@ class _NotebookTabTooltips:
         try:
             rx = int(x_root - nx)
             ry = int(y_root - ny)
-            idx = self.notebook.index(f"@{rx},{ry}")
+            idx = int(self.notebook.index(f"@{rx},{ry}"))
             if 0 <= idx < len(tabs):
                 return tabs[idx]
         except Exception:

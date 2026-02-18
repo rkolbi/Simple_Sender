@@ -104,6 +104,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "last_port": "",
     "machine_profiles": [],
     "macros_allow_python": False,
+    "macro_line_timeout_sec": 0.0,
+    "macro_total_timeout_sec": 0.0,
     "max_recent_files": 10,
     "performance_mode": True,
     "recent_files": [],

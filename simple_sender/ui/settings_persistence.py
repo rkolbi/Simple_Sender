@@ -106,6 +106,40 @@ def save_settings(app):
         )
     tooltip_timeout_value = max(0.0, float(tooltip_timeout_value))
 
+    macro_line_timeout_var = getattr(app, "macro_line_timeout_sec", None)
+    if macro_line_timeout_var is None:
+        macro_line_timeout_value = app.settings.get(
+            "macro_line_timeout_sec",
+            DEFAULT_SETTINGS.get("macro_line_timeout_sec", 0.0),
+        )
+    else:
+        macro_line_timeout_value = safe_float(
+            macro_line_timeout_var,
+            app.settings.get(
+                "macro_line_timeout_sec",
+                DEFAULT_SETTINGS.get("macro_line_timeout_sec", 0.0),
+            ),
+            "macro line timeout",
+        )
+    macro_line_timeout_value = max(0.0, float(macro_line_timeout_value))
+
+    macro_total_timeout_var = getattr(app, "macro_total_timeout_sec", None)
+    if macro_total_timeout_var is None:
+        macro_total_timeout_value = app.settings.get(
+            "macro_total_timeout_sec",
+            DEFAULT_SETTINGS.get("macro_total_timeout_sec", 0.0),
+        )
+    else:
+        macro_total_timeout_value = safe_float(
+            macro_total_timeout_var,
+            app.settings.get(
+                "macro_total_timeout_sec",
+                DEFAULT_SETTINGS.get("macro_total_timeout_sec", 0.0),
+            ),
+            "macro total timeout",
+        )
+    macro_total_timeout_value = max(0.0, float(macro_total_timeout_value))
+
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
     data.pop("console_status_enabled", None)
@@ -263,6 +297,8 @@ def save_settings(app):
         "job_completion_popup": bool(app.job_completion_popup.get()),
         "job_completion_beep": bool(app.job_completion_beep.get()),
         "macros_allow_python": bool(app.macros_allow_python.get()),
+        "macro_line_timeout_sec": macro_line_timeout_value,
+        "macro_total_timeout_sec": macro_total_timeout_value,
         "zeroing_persistent": bool(app.zeroing_persistent.get()),
         "auto_level_settings": dict(getattr(app, "auto_level_settings", {})),
         "auto_level_job_prefs": dict(getattr(app, "auto_level_job_prefs", {})),

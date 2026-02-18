@@ -306,8 +306,14 @@ def send_hold_jog(app):
         dz = direction * distance
     try:
         app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source="joystick")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Failed to send joystick hold jog: %s", exc)
+        app._joystick_hold_last_ts = time.monotonic()
+        try:
+            app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
+        except Exception:
+            pass
+        return
     app._joystick_hold_jog_sent = True
 
 

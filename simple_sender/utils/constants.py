@@ -467,6 +467,12 @@ MACRO_WAIT_TIMEOUT = 30.0
 MACRO_WAIT_POLL_INTERVAL = 0.1
 """Polling interval for %wait command (seconds)."""
 
+MACRO_LINE_TIMEOUT = 0.0
+"""Default maximum execution time for a single macro line (seconds, 0 disables)."""
+
+MACRO_TOTAL_TIMEOUT = 0.0
+"""Default maximum execution time for an entire macro run (seconds, 0 disables)."""
+
 MACRO_STDEXPR = False
 """Use standard Python expressions instead of bracket notation."""
 

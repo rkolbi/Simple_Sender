@@ -30,11 +30,47 @@ import threading
 import time
 from tkinter import messagebox
 
+from simple_sender.utils.constants import (
+    MACRO_LINE_TIMEOUT,
+    MACRO_TOTAL_TIMEOUT,
+)
 from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
 
 
 class MacroRunnerMixin(MacroExecutorState):
+    def _macro_timeout_setting(self, attr_name: str, default_value: float) -> float:
+        value = getattr(self.app, attr_name, default_value)
+        try:
+            if hasattr(value, "get"):
+                value = value.get()
+            timeout_s = float(value)
+        except Exception:
+            return float(default_value)
+        if timeout_s <= 0:
+            return 0.0
+        return timeout_s
+
+    def _macro_line_timeout_s(self) -> float:
+        return self._macro_timeout_setting("macro_line_timeout_sec", MACRO_LINE_TIMEOUT)
+
+    def _macro_total_timeout_s(self) -> float:
+        return self._macro_timeout_setting("macro_total_timeout_sec", MACRO_TOTAL_TIMEOUT)
+
+    def _macro_audit_enabled(self) -> bool:
+        enabled = getattr(self.app, "gui_logging_enabled", True)
+        try:
+            if hasattr(enabled, "get"):
+                enabled = enabled.get()
+            return bool(enabled)
+        except Exception:
+            return True
+
+    def _macro_audit(self, message: str, *, force: bool = False) -> None:
+        if not force and not self._macro_audit_enabled():
+            return
+        self.ui_q.put(("log", f"[macro][audit] {message}"))
+
     def run_macro(self, index: int):
         if not self.grbl.is_connected():
             messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
@@ -75,9 +111,18 @@ class MacroRunnerMixin(MacroExecutorState):
     def _run_macro_worker(self, lines: list[str], path: str | None):
         start = time.perf_counter()
         executed = 0
+        line_timeout_s = self._macro_line_timeout_s()
+        total_timeout_s = self._macro_total_timeout_s()
         self._alarm_event.clear()
         self._alarm_notified = False
         name = lines[0].strip() if lines else "Macro"
+        self._macro_audit(
+            (
+                f"Start name={name!r} path={path or '<unknown>'} "
+                f"line_timeout={line_timeout_s:.1f}s total_timeout={total_timeout_s:.1f}s"
+            ),
+            force=True,
+        )
         post_ui = getattr(self.app, "_post_ui_thread", None)
         if callable(post_ui) and hasattr(self.app, "_start_macro_status"):
             post_ui(self.app._start_macro_status, name)
@@ -100,48 +145,96 @@ class MacroRunnerMixin(MacroExecutorState):
             status_ok = self._macro_wait_for_status()
             if not modal_ok or not status_ok:
                 self.ui_q.put(("log", "[macro] Snapshot failed; macro aborted."))
+                self._macro_audit("Snapshot failed; aborting.", force=True)
                 return
             self._macro_saved_state = self._snapshot_macro_state()
             if self.grbl.is_connected():
                 self._macro_force_mm()
             for idx in range(2, len(lines)):
+                now = time.perf_counter()
+                if total_timeout_s > 0 and (now - start) > total_timeout_s:
+                    self.ui_q.put(
+                        ("log", f"[macro] Macro timed out after {total_timeout_s:.1f}s; aborted."),
+                    )
+                    self._macro_audit(
+                        f"L{idx + 1} timeout: total runtime exceeded {total_timeout_s:.1f}s",
+                        force=True,
+                    )
+                    break
                 raw = lines[idx]
                 raw_line = raw.rstrip("\r\n")
                 line = raw_line.strip()
                 self._current_macro_line = raw_line
                 if self._alarm_event.is_set():
+                    self._macro_audit(f"L{idx + 1} abort: alarm event set", force=True)
                     break
                 if not line:
                     continue
                 executed += 1
-                compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
-                if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
-                    self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
-                    self._notify_macro_compile_error(path, raw_line, idx + 1, compiled[1])
+                line_no = idx + 1
+                self._macro_audit(f"L{line_no} raw: {raw_line}")
+                line_start = time.perf_counter()
+                try:
+                    compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
+                    if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
+                        self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
+                        self._macro_audit(f"L{line_no} compile_error: {compiled[1]}", force=True)
+                        self._notify_macro_compile_error(path, raw_line, line_no, compiled[1])
+                        break
+                    if compiled is None:
+                        self._macro_audit(f"L{line_no} skipped")
+                        continue
+                    if isinstance(compiled, tuple):
+                        kind = compiled[0]
+                        self._macro_audit(f"L{line_no} directive: {kind}")
+                        if kind == "WAIT":
+                            wait_timeout_s = line_timeout_s if line_timeout_s > 0 else 30.0
+                            self._macro_wait_for_idle(timeout_s=wait_timeout_s)
+                        elif kind == "MSG":
+                            msg = compiled[1] if len(compiled) > 1 else ""
+                            if msg:
+                                msg = self._format_macro_message(str(msg))
+                                self.ui_q.put(("log", f"[macro] {msg}"))
+                        elif kind == "UPDATE":
+                            update_timeout_s = min(5.0, line_timeout_s) if line_timeout_s > 0 else 1.0
+                            self._macro_wait_for_status(timeout_s=max(update_timeout_s, 0.1))
+                        self._macro_audit(f"L{line_no} ok")
+                        continue
+                    evaluated = self._bcnc_evaluate_line(compiled)
+                    if evaluated is None:
+                        self._macro_audit(f"L{line_no} python_exec_ok")
+                        continue
+                    self._macro_audit(f"L{line_no} eval: {evaluated}")
+                    if not self._execute_command(evaluated, raw_line):
+                        self._macro_audit(f"L{line_no} aborted by command", force=True)
+                        break
+                    self._macro_audit(f"L{line_no} ok")
+                    if getattr(self.app, "_alarm_locked", False):
+                        self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
+                        self._macro_audit(f"L{line_no} abort: alarm lock active", force=True)
+                        break
+                except Exception as exc:
+                    logger.exception("Macro line %d failed", line_no)
+                    self.ui_q.put(("log", f"[macro] Line {line_no} failed: {exc}"))
+                    self._macro_audit(f"L{line_no} error: {exc}", force=True)
                     break
-                if compiled is None:
-                    continue
-                if isinstance(compiled, tuple):
-                    kind = compiled[0]
-                    if kind == "WAIT":
-                        self._macro_wait_for_idle()
-                    elif kind == "MSG":
-                        msg = compiled[1] if len(compiled) > 1 else ""
-                        if msg:
-                            msg = self._format_macro_message(str(msg))
-                            self.ui_q.put(("log", f"[macro] {msg}"))
-                    elif kind == "UPDATE":
-                        self._macro_wait_for_status()
-                    continue
-                evaluated = self._bcnc_evaluate_line(compiled)
-                if evaluated is None:
-                    continue
-                if not self._execute_command(evaluated, raw_line):
-                    break
-                if getattr(self.app, "_alarm_locked", False):
-                    self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
+                elapsed_line = time.perf_counter() - line_start
+                if line_timeout_s > 0 and elapsed_line > line_timeout_s:
+                    self.ui_q.put(
+                        (
+                            "log",
+                            f"[macro] Line {line_no} timed out after {elapsed_line:.2f}s "
+                            f"(limit {line_timeout_s:.2f}s); aborted.",
+                        )
+                    )
+                    self._macro_audit(
+                        f"L{line_no} timeout: {elapsed_line:.2f}s > {line_timeout_s:.2f}s",
+                        force=True,
+                    )
                     break
         except Exception as exc:
+            self.ui_q.put(("log", f"[macro] Runtime error: {exc}"))
+            self._macro_audit(f"Runtime error: {exc}", force=True)
             self.app._log_exception("Macro error", exc, show_dialog=True, dialog_title="Macro error")
         finally:
             try:
@@ -152,7 +245,10 @@ class MacroRunnerMixin(MacroExecutorState):
                 self.ui_q.put(("log", f"[macro] Unit restore failed: {exc}"))
             self._macro_saved_state = None
             self._macro_state_restored = False
-            self._macro_lock.release()
+            if self._macro_lock.locked():
+                self._macro_lock.release()
+            else:
+                logger.warning("Macro worker finished without a held macro lock.")
             if callable(post_ui) and hasattr(self.app, "_stop_macro_status"):
                 post_ui(self.app._stop_macro_status)
             elif hasattr(self.app, "_stop_macro_status"):
@@ -167,6 +263,10 @@ class MacroRunnerMixin(MacroExecutorState):
                     "log",
                     f"[macro] Executed {executed} line(s) in {duration:.2f}s ({avg:.3f}s/line)",
                 ))
+            self._macro_audit(
+                f"Done name={name!r} executed={executed} duration={duration:.2f}s",
+                force=True,
+            )
 
     def _notify_macro_compile_error(
         self,
