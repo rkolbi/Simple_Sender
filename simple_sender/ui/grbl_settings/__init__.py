@@ -206,10 +206,11 @@ class GRBLSettingsController:
                     sent += 1
                     time.sleep(GRBL_SETTINGS_WRITE_DELAY)
             except Exception as exc:
-                self.app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
+                message = str(exc)
+                self.app.ui_q.put(("log", f"[settings] Save failed: {message}"))
                 try:
-                    def finish_failed() -> None:
-                        self._finish_settings_save_failed(str(exc))
+                    def finish_failed(error_message: str = message) -> None:
+                        self._finish_settings_save_failed(error_message)
 
                     self.app.after(0, finish_failed)
                 except Exception:

@@ -19,17 +19,17 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
 - `Macro-2` - **Park over Bit Setter**: parks over fixed sensor coordinates in machine coordinates.
 - `Macro-3` - **XYZ Touch Plate**: probes touch-plate Z/X/Y, then captures `macro.state.TOOL_REFERENCE` at the fixed sensor.
 - `Macro-4` - **Z Touch Plate**: probes touch-plate Z only, then captures `macro.state.TOOL_REFERENCE` at the fixed sensor.
-- `Macro-5` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`.
-- `Macro-6` - **Prompt Test Macro**: exercises default/custom prompt dialogs and prompt-choice variables.
-- `Macro-7` - **Prompt Test Macro**: duplicate prompt-test sample slot.
-
-No `Macro-8` file is shipped by default; add one if you want an eighth macro button.
+- `Macro-5` - **No Touch Plate**: for manually-set XYZ zero workflows; captures `macro.state.TOOL_REFERENCE` at the fixed sensor without touch-plate probing.
+- `Macro-6` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`.
+- `Macro-7` - **Prompt Test Macro**: exercises default/custom prompt dialogs and prompt-choice variables.
+- `Macro-8` - **Prompt Test Macro**: duplicate prompt-test sample slot.
 
 ## Recommended Flow
 
-1. Use `Macro-3` (or `Macro-4` if you only need Z probing) to establish/update `TOOL_REFERENCE`.
-2. Use `Macro-5` for subsequent tool changes.
-3. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
+1. Use `Macro-3` (or `Macro-4` if you need touch-plate probing) to establish/update `TOOL_REFERENCE`.
+2. If XYZ zero is set manually (no touch plate), run `Macro-5` to establish/update `TOOL_REFERENCE`.
+3. Use `Macro-6` for subsequent tool changes.
+4. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
 
 ## Notes
 

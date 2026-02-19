@@ -1,19 +1,60 @@
-Prompt Test Macro
-Presents a test prompt and message to verify the popup flow.
+Tool Change
+Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.
 
-; First prompt uses the default Resume/Cancel UI.
-%msg (Press Resume or Cancel to confirm default behaviour.)
-M0 (Ensure the default Resume/Cancel prompt appears.)
+; Keep these values aligned with Macro 1/2 so the tool sensor remains consistent; adjust SAFE_HEIGHT if clamps differ.
+%macro.state.SAFE_HEIGHT = -5
+%macro.state.PROBE_X_LOCATION = -1.5
+%macro.state.PROBE_Y_LOCATION = -1224
+%macro.state.PROBE_Z_LOCATION = float(app.settings.get("macro_probe_z_location", -5.0))
+%macro.state.PROBE_SAFETY_MARGIN = max(0.0, float(app.settings.get("macro_probe_safety_margin", 3.0)))
+%macro.state.Z_MAX_TRAVEL = 150.0
+%macro.state.grbl_settings = getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
+%if "$132" in macro.state.grbl_settings: macro.state.Z_MAX_TRAVEL = float(macro.state.grbl_settings["$132"][0])
+%macro.state.PROBE_DISTANCE = max(1.0, round(macro.state.Z_MAX_TRAVEL + macro.state.PROBE_Z_LOCATION - macro.state.PROBE_SAFETY_MARGIN, 3))
+%macro.state.PROBE_RAPID_FEEDRATE = 200
+
+%if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 3, Macro 4, or Macro 5 first.")
+
 %wait
-
-; Second prompt exercises the custom title + button syntax.
-PROMPT [title(Custom Choice)] Pick an option from the custom buttons. [btn(Option One)a] [btn(Option Two)b] [btn(Option Three)c]
-%msg (Selected option key: [macro.prompt_choice_key] (label: [macro.prompt_choice_label]) index [macro.prompt_index])
-%wait
-
-; Third popup echoes the chosen option.
-PROMPT [title(Choice Made)] Your choice was: [macro.prompt_choice_key] [btn(OK)]
-%wait
-
-; Additional prompt to show Cancel handling remains at the end.
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
+%msg (Tool change start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz] TOOL_REFERENCE=[macro.state.TOOL_REFERENCE])
+G21
 M5
+G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+%wait
+M0 (Change the tool and press Resume when done.)
+G53 Z[macro.state.PROBE_Z_LOCATION]
+G91
+G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
+G0 Z2
+G4 P0.25
+G38.2 Z-5 F40
+G4 P0.25
+G38.4 Z10 F20
+G4 P0.25
+G38.2 Z-2 F5
+G4 P0.25
+G38.4 Z10 F5
+G90
+%wait
+%update
+%msg (New tool probe mz=[mz])
+G10 L20 Z[macro.state.TOOL_REFERENCE]
+%wait
+%update
+%msg (After G10: wz=[wz] mz=[mz])
+G91
+G0 Z5
+G90
+G53 Z[macro.state.SAFE_HEIGHT]
+%wait
+G0 X0 Y0
+STATE_RETURN
