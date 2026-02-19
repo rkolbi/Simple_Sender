@@ -21,7 +21,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog, messagebox
+
+from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +56,19 @@ def clear_console_log(app):
     app.streaming_controller.clear_console()
 
 def save_console_log(app):
-    path = filedialog.asksaveasfilename(
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    default_name = f"simple_sender_console_{timestamp}.txt"
+    initial_dir = Path.home() / "Desktop"
+    if not initial_dir.exists():
+        initial_dir = Path.home()
+    path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
         title="Save console log",
         defaultextension=".txt",
-        filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        initialdir=str(initial_dir),
+        initialfile=default_name,
+        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
     )
     if not path:
         return
