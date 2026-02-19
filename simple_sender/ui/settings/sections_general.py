@@ -58,25 +58,50 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_export_diagnostics,
         "Save recent console/status history and settings to a text file.",
     )
+    ttk.Label(diagnostics_frame, text="Backup bundle").grid(
+        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    backup_row = ttk.Frame(diagnostics_frame)
+    backup_row.grid(row=2, column=1, sticky="w", pady=4)
+    app.btn_export_backup_bundle = ttk.Button(
+        backup_row,
+        text="Export bundle",
+        command=app._export_backup_bundle,
+    )
+    app.btn_export_backup_bundle.pack(side="left")
+    apply_tooltip(
+        app.btn_export_backup_bundle,
+        "Export settings, macro files, and checklists into one zip bundle.",
+    )
+    app.btn_import_backup_bundle = ttk.Button(
+        backup_row,
+        text="Import bundle",
+        command=app._import_backup_bundle,
+    )
+    app.btn_import_backup_bundle.pack(side="left", padx=(8, 0))
+    apply_tooltip(
+        app.btn_import_backup_bundle,
+        "Import settings and macro assets from a previously exported bundle.",
+    )
     app.validate_streaming_check = ttk.Checkbutton(
         diagnostics_frame,
         text="Validate streaming (large) G-code files",
         variable=app.validate_streaming_gcode,
     )
-    app.validate_streaming_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.validate_streaming_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.validate_streaming_check,
         "Validate large files while loading; adds an extra scan but improves preflight checks.",
     )
     ttk.Label(diagnostics_frame, text="Streaming line threshold").grid(
-        row=3, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=4, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
         diagnostics_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
-    app.streaming_line_threshold_entry.grid(row=3, column=1, sticky="w", pady=(6, 0))
+    app.streaming_line_threshold_entry.grid(row=4, column=1, sticky="w", pady=(6, 0))
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,

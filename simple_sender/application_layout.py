@@ -51,6 +51,15 @@ class LayoutMixin:
     def _export_session_diagnostics(self):
         _app_module(self).export_session_diagnostics(self)
 
+    def _export_backup_bundle(self):
+        _app_module(self).export_backup_bundle(self)
+
+    def _import_backup_bundle(self):
+        _app_module(self).import_backup_bundle(self)
+
+    def _open_macro_manager(self):
+        _app_module(self).show_macro_manager(self)
+
     def _show_logs_dialog(self):
         _app_module(self).show_logs_dialog(self)
 

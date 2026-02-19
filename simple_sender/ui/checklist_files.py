@@ -25,24 +25,16 @@ from __future__ import annotations
 import glob
 import os
 
+from simple_sender.ui.macro_files import get_macro_search_dirs
+
 CHECKLIST_PREFIX = "checklist-"
 CHECKLIST_EXT = ".chk"
-
-
-def _macro_search_dirs(app) -> tuple[str, ...]:
-    executor = getattr(app, "macro_executor", None)
-    if executor is None:
-        return ()
-    dirs = getattr(executor, "macro_search_dirs", None)
-    if dirs is None:
-        dirs = getattr(executor, "_macro_search_dirs", ())
-    return tuple(dirs or ())
 
 
 def discover_checklist_files(app) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
-    for macro_dir in _macro_search_dirs(app):
+    for macro_dir in get_macro_search_dirs(app):
         pattern = os.path.join(macro_dir, f"{CHECKLIST_PREFIX}*{CHECKLIST_EXT}")
         try:
             candidates = sorted(glob.glob(pattern))
@@ -62,7 +54,7 @@ def find_named_checklist(app, name: str) -> str | None:
     if not key:
         return None
     filename = f"{CHECKLIST_PREFIX}{key}{CHECKLIST_EXT}"
-    for macro_dir in _macro_search_dirs(app):
+    for macro_dir in get_macro_search_dirs(app):
         path = os.path.join(macro_dir, filename)
         if os.path.isfile(path):
             return path

@@ -54,7 +54,9 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
 - Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Idle status spam suppressed in console; filters for alarms/errors.
-- Macros: left-click to run, right-click to preview.
+- Run preflight safety gate checks readiness/bounds/validation before streaming, with explicit operator override.
+- Diagnostics include session report export plus backup bundle import/export (settings, macros, checklists).
+- Macros: left-click to run, right-click to preview, with in-app Macro Manager for edit/duplicate/reorder.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
@@ -101,7 +103,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Click **Read Job** (auto-switches to the G-code tab after selection); file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
-   - Optional: run the Preflight check in the **Checklists** tab to catch validation issues before running.
+   - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
    - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
 5) **App safety options**
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
@@ -114,8 +116,8 @@ This is a practical, end-to-end flow with rationale for key options.
      - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in the **Checklists** tab > Safety.
      - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
-     - Click **Run** (Training Wheels may prompt). Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive.
-     - The Run confirmation includes a G-code validation report (unsupported codes, GRBL warnings, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
+     - Click **Run** (Training Wheels may prompt). Before streaming starts, a preflight safety gate checks job/controller readiness and bounds; when failures are present, operators can choose to stop or explicitly override and continue.
+     - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. The Run confirmation includes a G-code validation report (unsupported codes, GRBL warnings, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
      - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
@@ -165,7 +167,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
     ![-](pics/grblsettingstab.JPG)
     
-  - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight/export/streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
     ![](pics/appsettingstab.JPG)
   
@@ -198,7 +200,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
-- **Diagnostics:** Preflight check summarizes bounds/validation, and the diagnostics export captures recent status/console history (App Settings > Diagnostics).
+- **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics export captures recent status/console history, and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
@@ -236,12 +238,14 @@ This is a practical, end-to-end flow with rationale for key options.
 - Line-length errors include the original file line count and the non-empty cleaned line count; counts are reported as non-empty lines over the limit.
 - Streaming errors pause the job (gSender-style) and report the file name, line number, and line text in the error status.
 - Program pauses (M0/M1) and tool changes (M6) automatically pause the stream after the line is acknowledged.
+- Console Save pre-fills a timestamped filename (`simple_sender_console_YYYYMMDD_HHMMSS.txt`) for touch-friendly export.
 
 ## GRBL Settings UI
-- Refresh $$ (idle, not alarmed, after handshake). Table shows descriptions; edits inline with numeric validation/ranges; pending edits highlighted until saved. Raw $$ tab holds capture.
+- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
 Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
+`App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
 
 ![-](pics/macros.jpg)
 
@@ -488,8 +492,10 @@ This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) an
 
 ### Macro shortcuts
 If you prefer guided probing, the macro set includes touch-plate and reference-tool helpers (see the Macro table below):
-- **Macro-4**: XYZ touch plate + reference tool setup.
-- **Macro-6**: Z touch plate + reference tool setup.
+- **Macro-3**: XYZ touch plate + reference tool setup.
+- **Macro-4**: Z touch plate + reference tool setup.
+- **Macro-5**: No-touch-plate reference capture for manual XYZ zero workflows.
+- **Macro-6**: Tool change after a reference is established.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
@@ -595,7 +601,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
-- Need a support bundle: use App Settings > Diagnostics > Export session diagnostics.
+- Need a support bundle: use App Settings > Diagnostics > Export session diagnostics, or export a backup bundle for full settings/macro/checklist transfer.
 
 ## Change Summary (since 1.2)
 - Auto-leveling: added RMS roughness + outlier stats in the height map summary.
@@ -613,6 +619,11 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - Homing watchdog grace period is configurable to avoid disconnects during long homing cycles.
 - GRBL settings capture is more resilient: queued refresh after streaming, console `$$` routes through the refresh path, and Raw $$ always completes on the final `ok`.
 - Status history is stored for diagnostics export; console logging is throttled in performance mode.
+- Run now enforces a preflight safety gate before streaming and presents an operator override prompt when blocking failures are detected.
+- App Settings > Diagnostics now supports backup bundle export/import for settings, macros, and checklists.
+- App Settings > Macros now includes a built-in Macro Manager and probe safety inputs (Probe Z start and safety margin) used by touch-plate/tool-reference macros.
+- Console Save now pre-fills a timestamped filename for touch-first workflows.
+- GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
@@ -709,17 +720,18 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 
 ## Appendix C: Macro Reference
 
-The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships `Macro-1` through `Macro-7`.
+The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships `Macro-1` through `Macro-8`.
 
 | Macro | Purpose | When to use | When to avoid | Code notes |
 | --- | --- | --- | --- | --- |
 | Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Avoid while a stream is active; it's a manual setup macro. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
 | Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Avoid while cutting or with spindle running. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
-| Macro-3: XYZ Touch Plate | Probes Z/X/Y on the touch plate, then captures reference tool height on the fixed sensor. | Initial setup and full XYZ touch-plate calibration workflows. | Avoid during production runs; requires plate/clip interaction and operator prompts. | Includes `PROMPT`/`M0`, staged probing (`G38.2`/`G38.4`), `%update`, and stores `macro.state.TOOL_REFERENCE = wz`. |
-| Macro-4: Z Touch Plate | Probes touch-plate Z only, then captures reference tool height on the fixed sensor. | Z-only calibration when X/Y edge probing is not needed. | Avoid if XY edge probing is required for your setup. | Similar to Macro-3 but skips X/Y edge probing; still updates `TOOL_REFERENCE` from `wz`. |
-| Macro-5: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, probes at sensor, then applies `G10 L20 Z[...]`. |
-| Macro-6: Prompt Test Macro | Exercises default and custom macro prompts/dialog choices. | Verifying prompt UI behavior and choice-variable plumbing. | Not intended for machine motion workflows. | Demonstrates `M0`, `PROMPT`, custom `[title(...)]`/`[btn(...)]`, and logs `macro.prompt_choice_*`. |
-| Macro-7: Prompt Test Macro | Same as Macro-6 (duplicate shipped sample). | Backup/sample prompt test slot. | Not intended for machine motion workflows. | Current repository copy matches Macro-6 content. |
+| Macro-3: XYZ Touch Plate | Probes Z/X/Y on the touch plate, then captures reference tool height on the fixed sensor. | Initial setup and full XYZ touch-plate calibration workflows. | Avoid during production runs; requires plate/clip interaction and operator prompts. | Includes `PROMPT`/`M0`, staged probing (`G38.2`/`G38.4`), `%update`, stores `macro.state.TOOL_REFERENCE = wz`, and computes probe travel from `$132` plus configured probe start/margin. |
+| Macro-4: Z Touch Plate | Probes touch-plate Z only, then captures reference tool height on the fixed sensor. | Z-only calibration when X/Y edge probing is not needed. | Avoid if XY edge probing is required for your setup. | Similar to Macro-3 but skips X/Y edge probing; still updates `TOOL_REFERENCE` from `wz` and uses the same `$132`-based probe-distance calculation. |
+| Macro-5: No Touch Plate | Captures reference tool height on the fixed sensor without touch-plate probing. | Workflows where XYZ work zero was set manually and only reference capture is needed. | Avoid if touch-plate probing is required for your setup. | Uses configured sensor coordinates, computes `$132`-based probe travel with safety margin, probes staged Z touches, then stores `macro.state.TOOL_REFERENCE = wz`. |
+| Macro-6: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
+| Macro-7: Prompt Test Macro | Exercises default and custom macro prompts/dialog choices. | Verifying prompt UI behavior and choice-variable plumbing. | Not intended for machine motion workflows. | Demonstrates `M0`, `PROMPT`, custom `[title(...)]`/`[btn(...)]`, and logs `macro.prompt_choice_*`. |
+| Macro-8: Prompt Test Macro | Same as Macro-7 (duplicate shipped sample). | Backup/sample prompt test slot. | Not intended for machine motion workflows. | Current repository copy matches Macro-7 content. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -772,7 +784,7 @@ Macro UI is included below along with the rest of the interface.
 - Console log: read-only GRBL traffic log with filters.
 - Command entry: manual command input; blocked while streaming or when alarms restrict input.
 - Send: sends the command entry contents to GRBL.
-- Save: writes the current console log to a text file.
+- Save: writes the current console log to a text file with a prefilled timestamped filename.
 - Clear: clears the console log.
 - Filters ALL/ERRORS/ALARMS: filter the console display by severity.
 - Pos/Status toggle: includes or omits status/position reports from the console view and log.
@@ -799,7 +811,7 @@ Macro UI is included below along with the rest of the interface.
 ### GRBL Settings Tab
 - Refresh $$: requests a fresh $$ dump and populates the table.
 - Save Changes: sends edited settings back to GRBL in sequence.
-- Settings table: columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
+- Settings table: scrollable columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
 - Edited highlight: rows with pending edits are highlighted until saved or reverted.
 
 ### App Settings: Theme
@@ -836,6 +848,9 @@ Macro UI is included below along with the rest of the interface.
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
 - Line timeout (sec): maximum time allowed for each macro line (`0` disables; old-style behavior).
 - Total timeout (sec): maximum time allowed for a full macro run (`0` disables; old-style behavior).
+- Probe Z start (machine, mm): machine-coordinate approach Z for tool-reference probing macros (typically `-5`).
+- Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Macro-3/4/5/6.
+- Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder Macro-1..Macro-8 without leaving the app.
 - Recommendation: leave scripting off unless you trust the macro source.
 
 ### App Settings: Zeroing
@@ -892,7 +907,9 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Diagnostics
 - Preflight check (Run check): scans the loaded job for bounds/validation warnings.
+- Run preflight gate: Run now enforces the same checks and shows an operator override prompt on blocking failures.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
+- Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip.
 - Validate streaming (large) G-code files: enables validation pass for large files.
 - Streaming line threshold: cleaned line count that forces streaming mode (0 disables).
 - Recommendation: keep streaming validation enabled if you rely on warnings; raise the threshold if you want more files to load in full mode.
@@ -971,6 +988,13 @@ Macro UI is included below along with the rest of the interface.
 - Title: shows the macro name being previewed.
 - Macro text: read-only contents of the macro (excluding the header lines).
 - Close: closes the preview.
+
+### Macro Manager Dialog
+- Macro list: slot overview for Macro-1..Macro-8 and source file paths.
+- Name/tooltip/body editor: edits macro header and content in-place.
+- Save/Delete: writes or removes the selected macro file in the active writable macro directory.
+- Duplicate: copies one macro slot to a different slot.
+- Reorder: moves macro contents between slots while keeping numbered naming.
 
 ### Macro Prompt Dialog
 - Message: macro-supplied prompt text.

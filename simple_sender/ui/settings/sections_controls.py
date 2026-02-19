@@ -100,13 +100,23 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         app.macro_probe_safety_margin_entry,
         "Subtracted from the $132-based probe travel calculation in Macro 3/4/5.",
     )
+    app.btn_open_macro_manager = ttk.Button(
+        macro_frame,
+        text="Open Macro Manager",
+        command=app._open_macro_manager,
+    )
+    app.btn_open_macro_manager.grid(row=5, column=0, sticky="w", pady=(6, 2))
+    apply_tooltip(
+        app.btn_open_macro_manager,
+        "Edit, duplicate, and reorder Macro-1..Macro-8 from inside the app.",
+    )
 
     ttk.Label(
         macro_frame,
         text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
         wraplength=560,
         justify="left",
-    ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(2, 0))
+    ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(2, 0))
     return row + 1
 
 

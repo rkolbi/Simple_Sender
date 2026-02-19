@@ -39,6 +39,9 @@ class MacroPanel:
         self._right_frame = right
         self._load_macro_buttons()
 
+    def refresh(self) -> None:
+        self._load_macro_buttons()
+
     def _macro_path(self, index: int) -> str | None:
         return cast(str | None, self.app.macro_executor.macro_path(index))
 

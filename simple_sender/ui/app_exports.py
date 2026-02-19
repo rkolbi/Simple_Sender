@@ -28,6 +28,8 @@ from simple_sender.ui.led_panel import build_led_panel, on_led_visibility_change
 from simple_sender.ui.dialogs import show_alarm_recovery, show_auto_level_dialog, show_macro_prompt, show_resume_dialog
 from simple_sender.ui.dialogs.logs import show_logs_dialog
 from simple_sender.ui.dialogs.diagnostics import export_session_diagnostics, open_release_checklist, open_run_checklist, run_preflight_check
+from simple_sender.ui.dialogs.backup_bundle import export_backup_bundle, import_backup_bundle
+from simple_sender.ui.dialogs.macro_manager import show_macro_manager
 from simple_sender.ui.dialogs.popup_utils import patch_messagebox, set_default_parent
 from simple_sender.ui.gcode.loading import ensure_gcode_loading_popup, finish_gcode_loading, hide_gcode_loading, set_gcode_loading_indeterminate, set_gcode_loading_progress, show_gcode_loading
 from simple_sender.ui.settings import bind_app_settings_mousewheel, bind_app_settings_touch_scroll, on_app_settings_mousewheel, on_app_settings_touch_end, on_app_settings_touch_move, on_app_settings_touch_start, unbind_app_settings_mousewheel, unbind_app_settings_touch_scroll, update_app_settings_scrollregion
@@ -89,6 +91,9 @@ __all__ = [
     'open_run_checklist',
     'run_preflight_check',
     'export_session_diagnostics',
+    'export_backup_bundle',
+    'import_backup_bundle',
+    'show_macro_manager',
     'patch_messagebox',
     'set_default_parent',
     'ensure_gcode_loading_popup',

@@ -27,6 +27,7 @@ from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.dialogs.diagnostics import run_preflight_gate
 from simple_sender.utils.constants import BAUD_DEFAULT
 
 
@@ -272,6 +273,8 @@ def open_gcode(app):
 
 def run_job(app):
     if not app._require_grbl_connection():
+        return
+    if not run_preflight_gate(app):
         return
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._reset_gcode_view_for_run()

@@ -25,7 +25,7 @@ import os
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from typing import cast
+from typing import Any, cast
 
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
 from .popup_utils import center_window
@@ -184,40 +184,167 @@ def _format_validation_summary(report) -> list[str]:
     return summary
 
 
-def run_preflight_check(app) -> None:
-    path = getattr(app, "_last_gcode_path", None)
-    if not path:
-        messagebox.showinfo("Preflight check", "Load a G-code file first.")
-        return
+def _get_bounds(app: Any):
     parse_result = getattr(app, "_last_parse_result", None)
     bounds = getattr(parse_result, "bounds", None) if parse_result else None
     if not bounds:
         top_view = getattr(getattr(app, "toolpath_panel", None), "top_view", None)
         bounds = getattr(top_view, "bounds", None) if top_view else None
-    has_bounds = bool(bounds and len(bounds) >= 4 and (bounds[1] - bounds[0]) > 0)
+    if not bounds or len(bounds) < 6:
+        return None
+    return bounds
+
+
+def _get_travel_limits(app: Any) -> dict[str, float]:
+    data = getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
+    out: dict[str, float] = {}
+    for key, axis in (("$130", "x"), ("$131", "y"), ("$132", "z")):
+        raw = data.get(key)
+        if not raw:
+            continue
+        try:
+            out[axis] = float(raw[0])
+        except Exception:
+            continue
+    return out
+
+
+def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
+    failures: list[str] = []
+    warnings: list[str] = []
+    path = getattr(app, "_last_gcode_path", None)
+    has_job = bool(path)
+    if not has_job:
+        try:
+            has_job = bool(getattr(app.gview, "lines_count", 0))
+        except Exception:
+            has_job = False
+    if not has_job:
+        failures.append("No G-code job is loaded.")
+        return failures, warnings
+
+    if bool(getattr(app, "_alarm_locked", False)):
+        failures.append("Controller is in Alarm state. Clear alarm before running.")
+    if bool(getattr(app, "_homing_in_progress", False)):
+        failures.append("Homing is currently active. Wait until homing finishes.")
+    if not bool(getattr(app, "_grbl_ready", False)):
+        failures.append("GRBL is not ready yet. Wait for startup/status sync.")
+    if not bool(getattr(app, "_status_seen", False)):
+        failures.append("No live status has been received yet.")
+
+    bounds = _get_bounds(app)
+    if not bounds:
+        failures.append("Toolpath bounds are unavailable (wait for parsing / top view).")
+    else:
+        minx, maxx, miny, maxy, minz, maxz = bounds
+        span_x = max(0.0, float(maxx) - float(minx))
+        span_y = max(0.0, float(maxy) - float(miny))
+        span_z = max(0.0, float(maxz) - float(minz))
+        travel = _get_travel_limits(app)
+        if travel:
+            if "x" in travel and span_x > travel["x"] + 1e-6:
+                failures.append(
+                    f"X span {span_x:.3f} mm exceeds machine travel $130={travel['x']:.3f} mm."
+                )
+            if "y" in travel and span_y > travel["y"] + 1e-6:
+                failures.append(
+                    f"Y span {span_y:.3f} mm exceeds machine travel $131={travel['y']:.3f} mm."
+                )
+            if "z" in travel and span_z > travel["z"] + 1e-6:
+                failures.append(
+                    f"Z span {span_z:.3f} mm exceeds machine travel $132={travel['z']:.3f} mm."
+                )
+        else:
+            warnings.append("Machine travel settings ($130/$131/$132) are unavailable.")
+
     streaming_mode = bool(getattr(app, "_gcode_streaming_mode", False))
     validate_streaming = False
     try:
         validate_streaming = bool(app.validate_streaming_gcode.get())
     except Exception:
         validate_streaming = False
-    report = getattr(app, "_gcode_validation_report", None)
-    issues = []
-    if not has_bounds:
-        issues.append("Bounds are not ready (open Top View or wait for parsing).")
     if streaming_mode and not validate_streaming:
-        issues.append("Streaming validation is disabled.")
+        failures.append("Streaming validation is disabled for this large file.")
+
+    report = getattr(app, "_gcode_validation_report", None)
     if report is None:
         if streaming_mode:
             if validate_streaming:
-                issues.append("Validation report not available (skipped or failed).")
+                failures.append("Validation report is unavailable (streaming validation failed/skipped).")
         else:
-            issues.append("Validation report not available.")
-    issues.extend(_format_validation_summary(report))
+            failures.append("Validation report is unavailable.")
+    else:
+        if getattr(report, "line_issue_count", 0) > 0:
+            failures.append(
+                f"Validation found issues on {int(getattr(report, 'line_issue_count', 0))} line(s)."
+            )
+        if getattr(report, "grbl_warnings", None):
+            failures.append("Validation reported GRBL incompatibility warnings.")
+    return failures, warnings
+
+
+def run_preflight_gate(app: Any) -> bool:
+    failures, warnings = evaluate_run_preflight(app)
+    if failures:
+        message = "Run blocked by preflight safety gate:\n" + "\n".join(
+            f"- {item}" for item in failures
+        )
+        if warnings:
+            message += "\n\nWarnings:\n" + "\n".join(f"- {item}" for item in warnings)
+        proceed = bool(messagebox.askyesno(
+            "Preflight gate",
+            message
+            + "\n\nContinue anyway?\n"
+            + "Choose Yes to override the preflight gate and start the job.",
+        ))
+        if proceed:
+            try:
+                app.ui_q.put(("log", "[preflight] Override accepted; starting despite gate failures."))
+                for item in failures:
+                    app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
+            except Exception:
+                pass
+            try:
+                app.status.config(text="Preflight overridden: starting job")
+            except Exception:
+                pass
+            return True
+        try:
+            app.status.config(text="Run blocked: preflight gate failed")
+        except Exception:
+            pass
+        return False
+    if warnings:
+        try:
+            app.ui_q.put(("log", "[preflight] " + "; ".join(warnings)))
+        except Exception:
+            pass
+    return True
+
+
+def run_preflight_check(app) -> None:
+    path = getattr(app, "_last_gcode_path", None)
+    if not path:
+        messagebox.showinfo("Preflight check", "Load a G-code file first.")
+        return
+    failures, warnings = evaluate_run_preflight(app)
+    report = getattr(app, "_gcode_validation_report", None)
+    issues: list[str] = []
+    if failures:
+        issues.extend(failures)
+    if warnings:
+        issues.extend(warnings)
+    if report is not None:
+        issues.extend(_format_validation_summary(report))
     if issues:
+        title = "Preflight check"
+        prefix = "Review before running:\n"
+        if failures:
+            title = "Preflight check (fail)"
+            prefix = "Blocking issues found:\n"
         messagebox.showwarning(
-            "Preflight check",
-            "Review before running:\n" + "\n".join(f"- {item}" for item in issues),
+            title,
+            prefix + "\n".join(f"- {item}" for item in issues),
         )
         return
     messagebox.showinfo("Preflight check", "No issues detected.")
