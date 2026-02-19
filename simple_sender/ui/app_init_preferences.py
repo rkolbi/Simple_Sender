@@ -53,6 +53,18 @@ def init_basic_preferences(app, app_version: str, module):
             DEFAULT_SETTINGS.get("macro_total_timeout_sec", 0.0),
         )
     )
+    app.macro_probe_z_location = tk.DoubleVar(
+        value=setting(
+            "macro_probe_z_location",
+            DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+        )
+    )
+    app.macro_probe_safety_margin = tk.DoubleVar(
+        value=setting(
+            "macro_probe_safety_margin",
+            DEFAULT_SETTINGS.get("macro_probe_safety_margin", 3.0),
+        )
+    )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
     app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
     app._render3d_blocked = False

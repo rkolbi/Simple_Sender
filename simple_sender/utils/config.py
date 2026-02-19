@@ -106,6 +106,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "macros_allow_python": False,
     "macro_line_timeout_sec": 0.0,
     "macro_total_timeout_sec": 0.0,
+    "macro_probe_z_location": -5.0,
+    "macro_probe_safety_margin": 3.0,
     "max_recent_files": 10,
     "performance_mode": True,
     "recent_files": [],

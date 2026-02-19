@@ -710,6 +710,7 @@ def attach_numeric_keypad(
     except Exception:
         return entry
     entry.bind("<Button-1>", _open_numeric_keypad, add="+")
+    entry.bind("<FocusIn>", _open_numeric_keypad_from_focus, add="+")
     return entry
 
 
@@ -734,6 +735,24 @@ def _open_numeric_keypad(event):
         return
     _show_numeric_keypad(entry, spec)
     return "break"
+
+
+def _open_numeric_keypad_from_focus(event):
+    entry = event.widget
+    spec = getattr(entry, "_numeric_keypad_spec", None)
+    if not spec:
+        return
+    # Only auto-open on focus if the pointer is over the entry (mouse/touch focus),
+    # so keyboard tab navigation does not trigger keypad popups.
+    try:
+        x_root = entry.winfo_pointerx()
+        y_root = entry.winfo_pointery()
+        hovered = entry.winfo_containing(x_root, y_root) == entry
+    except Exception:
+        hovered = False
+    if not hovered:
+        return
+    _open_numeric_keypad(event)
 
 
 def _center_modal(window, parent):

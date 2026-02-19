@@ -71,12 +71,42 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         "Maximum allowed time for a full macro run in seconds. Set 0 to disable.",
     )
 
+    ttk.Label(macro_frame, text="Probe Z start (machine, mm)").grid(
+        row=3, column=0, sticky="w", pady=4
+    )
+    app.macro_probe_z_location_entry = ttk.Entry(
+        macro_frame,
+        textvariable=app.macro_probe_z_location,
+        width=12,
+    )
+    app.macro_probe_z_location_entry.grid(row=3, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.macro_probe_z_location_entry, allow_decimal=True)
+    apply_tooltip(
+        app.macro_probe_z_location_entry,
+        "Machine-coordinate Z starting point for fixed-sensor probing in Macro 3/4/5 (typically -5).",
+    )
+
+    ttk.Label(macro_frame, text="Probe safety margin (mm)").grid(
+        row=4, column=0, sticky="w", pady=4
+    )
+    app.macro_probe_safety_margin_entry = ttk.Entry(
+        macro_frame,
+        textvariable=app.macro_probe_safety_margin,
+        width=12,
+    )
+    app.macro_probe_safety_margin_entry.grid(row=4, column=1, sticky="w", pady=4)
+    attach_numeric_keypad(app.macro_probe_safety_margin_entry, allow_decimal=True)
+    apply_tooltip(
+        app.macro_probe_safety_margin_entry,
+        "Subtracted from the $132-based probe travel calculation in Macro 3/4/5.",
+    )
+
     ttk.Label(
         macro_frame,
         text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
         wraplength=560,
         justify="left",
-    ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
+    ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(2, 0))
     return row + 1
 
 

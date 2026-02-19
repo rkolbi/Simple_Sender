@@ -210,7 +210,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     _sync_tooltip_timeout_state()
     app.numeric_keypad_check = ttk.Checkbutton(
         theme_frame,
-        text="Enable numeric keypad popups",
+        text="Enable numeric keypad popups (click numeric fields)",
         variable=app.numeric_keypad_enabled,
     )
     app.numeric_keypad_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))

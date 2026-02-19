@@ -1,12 +1,16 @@
 XYZ Touch Plate
 Probes XYZ on the touch plate, then captures the reference tool height at the fixed sensor.
 
-; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe distance/feed).
+; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe feed).
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5
 %macro.state.PROBE_Y_LOCATION = -1224
-%macro.state.PROBE_Z_LOCATION = -5
-%macro.state.PROBE_DISTANCE = 150
+%macro.state.PROBE_Z_LOCATION = float(app.settings.get("macro_probe_z_location", -5.0))
+%macro.state.PROBE_SAFETY_MARGIN = max(0.0, float(app.settings.get("macro_probe_safety_margin", 3.0)))
+%macro.state.Z_MAX_TRAVEL = 150.0
+%macro.state.grbl_settings = getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
+%if "$132" in macro.state.grbl_settings: macro.state.Z_MAX_TRAVEL = float(macro.state.grbl_settings["$132"][0])
+%macro.state.PROBE_DISTANCE = max(1.0, round(macro.state.Z_MAX_TRAVEL + macro.state.PROBE_Z_LOCATION - macro.state.PROBE_SAFETY_MARGIN, 3))
 %macro.state.PROBE_RAPID_FEEDRATE = 200
 %macro.state.PLATE_THICKNESS = 11.95
 %macro.state.Z_FAST_PROBE_DISTANCE = 50

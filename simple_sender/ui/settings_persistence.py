@@ -140,6 +140,40 @@ def save_settings(app):
         )
     macro_total_timeout_value = max(0.0, float(macro_total_timeout_value))
 
+    macro_probe_z_var = getattr(app, "macro_probe_z_location", None)
+    if macro_probe_z_var is None:
+        macro_probe_z_value = app.settings.get(
+            "macro_probe_z_location",
+            DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+        )
+    else:
+        macro_probe_z_value = safe_float(
+            macro_probe_z_var,
+            app.settings.get(
+                "macro_probe_z_location",
+                DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+            ),
+            "macro probe Z start",
+        )
+    macro_probe_z_value = float(macro_probe_z_value)
+
+    macro_probe_margin_var = getattr(app, "macro_probe_safety_margin", None)
+    if macro_probe_margin_var is None:
+        macro_probe_margin_value = app.settings.get(
+            "macro_probe_safety_margin",
+            DEFAULT_SETTINGS.get("macro_probe_safety_margin", 3.0),
+        )
+    else:
+        macro_probe_margin_value = safe_float(
+            macro_probe_margin_var,
+            app.settings.get(
+                "macro_probe_safety_margin",
+                DEFAULT_SETTINGS.get("macro_probe_safety_margin", 3.0),
+            ),
+            "macro probe safety margin",
+        )
+    macro_probe_margin_value = max(0.0, float(macro_probe_margin_value))
+
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
     data.pop("console_status_enabled", None)
@@ -299,6 +333,8 @@ def save_settings(app):
         "macros_allow_python": bool(app.macros_allow_python.get()),
         "macro_line_timeout_sec": macro_line_timeout_value,
         "macro_total_timeout_sec": macro_total_timeout_value,
+        "macro_probe_z_location": macro_probe_z_value,
+        "macro_probe_safety_margin": macro_probe_margin_value,
         "zeroing_persistent": bool(app.zeroing_persistent.get()),
         "auto_level_settings": dict(getattr(app, "auto_level_settings", {})),
         "auto_level_job_prefs": dict(getattr(app, "auto_level_job_prefs", {})),

@@ -101,8 +101,10 @@ class GRBLSettingsController:
         apply_tooltip(self.btn_save, "Send edited settings to GRBL.")
         self.app._manual_controls.append(self.btn_save)
 
+        tree_frame = ttk.Frame(stab)
+        tree_frame.pack(fill="both", expand=True)
         self.settings_tree = ttk.Treeview(
-            stab,
+            tree_frame,
             columns=("setting", "name", "value", "units", "desc"),
             show="headings",
             height=12,
@@ -117,7 +119,10 @@ class GRBLSettingsController:
         self.settings_tree.column("value", width=120, anchor="w")
         self.settings_tree.column("units", width=100, anchor="w")
         self.settings_tree.column("desc", width=420, anchor="w")
-        self.settings_tree.pack(fill="both", expand=True)
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.settings_tree.yview)
+        self.settings_tree.configure(yscrollcommand=tree_scroll.set)
+        self.settings_tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
         self.settings_tree.bind("<Double-1>", self._edit_setting_value)
         self.settings_tree.bind("<Motion>", self._settings_tooltip_motion)
         self.settings_tree.bind("<Leave>", self._settings_tooltip_hide)
@@ -249,7 +254,13 @@ class GRBLSettingsController:
                 self.btn_refresh.config(state="disabled")
             return
         if self.settings_tree and "tree" in self._settings_prev_state:
-            self.settings_tree.state(self._settings_prev_state.pop("tree"))
+            prev_state = self._settings_prev_state.pop("tree")
+            was_disabled = False
+            if isinstance(prev_state, (tuple, list, set)):
+                was_disabled = "disabled" in prev_state
+            elif isinstance(prev_state, str):
+                was_disabled = prev_state == "disabled"
+            self.settings_tree.state(["disabled"] if was_disabled else ["!disabled"])
         if self.btn_save and "save" in self._settings_prev_state:
             self.btn_save.config(state=self._settings_prev_state.pop("save"))
         if self.btn_refresh and "refresh" in self._settings_prev_state:
