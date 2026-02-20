@@ -35,6 +35,7 @@ from simple_sender.ui.gcode.loading import ensure_gcode_loading_popup, finish_gc
 from simple_sender.ui.settings import bind_app_settings_mousewheel, bind_app_settings_touch_scroll, on_app_settings_mousewheel, on_app_settings_touch_end, on_app_settings_touch_move, on_app_settings_touch_start, unbind_app_settings_mousewheel, unbind_app_settings_touch_scroll, update_app_settings_scrollregion
 from simple_sender.ui.status.state_flash import apply_state_fg, cancel_state_flash, ensure_state_label_width, start_state_flash, toggle_state_flash, update_state_highlight
 from simple_sender.ui.status.bar import on_quick_button_visibility_change, update_quick_button_visibility
+from simple_sender.ui.screen_lock import init_screen_lock_guard, on_screen_lock_event, on_screen_lock_widget_mapped, refresh_screen_lock_toggle_text, toggle_screen_lock
 from simple_sender.ui.toggle_text import refresh_autolevel_overlay_toggle_text, refresh_keybindings_toggle_text, refresh_render_3d_toggle_text, refresh_tooltips_toggle_text
 from simple_sender.ui.theme_helpers import apply_theme, refresh_stop_button_backgrounds
 from simple_sender.ui.toolpath.toolpath_settings import apply_toolpath_arc_detail, apply_toolpath_draw_limits, apply_toolpath_performance, apply_toolpath_streaming_render_interval, clamp_arc_detail, clamp_toolpath_performance, clamp_toolpath_streaming_render_interval, init_toolpath_settings, load_3d_view, on_arc_detail_scale_key_release, on_arc_detail_scale_move, on_toolpath_lightweight_change, on_toolpath_performance_key_release, on_toolpath_performance_move, run_toolpath_arc_detail_reparse, save_3d_view, schedule_toolpath_arc_detail_reparse, toggle_render_3d, toolpath_limit_value, toolpath_perf_values
@@ -119,6 +120,11 @@ __all__ = [
     'update_state_highlight',
     'on_quick_button_visibility_change',
     'update_quick_button_visibility',
+    'init_screen_lock_guard',
+    'on_screen_lock_event',
+    'on_screen_lock_widget_mapped',
+    'refresh_screen_lock_toggle_text',
+    'toggle_screen_lock',
     'refresh_autolevel_overlay_toggle_text',
     'refresh_keybindings_toggle_text',
     'refresh_render_3d_toggle_text',

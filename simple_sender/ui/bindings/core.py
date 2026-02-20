@@ -377,6 +377,8 @@ def set_joystick_event_status(app, text: str):
     joystick_bindings.set_joystick_event_status(app, text)
 
 def handle_joystick_event(app, event):
+    if bool(getattr(app, "_screen_lock_active", False)):
+        return None
     return joystick_bindings.handle_joystick_event(
         app,
         event,
@@ -454,6 +456,8 @@ def clear_key_sequence_buffer(app):
     app._key_sequence_after_id = None
 
 def keyboard_binding_allowed(app) -> bool:
+    if bool(getattr(app, "_screen_lock_active", False)):
+        return False
     if not bool(app.keyboard_bindings_enabled.get()):
         return False
     try:

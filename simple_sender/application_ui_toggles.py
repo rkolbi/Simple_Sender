@@ -34,8 +34,11 @@ from simple_sender.ui.app_exports import (
     on_performance_mode_change,
     on_quick_button_visibility_change,
     on_scrollbar_width_change,
+    on_screen_lock_event,
+    on_screen_lock_widget_mapped,
     on_theme_change,
     on_ui_scale_change,
+    refresh_screen_lock_toggle_text,
     refresh_autolevel_overlay_toggle_text,
     refresh_keybindings_toggle_text,
     refresh_led_backgrounds,
@@ -44,7 +47,9 @@ from simple_sender.ui.app_exports import (
     toggle_console_pos_status,
     toggle_error_dialogs,
     toggle_performance,
+    toggle_screen_lock,
     toggle_tooltips,
+    init_screen_lock_guard,
     update_quick_button_visibility,
 )
 
@@ -59,6 +64,9 @@ class UiTogglesMixin:
     def _refresh_autolevel_overlay_button(self):
         refresh_autolevel_overlay_toggle_text(self)
 
+    def _refresh_screen_lock_toggle_text(self):
+        refresh_screen_lock_toggle_text(self)
+
     def _update_quick_button_visibility(self):
         update_quick_button_visibility(self)
 
@@ -67,6 +75,18 @@ class UiTogglesMixin:
 
     def _toggle_tooltips(self):
         toggle_tooltips(self)
+
+    def _toggle_screen_lock(self):
+        toggle_screen_lock(self)
+
+    def _init_screen_lock_guard(self):
+        init_screen_lock_guard(self)
+
+    def _on_screen_lock_event(self, event):
+        return on_screen_lock_event(self, event)
+
+    def _on_screen_lock_widget_mapped(self, event):
+        return on_screen_lock_widget_mapped(self, event)
 
     def _apply_theme(self, theme: str):
         apply_theme(self, theme)

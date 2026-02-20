@@ -350,6 +350,7 @@ class App(
         # Top + main layout
         self._build_toolbar()
         self._build_main()
+        self._init_screen_lock_guard()
         self._set_manual_controls_enabled(False)
 
         self.after(50, self._drain_ui_queue)

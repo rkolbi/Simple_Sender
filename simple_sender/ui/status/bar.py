@@ -122,10 +122,19 @@ def build_status_bar(app, before):
     set_kb_id(app.btn_release_checklist, "release_checklist")
     app.btn_release_checklist.pack(side="right", padx=(8, 0))
     apply_tooltip(app.btn_release_checklist, "Open the release checklist.")
+    app.btn_screen_lock = ttk.Button(
+        status_bar,
+        text="Lock",
+        command=app._toggle_screen_lock,
+    )
+    set_kb_id(app.btn_screen_lock, "screen_lock")
+    app.btn_screen_lock.pack(side="right", padx=(8, 0))
+    apply_tooltip(app.btn_screen_lock, "Lock/unlock the screen. When locked, only this button accepts input.")
     app._refresh_tooltips_toggle_text()
     app._refresh_render_3d_toggle_text()
     app._refresh_keybindings_toggle_text()
     app._refresh_autolevel_overlay_button()
+    app._refresh_screen_lock_toggle_text()
     update_quick_button_visibility(app)
     app._on_error_dialogs_enabled_change()
     if getattr(app, "_state_default_bg", None) is None:
