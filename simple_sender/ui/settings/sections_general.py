@@ -532,6 +532,51 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         app.job_completion_beep_check,
         "Ring the system bell when a job has finished streaming.",
     )
+    app.grbl_popup_enabled_check = ttk.Checkbutton(
+        dialog_frame,
+        text="Show GRBL alarm/error popups",
+        variable=app.grbl_popup_enabled,
+        command=app._apply_error_dialog_settings,
+    )
+    app.grbl_popup_enabled_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 2))
+    apply_tooltip(
+        app.grbl_popup_enabled_check,
+        "Show a non-blocking popup with alarm/error code definitions.",
+    )
+    ttk.Label(dialog_frame, text="GRBL popup auto-dismiss (seconds)").grid(
+        row=7, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    grbl_popup_dismiss_row = ttk.Frame(dialog_frame)
+    grbl_popup_dismiss_row.grid(row=7, column=1, sticky="w", pady=4)
+    app.grbl_popup_auto_dismiss_entry = ttk.Entry(
+        grbl_popup_dismiss_row, textvariable=app.grbl_popup_auto_dismiss_sec, width=12
+    )
+    app.grbl_popup_auto_dismiss_entry.pack(side="left")
+    attach_numeric_keypad(app.grbl_popup_auto_dismiss_entry, allow_decimal=True)
+    ttk.Label(grbl_popup_dismiss_row, text="sec (0=off)").pack(side="left", padx=(6, 0))
+    app.grbl_popup_auto_dismiss_entry.bind("<Return>", app._apply_error_dialog_settings)
+    app.grbl_popup_auto_dismiss_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
+    apply_tooltip(
+        app.grbl_popup_auto_dismiss_entry,
+        "Automatically close GRBL popups after this many seconds (0 disables auto-close).",
+    )
+    ttk.Label(dialog_frame, text="GRBL popup dedupe interval (seconds)").grid(
+        row=8, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    grbl_popup_dedupe_row = ttk.Frame(dialog_frame)
+    grbl_popup_dedupe_row.grid(row=8, column=1, sticky="w", pady=4)
+    app.grbl_popup_dedupe_entry = ttk.Entry(
+        grbl_popup_dedupe_row, textvariable=app.grbl_popup_dedupe_sec, width=12
+    )
+    app.grbl_popup_dedupe_entry.pack(side="left")
+    attach_numeric_keypad(app.grbl_popup_dedupe_entry, allow_decimal=True)
+    ttk.Label(grbl_popup_dedupe_row, text="sec").pack(side="left", padx=(6, 0))
+    app.grbl_popup_dedupe_entry.bind("<Return>", app._apply_error_dialog_settings)
+    app.grbl_popup_dedupe_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
+    apply_tooltip(
+        app.grbl_popup_dedupe_entry,
+        "Minimum time before the same ALARM:x/error:x popup can appear again.",
+    )
     return row + 1
 
 

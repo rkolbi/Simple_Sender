@@ -23,7 +23,11 @@
 import threading
 import time
 from typing import Any, Callable, cast
-from tkinter import messagebox
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.utils.grbl_errors import extract_grbl_code
 
 def install_dialog_loggers(app):
     orig_error = messagebox.showerror
@@ -113,6 +117,15 @@ def apply_error_dialog_settings(app, _event=None):
             value = fallback
         return value
 
+    def coerce_non_negative_float(var, fallback):
+        try:
+            value = float(var.get())
+        except Exception:
+            value = fallback
+        if value < 0:
+            value = fallback
+        return value
+
     interval = coerce_float(app.error_dialog_interval_var, app._error_dialog_interval)
     burst_window = coerce_float(app.error_dialog_burst_window_var, app._error_dialog_burst_window)
     burst_limit = coerce_int(app.error_dialog_burst_limit_var, app._error_dialog_burst_limit)
@@ -122,4 +135,199 @@ def apply_error_dialog_settings(app, _event=None):
     app.error_dialog_interval_var.set(interval)
     app.error_dialog_burst_window_var.set(burst_window)
     app.error_dialog_burst_limit_var.set(burst_limit)
+    if hasattr(app, "grbl_popup_auto_dismiss_sec"):
+        dismiss = coerce_non_negative_float(
+            app.grbl_popup_auto_dismiss_sec,
+            getattr(app, "settings", {}).get("grbl_popup_auto_dismiss_sec", 12.0),
+        )
+        app.grbl_popup_auto_dismiss_sec.set(dismiss)
+    if hasattr(app, "grbl_popup_dedupe_sec"):
+        dedupe = coerce_non_negative_float(
+            app.grbl_popup_dedupe_sec,
+            getattr(app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0),
+        )
+        app.grbl_popup_dedupe_sec.set(dedupe)
+    if hasattr(app, "grbl_popup_enabled") and not bool(app.grbl_popup_enabled.get()):
+        _close_grbl_code_popup(app)
     app._reset_error_dialog_state()
+
+
+def _close_grbl_code_popup(app) -> None:
+    after_id = getattr(app, "_grbl_code_popup_after_id", None)
+    if after_id is not None:
+        try:
+            app.after_cancel(after_id)
+        except Exception:
+            pass
+    app._grbl_code_popup_after_id = None
+    popup = getattr(app, "_grbl_code_popup", None)
+    try:
+        if popup is not None and popup.winfo_exists():
+            popup.destroy()
+    except Exception:
+        pass
+    app._grbl_code_popup = None
+    app._grbl_code_popup_vars = None
+
+
+def close_grbl_code_popup(app) -> None:
+    """Public helper for shutdown/cleanup paths."""
+    _close_grbl_code_popup(app)
+
+
+def _ensure_grbl_code_popup(app):
+    popup = getattr(app, "_grbl_code_popup", None)
+    popup_vars = getattr(app, "_grbl_code_popup_vars", None)
+    try:
+        if popup is not None and popup.winfo_exists() and isinstance(popup_vars, dict):
+            return popup, popup_vars
+    except Exception:
+        pass
+
+    popup = tk.Toplevel(app)
+    popup.title("GRBL Alert")
+    popup.transient(app)
+    popup.resizable(False, False)
+    popup.configure(padx=16, pady=12)
+
+    title_var = tk.StringVar(master=popup, value="GRBL alarm/error detected")
+    time_var = tk.StringVar(master=popup, value="")
+    code_var = tk.StringVar(master=popup, value="")
+    definition_var = tk.StringVar(master=popup, value="")
+
+    ttk.Label(
+        popup,
+        textvariable=title_var,
+        font=("TkDefaultFont", 10, "bold"),
+        justify="left",
+    ).pack(anchor="w")
+    ttk.Label(popup, textvariable=time_var, justify="left").pack(anchor="w", pady=(8, 0))
+    ttk.Label(popup, textvariable=code_var, justify="left").pack(anchor="w", pady=(2, 0))
+    ttk.Label(
+        popup,
+        textvariable=definition_var,
+        justify="left",
+        wraplength=520,
+    ).pack(anchor="w", pady=(2, 10))
+    ttk.Button(popup, text="Dismiss", command=lambda: _close_grbl_code_popup(app)).pack(
+        anchor="e"
+    )
+
+    def _on_close() -> None:
+        _close_grbl_code_popup(app)
+
+    popup.protocol("WM_DELETE_WINDOW", _on_close)
+    popup_vars = {
+        "title": title_var,
+        "time": time_var,
+        "code": code_var,
+        "definition": definition_var,
+    }
+    app._grbl_code_popup = popup
+    app._grbl_code_popup_vars = popup_vars
+    center_window(popup, app)
+    return popup, popup_vars
+
+
+def _get_bool_setting(app, attr: str, default: bool) -> bool:
+    var = getattr(app, attr, None)
+    if var is None:
+        return bool(default)
+    try:
+        return bool(var.get())
+    except Exception:
+        return bool(default)
+
+
+def _get_non_negative_float_setting(app, attr: str, default: float) -> float:
+    var = getattr(app, attr, None)
+    try:
+        value = float(var.get()) if var is not None else float(default)
+    except Exception:
+        value = float(default)
+    if value < 0:
+        return float(default)
+    return value
+
+
+def _schedule_grbl_popup_close(app) -> None:
+    auto_close_s = _get_non_negative_float_setting(
+        app,
+        "grbl_popup_auto_dismiss_sec",
+        12.0,
+    )
+    after_id = getattr(app, "_grbl_code_popup_after_id", None)
+    if after_id is not None:
+        try:
+            app.after_cancel(after_id)
+        except Exception:
+            pass
+    app._grbl_code_popup_after_id = None
+    if auto_close_s <= 0:
+        return
+    if not hasattr(app, "after"):
+        return
+    try:
+        app._grbl_code_popup_after_id = app.after(
+            int(round(auto_close_s * 1000)),
+            lambda: _close_grbl_code_popup(app),
+        )
+    except Exception:
+        app._grbl_code_popup_after_id = None
+
+
+def _maybe_log_grbl_popup_dedupe(app, code_token: str, dedupe_key: str, dedupe_s: float, now_mono: float) -> None:
+    last_log_by_code = getattr(app, "_grbl_code_popup_last_suppressed_log_ts_by_code", None)
+    if not isinstance(last_log_by_code, dict):
+        last_log_by_code = {}
+        app._grbl_code_popup_last_suppressed_log_ts_by_code = last_log_by_code
+    last_log_ts = float(last_log_by_code.get(dedupe_key, 0.0) or 0.0)
+    if dedupe_s > 0 and (now_mono - last_log_ts) < dedupe_s:
+        return
+    last_log_by_code[dedupe_key] = now_mono
+    try:
+        app.streaming_controller.handle_log(
+            f"[popup] Suppressed duplicate GRBL popup for {code_token} (dedupe {dedupe_s:.1f}s)."
+        )
+    except Exception:
+        return
+
+
+def show_grbl_code_popup(app, message: str | None) -> None:
+    """Show/update a non-blocking popup for known GRBL alarm/error codes."""
+    if getattr(app, "_closing", False):
+        return
+    if not _get_bool_setting(app, "grbl_popup_enabled", True):
+        return
+    parsed = extract_grbl_code(str(message or ""))
+    if not parsed:
+        return
+    kind, code, definition = parsed
+    dedupe_s = _get_non_negative_float_setting(app, "grbl_popup_dedupe_sec", 3.0)
+    dedupe_key = f"{kind}:{code}"
+    code_token = f"{kind.upper()}:{code}"
+    now_mono = time.monotonic()
+    seen = getattr(app, "_grbl_code_popup_last_ts_by_code", None)
+    if not isinstance(seen, dict):
+        seen = {}
+        app._grbl_code_popup_last_ts_by_code = seen
+    last_ts = float(seen.get(dedupe_key, 0.0) or 0.0)
+    if dedupe_s > 0 and (now_mono - last_ts) < dedupe_s:
+        _maybe_log_grbl_popup_dedupe(app, code_token, dedupe_key, dedupe_s, now_mono)
+        return
+    seen[dedupe_key] = now_mono
+    kind_label = "Alarm" if kind == "alarm" else "Error"
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        popup, popup_vars = _ensure_grbl_code_popup(app)
+        popup_vars["title"].set(f"GRBL {kind_label} detected")
+        popup_vars["time"].set(f"Time of {kind_label.lower()}: {timestamp}")
+        popup_vars["code"].set(f"Alarm/Error # {code} ({code_token})")
+        popup_vars["definition"].set(f"Definition: {definition}")
+        popup.title(f"GRBL {kind_label}")
+        popup.deiconify()
+        popup.lift()
+        center_window(popup, app)
+        _schedule_grbl_popup_close(app)
+    except Exception:
+        return

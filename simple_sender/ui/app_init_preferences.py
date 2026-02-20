@@ -40,6 +40,13 @@ def init_basic_preferences(app, app_version: str, module):
     )
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
+    app.grbl_popup_enabled = tk.BooleanVar(value=setting("grbl_popup_enabled", True))
+    app.grbl_popup_auto_dismiss_sec = tk.DoubleVar(
+        value=setting("grbl_popup_auto_dismiss_sec", 12.0)
+    )
+    app.grbl_popup_dedupe_sec = tk.DoubleVar(
+        value=setting("grbl_popup_dedupe_sec", 3.0)
+    )
     app.macros_allow_python = tk.BooleanVar(value=setting("macros_allow_python", False))
     app.macro_line_timeout_sec = tk.DoubleVar(
         value=setting(

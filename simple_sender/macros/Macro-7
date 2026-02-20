@@ -1,5 +1,6 @@
-Prompt Test Macro
+Test Macro
 Presents a test prompt and message to verify the popup flow.
+
 
 ; First prompt uses the default Resume/Cancel UI.
 %msg (Press Resume or Cancel to confirm default behaviour.)

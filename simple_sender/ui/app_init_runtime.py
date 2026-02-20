@@ -129,6 +129,11 @@ def init_runtime_state(
     app._error_dialog_window_start = 0.0
     app._error_dialog_count = 0
     app._error_dialog_suppressed = False
+    app._grbl_code_popup = None
+    app._grbl_code_popup_vars = None
+    app._grbl_code_popup_after_id = None
+    app._grbl_code_popup_last_ts_by_code = {}
+    app._grbl_code_popup_last_suppressed_log_ts_by_code = {}
     app._pending_force_g90 = False
     app._homing_in_progress = False
     app._homing_state_seen = False

@@ -1,6 +1,7 @@
 Tool Change
 Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.
-
+#ddaeff
+#34005b
 ; Keep these values aligned with Macro 1/2 so the tool sensor remains consistent; adjust SAFE_HEIGHT if clamps differ.
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5

@@ -1,5 +1,6 @@
-Park over Bit Setter
+Park @ Bit Setter
 Moves to the tool-height sensor so you can clean, inspect, or stage without altering offsets.
+
 
 ; Match the safe height and sensor coordinates to the other macros so you always park in a consistent spot.
 %macro.state.SAFE_HEIGHT = -5

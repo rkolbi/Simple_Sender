@@ -173,6 +173,38 @@ def save_settings(app):
             "macro probe safety margin",
         )
     macro_probe_margin_value = max(0.0, float(macro_probe_margin_value))
+    grbl_popup_auto_dismiss_var = getattr(app, "grbl_popup_auto_dismiss_sec", None)
+    if grbl_popup_auto_dismiss_var is None:
+        grbl_popup_auto_dismiss_value = app.settings.get(
+            "grbl_popup_auto_dismiss_sec",
+            DEFAULT_SETTINGS.get("grbl_popup_auto_dismiss_sec", 12.0),
+        )
+    else:
+        grbl_popup_auto_dismiss_value = safe_float(
+            grbl_popup_auto_dismiss_var,
+            app.settings.get(
+                "grbl_popup_auto_dismiss_sec",
+                DEFAULT_SETTINGS.get("grbl_popup_auto_dismiss_sec", 12.0),
+            ),
+            "GRBL popup auto-dismiss",
+        )
+    grbl_popup_auto_dismiss_value = max(0.0, float(grbl_popup_auto_dismiss_value))
+    grbl_popup_dedupe_var = getattr(app, "grbl_popup_dedupe_sec", None)
+    if grbl_popup_dedupe_var is None:
+        grbl_popup_dedupe_value = app.settings.get(
+            "grbl_popup_dedupe_sec",
+            DEFAULT_SETTINGS.get("grbl_popup_dedupe_sec", 3.0),
+        )
+    else:
+        grbl_popup_dedupe_value = safe_float(
+            grbl_popup_dedupe_var,
+            app.settings.get(
+                "grbl_popup_dedupe_sec",
+                DEFAULT_SETTINGS.get("grbl_popup_dedupe_sec", 3.0),
+            ),
+            "GRBL popup dedupe",
+        )
+    grbl_popup_dedupe_value = max(0.0, float(grbl_popup_dedupe_value))
 
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     data.pop("keybindings_enabled", None)
@@ -224,6 +256,13 @@ def save_settings(app):
         ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
         "error_dialogs_enabled": bool(app.error_dialogs_enabled.get()),
+        "grbl_popup_enabled": bool(
+            app.grbl_popup_enabled.get()
+            if hasattr(app, "grbl_popup_enabled")
+            else app.settings.get("grbl_popup_enabled", DEFAULT_SETTINGS.get("grbl_popup_enabled", True))
+        ),
+        "grbl_popup_auto_dismiss_sec": grbl_popup_auto_dismiss_value,
+        "grbl_popup_dedupe_sec": grbl_popup_dedupe_value,
         "performance_mode": bool(app.performance_mode.get()),
         "render3d_enabled": bool(app.render3d_enabled.get()),
         "status_poll_interval": safe_float(

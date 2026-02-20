@@ -24,6 +24,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Callable, cast
 
+from simple_sender.utils.macro_headers import parse_macro_header
 from simple_sender.ui.widgets import apply_tooltip, set_kb_id
 from simple_sender.ui.dialogs.popup_utils import center_window
 
@@ -33,6 +34,7 @@ class MacroPanel:
         self._left_frame: ttk.Frame | None = None
         self._right_frame: ttk.Frame | None = None
         self._macro_buttons: list[tk.Widget] = []
+        self._macro_color_styles: dict[str, str] = {}
 
     def attach_frames(self, left: ttk.Frame, right: ttk.Frame | None = None) -> None:
         self._left_frame = left
@@ -45,19 +47,113 @@ class MacroPanel:
     def _macro_path(self, index: int) -> str | None:
         return cast(str | None, self.app.macro_executor.macro_path(index))
 
-    def _read_macro_header(self, path: str, index: int) -> tuple[str, str]:
+    def _validate_macro_color(self, color: str) -> bool:
+        checker = getattr(self.app, "winfo_rgb", None)
+        if not callable(checker):
+            return False
+        try:
+            checker(color)
+            return True
+        except Exception:
+            return False
+
+    def _macro_text_color(self, color: str) -> str:
+        checker = getattr(self.app, "winfo_rgb", None)
+        if not callable(checker):
+            return ""
+        try:
+            r16, g16, b16 = checker(color)
+            r = int(round((r16 / 65535.0) * 255.0))
+            g = int(round((g16 / 65535.0) * 255.0))
+            b = int(round((b16 / 65535.0) * 255.0))
+            luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            return "#111111" if luminance >= 160.0 else "#ffffff"
+        except Exception:
+            return ""
+
+    def _button_style_for_color(self, color: str | None, text_color: str | None) -> str:
+        default_style = getattr(self.app, "macro_button_style", "TButton")
+        bg_color = str(color or "").strip().lower()
+        fg_color = str(text_color or "").strip().lower()
+        if not bg_color and not fg_color:
+            return default_style
+
+        if fg_color and not self._validate_macro_color(fg_color):
+            fg_color = ""
+        if bg_color and not self._validate_macro_color(bg_color):
+            bg_color = ""
+        if not bg_color and not fg_color:
+            return default_style
+
+        if bg_color and not fg_color:
+            fg_color = self._macro_text_color(bg_color)
+
+        style_key = f"{bg_color}|{fg_color}"
+        cached = self._macro_color_styles.get(style_key)
+        if cached:
+            return cached
+        style_obj = getattr(self.app, "style", None)
+        if style_obj is None:
+            try:
+                style_obj = ttk.Style(self.app)
+            except Exception:
+                return default_style
+        style_name = f"SimpleSender.MacroColor{len(self._macro_color_styles) + 1}.TButton"
+        try:
+            config_kwargs: dict[str, str | tuple[int, int]] = {
+                "anchor": "center",
+                "justify": "center",
+                "padding": (10, 12),
+            }
+            if bg_color:
+                config_kwargs["background"] = bg_color
+            if fg_color:
+                config_kwargs["foreground"] = fg_color
+            style_obj.configure(style_name, **config_kwargs)
+            map_kwargs: dict[str, list[tuple[str, str]]] = {}
+            if bg_color:
+                map_kwargs["background"] = [
+                    ("disabled", bg_color),
+                    ("active", bg_color),
+                    ("pressed", bg_color),
+                ]
+            if fg_color:
+                map_kwargs["foreground"] = [
+                    ("disabled", fg_color),
+                    ("active", fg_color),
+                    ("pressed", fg_color),
+                ]
+            if map_kwargs:
+                style_obj.map(style_name, **map_kwargs)
+        except Exception:
+            return default_style
+        self._macro_color_styles[style_key] = style_name
+        return style_name
+
+    def _read_macro_header(
+        self,
+        path: str,
+        index: int,
+    ) -> tuple[str, str, str | None, str | None, int]:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
-                name = f.readline().strip()
-                tip = f.readline().strip()
+                lines = f.read().splitlines()
+            name, tip, color, text_color, body_start = parse_macro_header(
+                lines,
+                color_validator=self._validate_macro_color,
+            )
             if not name:
                 name = f"Macro {index}"
-            return name, tip
+            return name, tip, color, text_color, body_start
         except Exception:
-            return f"Macro {index}", ""
+            return f"Macro {index}", "", None, None, 2
 
     def _show_macro_preview(self, name: str, lines: list[str]) -> None:
-        body = "".join(lines[2:]) if len(lines) > 2 else ""
+        _name, _tip, _color, _text_color, body_start = parse_macro_header(
+            lines,
+            color_validator=self._validate_macro_color,
+        )
+        body = "".join(lines[body_start:]) if len(lines) > body_start else ""
         dlg = tk.Toplevel(self.app)
         dlg.title(f"Macro Preview - {name}")
         dlg.transient(self.app)
@@ -122,11 +218,11 @@ class MacroPanel:
             self._left_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
 
         for col, (idx, path) in enumerate(entries):
-            name, tip = self._read_macro_header(path, idx)
+            name, tip, color, text_color, _body_start = self._read_macro_header(path, idx)
             btn = ttk.Button(
                 self._left_frame,
                 text=name,
-                style=getattr(self.app, "macro_button_style", "TButton"),
+                style=self._button_style_for_color(color, text_color),
                 command=_run_command(idx),
             )
             set_kb_id(btn, f"macro_{idx}")

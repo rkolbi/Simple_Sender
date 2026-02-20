@@ -25,75 +25,99 @@ from __future__ import annotations
 import re
 
 GRBL_ERROR_CODES: dict[int, str] = {
-    1: "G-code words consist of a letter and a value. Letter was not found.",
-    2: "Numeric value format is not valid or missing an expected value.",
-    3: "Grbl '$' system command was not recognized or supported.",
-    4: "Negative value received for an expected positive value.",
-    5: "Homing cycle is not enabled via settings.",
-    6: "Minimum step pulse time must be greater than 3usec.",
-    7: "EEPROM read failed. Reset and restored to default values.",
-    8: "Grbl '$' command cannot be used unless Grbl is idle.",
-    9: "G-code locked out during alarm or jog state.",
-    10: "Soft limits cannot be enabled without homing also enabled.",
-    11: "Max characters per line exceeded. Line was not processed and executed.",
-    12: "Grbl '$' setting value exceeds the maximum step rate supported.",
-    13: "Safety door detected as opened and door state initiated.",
-    14: "Build info or startup line exceeded EEPROM line length limit.",
-    15: "Jog target exceeds machine travel. Command ignored.",
-    16: "Jog command with no '=' or contains prohibited g-code.",
-    17: "Laser mode requires PWM output.",
-    20: "Unsupported or invalid g-code command found in block.",
-    21: "More than one g-code command from same modal group found in block.",
-    22: "Feed rate has not yet been set or is undefined.",
-    23: "G-code command in block requires an integer value.",
-    24: "Two G-code commands that both require the use of the XYZ axis words were detected in the block.",
-    25: "A G-code word was repeated in the block.",
-    26: "A G-code command requires XYZ axis words in the block, but none were detected.",
-    27: "N line number value is not within the valid range of 1 - 9,999,999.",
-    28: "A G-code command is missing required P or L values in the line.",
-    29: "G59.1, G59.2, and G59.3 are not supported.",
-    30: "G53 requires either G0 seek or G1 feed motion mode to be active.",
-    31: "Unused axis words found in block with G80 motion mode active.",
-    32: "G2/G3 arc lacks XYZ axis words in the selected plane.",
-    33: "Motion command has an invalid target (arc/probe target invalid).",
-    34: "Arc radius definition failed to compute arc geometry.",
-    35: "Arc offset definition missing IJK offset word in the selected plane.",
-    36: "Unused G-code words found that are not used by any command in the block.",
+    1: "Expected command letter.",
+    2: "Bad number format.",
+    3: "Invalid statement (unrecognized/unsupported '$' command).",
+    4: "Value < 0.",
+    5: "Setting disabled (homing not enabled).",
+    6: "Value < 3 usec (step pulse too short).",
+    7: "EEPROM read fail. Using defaults.",
+    8: "Not idle (cannot run that '$' command unless IDLE).",
+    9: "G-code lock (locked out during alarm/jog).",
+    10: "Homing not enabled (soft limits require homing).",
+    11: "Line overflow (too many characters; line not executed).",
+    12: "Step rate > 30kHz (settings exceed max step rate).",
+    13: "Check Door (safety door opened / door state).",
+    14: "Line length exceeded (startup/build info too long for EEPROM storage).",
+    15: "Travel exceeded (jog target exceeds travel; ignored).",
+    16: "Invalid jog command (missing '=' or contains prohibited g-code).",
+    17: "Setting disabled (laser mode requires PWM output).",
+    20: "Unsupported command (invalid/unsupported g-code).",
+    21: "Modal group violation.",
+    22: "Undefined feed rate.",
+    23: "Requires integer value.",
+    24: ">1 axis-word-requiring command in block.",
+    25: "Repeated g-code word in block.",
+    26: "No axis words found when required.",
+    27: "Invalid line number.",
+    28: "Missing required value word.",
+    29: "G59.x WCS not supported.",
+    30: "G53 only allowed with G0/G1.",
+    31: "Axis words present but unused by command/modal state.",
+    32: "G2/G3 require at least one in-plane axis word.",
+    33: "Motion target invalid.",
+    34: "Arc radius invalid.",
+    35: "G2/G3 require at least one in-plane offset word.",
+    36: "Unused value words found in block.",
+    37: "G43.1 TLO not assigned to configured tool length axis.",
+    38: "Tool number > max supported.",
 }
 
 GRBL_ALARM_CODES: dict[int, str] = {
-    1: "Hard limit triggered. Machine position likely lost; re-home recommended.",
-    2: "Soft limit alarm. Position retained; clear alarm to continue.",
-    3: "Reset while in motion. Position likely lost; re-home recommended.",
-    4: "Probe fail: probe not in expected initial state.",
+    1: "Hard limit: hard limit triggered; position likely lost; re-home recommended.",
+    2: "Soft limit: target exceeds travel; position retained; may unlock safely.",
+    3: "Abort during cycle: reset while in motion; position likely lost; re-home recommended.",
+    4: "Probe fail: probe not in expected initial state for the probing mode used.",
     5: "Probe fail: probe did not contact within programmed travel.",
-    6: "Homing fail: reset during active homing cycle.",
-    7: "Homing fail: safety door opened during homing cycle.",
-    8: "Homing fail: failed to clear limit switch while pulling off.",
-    9: "Homing fail: limit switch not found within search distance.",
-    10: "EStop asserted. Clear and reset. (grblHAL)",
-    11: "Homing required. Execute $H to continue. (grblHAL)",
-    12: "Limit switch engaged. Clear before continuing. (grblHAL)",
-    13: "Probe protection triggered. Clear before continuing. (grblHAL)",
-    14: "Spindle at speed timeout. Clear before continuing. (grblHAL)",
-    15: "Homing fail: second limit switch not found. (grblHAL)",
+    6: "Homing fail: active homing cycle was reset.",
+    7: "Homing fail: safety door opened during homing.",
+    8: "Homing fail: pull-off travel failed to clear the switch.",
+    9: "Homing fail: could not find switch within search distance.",
+    10: "Homing fail: dual-axis second switch did not trigger after the first within the allowed distance.",
 }
 
 _ERROR_CODE_PAT = re.compile(r"error:(\d+)", re.IGNORECASE)
 _ALARM_CODE_PAT = re.compile(r"ALARM:(\d+)", re.IGNORECASE)
 
 
+def get_grbl_error_description(code: int) -> str | None:
+    return GRBL_ERROR_CODES.get(int(code))
+
+
+def get_grbl_alarm_description(code: int) -> str | None:
+    return GRBL_ALARM_CODES.get(int(code))
+
+
+def extract_grbl_code(line: str) -> tuple[str, int, str] | None:
+    """Return (kind, code, description) for known GRBL error/alarm codes."""
+    text = line or ""
+    err_match = _ERROR_CODE_PAT.search(text)
+    if err_match:
+        try:
+            err_code = int(err_match.group(1))
+        except ValueError:
+            return None
+        err_desc = get_grbl_error_description(err_code)
+        if err_desc:
+            return ("error", err_code, err_desc)
+    alarm_match = _ALARM_CODE_PAT.search(text)
+    if alarm_match:
+        try:
+            alarm_code = int(alarm_match.group(1))
+        except ValueError:
+            return None
+        alarm_desc = get_grbl_alarm_description(alarm_code)
+        if alarm_desc:
+            return ("alarm", alarm_code, alarm_desc)
+    return None
+
+
 def annotate_grbl_error(line: str) -> str:
-    match = _ERROR_CODE_PAT.search(line or "")
-    if not match:
+    info = extract_grbl_code(line)
+    if not info or info[0] != "error":
         return line
-    try:
-        code = int(match.group(1))
-    except ValueError:
-        return line
-    desc = GRBL_ERROR_CODES.get(code)
-    if not desc:
-        return line
+    code = info[1]
+    desc = info[2]
     lower = line.lower()
     marker = f"error:{code}"
     pos = lower.find(marker)
@@ -103,16 +127,11 @@ def annotate_grbl_error(line: str) -> str:
 
 
 def annotate_grbl_alarm(line: str) -> str:
-    match = _ALARM_CODE_PAT.search(line or "")
-    if not match:
+    info = extract_grbl_code(line)
+    if not info or info[0] != "alarm":
         return line
-    try:
-        code = int(match.group(1))
-    except ValueError:
-        return line
-    desc = GRBL_ALARM_CODES.get(code)
-    if not desc:
-        return line
+    code = info[1]
+    desc = info[2]
     lower = line.lower()
     marker = f"alarm:{code}"
     pos = lower.find(marker)

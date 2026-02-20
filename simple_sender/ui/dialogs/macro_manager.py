@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, colorchooser
 from typing import Any
 
+from simple_sender.utils.macro_headers import parse_macro_color_line
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.ui.macro_files import (
     get_writable_macro_dir,
@@ -46,7 +47,8 @@ class _MacroManagerDialog:
         self.window.minsize(900, 520)
         self._macro_dir = get_writable_macro_dir(app)
         self._selected_slot = 1
-        self._slot_data: dict[int, tuple[str, str, str, str | None]] = {}
+        self._slot_data: dict[int, tuple[str, str, str, str, str, str | None]] = {}
+        self._warned_invalid_header_paths: set[str] = set()
 
         root = ttk.Frame(self.window, padding=10)
         root.pack(fill="both", expand=True)
@@ -75,7 +77,7 @@ class _MacroManagerDialog:
         right = ttk.Frame(root)
         right.grid(row=1, column=1, sticky="nsew")
         right.grid_columnconfigure(1, weight=1)
-        right.grid_rowconfigure(2, weight=1)
+        right.grid_rowconfigure(4, weight=1)
 
         ttk.Label(right, text="Name").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
         self.name_var = tk.StringVar()
@@ -87,11 +89,35 @@ class _MacroManagerDialog:
         self.tip_entry = ttk.Entry(right, textvariable=self.tip_var)
         self.tip_entry.grid(row=1, column=1, sticky="ew", pady=4)
 
-        ttk.Label(right, text="Body").grid(row=2, column=0, sticky="nw", padx=(0, 8), pady=4)
+        ttk.Label(right, text="Color").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.color_var = tk.StringVar()
+        self.color_entry = ttk.Entry(right, textvariable=self.color_var)
+        self.color_entry.grid(row=2, column=1, sticky="ew", pady=4)
+        self.btn_pick_color = ttk.Button(
+            right,
+            text="Pick...",
+            width=8,
+            command=lambda: self._pick_color(self.color_var, "Pick Button Color"),
+        )
+        self.btn_pick_color.grid(row=2, column=2, sticky="w", padx=(6, 0), pady=4)
+
+        ttk.Label(right, text="Text Color").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.text_color_var = tk.StringVar()
+        self.text_color_entry = ttk.Entry(right, textvariable=self.text_color_var)
+        self.text_color_entry.grid(row=3, column=1, sticky="ew", pady=4)
+        self.btn_pick_text_color = ttk.Button(
+            right,
+            text="Pick...",
+            width=8,
+            command=lambda: self._pick_color(self.text_color_var, "Pick Text Color"),
+        )
+        self.btn_pick_text_color.grid(row=3, column=2, sticky="w", padx=(6, 0), pady=4)
+
+        ttk.Label(right, text="Body").grid(row=4, column=0, sticky="nw", padx=(0, 8), pady=4)
         self.body_text = tk.Text(right, wrap="word", height=16)
-        self.body_text.grid(row=2, column=1, sticky="nsew", pady=4)
+        self.body_text.grid(row=4, column=1, sticky="nsew", pady=4)
         body_scroll = ttk.Scrollbar(right, orient="vertical", command=self.body_text.yview)
-        body_scroll.grid(row=2, column=2, sticky="ns", pady=4)
+        body_scroll.grid(row=4, column=2, sticky="ns", pady=4)
         self.body_text.configure(yscrollcommand=body_scroll.set)
 
         actions = ttk.Frame(root)
@@ -135,6 +161,10 @@ class _MacroManagerDialog:
         try:
             self.name_entry.configure(state=state)
             self.tip_entry.configure(state=state)
+            self.color_entry.configure(state=state)
+            self.text_color_entry.configure(state=state)
+            self.btn_pick_color.configure(state=state)
+            self.btn_pick_text_color.configure(state=state)
             self.body_text.configure(state="normal" if enabled else "disabled")
             self.btn_save.configure(state=state)
             self.btn_blank.configure(state=state)
@@ -146,28 +176,135 @@ class _MacroManagerDialog:
         except Exception:
             pass
 
+    def _pick_color(self, target_var: tk.StringVar, title: str) -> None:
+        initial = target_var.get().strip() or None
+        try:
+            _rgb, hex_color = colorchooser.askcolor(
+                color=initial,
+                title=title,
+                parent=self.window,
+            )
+        except Exception:
+            return
+        if isinstance(hex_color, str) and hex_color:
+            target_var.set(hex_color)
+
+    def _validate_macro_color(self, color: str) -> bool:
+        checker = getattr(self.app, "winfo_rgb", None)
+        if not callable(checker):
+            return False
+        try:
+            checker(color)
+            return True
+        except Exception:
+            return False
+
+    def _validate_editor_colors(self, color: str, text_color: str) -> bool:
+        color_raw = str(color).strip()
+        text_raw = str(text_color).strip()
+        if color_raw and (
+            parse_macro_color_line(
+                color_raw,
+                kind="button",
+                color_validator=self._validate_macro_color,
+            )
+            is None
+        ):
+            messagebox.showwarning(
+                "Macro Manager",
+                "Invalid button color. Use a valid Tk color name or hex color.",
+            )
+            return False
+        if text_raw and (
+            parse_macro_color_line(
+                text_raw,
+                kind="text",
+                color_validator=self._validate_macro_color,
+            )
+            is None
+        ):
+            messagebox.showwarning(
+                "Macro Manager",
+                "Invalid text color. Use a valid Tk color name or hex color.",
+            )
+            return False
+        return True
+
+    def _invalid_header_issues(self, path: str) -> list[str]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except Exception:
+            return []
+        issues: list[str] = []
+        line3 = str(lines[2]).strip() if len(lines) > 2 else ""
+        line4 = str(lines[3]).strip() if len(lines) > 3 else ""
+        if line3 and (
+            parse_macro_color_line(
+                line3,
+                kind="button",
+                color_validator=self._validate_macro_color,
+            )
+            is None
+        ):
+            issues.append("line 3 button color is invalid")
+        if line4 and (
+            parse_macro_color_line(
+                line4,
+                kind="text",
+                color_validator=self._validate_macro_color,
+            )
+            is None
+        ):
+            issues.append("line 4 text color is invalid")
+        return issues
+
     def refresh(self) -> None:
         self.slot_list.delete(0, "end")
         self._slot_data = {}
+        invalid_headers: list[str] = []
         for slot in range(1, 9):
-            name, tip, body, path = read_macro_slot(self.app, slot)
-            self._slot_data[slot] = (name, tip, body, path)
+            name, tip, color, text_color, body, path = read_macro_slot(self.app, slot)
+            self._slot_data[slot] = (name, tip, color, text_color, body, path)
             label = name or "(empty)"
             self.slot_list.insert("end", f"Macro-{slot}: {label}")
+            if path and os.path.isfile(path):
+                issues = self._invalid_header_issues(path)
+                if issues:
+                    path_key = os.path.normcase(os.path.abspath(path))
+                    if path_key not in self._warned_invalid_header_paths:
+                        self._warned_invalid_header_paths.add(path_key)
+                        issue_text = ", ".join(issues)
+                        invalid_headers.append(f"Macro-{slot} ({os.path.basename(path)}): {issue_text}")
+        if invalid_headers:
+            details = "\n".join(invalid_headers)
+            messagebox.showwarning(
+                "Macro Manager",
+                "Some macros have invalid color headers.\n"
+                "Lines 3 and 4 should be blank or valid colors.\n\n"
+                f"{details}",
+            )
         can_edit = self._macro_dir is not None
         self._set_editing_enabled(can_edit)
 
-    def _current_editor_values(self) -> tuple[str, str, str]:
+    def _current_editor_values(self) -> tuple[str, str, str, str, str]:
         name = self.name_var.get().strip()
         tip = self.tip_var.get().strip()
+        color = self.color_var.get().strip()
+        text_color = self.text_color_var.get().strip()
         body = self.body_text.get("1.0", "end-1c")
-        return name, tip, body
+        return name, tip, color, text_color, body
 
     def _load_slot(self, slot: int) -> None:
         self._selected_slot = int(slot)
-        name, tip, body, _path = self._slot_data.get(slot, ("", "", "", None))
+        name, tip, color, text_color, body, _path = self._slot_data.get(
+            slot,
+            ("", "", "", "", "", None),
+        )
         self.name_var.set(name)
         self.tip_var.set(tip)
+        self.color_var.set(color)
+        self.text_color_var.set(text_color)
         self.body_text.delete("1.0", "end")
         if body:
             self.body_text.insert("1.0", body)
@@ -191,21 +328,39 @@ class _MacroManagerDialog:
         except Exception:
             pass
 
-    def _write_slot(self, slot: int, name: str, tip: str, body: str) -> None:
+    def _write_slot(
+        self,
+        slot: int,
+        name: str,
+        tip: str,
+        color: str,
+        text_color: str,
+        body: str,
+    ) -> None:
         if not self._macro_dir:
             raise RuntimeError("No writable macro directory found.")
-        write_macro_slot(self._macro_dir, slot, name=name, tip=tip, body=body)
+        write_macro_slot(
+            self._macro_dir,
+            slot,
+            name=name,
+            tip=tip,
+            color=color,
+            text_color=text_color,
+            body=body,
+        )
 
     def save_current(self) -> None:
         if not self._macro_dir:
             messagebox.showwarning("Macro Manager", "No writable macro directory found.")
             return
-        name, tip, body = self._current_editor_values()
+        name, tip, color, text_color, body = self._current_editor_values()
         if not name:
             messagebox.showwarning("Macro Manager", "Macro name cannot be empty.")
             return
+        if not self._validate_editor_colors(color, text_color):
+            return
         try:
-            self._write_slot(self._selected_slot, name, tip, body)
+            self._write_slot(self._selected_slot, name, tip, color, text_color, body)
         except Exception as exc:
             messagebox.showerror("Macro Manager", f"Failed to save macro:\n{exc}")
             return
@@ -218,6 +373,8 @@ class _MacroManagerDialog:
     def new_blank(self) -> None:
         self.name_var.set(f"Macro {self._selected_slot}")
         self.tip_var.set("")
+        self.color_var.set("")
+        self.text_color_var.set("")
         self.body_text.delete("1.0", "end")
 
     def delete_current(self) -> None:
@@ -249,12 +406,14 @@ class _MacroManagerDialog:
         if target == source:
             messagebox.showwarning("Macro Manager", "Pick a different target slot.")
             return
-        name, tip, body = self._current_editor_values()
+        name, tip, color, text_color, body = self._current_editor_values()
         if not name:
             messagebox.showwarning("Macro Manager", "Macro name cannot be empty.")
             return
+        if not self._validate_editor_colors(color, text_color):
+            return
         try:
-            self._write_slot(target, name, tip, body)
+            self._write_slot(target, name, tip, color, text_color, body)
         except Exception as exc:
             messagebox.showerror("Macro Manager", f"Failed to duplicate macro:\n{exc}")
             return
@@ -270,15 +429,20 @@ class _MacroManagerDialog:
         target = source + int(delta)
         if target < 1 or target > 8:
             return
-        src_name, src_tip, src_body = self._current_editor_values()
+        src_name, src_tip, src_color, src_text_color, src_body = self._current_editor_values()
         if not src_name:
             messagebox.showwarning("Macro Manager", "Macro name cannot be empty.")
             return
-        tgt_name, tgt_tip, tgt_body, tgt_path = self._slot_data.get(target, ("", "", "", None))
+        if not self._validate_editor_colors(src_color, src_text_color):
+            return
+        tgt_name, tgt_tip, tgt_color, tgt_text_color, tgt_body, tgt_path = self._slot_data.get(
+            target,
+            ("", "", "", "", "", None),
+        )
         try:
-            self._write_slot(target, src_name, src_tip, src_body)
-            if tgt_name or tgt_tip or tgt_body or tgt_path:
-                self._write_slot(source, tgt_name, tgt_tip, tgt_body)
+            self._write_slot(target, src_name, src_tip, src_color, src_text_color, src_body)
+            if tgt_name or tgt_tip or tgt_color or tgt_text_color or tgt_body or tgt_path:
+                self._write_slot(source, tgt_name, tgt_tip, tgt_color, tgt_text_color, tgt_body)
             else:
                 remove_macro_slot(self._macro_dir, source)
         except Exception as exc:

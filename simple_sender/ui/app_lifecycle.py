@@ -25,6 +25,7 @@ import threading
 import traceback
 from tkinter import messagebox
 
+from simple_sender.ui.dialogs.error_dialogs_ui import close_grbl_code_popup
 
 def format_exception(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -77,6 +78,10 @@ def tk_report_callback_exception(app, exc, val, tb):
 
 def on_close(app):
     app._closing = True
+    try:
+        close_grbl_code_popup(app)
+    except Exception:
+        pass
     try:
         app._save_settings()
         app.grbl.disconnect()

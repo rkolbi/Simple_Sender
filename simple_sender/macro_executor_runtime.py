@@ -34,11 +34,22 @@ from simple_sender.utils.constants import (
     MACRO_LINE_TIMEOUT,
     MACRO_TOTAL_TIMEOUT,
 )
+from simple_sender.utils.macro_headers import parse_macro_header
 from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
 
 
 class MacroRunnerMixin(MacroExecutorState):
+    def _validate_macro_color(self, color: str) -> bool:
+        checker = getattr(self.app, "winfo_rgb", None)
+        if not callable(checker):
+            return False
+        try:
+            checker(color)
+            return True
+        except Exception:
+            return False
+
     def _macro_timeout_setting(self, attr_name: str, default_value: float) -> float:
         value = getattr(self.app, attr_name, default_value)
         try:
@@ -94,8 +105,12 @@ class MacroRunnerMixin(MacroExecutorState):
             messagebox.showerror("Macro error", str(exc))
             self._macro_lock.release()
             return
-        name = lines[0].strip() if lines else f"Macro {index}"
-        tip = lines[1].strip() if len(lines) > 1 else ""
+        name, tip, _color, _text_color, body_start = parse_macro_header(
+            lines,
+            color_validator=self._validate_macro_color,
+        )
+        if not name:
+            name = f"Macro {index}"
         ts = time.strftime("%H:%M:%S")
         if bool(self.app.gui_logging_enabled.get()):
             if tip:
@@ -103,12 +118,16 @@ class MacroRunnerMixin(MacroExecutorState):
             else:
                 self.app.streaming_controller.log(f"[{ts}] Macro: {name}")
             self.app.streaming_controller.log(f"[{ts}] Macro contents:")
-            for raw in lines[2:]:
+            for raw in lines[body_start:]:
                 self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
-        t = threading.Thread(target=self._run_macro_worker, args=(lines, path), daemon=True)
+        t = threading.Thread(
+            target=self._run_macro_worker,
+            args=(lines, path, body_start),
+            daemon=True,
+        )
         t.start()
 
-    def _run_macro_worker(self, lines: list[str], path: str | None):
+    def _run_macro_worker(self, lines: list[str], path: str | None, body_start: int = 2):
         start = time.perf_counter()
         executed = 0
         line_timeout_s = self._macro_line_timeout_s()
@@ -150,7 +169,7 @@ class MacroRunnerMixin(MacroExecutorState):
             self._macro_saved_state = self._snapshot_macro_state()
             if self.grbl.is_connected():
                 self._macro_force_mm()
-            for idx in range(2, len(lines)):
+            for idx in range(body_start, len(lines)):
                 now = time.perf_counter()
                 if total_timeout_s > 0 and (now - start) > total_timeout_s:
                     self.ui_q.put(

@@ -33,6 +33,12 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
 
 ## Notes
 
+- Macro file header format:
+  - line 1 = button label
+  - line 2 = tooltip
+  - line 3 = button color (`#RRGGBB`, `#RGB`, named color, or `color: ...`/`color=...`) (leave blank if unused)
+  - line 4 = button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`) (leave blank if unused)
+  - remaining lines = executed macro body
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
 - Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab and release/run checklist dialogs.

@@ -122,6 +122,7 @@ This is a practical, end-to-end flow with rationale for key options.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
    - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
+   - When enabled, non-blocking GRBL popups show timestamp, code number, and definition for known `ALARM:x` / `error:x` responses. Duplicate popups are deduped by code for the configured interval.
 9) **Settings and tuning**
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
    - Raw $$ tab keeps the text capture.
@@ -199,6 +200,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
+- **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics export captures recent status/console history, and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
@@ -244,7 +246,16 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (legacy `Maccro-*` names and optional `.txt` extensions remain supported); the first line becomes the button label, the second line the tooltip, and every subsequent line executes when you run the macro. Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
+Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (legacy `Maccro-*` names and optional `.txt` extensions remain supported).
+
+Macro file header format:
+- Line 1: button label.
+- Line 2: tooltip text.
+- Line 3: button color (`#RRGGBB`, `#RGB`, named color like `red`, or `color: ...`/`color=...`). Leave blank if unused.
+- Line 4: button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`). Leave blank if unused.
+- Remaining lines: executed macro body.
+
+Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
 `App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
 
 ![-](pics/macros.jpg)
@@ -772,6 +783,7 @@ Macro UI is included below along with the rest of the interface.
 
 ### Macro Panel (Jog Area)
 - Macro buttons (1-8): one button per existing `Macro-<n>` file; buttons appear in a single row and left-click runs the macro.
+- Header color lines: line 3 sets button background color and line 4 sets button text color (either line may be blank).
 - Right-click preview: opens a read-only preview of the selected macro.
 - Tooltips: show the second line of each macro file as a hint.
 - Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
@@ -840,9 +852,12 @@ Macro UI is included below along with the rest of the interface.
 - Minimum interval: minimum seconds between dialogs.
 - Burst window: time window for burst detection.
 - Max dialogs per window: cap before suppression begins.
+- Show GRBL alarm/error popups: toggles non-blocking GRBL code popups.
+- GRBL popup auto-dismiss (seconds): auto-close delay for GRBL popups (`0` disables auto-close).
+- GRBL popup dedupe interval (seconds): minimum time before the same `ALARM:x` / `error:x` popup can show again.
 - Show job completion dialog: toggles completion summary popup.
 - Play reminder beep on completion: toggles completion beep.
-- Recommendation: keep dialogs enabled; raise the minimum interval or burst window if you see repeated alerts.
+- Recommendation: keep dialogs enabled; tune popup dedupe/auto-dismiss to reduce noise while preserving visibility.
 
 ### App Settings: Macros
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
@@ -991,7 +1006,7 @@ Macro UI is included below along with the rest of the interface.
 
 ### Macro Manager Dialog
 - Macro list: slot overview for Macro-1..Macro-8 and source file paths.
-- Name/tooltip/body editor: edits macro header and content in-place.
+- Name/tooltip/color/text-color/body editor: edits macro header and content in-place.
 - Save/Delete: writes or removes the selected macro file in the active writable macro directory.
 - Duplicate: copies one macro slot to a different slot.
 - Reorder: moves macro contents between slots while keeping numbered naming.

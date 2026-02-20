@@ -34,6 +34,7 @@ from .status import (
 from . import streaming as _event_router_streaming
 from simple_sender.ui.grbl_lifecycle import handle_connection_event, handle_ready_event
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from simple_sender.ui.dialogs.error_dialogs_ui import show_grbl_code_popup
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 from simple_sender.types import UiEvent
@@ -201,6 +202,15 @@ def handle_event(app: Any, evt: UiEvent):
                         app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
                 except Exception as exc:
                     _log_suppressed("Failed to update joystick status hint", exc)
+            try:
+                src_tag = f" ({label})" if label else ""
+                app.streaming_controller.handle_log(f"[ERROR{src_tag}] {msg}")
+            except Exception as exc:
+                _log_suppressed("Failed to log manual error to console", exc)
+            try:
+                show_grbl_code_popup(app, msg)
+            except Exception as exc:
+                _log_suppressed("Failed showing GRBL error popup", exc)
             return
         case ("ready", is_ready):
             handle_ready_event(app, is_ready)
@@ -217,6 +227,10 @@ def handle_event(app: Any, evt: UiEvent):
             app._set_alarm_lock(True, msg)
             app.macro_executor.notify_alarm(msg)
             app._apply_status_poll_profile()
+            try:
+                show_grbl_code_popup(app, msg)
+            except Exception as exc:
+                _log_suppressed("Failed showing GRBL alarm popup", exc)
             return
         case ("status", line):
             handle_status_event(app, cast(str, line))
@@ -245,6 +259,10 @@ def handle_event(app: Any, evt: UiEvent):
                 app.status.config(text=f"Stream error: {msg}")
             except Exception as exc:
                 _log_suppressed("Failed to update stream error status", exc)
+            try:
+                show_grbl_code_popup(app, cast(str | None, msg))
+            except Exception as exc:
+                _log_suppressed("Failed showing stream error popup", exc)
             return
         case ("stream_pause_reason", reason):
             if reason:

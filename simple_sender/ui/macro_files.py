@@ -27,6 +27,7 @@ import os
 from typing import Any
 
 from simple_sender.utils.constants import MACRO_EXTS, MACRO_PREFIXES
+from simple_sender.utils.macro_headers import parse_macro_header
 
 CHECKLIST_PREFIX = "checklist-"
 CHECKLIST_EXT = ".chk"
@@ -61,23 +62,41 @@ def macro_slot_path(macro_dir: str, index: int) -> str:
     return os.path.join(macro_dir, macro_slot_filename(index))
 
 
-def read_macro_slot(app: Any, index: int) -> tuple[str, str, str, str | None]:
+def _macro_color_validator_from_app(app: Any):
+    checker = getattr(app, "winfo_rgb", None)
+    if not callable(checker):
+        return None
+
+    def _validate(color: str) -> bool:
+        try:
+            checker(color)
+            return True
+        except Exception:
+            return False
+
+    return _validate
+
+
+def read_macro_slot(app: Any, index: int) -> tuple[str, str, str, str, str, str | None]:
     path = None
     try:
         path = app.macro_executor.macro_path(int(index))
     except Exception:
         path = None
     if not path:
-        return "", "", "", None
+        return "", "", "", "", "", None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             lines = handle.read().splitlines()
     except Exception:
-        return "", "", "", path
-    name = lines[0].strip() if lines else ""
-    tip = lines[1].strip() if len(lines) > 1 else ""
-    body = "\n".join(lines[2:]) if len(lines) > 2 else ""
-    return name, tip, body, path
+        return "", "", "", "", "", path
+    color_validator = _macro_color_validator_from_app(app)
+    name, tip, color, text_color, body_start = parse_macro_header(
+        lines,
+        color_validator=color_validator,
+    )
+    body = "\n".join(lines[body_start:]) if len(lines) > body_start else ""
+    return name, tip, color or "", text_color or "", body, path
 
 
 def write_macro_slot(
@@ -86,11 +105,18 @@ def write_macro_slot(
     *,
     name: str,
     tip: str,
+    color: str = "",
+    text_color: str = "",
     body: str,
 ) -> str:
     os.makedirs(macro_dir, exist_ok=True)
     path = macro_slot_path(macro_dir, index)
-    lines = [str(name).strip(), str(tip).strip()]
+    lines = [
+        str(name).strip(),
+        str(tip).strip(),
+        str(color).strip(),
+        str(text_color).strip(),
+    ]
     body_text = str(body).replace("\r\n", "\n").replace("\r", "\n")
     if body_text:
         lines.extend(body_text.split("\n"))
