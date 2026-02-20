@@ -28,7 +28,12 @@ import time
 from collections import deque
 from typing import Sequence, cast
 
-from simple_sender.types import GrblWorkerState
+from simple_sender.types import (
+    GrblWorkerState,
+    ManualPendingItem,
+    StreamPendingItem,
+    StreamQueueItem,
+)
 
 from .utils.constants import EVENT_QUEUE_TIMEOUT, MAX_LINE_LENGTH, RX_BUFFER_SAFETY
 from .utils.exceptions import SerialWriteError
@@ -294,125 +299,143 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         
         finally:
             logger.debug("TX thread stopped")
-    
+
+    def _stream_loop_blocked(self) -> bool:
+        return (not self._streaming) or self._paused or self._abort_writes.is_set()
+
+    def _next_stream_item_locked(self) -> StreamPendingItem | None:
+        if self._pause_after_idx is not None and self._send_index > self._pause_after_idx:
+            return None
+        if self._stream_pending_item is not None:
+            return self._stream_pending_item
+        if self._resume_preamble:
+            return StreamPendingItem(line=self._resume_preamble[0], is_gcode=False, idx=None)
+        if self._send_index >= len(self._gcode):
+            return None
+        return StreamPendingItem(
+            line=self._gcode[self._send_index].strip(),
+            is_gcode=True,
+            idx=self._send_index,
+        )
+
+    def _validate_stream_item_locked(
+        self,
+        item: StreamPendingItem,
+    ) -> tuple[StreamPendingItem, bytes, int] | None:
+        line = self._sanitize_stream_line(item.line)
+        item = StreamPendingItem(line=line, is_gcode=item.is_gcode, idx=item.idx)
+        if item.is_gcode and item.idx is not None and self._pause_after_idx is None:
+            reason = self._pause_reason_for_line(line)
+            if reason:
+                self._pause_after_idx = item.idx
+                self._pause_after_reason = reason
+
+        payload = self._build_line_payload(line)
+        if payload is None:
+            msg = self._format_stream_error("Non-ASCII characters in line", item.idx, line)
+            self._pause_stream(reason="invalid characters")
+            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(("log", f"[stream error] {msg}"))
+            return None
+
+        line_len = len(payload)
+        if line_len > MAX_LINE_LENGTH:
+            msg = self._format_stream_error(
+                f"Line too long ({line_len} > {MAX_LINE_LENGTH})",
+                item.idx,
+                line,
+            )
+            self._pause_stream(reason="line too long")
+            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(("log", f"[stream error] {msg}"))
+            return None
+
+        usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
+        can_fit = (self._stream_buf_used + line_len) <= usable
+        if not can_fit and self._stream_buf_used > 0:
+            self._stream_pending_item = item
+            return None
+
+        return item, payload, line_len
+
+    def _reserve_stream_item_locked(
+        self,
+        item: StreamPendingItem,
+        line_len: int,
+    ) -> StreamQueueItem:
+        idx = item.idx
+        self._stream_pending_item = None
+        if item.is_gcode:
+            idx = self._send_index
+            self._send_index += 1
+
+        queue_item = StreamQueueItem(
+            line_len=line_len,
+            is_gcode=item.is_gcode,
+            idx=idx,
+            line=item.line,
+        )
+        self._stream_buf_used += line_len
+        self._stream_line_queue.append(queue_item)
+        return queue_item
+
+    def _rollback_reserved_stream_locked(self, *, is_gcode: bool, line_len: int) -> None:
+        if is_gcode and self._send_index > 0:
+            self._send_index -= 1
+        if self._stream_line_queue:
+            try:
+                last_len = self._stream_line_queue.pop().line_len
+            except Exception:
+                last_len = line_len
+            self._stream_buf_used = max(0, self._stream_buf_used - last_len)
+        else:
+            self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+
+    def _stream_send_invalidated(self, stream_token: int) -> bool:
+        return (
+            self._abort_writes.is_set()
+            or stream_token != self._stream_token
+            or not self._streaming
+            or self._paused
+        )
+
     def _process_stream_queue(self) -> None:
         """Process streaming queue - fill GRBL buffer."""
         while True:
-            if not self._streaming or self._paused or self._abort_writes.is_set():
+            if self._stream_loop_blocked():
                 break
-            
+
             with self._stream_lock:
-                if not self._streaming or self._paused or self._abort_writes.is_set():
+                if self._stream_loop_blocked():
                     break
-                
                 stream_token = self._stream_token
-
-                if (
-                    self._pause_after_idx is not None
-                    and self._send_index > self._pause_after_idx
-                ):
-                    break
-
-                # Get next item to send
-                item = self._stream_pending_item
+                item = self._next_stream_item_locked()
                 if item is None:
-                    if self._resume_preamble:
-                        line = self._resume_preamble[0]
-                        item = (line, False, None)
-                    else:
-                        if self._send_index >= len(self._gcode):
-                            break
-                        line = self._gcode[self._send_index].strip()
-                        item = (line, True, self._send_index)
-                
-                line, is_gcode, idx = item
-                line = self._sanitize_stream_line(line)
-                item = (line, is_gcode, idx)
-                if is_gcode and idx is not None and self._pause_after_idx is None:
-                    reason = self._pause_reason_for_line(line)
-                    if reason:
-                        self._pause_after_idx = idx
-                        self._pause_after_reason = reason
-                payload = self._build_line_payload(line)
-                if payload is None:
-                    msg = self._format_stream_error(
-                        "Non-ASCII characters in line",
-                        idx,
-                        line,
-                    )
-                    self._pause_stream(reason="invalid characters")
-                    self.ui_q.put(("stream_error", msg, idx, line, self._gcode_name))
-                    self.ui_q.put(("log", f"[stream error] {msg}"))
                     break
-                line_len = len(payload)
-                if line_len > MAX_LINE_LENGTH:
-                    msg = self._format_stream_error(
-                        f"Line too long ({line_len} > {MAX_LINE_LENGTH})",
-                        idx,
-                        line,
-                    )
-                    self._pause_stream(reason="line too long")
-                    self.ui_q.put(("stream_error", msg, idx, line, self._gcode_name))
-                    self.ui_q.put(("log", f"[stream error] {msg}"))
+
+                validated = self._validate_stream_item_locked(item)
+                if validated is None:
                     break
-                
-                # Check if it fits in buffer
-                usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                can_fit = (self._stream_buf_used + line_len) <= usable
-                
-                if not can_fit and self._stream_buf_used > 0:
-                    # Wait for buffer space
-                    self._stream_pending_item = item
-                    break
-                
-                # Send the line
-                self._stream_pending_item = None
-                if is_gcode:
-                    idx = self._send_index
-                    self._send_index += 1
-                
-                self._stream_buf_used += line_len
-                self._stream_line_queue.append((line_len, is_gcode, idx, line))
-            
-            # Write outside lock
-            if (
-                self._abort_writes.is_set()
-                or stream_token != self._stream_token
-                or not self._streaming
-                or self._paused
-            ):
+                item, payload, line_len = validated
+                queue_item = self._reserve_stream_item_locked(item, line_len)
+
+            if self._stream_send_invalidated(stream_token):
                 with self._stream_lock:
-                    if is_gcode and self._send_index > 0:
-                        self._send_index -= 1
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+                    self._rollback_reserved_stream_locked(
+                        is_gcode=queue_item.is_gcode,
+                        line_len=line_len,
+                    )
                     self._stream_pending_item = None
                 self._emit_buffer_fill()
                 break
 
-            if not self._write_line(line, payload):
-                # Write failed - rollback and stop streaming
+            if not self._write_line(queue_item.line, payload):
                 with self._stream_lock:
-                    if is_gcode and self._send_index > 0:
-                        self._send_index -= 1
-                    
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
-                    
+                    self._rollback_reserved_stream_locked(
+                        is_gcode=queue_item.is_gcode,
+                        line_len=line_len,
+                    )
                     self._stream_pending_item = item
-                
                 self._emit_buffer_fill()
                 if not self.is_connected():
                     break
@@ -421,18 +444,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     self._paused = False
                     self.ui_q.put(("stream_state", "error", "Write failed"))
                 break
-            
-            # Update state
-            if not is_gcode and self._resume_preamble:
+
+            if not queue_item.is_gcode and self._resume_preamble:
                 self._resume_preamble.popleft()
-            
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
-            
-            if is_gcode:
-                self.ui_q.put(("gcode_sent", idx, line))
-        
-        # Check if streaming is complete
+            if queue_item.is_gcode:
+                self.ui_q.put(("gcode_sent", queue_item.idx, queue_item.line))
+
         with self._stream_lock:
             send_index = self._send_index
             ack_index = self._ack_index
@@ -450,8 +469,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(("stream_state", "done", None))
             logger.info("Streaming complete")
 
-    def _process_manual_queue(self) -> None:
-        """Process immediate command queue with buffer pacing."""
+    def _purge_pending_jogs(self) -> None:
         if self._purge_jog_queue.is_set():
             self._purge_jog_queue.clear()
             pending: list[str] = []
@@ -468,31 +486,101 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             for cmd in kept:
                 self._outgoing_q.put(cmd)
             if self._manual_pending_item is not None:
-                line, _, _ = self._manual_pending_item
+                line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
                     self._manual_pending_item = None
+
+    def _manual_loop_blocked(self) -> bool:
+        if self._streaming or self._paused:
+            return True
+        if not self.is_connected():
+            return True
+        if self._abort_writes.is_set() and not self._alarm_active:
+            return True
+        return False
+
+    def _line_allowed_during_alarm(self, line: str) -> bool:
+        if not self._alarm_active:
+            return True
+        cmd_upper = line.strip().upper()
+        allowed = cmd_upper.startswith("$X") or cmd_upper.startswith("$H")
+        if not allowed:
+            self._clear_outgoing()
+        return allowed
+
+    def _manual_line_too_long(self, line: str, line_len: int) -> bool:
+        if line_len <= MAX_LINE_LENGTH:
+            return False
+        self.ui_q.put((
+            "log",
+            f"[manual] Line too long ({line_len} > {MAX_LINE_LENGTH}): {line}",
+        ))
+        self._manual_pending_item = None
+        return True
+
+    def _rollback_reserved_manual_locked(self, line_len: int) -> None:
+        if self._stream_line_queue:
+            try:
+                last_len = self._stream_line_queue.pop().line_len
+            except Exception:
+                last_len = line_len
+            self._stream_buf_used = max(0, self._stream_buf_used - last_len)
+        else:
+            self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+
+    def _reserve_manual_slot_locked(
+        self,
+        line: str,
+        payload: bytes,
+        line_len: int,
+    ) -> tuple[bool, bool, int]:
+        usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
+        if line_len > usable and self._stream_buf_used <= 0:
+            self._manual_pending_item = None
+            return True, False, usable
+
+        can_fit = (self._stream_buf_used + line_len) <= usable
+        if not can_fit and self._stream_buf_used > 0:
+            self._manual_pending_item = ManualPendingItem(
+                line=line,
+                payload=payload,
+                line_len=line_len,
+            )
+            return False, True, usable
+
+        self._manual_pending_item = None
+        self._stream_buf_used += line_len
+        self._stream_line_queue.append(
+            StreamQueueItem(
+                line_len=line_len,
+                is_gcode=False,
+                idx=None,
+                line=line,
+            )
+        )
+        return False, False, usable
+
+    def _process_manual_queue(self) -> None:
+        """Process immediate command queue with buffer pacing."""
+        self._purge_pending_jogs()
         while True:
-            if self._streaming or self._paused:
-                return
-            if not self.is_connected():
-                return
-            if self._abort_writes.is_set() and not self._alarm_active:
+            if self._manual_loop_blocked():
                 return
             payload: bytes | None = None
             line_len: int
             if self._manual_pending_item is not None:
-                line, payload, line_len = self._manual_pending_item
+                pending_item = self._manual_pending_item
+                line = pending_item.line
+                payload = pending_item.payload
+                line_len = pending_item.line_len
             else:
                 try:
                     line = self._outgoing_q.get_nowait()
                 except queue.Empty:
                     return
 
-                if self._alarm_active:
-                    cmd_upper = line.strip().upper()
-                    if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
-                        self._clear_outgoing()
-                        continue
+                if not self._line_allowed_during_alarm(line):
+                    continue
 
                 line = line.strip()
                 if not line:
@@ -507,40 +595,23 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     continue
                 line_len = len(payload)
 
-            allowed_alarm_cmd = False
-            if self._alarm_active:
-                cmd_upper = line.strip().upper()
-                allowed_alarm_cmd = cmd_upper.startswith("$X") or cmd_upper.startswith("$H")
-                if not allowed_alarm_cmd:
-                    self._clear_outgoing()
-                    continue
-
-            if line_len > MAX_LINE_LENGTH:
-                self.ui_q.put((
-                    "log",
-                    f"[manual] Line too long ({line_len} > {MAX_LINE_LENGTH}): {line}",
-                ))
-                self._manual_pending_item = None
+            allowed_alarm_cmd = self._line_allowed_during_alarm(line)
+            if not allowed_alarm_cmd:
                 continue
 
-            drop_for_buffer = False
-            usable = None
+            if self._manual_line_too_long(line, line_len):
+                continue
+
+            assert payload is not None
             with self._stream_lock:
-                usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
-                if line_len > usable and self._stream_buf_used <= 0:
-                    self._manual_pending_item = None
-                    drop_for_buffer = True
-                else:
-                    can_fit = (self._stream_buf_used + line_len) <= usable
+                drop_for_buffer, deferred, usable = self._reserve_manual_slot_locked(
+                    line=line,
+                    payload=payload,
+                    line_len=line_len,
+                )
 
-                    if not can_fit and self._stream_buf_used > 0:
-                        self._manual_pending_item = (line, payload, line_len)
-                        break
-
-                    self._manual_pending_item = None
-                    self._stream_buf_used += line_len
-                    self._stream_line_queue.append((line_len, False, None, line))
-
+            if deferred:
+                break
             if drop_for_buffer:
                 self.ui_q.put((
                     "log",
@@ -550,14 +621,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
 
             if self._abort_writes.is_set() and not allowed_alarm_cmd:
                 with self._stream_lock:
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+                    self._rollback_reserved_manual_locked(line_len)
                     self._manual_pending_item = None
                 self._emit_buffer_fill()
                 break
@@ -571,16 +635,13 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     self._settings_dump_active = False
                     self._settings_dump_seen = False
                 with self._stream_lock:
-                    if self._stream_line_queue:
-                        try:
-                            last_len, _, _, _ = self._stream_line_queue.pop()
-                        except Exception:
-                            last_len = line_len
-                        self._stream_buf_used = max(0, self._stream_buf_used - last_len)
-                    else:
-                        self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+                    self._rollback_reserved_manual_locked(line_len)
                     if self.is_connected():
-                        self._manual_pending_item = (line, payload, line_len)
+                        self._manual_pending_item = ManualPendingItem(
+                            line=line,
+                            payload=payload,
+                            line_len=line_len,
+                        )
                     else:
                         self._manual_pending_item = None
                 self._emit_buffer_fill()

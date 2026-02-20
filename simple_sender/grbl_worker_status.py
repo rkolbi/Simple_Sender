@@ -285,17 +285,17 @@ class GrblWorkerStatusMixin(GrblWorkerState):
 
             with self._stream_lock:
                 if self._stream_line_queue:
-                    line_len, is_gcode, idx, sent_line = self._stream_line_queue.popleft()
-                    self._stream_buf_used = max(0, self._stream_buf_used - line_len)
+                    queued_item = self._stream_line_queue.popleft()
+                    self._stream_buf_used = max(0, self._stream_buf_used - queued_item.line_len)
                     
-                    if is_gcode and self._streaming:
+                    if queued_item.is_gcode and self._streaming:
                         self._ack_index += 1
                         ack_index = self._ack_index
-                        ack_line_idx = idx
-                        ack_line_text = sent_line
+                        ack_line_idx = queued_item.idx
+                        ack_line_text = queued_item.line
                         if line_lower.startswith("error"):
-                            err_idx = idx
-                            err_line = sent_line
+                            err_idx = queued_item.idx
+                            err_line = queued_item.line
             
             self._emit_buffer_fill()
             

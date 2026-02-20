@@ -173,8 +173,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         with self._stream_lock:
             if self._manual_pending_item is not None:
                 return True
-            for _, is_gcode, _, _ in self._stream_line_queue:
-                if not is_gcode:
+            for queue_item in self._stream_line_queue:
+                if not queue_item.is_gcode:
                     return True
         return False
 

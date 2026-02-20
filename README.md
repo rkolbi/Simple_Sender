@@ -543,6 +543,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
+Current baseline in this repository (validated on February 20, 2026): full suite passes locally; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
 
 Run a subset:
 ```powershell
@@ -572,7 +573,8 @@ python -c "import simple_sender.ui.settings"
 ```
 
 ## Module Layout
-- `simple_sender/application.py`: Tkinter app class with UI orchestration and delegates.
+- `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
+- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI, toolpath) imported and installed onto `App`.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
 - `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
 - `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
@@ -581,6 +583,7 @@ python -c "import simple_sender.ui.settings"
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
+- `simple_sender/types.py`: shared protocols and stream-state value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) used by the worker pipeline.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
 
 ## Performance Profiling
@@ -635,6 +638,8 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - App Settings > Macros now includes a built-in Macro Manager and probe safety inputs (Probe Z start and safety margin) used by touch-plate/tool-reference macros.
 - Console Save now pre-fills a timestamped filename for touch-first workflows.
 - GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
+- `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
+- GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).

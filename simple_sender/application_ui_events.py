@@ -25,16 +25,32 @@
 
 # Standard library imports
 import queue
-import sys
 from typing import Any, cast
 
 # GUI imports
 import tkinter as tk
 
 
-def _app_module(instance):
-    return sys.modules[instance.__class__.__module__]
 
+from simple_sender.ui.app_exports import (
+    bind_app_settings_mousewheel,
+    bind_app_settings_touch_scroll,
+    on_app_settings_mousewheel,
+    on_app_settings_touch_end,
+    on_app_settings_touch_move,
+    on_app_settings_touch_start,
+    on_recover_button_visibility_change,
+    on_resume_button_visibility_change,
+    on_tab_changed,
+    show_macro_prompt,
+    unbind_app_settings_mousewheel,
+    unbind_app_settings_touch_scroll,
+    update_app_settings_scrollregion,
+    update_job_button_mode,
+    update_recover_button_visibility,
+    update_resume_button_visibility,
+    update_tab_visibility,
+)
 
 class UiEventsMixin:
     def _on_app_focus_out(self, event=None):
@@ -65,40 +81,40 @@ class UiEventsMixin:
         cancel_label: str,
         result_q: queue.Queue,
     ) -> None:
-        _app_module(self).show_macro_prompt(self, title, message, choices, cancel_label, result_q)
+        show_macro_prompt(self, title, message, choices, cancel_label, result_q)
 
     def _update_tab_visibility(self, nb=None):
-        _app_module(self).update_tab_visibility(self, nb)
+        update_tab_visibility(self, nb)
 
     def _update_app_settings_scrollregion(self):
-        _app_module(self).update_app_settings_scrollregion(self)
+        update_app_settings_scrollregion(self)
 
     def _on_app_settings_mousewheel(self, event):
-        _app_module(self).on_app_settings_mousewheel(self, event)
+        on_app_settings_mousewheel(self, event)
 
     def _bind_app_settings_mousewheel(self):
-        _app_module(self).bind_app_settings_mousewheel(self)
+        bind_app_settings_mousewheel(self)
 
     def _unbind_app_settings_mousewheel(self):
-        _app_module(self).unbind_app_settings_mousewheel(self)
+        unbind_app_settings_mousewheel(self)
 
     def _on_app_settings_touch_start(self, event):
-        _app_module(self).on_app_settings_touch_start(self, event)
+        on_app_settings_touch_start(self, event)
 
     def _on_app_settings_touch_move(self, event):
-        _app_module(self).on_app_settings_touch_move(self, event)
+        on_app_settings_touch_move(self, event)
 
     def _on_app_settings_touch_end(self, event=None):
-        _app_module(self).on_app_settings_touch_end(self, event)
+        on_app_settings_touch_end(self, event)
 
     def _bind_app_settings_touch_scroll(self):
-        _app_module(self).bind_app_settings_touch_scroll(self)
+        bind_app_settings_touch_scroll(self)
 
     def _unbind_app_settings_touch_scroll(self):
-        _app_module(self).unbind_app_settings_touch_scroll(self)
+        unbind_app_settings_touch_scroll(self)
 
     def _on_tab_changed(self, event):
-        _app_module(self).on_tab_changed(self, event)
+        on_tab_changed(self, event)
 
     def _on_auto_level_enabled_change(self):
         app = cast(Any, self)
@@ -180,16 +196,16 @@ class UiEventsMixin:
         app._update_state_highlight(app._machine_state_text)
 
     def _on_resume_button_visibility_change(self):
-        _app_module(self).on_resume_button_visibility_change(self)
+        on_resume_button_visibility_change(self)
 
     def _on_recover_button_visibility_change(self):
-        _app_module(self).on_recover_button_visibility_change(self)
+        on_recover_button_visibility_change(self)
 
     def _update_resume_button_visibility(self):
-        _app_module(self).update_resume_button_visibility(self)
+        update_resume_button_visibility(self)
 
     def _update_recover_button_visibility(self):
-        _app_module(self).update_recover_button_visibility(self)
+        update_recover_button_visibility(self)
 
     def _set_job_button_mode(self, mode: str):
-        _app_module(self).update_job_button_mode(self, mode)
+        update_job_button_mode(self, mode)

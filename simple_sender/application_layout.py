@@ -24,47 +24,58 @@
 """
 
 # Standard library imports
-import sys
 
 
-def _app_module(instance):
-    return sys.modules[instance.__class__.__module__]
 
+from simple_sender.ui.app_exports import (
+    build_main_layout,
+    build_toolbar,
+    ensure_tooltips,
+    export_backup_bundle,
+    export_session_diagnostics,
+    import_backup_bundle,
+    open_release_checklist,
+    open_run_checklist,
+    position_all_stop_offset,
+    run_preflight_check,
+    show_logs_dialog,
+    show_macro_manager,
+)
 
 class LayoutMixin:
     def _build_toolbar(self):
-        _app_module(self).build_toolbar(self)
+        build_toolbar(self)
 
     def _build_main(self):
-        _app_module(self).build_main_layout(self)
+        build_main_layout(self)
         self._ensure_tooltips()
 
     def _show_release_checklist(self):
-        _app_module(self).open_release_checklist(self)
+        open_release_checklist(self)
 
     def _show_run_checklist(self):
-        _app_module(self).open_run_checklist(self)
+        open_run_checklist(self)
 
     def _run_preflight_check(self):
-        _app_module(self).run_preflight_check(self)
+        run_preflight_check(self)
 
     def _export_session_diagnostics(self):
-        _app_module(self).export_session_diagnostics(self)
+        export_session_diagnostics(self)
 
     def _export_backup_bundle(self):
-        _app_module(self).export_backup_bundle(self)
+        export_backup_bundle(self)
 
     def _import_backup_bundle(self):
-        _app_module(self).import_backup_bundle(self)
+        import_backup_bundle(self)
 
     def _open_macro_manager(self):
-        _app_module(self).show_macro_manager(self)
+        show_macro_manager(self)
 
     def _show_logs_dialog(self):
-        _app_module(self).show_logs_dialog(self)
+        show_logs_dialog(self)
 
     def _position_all_stop_offset(self, event=None):
-        _app_module(self).position_all_stop_offset(self, event)
+        position_all_stop_offset(self, event)
 
     def _ensure_tooltips(self):
-        _app_module(self).ensure_tooltips(self)
+        ensure_tooltips(self)

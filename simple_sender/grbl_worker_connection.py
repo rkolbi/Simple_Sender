@@ -54,20 +54,16 @@ class _FallbackSerialTimeout(Exception):
     pass
 
 
-def _serial_exception_type():
-    import simple_sender.grbl_worker as grbl_worker
-
-    if grbl_worker.serial is None:
+def _serial_exception_type(serial_module: Any | None):
+    if serial_module is None:
         return _FallbackSerialException
-    return getattr(grbl_worker.serial, "SerialException", Exception)
+    return getattr(serial_module, "SerialException", Exception)
 
 
-def _serial_timeout_exception_type():
-    import simple_sender.grbl_worker as grbl_worker
-
-    if grbl_worker.serial is None:
+def _serial_timeout_exception_type(serial_module: Any | None):
+    if serial_module is None:
         return _FallbackSerialTimeout
-    return getattr(grbl_worker.serial, "SerialTimeoutException", Exception)
+    return getattr(serial_module, "SerialTimeoutException", Exception)
 
 
 class GrblWorkerConnectionMixin(GrblWorkerState):
@@ -84,6 +80,12 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         def _rx_loop(self, stop_evt: threading.Event) -> None: ...
         def _tx_loop(self, stop_evt: threading.Event) -> None: ...
         def _status_loop(self, stop_evt: threading.Event) -> None: ...
+        def _serial_module(self) -> Any | None: ...
+        def _serial_available(self) -> bool: ...
+        def _list_ports_provider(self) -> Any | None: ...
+        def _thread_join_timeout(self) -> float: ...
+        def _threading_module(self) -> Any: ...
+        def _time_module(self) -> Any: ...
 
     def list_ports(self) -> list[str]:
         """Get list of available serial ports.
@@ -91,12 +93,10 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         Returns:
             List of port device names
         """
-        import simple_sender.grbl_worker as grbl_worker
-
-        if not grbl_worker.SERIAL_AVAILABLE or grbl_worker.list_ports is None:
+        ports_provider = self._list_ports_provider()
+        if not self._serial_available() or ports_provider is None:
             return []
-        assert grbl_worker.list_ports is not None
-        return [p.device for p in grbl_worker.list_ports.comports()]
+        return [p.device for p in ports_provider.comports()]
 
     def connect(self, port: str, baud: int = BAUD_DEFAULT) -> None:
         """Connect to GRBL controller.
@@ -109,17 +109,16 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             SerialConnectionError: If connection fails
             ValueError: If parameters are invalid
         """
-        import simple_sender.grbl_worker as grbl_worker
-
-        if not grbl_worker.SERIAL_AVAILABLE:
+        if not self._serial_available():
             raise SerialConnectionError(
                 "pyserial is required to connect to GRBL. "
                 "Install with: pip install pyserial"
             )
-        assert grbl_worker.serial is not None
-        serial_exc = _serial_exception_type()
-        threading = grbl_worker.threading
-        time = grbl_worker.time
+        serial_module = self._serial_module()
+        assert serial_module is not None
+        serial_exc = _serial_exception_type(serial_module)
+        threading_mod = self._threading_module()
+        time_mod = self._time_module()
 
         # Validate inputs
         port = validate_port_name(port)
@@ -130,11 +129,11 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self.disconnect()
 
         # Reset state
-        self._stop_evt = threading.Event()
+        self._stop_evt = threading_mod.Event()
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
-        self._last_rx_ts = time.time()
+        self._last_rx_ts = time_mod.time()
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
@@ -142,7 +141,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
 
         try:
             # Open serial port
-            self.ser = grbl_worker.serial.Serial(
+            self.ser = serial_module.Serial(
                 port,
                 baudrate=baud,
                 timeout=SERIAL_TIMEOUT,
@@ -150,10 +149,10 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             )
             ser = self.ser
             assert ser is not None
-            self._connect_started_ts = time.time()
+            self._connect_started_ts = time_mod.time()
 
             # Give GRBL time to reset (some boards reset on connection)
-            time.sleep(SERIAL_CONNECT_DELAY)
+            time_mod.sleep(SERIAL_CONNECT_DELAY)
 
             # Clear buffers
             try:
@@ -164,19 +163,19 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
 
             # Start worker threads
             stop_evt = self._stop_evt
-            self._rx_thread = threading.Thread(
+            self._rx_thread = threading_mod.Thread(
                 target=self._rx_loop,
                 args=(stop_evt,),
                 daemon=True,
                 name="GRBL-RX"
             )
-            self._tx_thread = threading.Thread(
+            self._tx_thread = threading_mod.Thread(
                 target=self._tx_loop,
                 args=(stop_evt,),
                 daemon=True,
                 name="GRBL-TX"
             )
-            self._status_thread = threading.Thread(
+            self._status_thread = threading_mod.Thread(
                 target=self._status_loop,
                 args=(stop_evt,),
                 daemon=True,
@@ -237,7 +236,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self.ui_q.put(("stream_state", "stopped", None))
 
         # Close serial port
-        serial_exc = _serial_exception_type()
+        serial_exc = _serial_exception_type(self._serial_module())
         if self.ser:
             try:
                 self.ser.close()
@@ -250,9 +249,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
                 self.ser = None
 
         # Wait for threads to finish
-        import simple_sender.grbl_worker as grbl_worker
-
-        join_timeout = grbl_worker.THREAD_JOIN_TIMEOUT
+        join_timeout = self._thread_join_timeout()
         for thread in (self._rx_thread, self._tx_thread, self._status_thread):
             if thread and thread.is_alive():
                 thread.join(timeout=join_timeout)

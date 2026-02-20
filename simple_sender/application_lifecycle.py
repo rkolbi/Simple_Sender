@@ -24,33 +24,44 @@
 """
 
 # Standard library imports
-import sys
 from typing import Any, cast
 
 
-def _app_module(instance):
-    return sys.modules[instance.__class__.__module__]
 
+from simple_sender.ui.app_exports import (
+    call_on_ui_thread,
+    drain_ui_queue,
+    handle_event,
+    load_settings,
+    log_exception,
+    on_close,
+    post_ui_thread,
+    reset_error_dialog_state,
+    save_settings,
+    set_error_dialog_status,
+    should_show_error_dialog,
+    tk_report_callback_exception,
+)
 
 class LifecycleMixin:
     def _drain_ui_queue(self):
-        _app_module(self).drain_ui_queue(self)
+        drain_ui_queue(self)
 
     def _clear_pending_ui_updates(self):
         app = cast(Any, self)
         app.streaming_controller.clear_pending_ui_updates()
 
     def _handle_evt(self, evt):
-        _app_module(self).handle_event(self, evt)
+        handle_event(self, evt)
 
     def _on_close(self):
-        _app_module(self).on_close(self)
+        on_close(self)
 
     def _call_on_ui_thread(self, func, *args, timeout: float | None = 5.0, **kwargs):
-        return _app_module(self).call_on_ui_thread(self, func, *args, timeout=timeout, **kwargs)
+        return call_on_ui_thread(self, func, *args, timeout=timeout, **kwargs)
 
     def _post_ui_thread(self, func, *args, **kwargs):
-        _app_module(self).post_ui_thread(self, func, *args, **kwargs)
+        post_ui_thread(self, func, *args, **kwargs)
 
     def _log_exception(
         self,
@@ -61,7 +72,7 @@ class LifecycleMixin:
         dialog_title: str = "Error",
         traceback_text: str | None = None,
     ):
-        _app_module(self).log_exception(
+        log_exception(
             self,
             context,
             exc,
@@ -71,19 +82,19 @@ class LifecycleMixin:
         )
 
     def _tk_report_callback_exception(self, exc, val, tb):
-        _app_module(self).tk_report_callback_exception(self, exc, val, tb)
+        tk_report_callback_exception(self, exc, val, tb)
 
     def _should_show_error_dialog(self) -> bool:
-        return bool(_app_module(self).should_show_error_dialog(self))
+        return bool(should_show_error_dialog(self))
 
     def _reset_error_dialog_state(self):
-        _app_module(self).reset_error_dialog_state(self)
+        reset_error_dialog_state(self)
 
     def _set_error_dialog_status(self, text: str):
-        _app_module(self).set_error_dialog_status(self, text)
+        set_error_dialog_status(self, text)
 
     def _load_settings(self) -> dict:
-        return cast(dict, _app_module(self).load_settings(self))
+        return cast(dict, load_settings(self))
 
     def _save_settings(self):
-        _app_module(self).save_settings(self)
+        save_settings(self)

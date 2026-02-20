@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from dataclasses import dataclass
 from collections import deque
 from typing import Any, Callable, Iterator, Protocol, Sequence, TypeAlias, overload
 from typing import Literal
@@ -86,9 +87,26 @@ class AppProtocol(Protocol):
 
     def __getattr__(self, name: str) -> Any: ...
 
-StreamQueueItem: TypeAlias = tuple[int, bool, int | None, str]
-StreamPendingItem: TypeAlias = tuple[str, bool, int | None]
-ManualPendingItem: TypeAlias = tuple[str, bytes, int]
+@dataclass(frozen=True, slots=True)
+class StreamQueueItem:
+    line_len: int
+    is_gcode: bool
+    idx: int | None
+    line: str
+
+
+@dataclass(frozen=True, slots=True)
+class StreamPendingItem:
+    line: str
+    is_gcode: bool
+    idx: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManualPendingItem:
+    line: str
+    payload: bytes
+    line_len: int
 
 
 class GrblWorkerState:

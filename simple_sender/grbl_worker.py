@@ -36,6 +36,7 @@ from logging.handlers import RotatingFileHandler
 from collections import deque
 from typing import Any, Callable, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
+from .types import ManualPendingItem, StreamPendingItem, StreamQueueItem
 from .grbl_worker_commands import GrblWorkerCommandMixin
 from .grbl_worker_connection import (
     GrblWorkerConnectionMixin,
@@ -195,9 +196,9 @@ class GrblWorker(
         self._send_index = 0  # next index to send
         self._ack_index = -1  # last acked index
         self._stream_buf_used = 0
-        self._stream_line_queue: deque[Tuple[int, bool, Optional[int], str]] = deque()
-        self._stream_pending_item: Optional[Tuple[str, bool, Optional[int]]] = None
-        self._manual_pending_item: Optional[Tuple[str, bytes, int]] = None
+        self._stream_line_queue: deque[StreamQueueItem] = deque()
+        self._stream_pending_item: StreamPendingItem | None = None
+        self._manual_pending_item: ManualPendingItem | None = None
         self._last_manual_source: str | None = None
         self._settings_dump_active = False
         self._settings_dump_seen = False
@@ -239,6 +240,24 @@ class GrblWorker(
         self._homing_watchdog_enabled = True
         self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
         self._connect_started_ts = 0.0
+
+    def _serial_module(self):
+        return serial
+
+    def _serial_available(self) -> bool:
+        return bool(SERIAL_AVAILABLE)
+
+    def _list_ports_provider(self):
+        return list_ports
+
+    def _thread_join_timeout(self) -> float:
+        return float(THREAD_JOIN_TIMEOUT)
+
+    def _threading_module(self):
+        return threading
+
+    def _time_module(self):
+        return time
 
     def _log_rx_line(self, line: str) -> None:
         if not line:
@@ -296,8 +315,9 @@ class GrblWorker(
         ser = self.ser
         if ser is None:
             raise SerialWriteError("Serial port not connected")
-        timeout_exc = _serial_timeout_exception_type()
-        serial_exc = _serial_exception_type()
+        serial_module = self._serial_module()
+        timeout_exc = _serial_timeout_exception_type(serial_module)
+        serial_exc = _serial_exception_type(serial_module)
         try:
             with self._write_lock:
                 total = 0
@@ -373,8 +393,9 @@ class GrblWorker(
         """
         if not self.is_connected():
             return False
-        timeout_exc = _serial_timeout_exception_type()
-        serial_exc = _serial_exception_type()
+        serial_module = self._serial_module()
+        timeout_exc = _serial_timeout_exception_type(serial_module)
+        serial_exc = _serial_exception_type(serial_module)
         try:
             if payload is None:
                 payload = self._encode_line_payload(line)
@@ -485,8 +506,9 @@ class GrblWorker(
         """
         logger.debug("RX thread started")
         buf = b""
-        timeout_exc = _serial_timeout_exception_type()
-        serial_exc = _serial_exception_type()
+        serial_module = self._serial_module()
+        timeout_exc = _serial_timeout_exception_type(serial_module)
+        serial_exc = _serial_exception_type(serial_module)
         
         try:
             while not stop_evt.is_set():

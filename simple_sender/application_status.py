@@ -24,13 +24,22 @@
 """
 
 # Standard library imports
-import sys
 from typing import Any, cast
 
 
-def _app_module(instance):
-    return sys.modules[instance.__class__.__module__]
 
+from simple_sender.ui.app_exports import (
+    apply_error_dialog_settings,
+    apply_status_poll_profile,
+    convert_estimate_rates,
+    effective_status_poll_interval,
+    on_estimate_rates_change,
+    on_homing_watchdog_change,
+    on_status_failure_limit_change,
+    on_status_interval_change,
+    update_estimate_rate_units_label,
+    validate_estimate_rate_text,
+)
 
 class StatusMixin:
     def _on_fallback_rate_change(self, _event=None):
@@ -39,31 +48,31 @@ class StatusMixin:
             app._update_gcode_stats(app._last_gcode_lines)
 
     def _on_status_interval_change(self, _event=None):
-        _app_module(self).on_status_interval_change(self, _event)
+        on_status_interval_change(self, _event)
 
     def _on_status_failure_limit_change(self, _event=None):
-        _app_module(self).on_status_failure_limit_change(self, _event)
+        on_status_failure_limit_change(self, _event)
 
     def _on_homing_watchdog_change(self, _event=None):
-        _app_module(self).on_homing_watchdog_change(self, _event)
+        on_homing_watchdog_change(self, _event)
 
     def _apply_error_dialog_settings(self, _event=None):
-        _app_module(self).apply_error_dialog_settings(self, _event)
+        apply_error_dialog_settings(self, _event)
 
     def _effective_status_poll_interval(self) -> float:
-        return float(_app_module(self).effective_status_poll_interval(self))
+        return float(effective_status_poll_interval(self))
 
     def _apply_status_poll_profile(self):
-        _app_module(self).apply_status_poll_profile(self)
+        apply_status_poll_profile(self)
 
     def _update_estimate_rate_units_label(self):
-        _app_module(self).update_estimate_rate_units_label(self)
+        update_estimate_rate_units_label(self)
 
     def _on_estimate_rates_change(self, _event=None):
-        _app_module(self).on_estimate_rates_change(self, _event)
+        on_estimate_rates_change(self, _event)
 
     def _validate_estimate_rate_text(self, text: str) -> bool:
-        return bool(_app_module(self).validate_estimate_rate_text(text))
+        return bool(validate_estimate_rate_text(text))
 
     def _convert_estimate_rates(self, old_units: str, new_units: str):
-        _app_module(self).convert_estimate_rates(self, old_units, new_units)
+        convert_estimate_rates(self, old_units, new_units)
