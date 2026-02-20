@@ -1,6 +1,6 @@
 No Touch Plate
 Use when XYZ work zero is set manually; captures TOOL_REFERENCE at the fixed sensor for Tool Change.
-#86addd
+#dbe8eb
 #00006c
 ; Use this when you've already set X/Y/Z zero manually and only need tool-reference capture.
 %macro.state.SAFE_HEIGHT = -5

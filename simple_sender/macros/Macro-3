@@ -1,6 +1,6 @@
 XYZ Touch Plate
 Probes XYZ on the touch plate, then captures the reference tool height at the fixed sensor.
-#86addd
+#dbe8eb
 #00006c
 ; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe feed).
 %macro.state.SAFE_HEIGHT = -5
