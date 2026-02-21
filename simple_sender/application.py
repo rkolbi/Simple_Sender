@@ -62,6 +62,21 @@ if TYPE_CHECKING:
 SERIAL_IMPORT_ERROR = ""
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
 JOYSTICK_RESTORE_DELAY_MS = 0
+_APP_TYPE_CHECKING_STUBS: tuple[str, ...] = (
+    "_apply_ui_scale",
+    "_build_toolbar",
+    "_build_main",
+    "_init_screen_lock_guard",
+    "_set_manual_controls_enabled",
+    "_drain_ui_queue",
+    "_restore_joystick_bindings_on_start",
+    "_on_app_focus_out",
+    "_on_close",
+    "refresh_ports",
+    "_load_grbl_setting_info",
+    "_create_virtual_hold_buttons",
+    "_apply_keyboard_bindings",
+)
 
 
 def _resolve_script_file() -> str:
@@ -164,6 +179,9 @@ class App(tk.Tk):
     _serial_import_error: str
 
     if TYPE_CHECKING:
+        # Intentionally curated stubs for critical mixin-installed methods used
+        # in App.__init__ and common call sites. This is not an exhaustive list
+        # of every method installed from _APP_MIXINS.
         def _apply_ui_scale(self, value: float | None = None) -> float: ...
         def _build_toolbar(self) -> None: ...
         def _build_main(self) -> None: ...

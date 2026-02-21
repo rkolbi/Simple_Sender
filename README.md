@@ -543,7 +543,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 20, 2026): full suite passes locally; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
+Current baseline in this repository (validated on February 21, 2026): full suite passes locally; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
 
 Run a subset:
 ```powershell
@@ -573,6 +573,11 @@ Type checking (mypy):
 python -m mypy
 ```
 
+Validate mypy target manifest and README count note:
+```powershell
+python tools/check_mypy_targets.py --expected-count 148
+```
+
 One-command local gate:
 ```powershell
 run_tests.bat
@@ -582,6 +587,15 @@ Import stability check (same gate used in CI):
 ```powershell
 python -c "import simple_sender.ui.settings"
 ```
+
+Optional pre-commit hooks (mypy manifest + mypy):
+```powershell
+python -m pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+Release history and validated baselines are tracked in `CHANGELOG.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
@@ -659,6 +673,9 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
+4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
+5. Static typing gates currently run mypy against 148 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-21), and local/CI hooks now enforce `--expected-count 148`.
+6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
