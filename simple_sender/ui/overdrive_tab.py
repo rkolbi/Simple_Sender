@@ -62,6 +62,19 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_spindle_off, "Turn spindle off.")
     attach_log_gcode(app.btn_spindle_off, "M5")
 
+    app.btn_spoilboard = ttk.Button(
+        spindle_frame,
+        text="Spoilboard",
+        command=lambda: app._confirm_and_run(
+            "Spoilboard Generator", app._show_spoilboard_generator_dialog
+        ),
+    )
+    set_kb_id(app.btn_spoilboard, "spoilboard_generator")
+    app.btn_spoilboard.pack(side="left", padx=(6, 0))
+    app._manual_controls.append(app.btn_spoilboard)
+    app._offline_controls.add(app.btn_spoilboard)
+    apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
+
     info_label = ttk.Label(container, textvariable=app.override_info_var, anchor="center")
     info_label.pack(fill="x", pady=(0, 4))
     note_label = ttk.Label(

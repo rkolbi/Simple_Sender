@@ -27,7 +27,11 @@
 from typing import Any, cast
 
 from simple_sender.types import LineSource
-from simple_sender.ui.dialogs import show_auto_level_dialog, show_resume_dialog
+from simple_sender.ui.dialogs import (
+    show_auto_level_dialog,
+    show_resume_dialog,
+    show_spoilboard_generator_dialog,
+)
 from simple_sender.ui.dialogs.resume_from import build_resume_preamble, resume_from_line
 from simple_sender.ui.dialogs.streaming_metrics import (
     format_throughput,
@@ -71,6 +75,9 @@ class GcodeMixin:
 
     def _show_auto_level_dialog(self):
         show_auto_level_dialog(self)
+
+    def _show_spoilboard_generator_dialog(self):
+        show_spoilboard_generator_dialog(self)
 
     def _build_resume_preamble(self, lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
         source = lines

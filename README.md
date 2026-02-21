@@ -26,6 +26,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [Macros](#macros)
 - [Estimation & 3D View](#estimation--3d-view)
 - [Auto-Leveling](#auto-leveling)
+- [Spoilboard Generator](#spoilboard-generator)
 - [Probing Workflow](#probing-workflow)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Joystick Bindings](#joystick-bindings)
@@ -52,7 +53,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Resume From... dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present).
 - Tooltips for every control; disabled buttons explain why (streaming, disconnected, alarm).
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
-- Overdrive tab: spindle control plus feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
+- Overdrive tab: spindle control, Spoilboard Generator, and feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Run preflight safety gate checks readiness/bounds/validation before streaming, with explicit operator override.
 - Diagnostics include session report export plus backup bundle import/export (settings, macros, checklists).
@@ -114,7 +115,7 @@ This is a practical, end-to-end flow with rationale for key options.
      - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
      - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
      - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in the **Checklists** tab > Safety.
-     - Use the Overdrive tab to flip the spindle and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
+     - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
      - Click **Run** (Training Wheels may prompt). Before streaming starts, a preflight safety gate checks job/controller readiness and bounds; when failures are present, operators can choose to stop or explicitly override and continue.
      - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. The Run confirmation includes a G-code validation report (unsupported codes, GRBL warnings, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
@@ -156,7 +157,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
     ![](pics/logstab.JPG)
 
-  - **Overdrive:** Spindle ON/OFF controls plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
+  - **Overdrive:** Spindle ON/OFF controls, a Spoilboard Generator button, plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
   
     ![-](pics/overdrivetab.JPG)
     
@@ -470,6 +471,38 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Large leveled files may reload in streaming preview mode (stats are limited until fully loaded).
 - Always test in the air first and confirm probe wiring before running a full grid.
 
+## Spoilboard Generator
+Use the Overdrive tab's **Spoilboard** button to generate a surfacing program without opening a CAM tool.
+
+### Inputs
+- Width X
+- Height Y
+- Tool Diameter
+- Stepover %
+- Feed XY
+- Feed Z
+- Spindle RPM (default `18000`)
+- Start X
+- Start Y
+
+### Assumptions and motion flow
+- Assumes the spindle is already positioned at your desired work Z plane before running the program.
+- Start sequence:
+  - switch to relative and raise Z by `10 mm`
+  - switch to absolute and rapid to lower-left (`Start X`, `Start Y`)
+  - start spindle at the specified RPM
+  - switch to relative and feed-plunge down `10 mm` to return to the original Z plane
+  - switch to absolute and run surfacing passes
+- End sequence:
+  - switch to relative and raise Z by `10 mm`
+  - switch to absolute, stop spindle, and end program (`M30`)
+
+### Post-generate options
+After generation, a blocking modal appears:
+- **Read G-code**: loads generated code directly into the viewer using the normal load pipeline (no file write).
+- **Save G-code**: opens Save dialog with default filename `surfacing-YYYYMMDD-HHMMSS.nc`, default folder set to the app log directory, and writes to disk without auto-loading.
+- **Cancel**: closes the modal and discards the generated program.
+
 ## Probing Workflow
 This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) and optionally running Auto-Level. Adjust the numbers for your machine and tooling.
 
@@ -609,6 +642,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
 - `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
+- `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
 - `simple_sender/types.py`: shared protocols and stream-state value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) used by the worker pipeline.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
@@ -668,6 +702,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
 - Auto-Level dialog flow has been decomposed into a dedicated controller module (`ui/autolevel_dialog/dialog_controller.py`) while preserving public entry points in `ui/autolevel_dialog/__init__.py`.
+- Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
@@ -847,11 +882,24 @@ Macro UI is included below along with the rest of the interface.
 ### Overdrive Tab
 - Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
 - Spindle OFF: turns the spindle off (M5).
+- Spoilboard: opens the Spoilboard Generator dialog for surfacing program creation.
 - Override summary: read-only summary of current feed/spindle overrides.
 - Feed override slider: sets feed override target (10-200%).
 - Feed +10%/-10%/Reset: adjusts feed override in 10% GRBL steps.
 - Spindle override slider: sets spindle override target (10-200%).
 - Spindle +10%/-10%/Reset: adjusts spindle override in 10% GRBL steps.
+
+### Spoilboard Generator Dialog
+- Width X / Height Y: surfacing rectangle dimensions (mm).
+- Tool Diameter: cutter diameter used to derive row spacing.
+- Stepover %: percentage of tool diameter used for stepover.
+- Feed XY / Feed Z: cutting and plunge feed rates.
+- Spindle RPM: spindle speed for `M3`.
+- Start X / Start Y: lower-left origin for the surfacing rectangle.
+- Generate: builds G-code in-memory and opens the Read/Save/Cancel modal.
+- Read G-code: loads generated program into the G-code tab without writing to disk.
+- Save G-code: saves to a user-selected path with timestamped default filename.
+- Cancel: aborts with no load/save side effects.
 
 ### Raw $$ Tab
 - Raw $$ text view: read-only capture of the last settings dump from GRBL.
