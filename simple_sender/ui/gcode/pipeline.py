@@ -160,9 +160,13 @@ def clear_gcode(app):
     app._gcode_validation_report = None
     app._last_parse_result = None
     app._last_parse_hash = None
+    app._live_estimate_min = None
+    app._last_stats = None
+    app._last_rate_source = None
     app._last_error_index = -1
     _reset_autolevel_state(app)
     app._gcode_parse_token += 1
+    app._stats_token += 1
     app._stats_cache.clear()
     app.grbl.load_gcode([])
     app.gview.set_lines([])

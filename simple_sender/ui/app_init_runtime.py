@@ -23,40 +23,17 @@
 from typing import Any, cast
 
 
-def init_runtime_state(
-    app,
-    default_jog_feed_xy: float,
-    default_jog_feed_z: float,
-    macro_search_dirs: tuple[str, ...],
-    module,
-):
-    deps = module
-    copy = deps.copy
-    queue = deps.queue
-    tk = deps.tk
-    ttk = deps.ttk
-    DEFAULT_SETTINGS = deps.DEFAULT_SETTINGS
-    STATUS_POLL_DEFAULT = deps.STATUS_POLL_DEFAULT
-    UI_EVENT_QUEUE_MAXSIZE = deps.UI_EVENT_QUEUE_MAXSIZE
-    GrblWorker = deps.GrblWorker
-    MacroExecutor = deps.MacroExecutor
-    StreamingController = deps.StreamingController
-    MacroPanel = deps.MacroPanel
-    ToolpathPanel = deps.ToolpathPanel
-    GRBLSettingsController = deps.GRBLSettingsController
-    ProbeController = deps.ProbeController
-    AutoLevelProbeRunner = deps.AutoLevelProbeRunner
-
-    def setting(key: str, fallback):
-        return app.settings.get(key, DEFAULT_SETTINGS.get(key, fallback))
-
+def _normalize_key_bindings(app) -> None:
     raw_bindings = app.settings.get("key_bindings", {})
     if isinstance(raw_bindings, dict):
         app._key_bindings = {}
-        for k, v in raw_bindings.items():
-            app._key_bindings[str(k)] = app._normalize_key_label(str(v))
+        for key, value in raw_bindings.items():
+            app._key_bindings[str(key)] = app._normalize_key_label(str(value))
     else:
         app._key_bindings = {}
+
+
+def _normalize_joystick_bindings(app) -> None:
     raw_joystick_bindings = app.settings.get("joystick_bindings", {})
     normalized_joystick_bindings: dict[str, dict[str, Any]] = {}
     if isinstance(raw_joystick_bindings, dict):
@@ -64,6 +41,9 @@ def init_runtime_state(
             if isinstance(binding, dict):
                 normalized_joystick_bindings[str(key)] = dict(binding)
     app._joystick_bindings = normalized_joystick_bindings
+
+
+def _init_keyboard_runtime_state(app) -> None:
     app._bound_key_sequences = set()
     app._key_sequence_map = {}
     app._kb_conflicts = set()
@@ -87,6 +67,9 @@ def init_runtime_state(
     app._kb_item_to_button = {}
     app._kb_edit = None
     app._kb_edit_state = cast(dict[Any, dict[str, Any]], {})
+
+
+def _init_joystick_runtime_state(app, tk) -> None:
     app._joystick_binding_map = cast(dict[tuple, Any], {})
     app._joystick_capture_state = None
     app._joystick_poll_id = None
@@ -120,11 +103,37 @@ def init_runtime_state(
     )
     app.joystick_live_status = tk.StringVar(value="Joystick state: idle")
     app.keyboard_live_status = tk.StringVar(value="Keyboard state: idle")
+
+
+def _init_connection_runtime_state(app) -> None:
     app._closing = False
     app._connecting = False
     app._disconnecting = False
     app._connect_thread = None
     app._disconnect_thread = None
+
+
+def _clamp_float_setting(setting, key: str, fallback: float) -> float:
+    try:
+        value = float(setting(key, fallback))
+    except Exception:
+        value = fallback
+    if value <= 0:
+        value = fallback
+    return value
+
+
+def _clamp_int_setting(setting, key: str, fallback: int) -> int:
+    try:
+        value = int(setting(key, fallback))
+    except Exception:
+        value = fallback
+    if value <= 0:
+        value = fallback
+    return value
+
+
+def _init_error_dialog_runtime_state(app, setting, tk) -> None:
     app._error_dialog_last_ts = 0.0
     app._error_dialog_window_start = 0.0
     app._error_dialog_count = 0
@@ -139,96 +148,99 @@ def init_runtime_state(
     app._homing_state_seen = False
     app._homing_start_ts = 0.0
     app._homing_timeout_s = 30.0
-    try:
-        interval = float(setting("error_dialog_interval", 2.0))
-    except Exception:
-        interval = 2.0
-    try:
-        burst_window = float(setting("error_dialog_burst_window", 30.0))
-    except Exception:
-        burst_window = 30.0
-    try:
-        burst_limit = int(setting("error_dialog_burst_limit", 3))
-    except Exception:
-        burst_limit = 3
-    if interval <= 0:
-        interval = 2.0
-    if burst_window <= 0:
-        burst_window = 30.0
-    if burst_limit <= 0:
-        burst_limit = 3
-    app._error_dialog_interval = interval
-    app._error_dialog_burst_window = burst_window
-    app._error_dialog_burst_limit = burst_limit
+
+    app._error_dialog_interval = _clamp_float_setting(setting, "error_dialog_interval", 2.0)
+    app._error_dialog_burst_window = _clamp_float_setting(setting, "error_dialog_burst_window", 30.0)
+    app._error_dialog_burst_limit = _clamp_int_setting(setting, "error_dialog_burst_limit", 3)
+
     app.error_dialog_interval_var = tk.DoubleVar(value=app._error_dialog_interval)
     app.error_dialog_burst_window_var = tk.DoubleVar(value=app._error_dialog_burst_window)
     app.error_dialog_burst_limit_var = tk.IntVar(value=app._error_dialog_burst_limit)
     app.error_dialog_status_var = tk.StringVar(value="")
-    UiEventQueue = getattr(deps, "UiEventQueue", None)
-    if UiEventQueue is not None:
-        app.ui_q = UiEventQueue(maxsize=UI_EVENT_QUEUE_MAXSIZE)
+
+
+def _init_worker_and_runtime_controllers(
+    app,
+    *,
+    deps,
+    queue_module,
+    tk,
+    setting,
+    default_settings: dict,
+    status_poll_default: float,
+    ui_event_queue_maxsize: int,
+    macro_search_dirs: tuple[str, ...],
+) -> None:
+    ui_event_queue_cls = getattr(deps, "UiEventQueue", None)
+    if ui_event_queue_cls is not None:
+        app.ui_q = ui_event_queue_cls(maxsize=ui_event_queue_maxsize)
     else:
-        app.ui_q = queue.Queue()
+        app.ui_q = queue_module.Queue()
+
     app.status_poll_interval = tk.DoubleVar(
         value=app.settings.get(
             "status_poll_interval",
-            DEFAULT_SETTINGS.get("status_poll_interval", STATUS_POLL_DEFAULT),
+            default_settings.get("status_poll_interval", status_poll_default),
         )
     )
-    try:
-        failure_limit = int(
-            app.settings.get(
-                "status_query_failure_limit",
-                DEFAULT_SETTINGS.get("status_query_failure_limit", 3),
-            )
-        )
-    except Exception:
-        failure_limit = 3
+    failure_limit = _clamp_int_setting(setting, "status_query_failure_limit", 3)
     if failure_limit < 1:
         failure_limit = 1
     if failure_limit > 10:
         failure_limit = 10
     app.status_query_failure_limit = tk.IntVar(value=failure_limit)
-    app.grbl = GrblWorker(app.ui_q)
+
+    app.grbl = deps.GrblWorker(app.ui_q)
     app.grbl.set_status_query_failure_limit(app.status_query_failure_limit.get())
     try:
         app._on_homing_watchdog_change()
     except Exception:
         pass
-    app.macro_executor = MacroExecutor(app, macro_search_dirs=macro_search_dirs)
-    app.probe_controller = ProbeController(app)
-    app.auto_level_runner = AutoLevelProbeRunner(app)
-    app.streaming_controller = StreamingController(app)
-    app.macro_panel = MacroPanel(app)
-    app.toolpath_panel = ToolpathPanel(app)
-    app.settings_controller = GRBLSettingsController(app)
+
+    app.macro_executor = deps.MacroExecutor(app, macro_search_dirs=macro_search_dirs)
+    app.probe_controller = deps.ProbeController(app)
+    app.auto_level_runner = deps.AutoLevelProbeRunner(app)
+    app.streaming_controller = deps.StreamingController(app)
+    app.macro_panel = deps.MacroPanel(app)
+    app.toolpath_panel = deps.ToolpathPanel(app)
+    app.settings_controller = deps.GRBLSettingsController(app)
     app._install_dialog_loggers()
     app.report_callback_exception = app._tk_report_callback_exception
     app._apply_status_poll_profile()
 
-    app.unit_mode = tk.StringVar(value=app.settings.get("unit_mode", DEFAULT_SETTINGS.get("unit_mode", "mm")))
+
+def _init_units_and_estimation_state(
+    app,
+    *,
+    tk,
+    default_settings: dict,
+    default_jog_feed_xy: float,
+    default_jog_feed_z: float,
+) -> None:
+    app.unit_mode = tk.StringVar(value=app.settings.get("unit_mode", default_settings.get("unit_mode", "mm")))
     app._modal_units = app.unit_mode.get()
     app._report_units = None
     app.estimate_rate_x_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_x", DEFAULT_SETTINGS.get("estimate_rate_x", "")))
+        value=str(app.settings.get("estimate_rate_x", default_settings.get("estimate_rate_x", "")))
     )
     app.estimate_rate_y_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_y", DEFAULT_SETTINGS.get("estimate_rate_y", "")))
+        value=str(app.settings.get("estimate_rate_y", default_settings.get("estimate_rate_y", "")))
     )
     app.estimate_rate_z_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_z", DEFAULT_SETTINGS.get("estimate_rate_z", "")))
+        value=str(app.settings.get("estimate_rate_z", default_settings.get("estimate_rate_z", "")))
     )
-    app.step_xy = tk.DoubleVar(value=app.settings.get("step_xy", DEFAULT_SETTINGS.get("step_xy", 1.0)))
-    app.step_z = tk.DoubleVar(value=app.settings.get("step_z", DEFAULT_SETTINGS.get("step_z", 1.0)))
+    app.step_xy = tk.DoubleVar(value=app.settings.get("step_xy", default_settings.get("step_xy", 1.0)))
+    app.step_z = tk.DoubleVar(value=app.settings.get("step_z", default_settings.get("step_z", 1.0)))
     app.jog_feed_xy = tk.DoubleVar(value=default_jog_feed_xy)
     app.jog_feed_z = tk.DoubleVar(value=default_jog_feed_z)
 
+
+def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app.connected = False
-    app.current_port = tk.StringVar(value=app.settings.get("last_port", DEFAULT_SETTINGS.get("last_port", "")))
+    app.current_port = tk.StringVar(value=app.settings.get("last_port", default_settings.get("last_port", "")))
     app.tool_reference_var = tk.StringVar(value="")
     app._tool_reference_last = None
 
-    # State
     app.machine_state = tk.StringVar(value="DISCONNECTED")
     app.wpos_x = tk.StringVar(value="0.000")
     app.wpos_y = tk.StringVar(value="0.000")
@@ -242,6 +254,9 @@ def init_runtime_state(
     app._wpos_value_labels = {}
     app._wpos_label_default_fg = {}
     app._wpos_flash_after_ids = {}
+
+
+def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: dict) -> None:
     app._last_gcode_lines = []
     app._gcode_source = None
     app._gcode_streaming_mode = False
@@ -251,6 +266,7 @@ def init_runtime_state(
     app._gcode_validation_report = None
     app._last_parse_result = None
     app._last_parse_hash = None
+
     app._auto_level_grid = None
     app._auto_level_height_map = None
     app._auto_level_bounds = None
@@ -262,21 +278,22 @@ def init_runtime_state(
     app._auto_level_leveled_name = None
     app._auto_level_restore = None
     app.auto_level_settings = dict(
-        app.settings.get("auto_level_settings", DEFAULT_SETTINGS.get("auto_level_settings", {}))
+        app.settings.get("auto_level_settings", default_settings.get("auto_level_settings", {}))
         or {}
     )
+
     raw_job_prefs = app.settings.get(
         "auto_level_job_prefs",
-        DEFAULT_SETTINGS.get("auto_level_job_prefs", {}),
+        default_settings.get("auto_level_job_prefs", {}),
     )
     if isinstance(raw_job_prefs, dict):
-        app.auto_level_job_prefs = copy.deepcopy(raw_job_prefs)
+        app.auto_level_job_prefs = copy_module.deepcopy(raw_job_prefs)
     else:
-        app.auto_level_job_prefs = copy.deepcopy(
-            DEFAULT_SETTINGS.get("auto_level_job_prefs", {})
-        )
+        app.auto_level_job_prefs = copy_module.deepcopy(default_settings.get("auto_level_job_prefs", {}))
+
     raw_presets = app.settings.get("auto_level_presets", {})
     app.auto_level_presets = dict(raw_presets) if isinstance(raw_presets, dict) else {}
+
     app._gcode_loading = False
     app._gcode_load_token = 0
     app._gcode_parse_token = 0
@@ -285,13 +302,16 @@ def init_runtime_state(
     app._gcode_load_popup = None
     app._gcode_load_popup_label = None
     app._gcode_load_popup_bar = None
+
+
+def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._rapid_rates = None
     app._rapid_rates_source = None
     app.fallback_rapid_rate = tk.StringVar(
-        value=app.settings.get("fallback_rapid_rate", DEFAULT_SETTINGS.get("fallback_rapid_rate", ""))
+        value=app.settings.get("fallback_rapid_rate", default_settings.get("fallback_rapid_rate", ""))
     )
     app.estimate_factor = tk.DoubleVar(
-        value=app.settings.get("estimate_factor", DEFAULT_SETTINGS.get("estimate_factor", 1.0))
+        value=app.settings.get("estimate_factor", default_settings.get("estimate_factor", 1.0))
     )
     app._estimate_factor_label = tk.StringVar(value=f"{app.estimate_factor.get():.2f}x")
     app._accel_rates = None
@@ -300,6 +320,7 @@ def init_runtime_state(
     app._last_rate_source = None
     app._stats_cache = {}
     app._live_estimate_min = None
+
     app._stream_state = None
     app._stream_start_ts = None
     app._stream_pause_total = 0.0
@@ -310,16 +331,19 @@ def init_runtime_state(
     app._toolpath_reparse_deferred = False
     app._job_started_at = None
     app._job_completion_notified = False
+
     app._grbl_ready = False
     app._alarm_locked = False
     app._alarm_message = ""
     app._pending_settings_refresh = False
     app._connected_port = None
     app._status_seen = False
+
     app.progress_pct = tk.IntVar(value=0)
     app.buffer_fill = tk.StringVar(value="Buffer: 0%")
     app.throughput_var = tk.StringVar(value="TX: 0 B/s")
     app.buffer_fill_pct = tk.IntVar(value=0)
+
     app._manual_controls = []
     app._offline_controls = set()
     app._override_controls = []
@@ -334,6 +358,7 @@ def init_runtime_state(
     app._spindle_override_slider_locked = False
     app._feed_override_slider_last_position = 100
     app._spindle_override_slider_last_position = 100
+
     app._machine_state_text = "DISCONNECTED"
     app._grbl_setting_info = {}
     app._grbl_setting_keys = []
@@ -342,7 +367,10 @@ def init_runtime_state(
     app._last_error_index = -1
     app._confirm_last_time = {}
     app._confirm_debounce_sec = 0.8
-    app._auto_reconnect_last_port = app.settings.get("last_port", DEFAULT_SETTINGS.get("last_port", ""))
+
+
+def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
+    app._auto_reconnect_last_port = app.settings.get("last_port", default_settings.get("last_port", ""))
     app._auto_reconnect_last_attempt = 0.0
     app._auto_reconnect_pending = False
     app._auto_reconnect_retry = 0
@@ -356,3 +384,56 @@ def init_runtime_state(
     app._state_flash_color = None
     app._state_flash_on = False
     app._state_default_bg = None
+
+
+def init_runtime_state(
+    app,
+    default_jog_feed_xy: float,
+    default_jog_feed_z: float,
+    macro_search_dirs: tuple[str, ...],
+    module,
+):
+    deps = module
+    copy_module = deps.copy
+    queue_module = deps.queue
+    tk = deps.tk
+    default_settings = deps.DEFAULT_SETTINGS
+    status_poll_default = deps.STATUS_POLL_DEFAULT
+    ui_event_queue_maxsize = deps.UI_EVENT_QUEUE_MAXSIZE
+
+    def setting(key: str, fallback):
+        return app.settings.get(key, default_settings.get(key, fallback))
+
+    _normalize_key_bindings(app)
+    _normalize_joystick_bindings(app)
+    _init_keyboard_runtime_state(app)
+    _init_joystick_runtime_state(app, tk)
+    _init_connection_runtime_state(app)
+    _init_error_dialog_runtime_state(app, setting, tk)
+    _init_worker_and_runtime_controllers(
+        app,
+        deps=deps,
+        queue_module=queue_module,
+        tk=tk,
+        setting=setting,
+        default_settings=default_settings,
+        status_poll_default=status_poll_default,
+        ui_event_queue_maxsize=ui_event_queue_maxsize,
+        macro_search_dirs=macro_search_dirs,
+    )
+    _init_units_and_estimation_state(
+        app,
+        tk=tk,
+        default_settings=default_settings,
+        default_jog_feed_xy=default_jog_feed_xy,
+        default_jog_feed_z=default_jog_feed_z,
+    )
+    _init_machine_position_state(app, tk=tk, default_settings=default_settings)
+    _init_gcode_and_autolevel_state(
+        app,
+        copy_module=copy_module,
+        tk=tk,
+        default_settings=default_settings,
+    )
+    _init_stream_and_override_state(app, tk=tk, default_settings=default_settings)
+    _init_reconnect_and_ui_state(app, default_settings=default_settings)

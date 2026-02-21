@@ -53,55 +53,9 @@ def build_safety_aids_section(app, parent: ttk.Frame, row: int) -> int:
     return row + 1
 
 
-def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
-    interface_frame = ttk.LabelFrame(parent, text="Interface", padding=8)
-    interface_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
-    interface_frame.grid_columnconfigure(0, weight=1)
-    app.fullscreen_startup_check = ttk.Checkbutton(
-        interface_frame,
-        text="Start in fullscreen",
-        variable=app.fullscreen_on_startup,
-    )
-    app.fullscreen_startup_check.grid(row=0, column=0, sticky="w")
-    apply_tooltip(
-        app.fullscreen_startup_check,
-        "Enable fullscreen on startup (takes effect after restart).",
-    )
-    app.resume_button_check = ttk.Checkbutton(
-        interface_frame,
-        text="Show 'Resume From...' button",
-        variable=app.show_resume_from_button,
-        command=app._on_resume_button_visibility_change,
-    )
-    app.resume_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
-    apply_tooltip(
-        app.resume_button_check,
-        "Toggle the visibility of the toolbar button that lets you resume from a specific line.",
-    )
-    app.recover_button_check = ttk.Checkbutton(
-        interface_frame,
-        text="Show 'Recover' button",
-        variable=app.show_recover_button,
-        command=app._on_recover_button_visibility_change,
-    )
-    app.recover_button_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
-    apply_tooltip(
-        app.recover_button_check,
-        "Show or hide the Recover button that brings up the alarm recovery dialog.",
-    )
-    app.auto_level_enabled_check = ttk.Checkbutton(
-        interface_frame,
-        text="Enable Auto-Level",
-        variable=app.auto_level_enabled,
-        command=app._on_auto_level_enabled_change,
-    )
-    app.auto_level_enabled_check.grid(row=3, column=0, sticky="w", pady=(4, 0))
-    apply_tooltip(
-        app.auto_level_enabled_check,
-        "Show Auto-Level in the toolbar after a job loads (disable to keep it hidden).",
-    )
+def _build_interface_performance_row(app, interface_frame, row: int) -> int:
     perf_row = ttk.Frame(interface_frame)
-    perf_row.grid(row=4, column=0, sticky="w", pady=(6, 0))
+    perf_row.grid(row=row, column=0, sticky="w", pady=(6, 0))
     ttk.Label(perf_row, text="Performance mode (batch console updates)").pack(side="left")
 
     def _refresh_performance_button() -> None:
@@ -145,21 +99,25 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.performance_mode.trace_add("write", lambda *_args: _refresh_performance_button())
     except Exception:
         pass
+    return row + 1
 
+
+def _build_interface_logging_row(app, interface_frame, row: int) -> int:
     app.logging_check = ttk.Checkbutton(
         interface_frame,
         text="Log GUI button actions",
         variable=app.gui_logging_enabled,
         command=app._on_gui_logging_change,
     )
-    app.logging_check.grid(row=5, column=0, sticky="w", pady=(8, 0))
+    app.logging_check.grid(row=row, column=0, sticky="w", pady=(8, 0))
     apply_tooltip(
         app.logging_check,
         "Record GUI button actions in the console log when enabled.",
     )
     logs_btn_row = ttk.Frame(interface_frame)
-    logs_btn_row.grid(row=6, column=0, sticky="w", pady=(6, 0))
-    def _show_logs():
+    logs_btn_row.grid(row=row + 1, column=0, sticky="w", pady=(6, 0))
+
+    def _show_logs() -> None:
         handler = getattr(app, "_show_logs_dialog", None)
         if callable(handler):
             handler()
@@ -176,10 +134,14 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.view_logs_button,
         "Open the application log viewer and export logs for diagnostics.",
     )
+    return row + 2
+
+
+def _build_interface_indicators_row(app, interface_frame, row: int) -> int:
     indicator_label = ttk.Label(interface_frame, text="Status indicators")
-    indicator_label.grid(row=7, column=0, sticky="w", pady=(10, 0))
+    indicator_label.grid(row=row, column=0, sticky="w", pady=(10, 0))
     indicator_row = ttk.Frame(interface_frame)
-    indicator_row.grid(row=8, column=0, sticky="w", pady=(2, 0))
+    indicator_row.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
     app.endstop_indicator_check = ttk.Checkbutton(
         indicator_row,
         text="Endstops",
@@ -204,11 +166,14 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.hold_indicator_check.pack(side="left", padx=(12, 0))
     apply_tooltip(app.hold_indicator_check, "Show or hide the Hold status indicator.")
+    return row + 2
 
+
+def _build_status_bar_button_visibility_row(app, interface_frame, row: int) -> int:
     status_bar_label = ttk.Label(interface_frame, text="Status bar")
-    status_bar_label.grid(row=9, column=0, sticky="w", pady=(10, 0))
+    status_bar_label.grid(row=row, column=0, sticky="w", pady=(10, 0))
     quick_buttons_row = ttk.Frame(interface_frame)
-    quick_buttons_row.grid(row=10, column=0, sticky="w", pady=(2, 0))
+    quick_buttons_row.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
     app.quick_tips_check = ttk.Checkbutton(
         quick_buttons_row,
         text="Tips",
@@ -258,11 +223,14 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.quick_release_check,
         "Show or hide the Release checklist quick button in the status bar.",
     )
+    return row + 2
 
+
+def _build_status_bar_quick_toggle_row(app, interface_frame, row: int) -> int:
     quick_toggle_label = ttk.Label(interface_frame, text="Status bar quick toggles")
-    quick_toggle_label.grid(row=11, column=0, sticky="w", pady=(6, 0))
+    quick_toggle_label.grid(row=row, column=0, sticky="w", pady=(6, 0))
     toggle_btn_row = ttk.Frame(interface_frame)
-    toggle_btn_row.grid(row=12, column=0, sticky="w", pady=(2, 0))
+    toggle_btn_row.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
     app.btn_toggle_tips_settings = ttk.Button(
         toggle_btn_row,
         text="Tips",
@@ -307,6 +275,62 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_toggle_autolevel_overlay_settings,
         "Toggle the Auto-Level overlay in the toolpath views (same as the Auto-Level Overlay quick button).",
     )
+    return row + 2
+
+
+def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
+    interface_frame = ttk.LabelFrame(parent, text="Interface", padding=8)
+    interface_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
+    interface_frame.grid_columnconfigure(0, weight=1)
+    app.fullscreen_startup_check = ttk.Checkbutton(
+        interface_frame,
+        text="Start in fullscreen",
+        variable=app.fullscreen_on_startup,
+    )
+    app.fullscreen_startup_check.grid(row=0, column=0, sticky="w")
+    apply_tooltip(
+        app.fullscreen_startup_check,
+        "Enable fullscreen on startup (takes effect after restart).",
+    )
+    app.resume_button_check = ttk.Checkbutton(
+        interface_frame,
+        text="Show 'Resume From...' button",
+        variable=app.show_resume_from_button,
+        command=app._on_resume_button_visibility_change,
+    )
+    app.resume_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.resume_button_check,
+        "Toggle the visibility of the toolbar button that lets you resume from a specific line.",
+    )
+    app.recover_button_check = ttk.Checkbutton(
+        interface_frame,
+        text="Show 'Recover' button",
+        variable=app.show_recover_button,
+        command=app._on_recover_button_visibility_change,
+    )
+    app.recover_button_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.recover_button_check,
+        "Show or hide the Recover button that brings up the alarm recovery dialog.",
+    )
+    app.auto_level_enabled_check = ttk.Checkbutton(
+        interface_frame,
+        text="Enable Auto-Level",
+        variable=app.auto_level_enabled,
+        command=app._on_auto_level_enabled_change,
+    )
+    app.auto_level_enabled_check.grid(row=3, column=0, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.auto_level_enabled_check,
+        "Show Auto-Level in the toolbar after a job loads (disable to keep it hidden).",
+    )
+
+    next_row = _build_interface_performance_row(app, interface_frame, 4)
+    next_row = _build_interface_logging_row(app, interface_frame, next_row)
+    next_row = _build_interface_indicators_row(app, interface_frame, next_row)
+    next_row = _build_status_bar_button_visibility_row(app, interface_frame, next_row)
+    _build_status_bar_quick_toggle_row(app, interface_frame, next_row)
     return row + 1
 
 
@@ -360,28 +384,35 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
 
     def _save_autolevel_job_prefs(_event=None) -> None:
+        current_prefs = app.auto_level_job_prefs if isinstance(app.auto_level_job_prefs, dict) else {}
+        current_small_vals = pref_dict(current_prefs, "small")
+        current_large_vals = pref_dict(current_prefs, "large")
+        current_custom_vals = pref_dict(current_prefs, "custom")
         small_max_area = pref_float(
             small_max_area_var.get(),
-            pref_float(job_prefs.get("small_max_area"), default_job_prefs.get("small_max_area", 2500.0)),
+            pref_float(
+                current_prefs.get("small_max_area"),
+                default_job_prefs.get("small_max_area", 2500.0),
+            ),
         )
         large_min_area = pref_float(
             large_min_area_var.get(),
             pref_float(
-                job_prefs.get("large_min_area"),
+                current_prefs.get("large_min_area"),
                 default_job_prefs.get("large_min_area", AUTOLEVEL_LARGE_MIN_AREA_DEFAULT),
             ),
         )
         small_spacing = pref_float(
             small_spacing_var.get(),
-            pref_float(small_vals.get("spacing"), small_defaults.get("spacing", 3.0)),
+            pref_float(current_small_vals.get("spacing"), small_defaults.get("spacing", 3.0)),
         )
         large_spacing = pref_float(
             large_spacing_var.get(),
-            pref_float(large_vals.get("spacing"), large_defaults.get("spacing", 8.0)),
+            pref_float(current_large_vals.get("spacing"), large_defaults.get("spacing", 8.0)),
         )
         custom_spacing = pref_float(
             custom_spacing_var.get(),
-            pref_float(custom_vals.get("spacing"), custom_defaults.get("spacing", 5.0)),
+            pref_float(current_custom_vals.get("spacing"), custom_defaults.get("spacing", 5.0)),
         )
         small_interp = pref_interp(small_interp_var.get(), "bicubic")
         large_interp = pref_interp(large_interp_var.get(), "bilinear")

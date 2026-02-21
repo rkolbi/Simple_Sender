@@ -26,26 +26,27 @@
 # Standard library imports
 from typing import Any, cast
 
+from simple_sender.types import AppProtocol
 
-
-from simple_sender.ui.app_exports import (
-    call_on_ui_thread,
-    drain_ui_queue,
-    handle_event,
-    load_settings,
+from simple_sender.ui.app_lifecycle import (
     log_exception,
     on_close,
-    post_ui_thread,
-    reset_error_dialog_state,
-    save_settings,
-    set_error_dialog_status,
-    should_show_error_dialog,
     tk_report_callback_exception,
 )
+from simple_sender.ui.dialogs.error_dialogs_ui import (
+    reset_error_dialog_state,
+    set_error_dialog_status,
+    should_show_error_dialog,
+)
+from simple_sender.ui.events import handle_event
+from simple_sender.ui.settings_persistence import load_settings, save_settings
+from simple_sender.ui.threading_utils import call_on_ui_thread, post_ui_thread
+from simple_sender.ui.ui_queue import drain_ui_queue
 
 class LifecycleMixin:
     def _drain_ui_queue(self):
-        drain_ui_queue(self)
+        app = cast(AppProtocol, self)
+        drain_ui_queue(app)
 
     def _clear_pending_ui_updates(self):
         app = cast(Any, self)

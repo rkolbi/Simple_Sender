@@ -25,20 +25,21 @@
 
 # Standard library imports
 from typing import Any, cast
-
-
-
-from simple_sender.ui.app_exports import (
-    apply_error_dialog_settings,
+from simple_sender.ui.dialogs.error_dialogs_ui import apply_error_dialog_settings
+from simple_sender.ui.grbl_lifecycle import (
     apply_status_poll_profile,
-    convert_estimate_rates,
     effective_status_poll_interval,
+)
+from simple_sender.ui.profiles.estimate_rates import (
+    convert_estimate_rates,
     on_estimate_rates_change,
+    update_estimate_rate_units_label,
+    validate_estimate_rate_text,
+)
+from simple_sender.ui.status.polling import (
     on_homing_watchdog_change,
     on_status_failure_limit_change,
     on_status_interval_change,
-    update_estimate_rate_units_label,
-    validate_estimate_rate_text,
 )
 
 class StatusMixin:

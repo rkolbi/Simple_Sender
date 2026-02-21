@@ -22,6 +22,7 @@
 
 import time
 import logging
+from dataclasses import dataclass
 from typing import cast
 
 from simple_sender.ui.dro import convert_units, format_dro_value
@@ -153,111 +154,107 @@ def _parse_report_units_setting(app, raw: str) -> None:
         _log_suppressed("Failed refreshing DRO display after $13 update", exc)
 
 
-def handle_status_event(app, raw: str):
-    # Parse minimal fields: state + WPos if present
-    app._last_status_raw = raw
-    app._last_status_ts = time.time()
-    history = getattr(app, "_status_history", None)
-    if not isinstance(history, list):
-        history = []
-        app._status_history = history
-    history.append((app._last_status_ts, raw))
-    if len(history) > 200:
-        del history[:-200]
-    s = raw.strip("<>")
-    parts = s.split("|")
-    state = parts[0] if parts else "?"
-    app._status_seen = True
-    wpos = None
-    mpos = None
-    feed = None
-    spindle = None
-    planner = None
-    rxbytes = None
-    wco = None
-    ov = None
-    pins = None
-    for p in parts:
-        if p.startswith("WPos:"):
-            wpos = p[5:]
-        elif p.startswith("MPos:"):
-            mpos = p[5:]
-        elif p.startswith("FS:"):
+@dataclass(slots=True)
+class _StatusFields:
+    state: str
+    wpos: str | None = None
+    mpos: str | None = None
+    feed: float | None = None
+    spindle: float | None = None
+    planner: int | None = None
+    rxbytes: int | None = None
+    wco: str | None = None
+    ov: str | None = None
+    pins: str | None = None
+
+
+def _parse_status_fields(raw: str) -> _StatusFields:
+    parts = raw.strip("<>").split("|")
+    fields = _StatusFields(state=parts[0] if parts else "?")
+    for part in parts:
+        if part.startswith("WPos:"):
+            fields.wpos = part[5:]
+        elif part.startswith("MPos:"):
+            fields.mpos = part[5:]
+        elif part.startswith("FS:"):
             try:
-                f_str, s_str = p[3:].split(",", 1)
-                feed = float(f_str)
-                spindle = float(s_str)
+                feed_str, spindle_str = part[3:].split(",", 1)
+                fields.feed = float(feed_str)
+                fields.spindle = float(spindle_str)
             except Exception as exc:
                 _log_suppressed("Failed parsing FS field from status line", exc)
-        elif p.startswith("Bf:"):
+        elif part.startswith("Bf:"):
             try:
-                bf_planner, bf_rx = p[3:].split(",", 1)
-                planner = int(bf_planner)
-                rxbytes = int(bf_rx)
+                planner_str, rx_str = part[3:].split(",", 1)
+                fields.planner = int(planner_str)
+                fields.rxbytes = int(rx_str)
             except Exception as exc:
                 _log_suppressed("Failed parsing Bf field from status line", exc)
-        elif p.startswith("WCO:"):
-            wco = p[4:]
-        elif p.startswith("Ov:"):
-            ov = p[3:]
-        elif p.startswith("Pn:"):
-            pins = p[3:]
-    app._last_status_pins = pins
+        elif part.startswith("WCO:"):
+            fields.wco = part[4:]
+        elif part.startswith("Ov:"):
+            fields.ov = part[3:]
+        elif part.startswith("Pn:"):
+            fields.pins = part[3:]
+    return fields
 
+
+def _resolve_display_state(app, state: str) -> str:
     state_lower = state.lower()
     display_state = "Homing" if state_lower.startswith("home") else state
-    if getattr(app, "_homing_in_progress", False):
-        if state_lower.startswith("home"):
-            app._homing_state_seen = True
-            display_state = "Homing"
-        elif state_lower.startswith("idle"):
-            start_ts = getattr(app, "_homing_start_ts", 0.0)
-            timeout_s = getattr(app, "_homing_timeout_s", 30.0)
-            timed_out = start_ts and (time.time() - start_ts) > timeout_s
-            if getattr(app, "_homing_state_seen", False) or timed_out:
-                app._homing_in_progress = False
-                app._homing_state_seen = False
-                display_state = state
-                try:
-                    app.grbl.clear_watchdog_ignore("homing")
-                except Exception as exc:
-                    _log_suppressed("Failed clearing homing watchdog ignore on idle", exc)
-            else:
-                display_state = "Homing"
-        elif state_lower.startswith("alarm") or state_lower.startswith("door"):
+    if not getattr(app, "_homing_in_progress", False):
+        return display_state
+    if state_lower.startswith("home"):
+        app._homing_state_seen = True
+        return "Homing"
+    if state_lower.startswith("idle"):
+        start_ts = getattr(app, "_homing_start_ts", 0.0)
+        timeout_s = getattr(app, "_homing_timeout_s", 30.0)
+        timed_out = start_ts and (time.time() - start_ts) > timeout_s
+        if getattr(app, "_homing_state_seen", False) or timed_out:
             app._homing_in_progress = False
             app._homing_state_seen = False
-            display_state = state
             try:
                 app.grbl.clear_watchdog_ignore("homing")
             except Exception as exc:
-                _log_suppressed("Failed clearing homing watchdog ignore on alarm/door", exc)
-        else:
-            app._homing_in_progress = False
-            app._homing_state_seen = False
-            display_state = state
-            try:
-                app.grbl.clear_watchdog_ignore("homing")
-            except Exception as exc:
-                _log_suppressed("Failed clearing homing watchdog ignore on other state", exc)
+                _log_suppressed("Failed clearing homing watchdog ignore on idle", exc)
+            return state
+        return "Homing"
+
+    app._homing_in_progress = False
+    app._homing_state_seen = False
+    try:
+        app.grbl.clear_watchdog_ignore("homing")
+    except Exception as exc:
+        context = (
+            "Failed clearing homing watchdog ignore on alarm/door"
+            if (state_lower.startswith("alarm") or state_lower.startswith("door"))
+            else "Failed clearing homing watchdog ignore on other state"
+        )
+        _log_suppressed(context, exc)
+    return state
+
+
+def _apply_machine_state(app, state: str, display_state: str) -> bool:
+    state_lower = state.lower()
     app._machine_state_text = state
     if state_lower.startswith("alarm"):
         app._set_alarm_lock(True, state)
     else:
         if app._alarm_locked:
             app._set_alarm_lock(False)
-        else:
-            if not getattr(app, "_macro_status_active", False):
-                app.machine_state.set(display_state)
-                try:
-                    app._ensure_state_label_width(display_state)
-                except Exception as exc:
-                    _log_suppressed("Failed adjusting machine state label width", exc)
-                app._update_state_highlight(display_state)
+        elif not getattr(app, "_macro_status_active", False):
+            app.machine_state.set(display_state)
+            try:
+                app._ensure_state_label_width(display_state)
+            except Exception as exc:
+                _log_suppressed("Failed adjusting machine state label width", exc)
+            app._update_state_highlight(display_state)
         _maybe_restore_pending_g90(app)
+
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
         if app._stream_state in ("running", "paused") or app.grbl.is_streaming():
-            return
+            return False
         app._pending_settings_refresh = False
         app._request_settings_dump()
     if (
@@ -272,26 +269,78 @@ def handle_status_event(app, raw: str):
     with app.macro_executor.macro_vars() as macro_vars:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
+    return True
 
-    def parse_xyz(text: str):
-        parts = text.split(",")
-        if len(parts) < 3:
-            return None
+
+def _parse_xyz_triplet(text: str) -> list[float] | None:
+    parts = text.split(",")
+    if len(parts) < 3:
+        return None
+    try:
+        return [float(parts[0]), float(parts[1]), float(parts[2])]
+    except Exception as exc:
+        _log_suppressed("Failed parsing XYZ triplet", exc)
+        return None
+
+
+def _flash_wpos_labels(app) -> None:
+    labels = getattr(app, "_wpos_value_labels", None)
+    if not labels:
+        return
+    for axis, label in labels.items():
+        default_fg = ""
         try:
-            return [float(parts[0]), float(parts[1]), float(parts[2])]
+            default_fg = app._wpos_label_default_fg.get(axis, "")
         except Exception as exc:
-            _log_suppressed("Failed parsing XYZ triplet", exc)
-            return None
+            _log_suppressed("Failed reading default WPos label color", exc)
+            default_fg = ""
+        after_id = None
+        try:
+            after_id = app._wpos_flash_after_ids.get(axis)
+        except Exception as exc:
+            _log_suppressed("Failed reading pending WPos flash id", exc)
+            after_id = None
+        if after_id:
+            try:
+                app.after_cancel(after_id)
+            except Exception as exc:
+                _log_suppressed("Failed cancelling previous WPos flash timer", exc)
+        try:
+            label.configure(foreground="#2196f3")
+        except Exception as exc:
+            _log_suppressed("Failed applying WPos flash color", exc)
+            continue
 
-    wco_vals = parse_xyz(wco) if wco else None
-    mpos_vals = parse_xyz(mpos) if mpos else None
-    wpos_vals = parse_xyz(wpos) if wpos else None
+        def restore(target=label, axis_key=axis, fg=default_fg):
+            try:
+                if fg:
+                    target.configure(foreground=fg)
+                else:
+                    target.configure(foreground="")
+            except Exception as exc:
+                _log_suppressed("Failed restoring WPos label color", exc)
+            try:
+                app._wpos_flash_after_ids[axis_key] = None
+            except Exception as exc:
+                _log_suppressed("Failed clearing WPos flash timer id", exc)
+
+        try:
+            app._wpos_flash_after_ids[axis] = app.after(150, restore)
+        except Exception as exc:
+            _log_suppressed("Failed scheduling WPos flash restore timer", exc)
+
+
+def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
+    wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
+    mpos_vals = _parse_xyz_triplet(fields.mpos) if fields.mpos else None
+    wpos_vals = _parse_xyz_triplet(fields.wpos) if fields.wpos else None
     if wco_vals:
         app._wco_raw = tuple(wco_vals)
     else:
         cached_wco = getattr(app, "_wco_raw", None)
         if cached_wco and len(cached_wco) >= 3:
             wco_vals = [cached_wco[0], cached_wco[1], cached_wco[2]]
+
     report_units = getattr(app, "_report_units", None) or app.unit_mode.get()
     modal_units = app.unit_mode.get()
 
@@ -339,51 +388,6 @@ def handle_status_event(app, raw: str):
                 macro_vars["mz"] = to_modal(mpos_calc[2])
         except Exception as exc:
             _log_suppressed("Failed updating computed machine-position DRO values", exc)
-    def flash_wpos_labels():
-        labels = getattr(app, "_wpos_value_labels", None)
-        if not labels:
-            return
-        for axis, label in labels.items():
-            default_fg = ""
-            try:
-                default_fg = app._wpos_label_default_fg.get(axis, "")
-            except Exception as exc:
-                _log_suppressed("Failed reading default WPos label color", exc)
-                default_fg = ""
-            after_id = None
-            try:
-                after_id = app._wpos_flash_after_ids.get(axis)
-            except Exception as exc:
-                _log_suppressed("Failed reading pending WPos flash id", exc)
-                after_id = None
-            if after_id:
-                try:
-                    app.after_cancel(after_id)
-                except Exception as exc:
-                    _log_suppressed("Failed cancelling previous WPos flash timer", exc)
-            try:
-                label.configure(foreground="#2196f3")
-            except Exception as exc:
-                _log_suppressed("Failed applying WPos flash color", exc)
-                continue
-
-            def restore(target=label, axis_key=axis, fg=default_fg):
-                try:
-                    if fg:
-                        target.configure(foreground=fg)
-                    else:
-                        target.configure(foreground="")
-                except Exception as exc:
-                    _log_suppressed("Failed restoring WPos label color", exc)
-                try:
-                    app._wpos_flash_after_ids[axis_key] = None
-                except Exception as exc:
-                    _log_suppressed("Failed clearing WPos flash timer id", exc)
-
-            try:
-                app._wpos_flash_after_ids[axis] = app.after(150, restore)
-            except Exception as exc:
-                _log_suppressed("Failed scheduling WPos flash restore timer", exc)
 
     if wpos_vals:
         try:
@@ -405,7 +409,7 @@ def handle_status_event(app, raw: str):
                 _log_suppressed("Failed updating toolpath position from WPos", exc)
         except Exception as exc:
             _log_suppressed("Failed updating WPos DRO values", exc)
-        flash_wpos_labels()
+        _flash_wpos_labels(app)
     elif wpos_calc:
         try:
             app._wpos_raw = tuple(wpos_calc)
@@ -426,30 +430,31 @@ def handle_status_event(app, raw: str):
                 _log_suppressed("Failed updating toolpath position from computed WPos", exc)
         except Exception as exc:
             _log_suppressed("Failed updating computed WPos DRO values", exc)
-    if feed is not None:
+
+    if fields.feed is not None:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["curfeed"] = feed
-    if spindle is not None:
+            macro_vars["curfeed"] = fields.feed
+    if fields.spindle is not None:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["curspindle"] = spindle
-    if planner is not None:
+            macro_vars["curspindle"] = fields.spindle
+    if fields.planner is not None:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["planner"] = planner
-    if rxbytes is not None:
+            macro_vars["planner"] = fields.planner
+    if fields.rxbytes is not None:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["rxbytes"] = rxbytes
+            macro_vars["rxbytes"] = fields.rxbytes
     if wco_vals:
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["wcox"] = to_modal(wco_vals[0])
             macro_vars["wcoy"] = to_modal(wco_vals[1])
             macro_vars["wcoz"] = to_modal(wco_vals[2])
-    if pins is not None:
+    if fields.pins is not None:
         with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["pins"] = pins
-    if ov:
+            macro_vars["pins"] = fields.pins
+    if fields.ov:
         feed_val = spindle_val = None
         try:
-            ov_parts = [int(float(v)) for v in ov.split(",")]
+            ov_parts = [int(float(v)) for v in fields.ov.split(",")]
             if len(ov_parts) >= 3:
                 feed_val, spindle_val = ov_parts[0], ov_parts[2]
                 with app.macro_executor.macro_vars() as macro_vars:
@@ -470,12 +475,31 @@ def handle_status_event(app, raw: str):
             if spindle_val is not None:
                 app._set_spindle_override_slider_value(spindle_val)
             app._refresh_override_info()
-    pin_state = {c for c in (pins or "").upper() if c.isalpha()}
+    pin_state = {char for char in (fields.pins or "").upper() if char.isalpha()}
     endstop_active = bool(pin_state & {"X", "Y", "Z"})
     with app.macro_executor.macro_vars() as macro_vars:
         prb_value = macro_vars.get("PRB")
     probe_active = bool(pin_state & {"P"}) or bool(prb_value)
-    hold_active = bool(pin_state & {"H"}) or "hold" in str(state).lower()
+    hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
     app._update_led_panel(endstop_active, probe_active, hold_active)
+
+
+def handle_status_event(app, raw: str):
+    app._last_status_raw = raw
+    app._last_status_ts = time.time()
+    history = getattr(app, "_status_history", None)
+    if not isinstance(history, list):
+        history = []
+        app._status_history = history
+    history.append((app._last_status_ts, raw))
+    if len(history) > 200:
+        del history[:-200]
+    fields = _parse_status_fields(raw)
+    app._status_seen = True
+    app._last_status_pins = fields.pins
+    display_state = _resolve_display_state(app, fields.state)
+    if not _apply_machine_state(app, fields.state, display_state):
+        return
+    _update_positions_and_macro_state(app, fields)
 
 

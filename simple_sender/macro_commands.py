@@ -34,10 +34,76 @@ from simple_sender.utils.constants import MACRO_GPAT, RT_STATUS
 logger = logging.getLogger(__name__)
 
 
-def execute_macro_command(
-    line: Any,
+def _maybe_set_unit_mode(app, unit_mode: str | None) -> None:
+    if not unit_mode:
+        return
+    try:
+        app._set_unit_mode(unit_mode)
+    except Exception:
+        pass
+
+
+def _handle_prompt_command(
     *,
+    cmd: str,
+    s: str,
     raw_line: str | None,
+    app,
+    ui_q,
+    macro_vars: dict[str, Any],
+    macro_vars_lock,
+    parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
+) -> bool | None:
+    if cmd not in ("M0", "M00", "PROMPT"):
+        return None
+    prompt_source = raw_line or s
+    if raw_line:
+        stripped = raw_line.lstrip()
+        if not stripped.upper().startswith(("M0", "M00", "PROMPT")):
+            prompt_source = s
+    with macro_vars_lock:
+        macro_snapshot = dict(macro_vars)
+    title, message, choices, cancel_label, button_keys = parse_macro_prompt(
+        prompt_source,
+        macro_snapshot,
+    )
+    result_q: queue.Queue[str] = queue.Queue()
+    ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
+    while True:
+        try:
+            choice = result_q.get(timeout=0.2)
+            break
+        except queue.Empty:
+            if getattr(app, "_closing", False):
+                choice = cancel_label
+                break
+    if choice not in choices:
+        choice = cancel_label
+    button_key = button_keys.get(choice) if choice in button_keys else None
+    with macro_vars_lock:
+        macro_vars["prompt_choice"] = choice
+        macro_vars["prompt_choice_key"] = button_key
+        macro_vars["prompt_choice_label"] = choice
+        macro_vars["prompt_index"] = choices.index(choice) if choice in choices else -1
+        macro_vars["prompt_cancelled"] = (choice == cancel_label)
+        macro_ns = macro_vars.get("macro")
+        if isinstance(macro_ns, types.SimpleNamespace):
+            setattr(macro_ns, "prompt_choice", choice)
+            setattr(macro_ns, "prompt_choice_key", button_key)
+            setattr(macro_ns, "prompt_choice_label", choice)
+            setattr(macro_ns, "prompt_index", macro_vars["prompt_index"])
+            setattr(macro_ns, "prompt_cancelled", macro_vars["prompt_cancelled"])
+    ui_q.put(("log", f"[macro] Prompt: {message} | Selected: {choice}"))
+    if choice == cancel_label:
+        ui_q.put(("log", "[macro] Prompt canceled; macro aborted."))
+        return False
+    return True
+
+
+def _handle_named_macro_command(
+    *,
+    cmd: str,
+    cmd_parts: list[str],
     app,
     grbl,
     ui_q,
@@ -47,69 +113,7 @@ def execute_macro_command(
     parse_timeout: Callable[[list[str], float], float],
     wait_for_connection_state: Callable[[bool, float], bool],
     macro_restore_state: Callable[[], bool],
-    parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
-) -> bool:
-    if line is None:
-        return True
-    if isinstance(line, tuple):
-        return True
-    s = str(line).strip()
-    if not s:
-        return True
-    cmd_parts = s.replace(",", " ").split()
-    cmd = cmd_parts[0].upper()
-    unit_mode = None
-    for part in cmd_parts:
-        upper = part.upper()
-        if upper == "G20":
-            unit_mode = "inch"
-        elif upper == "G21":
-            unit_mode = "mm"
-
-    if cmd in ("M0", "M00", "PROMPT"):
-        prompt_source = raw_line or s
-        if raw_line:
-            stripped = raw_line.lstrip()
-            if not stripped.upper().startswith(("M0", "M00", "PROMPT")):
-                prompt_source = s
-        with macro_vars_lock:
-            macro_snapshot = dict(macro_vars)
-        title, message, choices, cancel_label, button_keys = parse_macro_prompt(
-            prompt_source,
-            macro_snapshot,
-        )
-        result_q: queue.Queue[str] = queue.Queue()
-        ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
-        while True:
-            try:
-                choice = result_q.get(timeout=0.2)
-                break
-            except queue.Empty:
-                if getattr(app, "_closing", False):
-                    choice = cancel_label
-                    break
-        if choice not in choices:
-            choice = cancel_label
-        button_key = button_keys.get(choice) if choice in button_keys else None
-        with macro_vars_lock:
-            macro_vars["prompt_choice"] = choice
-            macro_vars["prompt_choice_key"] = button_key
-            macro_vars["prompt_choice_label"] = choice
-            macro_vars["prompt_index"] = choices.index(choice) if choice in choices else -1
-            macro_vars["prompt_cancelled"] = (choice == cancel_label)
-            macro_ns = macro_vars.get("macro")
-            if isinstance(macro_ns, types.SimpleNamespace):
-                setattr(macro_ns, "prompt_choice", choice)
-                setattr(macro_ns, "prompt_choice_key", button_key)
-                setattr(macro_ns, "prompt_choice_label", choice)
-                setattr(macro_ns, "prompt_index", macro_vars["prompt_index"])
-                setattr(macro_ns, "prompt_cancelled", macro_vars["prompt_cancelled"])
-        ui_q.put(("log", f"[macro] Prompt: {message} | Selected: {choice}"))
-        if choice == cancel_label:
-            ui_q.put(("log", "[macro] Prompt canceled; macro aborted."))
-            return False
-        return True
-
+) -> bool | None:
     if cmd in ("ABSOLUTE", "ABS"):
         macro_send("G90")
         return True
@@ -159,14 +163,11 @@ def execute_macro_command(
     if cmd == "RESET":
         grbl.reset()
         return True
-    if cmd == "PAUSE":
+    if cmd in ("PAUSE", "FEEDHOLD"):
         grbl.hold()
         return True
     if cmd == "RESUME":
         grbl.resume()
-        return True
-    if cmd == "FEEDHOLD":
-        grbl.hold()
         return True
     if cmd == "STOP":
         grbl.stop_stream()
@@ -218,6 +219,68 @@ def execute_macro_command(
         if parts:
             macro_send("G92 " + " ".join(parts))
         return True
+    return None
+
+
+def execute_macro_command(
+    line: Any,
+    *,
+    raw_line: str | None,
+    app,
+    grbl,
+    ui_q,
+    macro_vars: dict[str, Any],
+    macro_vars_lock,
+    macro_send: Callable[[str], Any],
+    parse_timeout: Callable[[list[str], float], float],
+    wait_for_connection_state: Callable[[bool, float], bool],
+    macro_restore_state: Callable[[], bool],
+    parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
+) -> bool:
+    if line is None:
+        return True
+    if isinstance(line, tuple):
+        return True
+    s = str(line).strip()
+    if not s:
+        return True
+    cmd_parts = s.replace(",", " ").split()
+    cmd = cmd_parts[0].upper()
+    unit_mode = None
+    for part in cmd_parts:
+        upper = part.upper()
+        if upper == "G20":
+            unit_mode = "inch"
+        elif upper == "G21":
+            unit_mode = "mm"
+
+    prompt_result = _handle_prompt_command(
+        cmd=cmd,
+        s=s,
+        raw_line=raw_line,
+        app=app,
+        ui_q=ui_q,
+        macro_vars=macro_vars,
+        macro_vars_lock=macro_vars_lock,
+        parse_macro_prompt=parse_macro_prompt,
+    )
+    if prompt_result is not None:
+        return prompt_result
+    command_result = _handle_named_macro_command(
+        cmd=cmd,
+        cmd_parts=cmd_parts,
+        app=app,
+        grbl=grbl,
+        ui_q=ui_q,
+        macro_vars=macro_vars,
+        macro_vars_lock=macro_vars_lock,
+        macro_send=macro_send,
+        parse_timeout=parse_timeout,
+        wait_for_connection_state=wait_for_connection_state,
+        macro_restore_state=macro_restore_state,
+    )
+    if command_result is not None:
+        return command_result
 
     if s.startswith("!"):
         grbl.hold()
@@ -234,24 +297,12 @@ def execute_macro_command(
 
     if s.startswith("$") or s.startswith("@") or s.startswith("{"):
         macro_send(s)
-        if unit_mode:
-            try:
-                app._set_unit_mode(unit_mode)
-            except Exception:
-                pass
+        _maybe_set_unit_mode(app, unit_mode)
         return True
     if s.startswith("(") or MACRO_GPAT.match(s):
         macro_send(s)
-        if unit_mode:
-            try:
-                app._set_unit_mode(unit_mode)
-            except Exception:
-                pass
+        _maybe_set_unit_mode(app, unit_mode)
         return True
     macro_send(s)
-    if unit_mode:
-        try:
-            app._set_unit_mode(unit_mode)
-        except Exception:
-            pass
+    _maybe_set_unit_mode(app, unit_mode)
     return True

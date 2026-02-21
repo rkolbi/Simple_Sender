@@ -24,23 +24,22 @@
 """
 
 # Standard library imports
-
-
-
-from simple_sender.ui.app_exports import (
-    build_main_layout,
-    build_toolbar,
-    ensure_tooltips,
+from simple_sender.ui.controls.toolbar import build_toolbar
+from simple_sender.ui.dialogs.backup_bundle import (
     export_backup_bundle,
-    export_session_diagnostics,
     import_backup_bundle,
+)
+from simple_sender.ui.dialogs.diagnostics import (
+    export_session_diagnostics,
     open_release_checklist,
     open_run_checklist,
-    position_all_stop_offset,
     run_preflight_check,
-    show_logs_dialog,
-    show_macro_manager,
 )
+from simple_sender.ui.dialogs.logs import show_logs_dialog
+from simple_sender.ui.dialogs.macro_manager import show_macro_manager
+from simple_sender.ui.main_layout import build_main_layout
+from simple_sender.ui.widgets import ensure_tooltips
+from simple_sender.ui.all_stop import position_all_stop_offset
 
 class LayoutMixin:
     def _build_toolbar(self):

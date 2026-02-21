@@ -20,19 +20,16 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-def init_basic_preferences(app, app_version: str, module):
-    deps = module
-    DEFAULT_SETTINGS = deps.DEFAULT_SETTINGS
-    GCODE_STREAMING_LINE_THRESHOLD = deps.GCODE_STREAMING_LINE_THRESHOLD
-    PYGAME_AVAILABLE = deps.PYGAME_AVAILABLE
-    WATCHDOG_HOMING_TIMEOUT = deps.WATCHDOG_HOMING_TIMEOUT
-    tk = deps.tk
-    ttk = deps.ttk
-    tkfont = deps.tkfont
-
-    def setting(key: str, fallback):
-        return app.settings.get(key, DEFAULT_SETTINGS.get(key, fallback))
-
+def _init_behavior_preferences(
+    app,
+    *,
+    setting,
+    default_settings: dict,
+    gcode_streaming_line_threshold: int,
+    pygame_available: bool,
+    watchdog_homing_timeout: float,
+    tk,
+) -> None:
     app.tooltip_enabled = tk.BooleanVar(value=setting("tooltips_enabled", True))
     app.tooltip_timeout_sec = tk.DoubleVar(value=setting("tooltip_timeout_sec", 10.0))
     app.numeric_keypad_enabled = tk.BooleanVar(
@@ -51,25 +48,25 @@ def init_basic_preferences(app, app_version: str, module):
     app.macro_line_timeout_sec = tk.DoubleVar(
         value=setting(
             "macro_line_timeout_sec",
-            DEFAULT_SETTINGS.get("macro_line_timeout_sec", 0.0),
+            default_settings.get("macro_line_timeout_sec", 0.0),
         )
     )
     app.macro_total_timeout_sec = tk.DoubleVar(
         value=setting(
             "macro_total_timeout_sec",
-            DEFAULT_SETTINGS.get("macro_total_timeout_sec", 0.0),
+            default_settings.get("macro_total_timeout_sec", 0.0),
         )
     )
     app.macro_probe_z_location = tk.DoubleVar(
         value=setting(
             "macro_probe_z_location",
-            DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+            default_settings.get("macro_probe_z_location", -5.0),
         )
     )
     app.macro_probe_safety_margin = tk.DoubleVar(
         value=setting(
             "macro_probe_safety_margin",
-            DEFAULT_SETTINGS.get("macro_probe_safety_margin", 3.0),
+            default_settings.get("macro_probe_safety_margin", 3.0),
         )
     )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
@@ -84,7 +81,7 @@ def init_basic_preferences(app, app_version: str, module):
         value=setting("validate_streaming_gcode", True)
     )
     app.streaming_line_threshold = tk.IntVar(
-        value=setting("streaming_line_threshold", GCODE_STREAMING_LINE_THRESHOLD)
+        value=setting("streaming_line_threshold", gcode_streaming_line_threshold)
     )
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
     app.fullscreen_on_startup = tk.BooleanVar(value=setting("fullscreen_on_startup", True))
@@ -102,12 +99,12 @@ def init_basic_preferences(app, app_version: str, module):
         value=setting("homing_watchdog_enabled", True)
     )
     app.homing_watchdog_timeout = tk.DoubleVar(
-        value=setting("homing_watchdog_timeout", WATCHDOG_HOMING_TIMEOUT)
+        value=setting("homing_watchdog_timeout", watchdog_homing_timeout)
     )
     app.joystick_safety_enabled = tk.BooleanVar(
         value=setting("joystick_safety_enabled", False)
     )
-    if app.joystick_bindings_enabled.get() and not PYGAME_AVAILABLE:
+    if app.joystick_bindings_enabled.get() and not pygame_available:
         app.joystick_bindings_enabled.set(False)
     app._joystick_auto_enable_requested = bool(app.joystick_bindings_enabled.get())
     app.job_completion_popup = tk.BooleanVar(value=setting("job_completion_popup", True))
@@ -119,6 +116,9 @@ def init_basic_preferences(app, app_version: str, module):
     app.console_status_enabled = tk.BooleanVar(value=legacy_status_enabled)
     app.ui_scale = tk.DoubleVar(value=setting("ui_scale", 1.0))
     app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
+
+
+def _init_style_preferences(app, *, tkfont, ttk) -> None:
     app.style = ttk.Style()
     try:
         default_scrollbar = app.style.lookup("TScrollbar", "width")
@@ -236,14 +236,9 @@ def init_basic_preferences(app, app_version: str, module):
             app._ui_scale_custom_font_bases[key] = int(font.cget("size"))
         except Exception:
             pass
-    app.available_themes = list(app.style.theme_names())
-    theme_choice = setting("theme", app.style.theme_use())
-    app.selected_theme = tk.StringVar(value=theme_choice)
-    app._apply_theme(theme_choice)
-    try:
-        app._apply_scrollbar_width()
-    except Exception:
-        pass
+
+
+def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
     app.version_var = tk.StringVar(value=f"Simple Sender (BETA)  -  Version: v{app_version}")
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))
@@ -258,3 +253,37 @@ def init_basic_preferences(app, app_version: str, module):
     app.show_quick_alo_button = tk.BooleanVar(value=setting("show_quick_alo_button", True))
     app.show_quick_release_button = tk.BooleanVar(value=setting("show_quick_release_button", True))
     app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "acked"))
+
+
+def init_basic_preferences(app, app_version: str, module):
+    deps = module
+    default_settings = deps.DEFAULT_SETTINGS
+    gcode_streaming_line_threshold = deps.GCODE_STREAMING_LINE_THRESHOLD
+    pygame_available = deps.PYGAME_AVAILABLE
+    watchdog_homing_timeout = deps.WATCHDOG_HOMING_TIMEOUT
+    tk = deps.tk
+    ttk = deps.ttk
+    tkfont = deps.tkfont
+
+    def setting(key: str, fallback):
+        return app.settings.get(key, default_settings.get(key, fallback))
+
+    _init_behavior_preferences(
+        app,
+        setting=setting,
+        default_settings=default_settings,
+        gcode_streaming_line_threshold=gcode_streaming_line_threshold,
+        pygame_available=pygame_available,
+        watchdog_homing_timeout=watchdog_homing_timeout,
+        tk=tk,
+    )
+    _init_style_preferences(app, tkfont=tkfont, ttk=ttk)
+    app.available_themes = list(app.style.theme_names())
+    theme_choice = setting("theme", app.style.theme_use())
+    app.selected_theme = tk.StringVar(value=theme_choice)
+    app._apply_theme(theme_choice)
+    try:
+        app._apply_scrollbar_width()
+    except Exception:
+        pass
+    _init_visibility_preferences(app, setting=setting, app_version=app_version, tk=tk)

@@ -29,28 +29,29 @@ from typing import Any, cast
 
 # GUI imports
 import tkinter as tk
-
-
-
-from simple_sender.ui.app_exports import (
+from simple_sender.ui.controls.toolbar import (
+    on_recover_button_visibility_change,
+    on_resume_button_visibility_change,
+    update_job_button_mode,
+    update_recover_button_visibility,
+    update_resume_button_visibility,
+)
+from simple_sender.ui.dialogs import show_macro_prompt
+from simple_sender.ui.main_tabs import on_tab_changed, update_tab_visibility
+from simple_sender.ui.settings import (
     bind_app_settings_mousewheel,
     bind_app_settings_touch_scroll,
     on_app_settings_mousewheel,
     on_app_settings_touch_end,
     on_app_settings_touch_move,
     on_app_settings_touch_start,
-    on_recover_button_visibility_change,
-    on_resume_button_visibility_change,
-    on_tab_changed,
-    show_macro_prompt,
     unbind_app_settings_mousewheel,
     unbind_app_settings_touch_scroll,
     update_app_settings_scrollregion,
-    update_job_button_mode,
-    update_recover_button_visibility,
-    update_resume_button_visibility,
-    update_tab_visibility,
 )
+
+MACRO_STATUS_SCROLL_INTERVAL_MS = 200
+
 
 class UiEventsMixin:
     def _on_app_focus_out(self, event=None):
@@ -174,7 +175,10 @@ class UiEventsMixin:
                 pass
         except Exception:
             pass
-        app._macro_status_after_id = app.after(200, self._update_macro_status_display)
+        app._macro_status_after_id = app.after(
+            MACRO_STATUS_SCROLL_INTERVAL_MS,
+            self._update_macro_status_display,
+        )
 
     def _stop_macro_status(self):
         app = cast(Any, self)

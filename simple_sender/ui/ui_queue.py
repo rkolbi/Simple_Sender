@@ -31,6 +31,8 @@ from simple_sender.utils.constants import (
 )
 from simple_sender.types import AppProtocol, UiEvent
 
+UI_QUEUE_DRAIN_INTERVAL_MS = 50
+
 
 class UiEventQueue:
     _LOW_PRIORITY_KINDS = {"log_rx", "log_tx"}
@@ -166,4 +168,4 @@ def drain_ui_queue(app: AppProtocol) -> None:
     if hasattr(app, "_sync_tool_reference_label"):
         app._sync_tool_reference_label()
     app._maybe_auto_reconnect()
-    app.after(50, app._drain_ui_queue)
+    app.after(UI_QUEUE_DRAIN_INTERVAL_MS, app._drain_ui_queue)

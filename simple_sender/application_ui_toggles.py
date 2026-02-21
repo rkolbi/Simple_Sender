@@ -24,34 +24,44 @@
 """
 
 # Standard library imports
-from simple_sender.ui.app_exports import (
-    apply_ui_scale,
-    apply_scrollbar_width,
-    apply_theme,
+from simple_sender.ui.dialogs.error_dialogs_ui import (
     install_dialog_loggers,
     on_error_dialogs_enabled_change,
-    on_gui_logging_change,
-    on_performance_mode_change,
-    on_quick_button_visibility_change,
-    on_scrollbar_width_change,
+    toggle_error_dialogs,
+)
+from simple_sender.ui.screen_lock import (
+    init_screen_lock_guard,
     on_screen_lock_event,
     on_screen_lock_widget_mapped,
-    on_theme_change,
-    on_ui_scale_change,
     refresh_screen_lock_toggle_text,
-    refresh_autolevel_overlay_toggle_text,
-    refresh_keybindings_toggle_text,
-    refresh_led_backgrounds,
-    refresh_stop_button_backgrounds,
-    refresh_tooltips_toggle_text,
-    toggle_console_pos_status,
-    toggle_error_dialogs,
-    toggle_performance,
     toggle_screen_lock,
-    toggle_tooltips,
-    init_screen_lock_guard,
+)
+from simple_sender.ui.status.bar import (
+    on_quick_button_visibility_change,
     update_quick_button_visibility,
 )
+from simple_sender.ui.theme_helpers import (
+    apply_theme,
+    refresh_stop_button_backgrounds,
+)
+from simple_sender.ui.toggle_text import (
+    refresh_autolevel_overlay_toggle_text,
+    refresh_keybindings_toggle_text,
+    refresh_tooltips_toggle_text,
+)
+from simple_sender.ui.ui_actions import (
+    apply_scrollbar_width,
+    apply_ui_scale,
+    on_gui_logging_change,
+    on_performance_mode_change,
+    on_scrollbar_width_change,
+    on_theme_change,
+    on_ui_scale_change,
+    toggle_console_pos_status,
+    toggle_performance,
+    toggle_tooltips,
+)
+from simple_sender.ui.led_panel import refresh_led_backgrounds
 
 
 class UiTogglesMixin:

@@ -29,6 +29,146 @@ from tkinter import messagebox, ttk
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.utils.grbl_errors import extract_grbl_code
 
+
+class ErrorDialogManager:
+    def __init__(self, app) -> None:
+        self.app = app
+        self.interval = float(getattr(app, "_error_dialog_interval", 2.0) or 2.0)
+        self.burst_window = float(getattr(app, "_error_dialog_burst_window", 30.0) or 30.0)
+        self.burst_limit = int(getattr(app, "_error_dialog_burst_limit", 3) or 3)
+        self.last_ts = float(getattr(app, "_error_dialog_last_ts", 0.0) or 0.0)
+        self.window_start = float(getattr(app, "_error_dialog_window_start", 0.0) or 0.0)
+        self.count = int(getattr(app, "_error_dialog_count", 0) or 0)
+        self.suppressed = bool(getattr(app, "_error_dialog_suppressed", False))
+        self._sync_to_app()
+
+    def _sync_to_app(self) -> None:
+        self.app._error_dialog_interval = self.interval
+        self.app._error_dialog_burst_window = self.burst_window
+        self.app._error_dialog_burst_limit = self.burst_limit
+        self.app._error_dialog_last_ts = self.last_ts
+        self.app._error_dialog_window_start = self.window_start
+        self.app._error_dialog_count = self.count
+        self.app._error_dialog_suppressed = self.suppressed
+
+    def set_status(self, text: str) -> None:
+        def update():
+            if hasattr(self.app, "error_dialog_status_var"):
+                self.app.error_dialog_status_var.set(text)
+
+        if threading.current_thread() is threading.main_thread():
+            update()
+        else:
+            self.app._post_ui_thread(update)
+
+    def reset_state(self) -> None:
+        self.last_ts = 0.0
+        self.window_start = 0.0
+        self.count = 0
+        self.suppressed = False
+        self._sync_to_app()
+        self.set_status("")
+
+    def should_show_dialog(self) -> bool:
+        if not bool(self.app.error_dialogs_enabled.get()):
+            return False
+        if self.app._closing:
+            return False
+        if self.suppressed:
+            return False
+        now = time.monotonic()
+        if (now - self.last_ts) < self.interval:
+            return False
+        if (now - self.window_start) > self.burst_window:
+            self.window_start = now
+            self.count = 0
+        self.count += 1
+        self.last_ts = now
+        if self.count > self.burst_limit:
+            self.suppressed = True
+            msg = "[error] Too many errors; suppressing dialogs for this session."
+            try:
+                if threading.current_thread() is threading.main_thread():
+                    self.app.streaming_controller.handle_log(msg)
+                else:
+                    self.app.ui_q.put(("log", msg))
+            except Exception:
+                pass
+            self._sync_to_app()
+            self.set_status("Dialogs: Suppressed")
+            return False
+        self._sync_to_app()
+        return True
+
+    def apply_settings(self, _event=None) -> None:
+        def coerce_float(var, fallback):
+            try:
+                value = float(var.get())
+            except Exception:
+                value = fallback
+            if value <= 0:
+                value = fallback
+            return value
+
+        def coerce_int(var, fallback):
+            try:
+                value = int(var.get())
+            except Exception:
+                value = fallback
+            if value <= 0:
+                value = fallback
+            return value
+
+        def coerce_non_negative_float(var, fallback):
+            try:
+                value = float(var.get())
+            except Exception:
+                value = fallback
+            if value < 0:
+                value = fallback
+            return value
+
+        self.interval = coerce_float(
+            self.app.error_dialog_interval_var,
+            self.interval,
+        )
+        self.burst_window = coerce_float(
+            self.app.error_dialog_burst_window_var,
+            self.burst_window,
+        )
+        self.burst_limit = coerce_int(
+            self.app.error_dialog_burst_limit_var,
+            self.burst_limit,
+        )
+        self.app.error_dialog_interval_var.set(self.interval)
+        self.app.error_dialog_burst_window_var.set(self.burst_window)
+        self.app.error_dialog_burst_limit_var.set(self.burst_limit)
+        if hasattr(self.app, "grbl_popup_auto_dismiss_sec"):
+            dismiss = coerce_non_negative_float(
+                self.app.grbl_popup_auto_dismiss_sec,
+                getattr(self.app, "settings", {}).get("grbl_popup_auto_dismiss_sec", 12.0),
+            )
+            self.app.grbl_popup_auto_dismiss_sec.set(dismiss)
+        if hasattr(self.app, "grbl_popup_dedupe_sec"):
+            dedupe = coerce_non_negative_float(
+                self.app.grbl_popup_dedupe_sec,
+                getattr(self.app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0),
+            )
+            self.app.grbl_popup_dedupe_sec.set(dedupe)
+        if hasattr(self.app, "grbl_popup_enabled") and not bool(self.app.grbl_popup_enabled.get()):
+            _close_grbl_code_popup(self.app)
+        self.reset_state()
+
+
+def _get_error_dialog_manager(app) -> ErrorDialogManager:
+    manager = getattr(app, "_error_dialog_manager", None)
+    if isinstance(manager, ErrorDialogManager):
+        return manager
+    manager = ErrorDialogManager(app)
+    app._error_dialog_manager = manager
+    return manager
+
+
 def install_dialog_loggers(app):
     orig_error = messagebox.showerror
 
@@ -48,108 +188,22 @@ def toggle_error_dialogs(app):
 def on_error_dialogs_enabled_change(app):
     enabled = bool(app.error_dialogs_enabled.get())
     if enabled:
-        app._reset_error_dialog_state()
+        _get_error_dialog_manager(app).reset_state()
     else:
-        app._set_error_dialog_status("Dialogs: Off")
+        _get_error_dialog_manager(app).set_status("Dialogs: Off")
 
 def should_show_error_dialog(app) -> bool:
-    if not bool(app.error_dialogs_enabled.get()):
-        return False
-    if app._closing:
-        return False
-    if app._error_dialog_suppressed:
-        return False
-    now = time.monotonic()
-    if (now - app._error_dialog_last_ts) < app._error_dialog_interval:
-        return False
-    if (now - app._error_dialog_window_start) > app._error_dialog_burst_window:
-        app._error_dialog_window_start = now
-        app._error_dialog_count = 0
-    app._error_dialog_count += 1
-    app._error_dialog_last_ts = now
-    if app._error_dialog_count > app._error_dialog_burst_limit:
-        app._error_dialog_suppressed = True
-        msg = "[error] Too many errors; suppressing dialogs for this session."
-        try:
-            if threading.current_thread() is threading.main_thread():
-                app.streaming_controller.handle_log(msg)
-            else:
-                app.ui_q.put(("log", msg))
-        except Exception:
-            pass
-        app._set_error_dialog_status("Dialogs: Suppressed")
-        return False
-    return True
+    return _get_error_dialog_manager(app).should_show_dialog()
 
 def reset_error_dialog_state(app):
-    app._error_dialog_last_ts = 0.0
-    app._error_dialog_window_start = 0.0
-    app._error_dialog_count = 0
-    app._error_dialog_suppressed = False
-    app._set_error_dialog_status("")
+    _get_error_dialog_manager(app).reset_state()
 
 def set_error_dialog_status(app, text: str):
-    def update():
-        if hasattr(app, "error_dialog_status_var"):
-            app.error_dialog_status_var.set(text)
-    if threading.current_thread() is threading.main_thread():
-        update()
-    else:
-        app._post_ui_thread(update)
+    _get_error_dialog_manager(app).set_status(text)
 
 
 def apply_error_dialog_settings(app, _event=None):
-    def coerce_float(var, fallback):
-        try:
-            value = float(var.get())
-        except Exception:
-            value = fallback
-        if value <= 0:
-            value = fallback
-        return value
-
-    def coerce_int(var, fallback):
-        try:
-            value = int(var.get())
-        except Exception:
-            value = fallback
-        if value <= 0:
-            value = fallback
-        return value
-
-    def coerce_non_negative_float(var, fallback):
-        try:
-            value = float(var.get())
-        except Exception:
-            value = fallback
-        if value < 0:
-            value = fallback
-        return value
-
-    interval = coerce_float(app.error_dialog_interval_var, app._error_dialog_interval)
-    burst_window = coerce_float(app.error_dialog_burst_window_var, app._error_dialog_burst_window)
-    burst_limit = coerce_int(app.error_dialog_burst_limit_var, app._error_dialog_burst_limit)
-    app._error_dialog_interval = interval
-    app._error_dialog_burst_window = burst_window
-    app._error_dialog_burst_limit = burst_limit
-    app.error_dialog_interval_var.set(interval)
-    app.error_dialog_burst_window_var.set(burst_window)
-    app.error_dialog_burst_limit_var.set(burst_limit)
-    if hasattr(app, "grbl_popup_auto_dismiss_sec"):
-        dismiss = coerce_non_negative_float(
-            app.grbl_popup_auto_dismiss_sec,
-            getattr(app, "settings", {}).get("grbl_popup_auto_dismiss_sec", 12.0),
-        )
-        app.grbl_popup_auto_dismiss_sec.set(dismiss)
-    if hasattr(app, "grbl_popup_dedupe_sec"):
-        dedupe = coerce_non_negative_float(
-            app.grbl_popup_dedupe_sec,
-            getattr(app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0),
-        )
-        app.grbl_popup_dedupe_sec.set(dedupe)
-    if hasattr(app, "grbl_popup_enabled") and not bool(app.grbl_popup_enabled.get()):
-        _close_grbl_code_popup(app)
-    app._reset_error_dialog_state()
+    _get_error_dialog_manager(app).apply_settings(_event)
 
 
 def _close_grbl_code_popup(app) -> None:

@@ -27,6 +27,8 @@ from simple_sender.utils.constants import (
     JOG_PANEL_ALL_STOP_OFFSET_IN,
 )
 
+ALL_STOP_POSITION_RETRY_MS = 50
+
 
 def all_stop_action(app):
     try:
@@ -63,7 +65,7 @@ def position_all_stop_offset(app, event=None):
     except tk.TclError:
         return
     if not slot.winfo_ismapped():
-        app.after(50, app._position_all_stop_offset)
+        app.after(ALL_STOP_POSITION_RETRY_MS, app._position_all_stop_offset)
         return
     offset = getattr(app, "_all_stop_offset_px", None)
     if offset is None:

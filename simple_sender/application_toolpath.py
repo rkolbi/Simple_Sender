@@ -24,7 +24,8 @@
 """
 
 # Standard library imports
-from simple_sender.ui.app_exports import (
+from simple_sender.ui.toggle_text import refresh_render_3d_toggle_text
+from simple_sender.ui.toolpath.toolpath_settings import (
     apply_toolpath_arc_detail,
     apply_toolpath_draw_limits,
     apply_toolpath_performance,
@@ -38,7 +39,6 @@ from simple_sender.ui.app_exports import (
     on_toolpath_lightweight_change,
     on_toolpath_performance_key_release,
     on_toolpath_performance_move,
-    refresh_render_3d_toggle_text,
     run_toolpath_arc_detail_reparse,
     save_3d_view,
     schedule_toolpath_arc_detail_reparse,

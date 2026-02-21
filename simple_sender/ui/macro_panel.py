@@ -124,7 +124,7 @@ class MacroPanel:
                     ("pressed", fg_color),
                 ]
             if map_kwargs:
-                style_obj.map(style_name, **map_kwargs)
+                style_obj.map(style_name, **cast(Any, map_kwargs))
         except Exception:
             return default_style
         self._macro_color_styles[style_key] = style_name

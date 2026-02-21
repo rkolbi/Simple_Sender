@@ -26,7 +26,24 @@ from tkinter import ttk
 _TOUCH_SCROLL_THRESHOLD = 6
 
 
-def _touch_scroll_allowed(widget) -> bool:
+def _is_descendant(widget, ancestor) -> bool:
+    current = widget
+    while current is not None:
+        if current is ancestor:
+            return True
+        current = getattr(current, "master", None)
+    return False
+
+
+def _touch_scroll_allowed(app, widget) -> bool:
+    if widget is None:
+        return False
+    # Restrict touch scrolling to the App Settings content/canvas so controls
+    # like the tab's scrollbar do not trigger reverse scan dragging.
+    inner = getattr(app, "_app_settings_inner", None)
+    canvas = getattr(app, "app_settings_canvas", None)
+    if inner is not None and not _is_descendant(widget, inner) and not _is_descendant(widget, canvas):
+        return False
     if isinstance(
         widget,
         (
@@ -38,6 +55,8 @@ def _touch_scroll_allowed(widget) -> bool:
             ttk.Combobox,
             ttk.Scale,
             ttk.Spinbox,
+            tk.Scrollbar,
+            ttk.Scrollbar,
         ),
     ):
         return False
@@ -79,7 +98,7 @@ def unbind_app_settings_mousewheel(app):
 def on_app_settings_touch_start(app, event):
     if not hasattr(app, "app_settings_canvas"):
         return
-    if not _touch_scroll_allowed(getattr(event, "widget", None)):
+    if not _touch_scroll_allowed(app, getattr(event, "widget", None)):
         return
     canvas = app.app_settings_canvas
     x = canvas.winfo_pointerx() - canvas.winfo_rootx()

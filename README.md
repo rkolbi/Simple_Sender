@@ -562,9 +562,20 @@ Coverage:
 python -m pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
 ```
 
+Critical-path coverage gate (same check used by `run_tests.bat`):
+```powershell
+python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term
+python tools/check_core_coverage.py coverage.xml
+```
+
 Type checking (mypy):
 ```powershell
 python -m mypy
+```
+
+One-command local gate:
+```powershell
+run_tests.bat
 ```
 
 Import stability check (same gate used in CI):
@@ -574,7 +585,7 @@ python -c "import simple_sender.ui.settings"
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
-- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI, toolpath) imported and installed onto `App`.
+- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI, toolpath) imported and installed onto `App`; these helpers now import their UI dependencies directly (instead of routing through `ui/app_exports.py`).
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
 - `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
 - `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
@@ -582,6 +593,8 @@ python -c "import simple_sender.ui.settings"
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
+- `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
+- `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
 - `simple_sender/types.py`: shared protocols and stream-state value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) used by the worker pipeline.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
@@ -640,6 +653,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
+- Auto-Level dialog flow has been decomposed into a dedicated controller module (`ui/autolevel_dialog/dialog_controller.py`) while preserving public entry points in `ui/autolevel_dialog/__init__.py`.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
