@@ -1,0 +1,5 @@
+Confirm emergency stop and limit switches are functional.
+Home the machine and verify travel direction/limits.
+Set WCS zero and confirm units (G20/G21) match expectations.
+Verify tool, clamp clearance, and safe Z height.
+Dry-run in air if the job is new or the setup changed.

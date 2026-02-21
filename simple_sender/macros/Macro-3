@@ -1,7 +1,8 @@
-XYZ Touch Plate
-Probes XYZ on the touch plate, then captures the reference tool height at the fixed sensor.
+Job Setup
+Guided setup: choose XYZ Plate, Z Plate, or Manual, then run the matching zero/reference workflow.
 
 
+; Guided setup flow that combines the common paths from Macro-3/4/5.
 ; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe feed).
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5
@@ -26,59 +27,70 @@ Probes XYZ on the touch plate, then captures the reference tool height at the fi
 %FEEDMODE = feedmode
 %SPINDLE = spindle
 %COOLANT = coolant
-%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+%msg (Job Setup start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+
+PROMPT [title(Job Setup)] Choose setup type. [btn(XYZ Plate)x] [btn(Z Plate)z] [btn(Manual)m]
+%if macro.prompt_choice_key == "x": macro.state.SETUP_MODE = "xyz"
+%if macro.prompt_choice_key == "z": macro.state.SETUP_MODE = "z"
+%if macro.prompt_choice_key == "m": macro.state.SETUP_MODE = "manual"
+%if getattr(macro.state, "SETUP_MODE", "") == "": raise RuntimeError("Job Setup mode not selected.")
+%msg (Job Setup mode selected: [macro.state.SETUP_MODE])
 
 %macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
 %if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
 ["PROMPT resumelabel=Proceed You are about to overwrite material and tool reference points. Are you sure you want to proceed?" if macro.prompt_tool_ref is not None else ""][""]
-M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
+
+["M0 (XYZ Plate mode: ensure the touch plate is installed and the clip is attached to the bit.)" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["M0 (Z Plate mode: ensure the touch plate is installed for Z probing and the clip is attached.)" if macro.state.SETUP_MODE == "z" else ""][""]
+["M0 (Manual mode: confirm XYZ work zero is already set; remove touch plate and attach the clip.)" if macro.state.SETUP_MODE == "manual" else ""][""]
 G90
 G21
-G92 X0 Y0
+["G92 X0 Y0" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
 
-; Probe Z (touch plate)
-G91
-G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150
-G90
-G92 Z[macro.state.PLATE_THICKNESS]
-G1 Z14
-G91
-G38.2 Z-15 F40
-G0 Z2
-G4 P0.25
-G38.2 Z-3 F20
-G90
-G92 Z[macro.state.PLATE_THICKNESS]
-G0 Z16
+; Touch plate probing branch (XYZ Plate and Z Plate modes).
+["G91" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G90" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G92 Z[macro.state.PLATE_THICKNESS]" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G1 Z14" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G91" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G38.2 Z-15 F40" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G0 Z2" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G4 P0.25" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G38.2 Z-3 F20" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G90" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G92 Z[macro.state.PLATE_THICKNESS]" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G0 Z16" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
 
-; Probe X (touch plate)
-G0 X-70 F800
-G0 Z4
-G38.2 X0 F170
-G92 X[macro.state.X_PLATE_OFFSET]
-G1 X-14
-G38.2 X0 F60
-G92 X[macro.state.X_PLATE_OFFSET]
-G0 X-15
+; XYZ-only edge probing branch.
+["G0 X-70 F800" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 Z4" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G38.2 X0 F170" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G92 X[macro.state.X_PLATE_OFFSET]" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G1 X-14" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G38.2 X0 F60" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G92 X[macro.state.X_PLATE_OFFSET]" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 X-15" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 Z16" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 X30 Y-70 F800" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 Z4" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G38.2 Y0 F170" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G92 Y[macro.state.Y_PLATE_OFFSET]" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G1 Y-14" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G38.2 Y0 F60" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G92 Y[macro.state.Y_PLATE_OFFSET]" if macro.state.SETUP_MODE == "xyz" else ""][""]
+["G0 Y-15" if macro.state.SETUP_MODE == "xyz" else ""][""]
 
-; Probe Y (touch plate)
-G0 Z16
-G0 X30 Y-70 F800
-G0 Z4
-G38.2 Y0 F170
-G92 Y[macro.state.Y_PLATE_OFFSET]
-G1 Y-14
-G38.2 Y0 F60
-G92 Y[macro.state.Y_PLATE_OFFSET]
-
-G0 Y-15
-G0 Z20
-G0 X0 Y0
+["G0 Z20" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
+["G0 X0 Y0" if macro.state.SETUP_MODE in ("xyz", "z") else ""][""]
 %update
-%msg (After touch plate: wx=[wx] wy=[wy] wz=[wz])
-M0 (Stow the touch plate and clip; tool height will be measured next.)
+%if macro.state.SETUP_MODE == "manual": macro.state.SETUP_NOTE = "Manual mode selected: keeping existing XYZ zero and capturing reference only."
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.SETUP_NOTE = f"After touch plate: wx={wx} wy={wy} wz={wz}"
+%msg [macro.state.SETUP_NOTE]
+["M0 (Stow the touch plate and clip; tool height will be measured next.)" if macro.state.SETUP_MODE in ("xyz", "z") else "M0 (Proceeding to fixed sensor to capture tool reference.)"][""]
 %wait
 
+; Common fixed-sensor tool-reference capture for all setup modes.
 G21
 M5
 G90

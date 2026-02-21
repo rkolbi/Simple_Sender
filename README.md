@@ -173,7 +173,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
     ![](pics/appsettingstab.JPG)
   
-  - **Checklists:** Release/run checklists loaded from `checklist-*.chk` files, including the Release/Run checklist dialogs and the status-bar Release quick button.
+  - **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including the Release/Start Job checklist dialogs and the status-bar Release quick button.
   
     ![-](pics/checkliststab.JPG)
     
@@ -536,10 +536,8 @@ This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) an
 
 ### Macro shortcuts
 If you prefer guided probing, the macro set includes touch-plate and reference-tool helpers (see the Macro table below):
-- **Macro-3**: XYZ touch plate + reference tool setup.
-- **Macro-4**: Z touch plate + reference tool setup.
-- **Macro-5**: No-touch-plate reference capture for manual XYZ zero workflows.
-- **Macro-6**: Tool change after a reference is established.
+- **Macro-3**: Guided Job Setup chooser (`XYZ Plate`, `Z Plate`, or `Manual`) plus reference-tool capture.
+- **Macro-4**: Tool change after a reference is established.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
@@ -682,7 +680,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - Auto-leveling: added RMS roughness + outlier stats in the height map summary.
 - Auto-leveling: optional spiral (center-out) probe order in addition to serpentine.
 - Auto-leveling: fixed dialog initialization error when opening after loading a job.
-- Checklists tab loads `checklist-*.chk` files from the macros folder; Release/Run dialogs use the same files.
+- Checklists tab loads `checklist-*.chk` files from the macros folder; Release/Start Job dialogs use the same files.
 - Diagnostics export bundles recent console/status history plus current settings; preflight check flags bounds/validation issues.
 - Auto-leveling now produces a `-AL` file, enforces GRBL's 80-byte limit in the output, and blocks re-leveling an already leveled file.
 - Streaming validation for large files is configurable, and streaming loads now preserve comments/blank lines when auto-leveling rewrites lines.
@@ -802,18 +800,14 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 
 ## Appendix C: Macro Reference
 
-The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships `Macro-1` through `Macro-8`.
+The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships active defaults in `Macro-1` through `Macro-4`.
 
 | Macro | Purpose | When to use | When to avoid | Code notes |
 | --- | --- | --- | --- | --- |
 | Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Avoid while a stream is active; it's a manual setup macro. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
 | Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Avoid while cutting or with spindle running. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
-| Macro-3: XYZ Touch Plate | Probes Z/X/Y on the touch plate, then captures reference tool height on the fixed sensor. | Initial setup and full XYZ touch-plate calibration workflows. | Avoid during production runs; requires plate/clip interaction and operator prompts. | Includes `PROMPT`/`M0`, staged probing (`G38.2`/`G38.4`), `%update`, stores `macro.state.TOOL_REFERENCE = wz`, and computes probe travel from `$132` plus configured probe start/margin. |
-| Macro-4: Z Touch Plate | Probes touch-plate Z only, then captures reference tool height on the fixed sensor. | Z-only calibration when X/Y edge probing is not needed. | Avoid if XY edge probing is required for your setup. | Similar to Macro-3 but skips X/Y edge probing; still updates `TOOL_REFERENCE` from `wz` and uses the same `$132`-based probe-distance calculation. |
-| Macro-5: No Touch Plate | Captures reference tool height on the fixed sensor without touch-plate probing. | Workflows where XYZ work zero was set manually and only reference capture is needed. | Avoid if touch-plate probing is required for your setup. | Uses configured sensor coordinates, computes `$132`-based probe travel with safety margin, probes staged Z touches, then stores `macro.state.TOOL_REFERENCE = wz`. |
-| Macro-6: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
-| Macro-7: Prompt Test Macro | Exercises default and custom macro prompts/dialog choices. | Verifying prompt UI behavior and choice-variable plumbing. | Not intended for machine motion workflows. | Demonstrates `M0`, `PROMPT`, custom `[title(...)]`/`[btn(...)]`, and logs `macro.prompt_choice_*`. |
-| Macro-8: Prompt Test Macro | Same as Macro-7 (duplicate shipped sample). | Backup/sample prompt test slot. | Not intended for machine motion workflows. | Current repository copy matches Macro-7 content. |
+| Macro-3: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup where one macro should guide the decision path before probing. | Avoid during production runs without operator supervision; this flow requires plate/clip interaction and prompts. | Starts with a custom `PROMPT` (`[btn(...)]` keys), branches on `macro.prompt_choice_key` (`x/z/m`), runs the matching touch-plate/manual path, then performs shared `$132`-based reference capture and stores `macro.state.TOOL_REFERENCE = wz`. |
+| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured by Job Setup. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -948,7 +942,7 @@ Macro UI is included below along with the rest of the interface.
 - Line timeout (sec): maximum time allowed for each macro line (`0` disables; old-style behavior).
 - Total timeout (sec): maximum time allowed for a full macro run (`0` disables; old-style behavior).
 - Probe Z start (machine, mm): machine-coordinate approach Z for tool-reference probing macros (typically `-5`).
-- Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Macro-3/4/5/6.
+- Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Macro-3/4.
 - Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder Macro-1..Macro-8 without leaving the app.
 - Recommendation: leave scripting off unless you trust the macro source.
 

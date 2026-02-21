@@ -1,0 +1,91 @@
+Z Touch Plate
+Probes Z on the touch plate, then captures the reference tool height at the fixed sensor.
+
+
+; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe feed).
+%macro.state.SAFE_HEIGHT = -5
+%macro.state.PROBE_X_LOCATION = -1.5
+%macro.state.PROBE_Y_LOCATION = -1224
+%macro.state.PROBE_Z_LOCATION = float(app.settings.get("macro_probe_z_location", -5.0))
+%macro.state.PROBE_SAFETY_MARGIN = max(0.0, float(app.settings.get("macro_probe_safety_margin", 3.0)))
+%macro.state.Z_MAX_TRAVEL = 150.0
+%macro.state.grbl_settings = getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
+%if "$132" in macro.state.grbl_settings: macro.state.Z_MAX_TRAVEL = float(macro.state.grbl_settings["$132"][0])
+%macro.state.PROBE_DISTANCE = max(1.0, round(macro.state.Z_MAX_TRAVEL + macro.state.PROBE_Z_LOCATION - macro.state.PROBE_SAFETY_MARGIN, 3))
+%macro.state.PROBE_RAPID_FEEDRATE = 200
+%macro.state.PLATE_THICKNESS = 11.95
+%macro.state.Z_FAST_PROBE_DISTANCE = 50
+%macro.state.X_PLATE_OFFSET = -13.175
+%macro.state.Y_PLATE_OFFSET = -13.175
+
+%wait
+%WCS = WCS
+%PLANE = plane
+%UNITS = units
+%DISTANCE = distance
+%FEEDMODE = feedmode
+%SPINDLE = spindle
+%COOLANT = coolant
+%msg (Start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+
+%macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
+%if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
+["PROMPT resumelabel=Proceed You are about to overwrite material and tool reference points. Are you sure you want to proceed?" if macro.prompt_tool_ref is not None else ""][""]
+M0 (Ensure the touch plate is installed and the clip is attached to the bit.)
+G90
+G21
+G92 X0 Y0
+
+; Probe Z (touch plate)
+G91
+G38.2 Z-[macro.state.Z_FAST_PROBE_DISTANCE] F150
+G90
+G92 Z[macro.state.PLATE_THICKNESS]
+G1 Z14
+G91
+G38.2 Z-15 F40
+G0 Z2
+G4 P0.25
+G38.2 Z-3 F20
+G90
+G92 Z[macro.state.PLATE_THICKNESS]
+G0 Z16
+
+G0 Z20
+G0 X0 Y0
+%update
+%msg (After touch plate: wx=[wx] wy=[wy] wz=[wz])
+M0 (Stow the touch plate and clip; tool height will be measured next.)
+%wait
+
+G21
+M5
+G90
+G53 G0 Z[macro.state.SAFE_HEIGHT]
+G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+%wait
+G53 Z[macro.state.PROBE_Z_LOCATION]
+
+G91
+G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
+G0 Z2
+G4 P0.25
+G38.2 Z-5 F40
+G4 P0.25
+G38.4 Z10 F20
+G4 P0.25
+G38.2 Z-2 F5
+G4 P0.25
+G38.4 Z10 F5
+G90
+%wait
+%update
+%macro.state.TOOL_REFERENCE = wz
+%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
+G91
+G0 Z5
+G90
+G53 Z[macro.state.SAFE_HEIGHT]
+%wait
+G0 X0 Y0
+STATE_RETURN

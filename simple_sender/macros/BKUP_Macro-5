@@ -1,8 +1,8 @@
-Tool Change
-Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.
+No Touch Plate
+Use when XYZ work zero is set manually; captures TOOL_REFERENCE at the fixed sensor for Tool Change.
 
 
-; Keep these values aligned with Macro 1/2 so the tool sensor remains consistent; adjust SAFE_HEIGHT if clamps differ.
+; Use this when you've already set X/Y/Z zero manually and only need tool-reference capture.
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5
 %macro.state.PROBE_Y_LOCATION = -1224
@@ -14,8 +14,6 @@ Moves to the fixed sensor, lets you swap the tool, then re-applies the stored re
 %macro.state.PROBE_DISTANCE = max(1.0, round(macro.state.Z_MAX_TRAVEL + macro.state.PROBE_Z_LOCATION - macro.state.PROBE_SAFETY_MARGIN, 3))
 %macro.state.PROBE_RAPID_FEEDRATE = 200
 
-%if getattr(macro.state, "TOOL_REFERENCE", None) is None: raise RuntimeError("TOOL_REFERENCE not set; run Macro 3 (Job Setup) first.")
-
 %wait
 %WCS = WCS
 %PLANE = plane
@@ -24,15 +22,21 @@ Moves to the fixed sensor, lets you swap the tool, then re-applies the stored re
 %FEEDMODE = feedmode
 %SPINDLE = spindle
 %COOLANT = coolant
-%msg (Tool change start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz] TOOL_REFERENCE=[macro.state.TOOL_REFERENCE])
+%msg (No-touch-plate start: units=[units] WCS=[WCS] wx=[wx] wy=[wy] wz=[wz] mx=[mx] my=[my] mz=[mz])
+
+%macro.prompt_tool_ref = getattr(macro.state, "TOOL_REFERENCE", None)
+%if isinstance(macro.prompt_tool_ref, float): macro.prompt_tool_ref = round(macro.prompt_tool_ref, 4)
+["PROMPT resumelabel=Proceed This will overwrite the stored tool reference. Continue?" if macro.prompt_tool_ref is not None else ""][""]
+M0 (Confirm XYZ work zero is already set manually. Ensure touch plate is removed and clip is on the tool.)
+
 G21
 M5
 G90
 G53 G0 Z[macro.state.SAFE_HEIGHT]
 G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
 %wait
-M0 (Change the tool and press Resume when done.)
 G53 Z[macro.state.PROBE_Z_LOCATION]
+
 G91
 G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
 G0 Z2
@@ -47,11 +51,8 @@ G38.4 Z10 F5
 G90
 %wait
 %update
-%msg (New tool probe mz=[mz])
-G10 L20 Z[macro.state.TOOL_REFERENCE]
-%wait
-%update
-%msg (After G10: wz=[wz] mz=[mz])
+%macro.state.TOOL_REFERENCE = wz
+%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
 G91
 G0 Z5
 G90

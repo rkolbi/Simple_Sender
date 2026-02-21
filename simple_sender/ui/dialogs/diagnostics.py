@@ -60,6 +60,17 @@ def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
     return cast(list[str], items)
 
 
+def _resolve_checklist_items_any(app, names: list[str], fallback: list[str]) -> list[str]:
+    for name in names:
+        path = find_named_checklist(app, name)
+        if not path:
+            continue
+        items = load_checklist_items(path)
+        if items is not None:
+            return cast(list[str], items)
+    return fallback
+
+
 def open_release_checklist(app):
     existing = getattr(app, "_release_checklist_window", None)
     if existing is not None:
@@ -117,12 +128,12 @@ def open_run_checklist(app):
             pass
     win = tk.Toplevel(app)
     app._run_checklist_window = win
-    win.title("Run checklist")
+    win.title("Start Job checklist")
     win.minsize(520, 320)
     win.transient(app)
     container = ttk.Frame(win, padding=12)
     container.pack(fill="both", expand=True)
-    title = ttk.Label(container, text="Run checklist", font=("TkDefaultFont", 12, "bold"))
+    title = ttk.Label(container, text="Start Job checklist", font=("TkDefaultFont", 12, "bold"))
     title.pack(anchor="w")
     ttk.Label(
         container,
@@ -130,7 +141,7 @@ def open_run_checklist(app):
         wraplength=480,
         justify="left",
     ).pack(anchor="w", pady=(4, 10))
-    items = _resolve_checklist_items(app, "run", RUN_CHECKLIST_ITEMS)
+    items = _resolve_checklist_items_any(app, ["start-job", "run"], RUN_CHECKLIST_ITEMS)
     text = tk.Text(container, wrap="word", height=10)
     text.pack(fill="both", expand=True)
     if items:
