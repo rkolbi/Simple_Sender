@@ -209,7 +209,6 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
         "SimpleSender.UnitReported.TButton",
         anchor="center",
         justify="center",
-        padding=touch_padding,
     )
     dro_size = default_font.cget("size")
     if not isinstance(dro_size, int):

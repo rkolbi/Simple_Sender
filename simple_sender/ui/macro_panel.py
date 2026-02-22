@@ -25,7 +25,7 @@ from tkinter import ttk, messagebox
 from typing import Any, Callable, cast
 
 from simple_sender.utils.macro_headers import parse_macro_header
-from simple_sender.ui.widgets import apply_tooltip, set_kb_id
+from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
 from simple_sender.ui.dialogs.popup_utils import center_window
 
 class MacroPanel:
@@ -214,10 +214,26 @@ class MacroPanel:
                 entries.append((idx, path))
 
         self._left_frame.grid_rowconfigure(0, weight=0)
-        for col in range(len(entries)):
+        total_buttons = len(entries) + 1  # Home button + configured macro buttons
+        for col in range(total_buttons):
             self._left_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
 
-        for col, (idx, path) in enumerate(entries):
+        default_style = getattr(self.app, "macro_button_style", "TButton")
+        home_btn = ttk.Button(
+            self._left_frame,
+            text="Home",
+            style=default_style,
+            command=self.app._start_homing,
+        )
+        self.app.btn_home_mpos = home_btn
+        set_kb_id(home_btn, "home")
+        home_btn.grid(row=0, column=0, padx=(0, 6) if total_buttons > 1 else 0, pady=2, sticky="ew")
+        apply_tooltip(home_btn, "Run the homing cycle.")
+        attach_log_gcode(home_btn, "$H")
+        self.app._manual_controls.append(home_btn)
+        self._macro_buttons.append(home_btn)
+
+        for col, (idx, path) in enumerate(entries, start=1):
             name, tip, color, text_color, _body_start = self._read_macro_header(path, idx)
             btn = ttk.Button(
                 self._left_frame,
@@ -226,7 +242,7 @@ class MacroPanel:
                 command=_run_command(idx),
             )
             set_kb_id(btn, f"macro_{idx}")
-            padx = (0, 6) if col < len(entries) - 1 else 0
+            padx = (0, 6) if col < total_buttons - 1 else 0
             btn.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
             btn.bind("<Button-3>", _preview_bind(idx))

@@ -138,11 +138,11 @@ This is a practical, end-to-end flow with rationale for key options.
 5) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
-- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover, unit toggle (mm/inch).
+- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover.
 
 - **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again.
 
-- **Left panels:** MPos (Home/Unit toggle/Hold/Resume), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro buttons (if Macro-1..Macro-8 files exist).
+- **Left panels:** MPos (unit toggle), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro row (Home plus Macro-1..Macro-8 buttons when files exist).
 
 - **Tabs:**
   - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
@@ -229,7 +229,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Joystick hold-jog bindings (`X/Y/Z +/- (Hold)`) send one long jog command per press, then stop with jog-cancel on release.
 - Hold-jog distance targets remaining travel when GRBL max travel (`$130/$131/$132`) and machine position are known; otherwise a conservative long move is used and release still cancels motion.
 - If joystick communication/backend is lost during hold-jog (device unplugged, backend failure, polling error, or bindings disabled), the active jog is cancelled immediately.
-- Unit toggle button flips mm/inch and label; jogs blocked during streaming/alarm.
+- Unit toggle button (MPos panel) flips mm/inch and label; jogs blocked during streaming/alarm.
 - Safe mode (App Settings > Jogging) sets conservative jog feeds and steps for first-time setup.
 
 ## Console & Manual Commands

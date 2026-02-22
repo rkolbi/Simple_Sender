@@ -89,10 +89,65 @@ def _apply_home_button_theme(app, palette: dict):
         ],
     )
 
+
+def _reapply_button_metrics(app) -> None:
+    style = app.style
+    touch_padding = (10, 12)
+    try:
+        style.configure(
+            app.icon_button_style,
+            anchor="center",
+            justify="center",
+            padding=(8, 4),
+            font=app.icon_button_font,
+        )
+    except Exception:
+        pass
+    try:
+        style_name = getattr(app, "home_button_style", "")
+        if style_name:
+            style.configure(
+                style_name,
+                anchor="center",
+                justify="center",
+                padding=touch_padding,
+                font=app.home_button_font,
+            )
+    except Exception:
+        pass
+    try:
+        style.configure(
+            app.mpos_button_style,
+            anchor="center",
+            justify="center",
+            padding=touch_padding,
+        )
+    except Exception:
+        pass
+    try:
+        style.configure(
+            app.macro_button_style,
+            anchor="center",
+            justify="center",
+            padding=touch_padding,
+        )
+    except Exception:
+        pass
+    try:
+        style.configure(
+            "SimpleSender.UnitReported.TButton",
+            anchor="center",
+            justify="center",
+        )
+    except Exception:
+        pass
+
+
 def apply_theme(app, theme: str):
     try:
         if theme in app.available_themes:
             app.style.theme_use(theme)
+            _reapply_button_metrics(app)
             palette = None
             try:
                 palette = app.theme_palettes.get(theme)

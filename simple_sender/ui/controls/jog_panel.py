@@ -24,7 +24,6 @@ import tkinter as tk
 import logging
 from tkinter import ttk
 
-from simple_sender.ui.icons import ICON_HOME, ICON_HOLD, ICON_RESUME, icon_label
 from simple_sender.ui.widgets import (
     StopSignButton,
     apply_tooltip,
@@ -450,25 +449,15 @@ def _build_position_and_action_controls(app, align):
     mpos_actions_top.grid(row=4, column=0, sticky="new", pady=(6, 0))
     mpos_actions_top.grid_columnconfigure(0, weight=1, uniform="mpos_buttons")
     mpos_actions_top.grid_columnconfigure(1, weight=1, uniform="mpos_buttons")
-    app.btn_home_mpos = ttk.Button(
-        mpos_actions_top,
-        text=icon_label(ICON_HOME, "Home"),
-        style=getattr(app, "home_button_style", app.icon_button_style),
-        command=app._start_homing,
-    )
-    set_kb_id(app.btn_home_mpos, "home")
-    app.btn_home_mpos.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-    app._manual_controls.append(app.btn_home_mpos)
-    apply_tooltip(app.btn_home_mpos, "Run the homing cycle.")
-    attach_log_gcode(app.btn_home_mpos, "$H")
+
     app.btn_unit_toggle = ttk.Button(
         mpos_actions_top,
         text=app._unit_toggle_label(),
-        style=getattr(app, "mpos_button_style", "TButton"),
+        style="TButton",
         command=app._toggle_unit_mode,
     )
     set_kb_id(app.btn_unit_toggle, "unit_toggle")
-    app.btn_unit_toggle.grid(row=0, column=1, sticky="ew")
+    app.btn_unit_toggle.grid(row=0, column=0, sticky="ew", padx=(0, 6))
     app._manual_controls.append(app.btn_unit_toggle)
     app._offline_controls.add(app.btn_unit_toggle)
     apply_tooltip(
@@ -476,33 +465,6 @@ def _build_position_and_action_controls(app, align):
         "Toggle modal units (G20/G21). Blue text means report units are tracked ($13).",
     )
     app._update_unit_toggle_display()
-
-    mpos_actions_bottom = ttk.Frame(align)
-    mpos_actions_bottom.grid(row=5, column=0, sticky="new", pady=(6, 0))
-    mpos_actions_bottom.grid_columnconfigure(0, weight=1, uniform="mpos_buttons")
-    mpos_actions_bottom.grid_columnconfigure(1, weight=1, uniform="mpos_buttons")
-    app.btn_hold_mpos = ttk.Button(
-        mpos_actions_bottom,
-        text=icon_label(ICON_HOLD, "Hold"),
-        style=getattr(app, "mpos_button_style", "TButton"),
-        command=lambda: app._run_if_connected(app.grbl.hold),
-    )
-    set_kb_id(app.btn_hold_mpos, "feed_hold")
-    app.btn_hold_mpos.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-    app._manual_controls.append(app.btn_hold_mpos)
-    apply_tooltip(app.btn_hold_mpos, "Feed hold.")
-    attach_log_gcode(app.btn_hold_mpos, "!")
-    app.btn_resume_mpos = ttk.Button(
-        mpos_actions_bottom,
-        text=icon_label(ICON_RESUME, "Resume"),
-        style=getattr(app, "mpos_button_style", "TButton"),
-        command=lambda: app._run_if_connected(app.grbl.resume),
-    )
-    set_kb_id(app.btn_resume_mpos, "feed_resume")
-    app.btn_resume_mpos.grid(row=0, column=1, sticky="ew")
-    app._manual_controls.append(app.btn_resume_mpos)
-    apply_tooltip(app.btn_resume_mpos, "Resume after hold.")
-    attach_log_gcode(app.btn_resume_mpos, "~")
 
     btns = ttk.Frame(align)
     btns.grid(row=4, column=2, sticky="new", pady=(6, 0))
@@ -680,7 +642,7 @@ def build_jog_panel(app, parent):
     app._set_step_z(app.step_z.get())
 
     macro_row = ttk.Frame(align)
-    macro_row.grid(row=5, column=2, columnspan=10, sticky="new", pady=(6, 0))
+    macro_row.grid(row=5, column=0, columnspan=13, sticky="ew", pady=(6, 0))
     macro_row.grid_columnconfigure(0, weight=1, uniform="macro_buttons")
 
     app.macro_panel.attach_frames(macro_row, None)

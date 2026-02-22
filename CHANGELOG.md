@@ -12,6 +12,15 @@ All notable changes to this project are documented in this file.
   - **Save G-code** defaults to the app log directory with `surfacing-YYYYMMDD-HHMMSS.nc`
   - includes updated README operation docs and safety checklist for running surfacing with `Z0` set to spoilboard top
 
+### Changed
+- Jog panel control layout was reorganized:
+  - removed the dedicated MPos `Hold` and `Resume` buttons from the left control column
+  - moved `Home` into the macro button row (as the first button) so it matches macro-button formatting
+  - moved the macro row to span from the far-left side of the jog area
+  - kept the MPos unit toggle (`mm/inch`) in the original top-left control slot
+- Theme switching now reapplies custom button metrics after `ttk` theme changes so macro/MPos button heights remain consistent across themes.
+- README UI tour notes now match the current control locations (top bar, left panels, and unit toggle placement).
+
 ## [1.6.0] - 2026-02-21
 
 ### Added
