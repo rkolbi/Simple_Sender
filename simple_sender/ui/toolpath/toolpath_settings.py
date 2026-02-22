@@ -46,6 +46,12 @@ def _can_use_toolpath(app) -> bool:
     return bool(app._last_gcode_lines) and not getattr(app, "_gcode_streaming_mode", False)
 
 
+def _stream_ui_busy(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    return app._stream_state in ("running", "paused")
+
+
 def _confirm_streaming_3d_preview(app) -> bool:
     name = "this file"
     path = getattr(app, "_last_gcode_path", None)
@@ -270,7 +276,7 @@ def apply_toolpath_performance(app, _event=None):
     app.toolpath_panel.set_lightweight(lightweight)
     app.toolpath_panel.set_draw_percent(draw_percent)
     if _can_use_toolpath(app):
-        if app._stream_state in ("running", "paused"):
+        if _stream_ui_busy(app):
             app._toolpath_reparse_deferred = True
         else:
             app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
@@ -323,7 +329,7 @@ def schedule_toolpath_arc_detail_reparse(app):
 def run_toolpath_arc_detail_reparse(app):
     app._toolpath_arc_detail_reparse_after_id = None
     if _can_use_toolpath(app):
-        if app._stream_state in ("running", "paused"):
+        if _stream_ui_busy(app):
             app._toolpath_reparse_deferred = True
             return
         app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
@@ -331,7 +337,7 @@ def run_toolpath_arc_detail_reparse(app):
 def on_toolpath_lightweight_change(app):
     app.toolpath_panel.set_lightweight(bool(app.toolpath_lightweight.get()))
     if _can_use_toolpath(app):
-        if app._stream_state in ("running", "paused"):
+        if _stream_ui_busy(app):
             app._toolpath_reparse_deferred = True
             return
         app.toolpath_panel.set_gcode_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)

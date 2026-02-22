@@ -23,6 +23,35 @@
 from simple_sender.utils.constants import ALL_STOP_CHOICES, CURRENT_LINE_CHOICES
 
 
+def _machine_motion_active(app) -> bool:
+    state = str(getattr(app, "_machine_state_text", "") or "").lower()
+    if not state:
+        return False
+    return not state.startswith("idle")
+
+
+def _planner_queued_depth(app) -> int:
+    try:
+        available = int(getattr(app, "_planner_blocks_available", 0))
+    except Exception:
+        available = 0
+    try:
+        capacity = int(getattr(app, "_planner_blocks_capacity", 15))
+    except Exception:
+        capacity = 15
+    if capacity <= 0:
+        capacity = 15
+    if available < 0:
+        available = 0
+    if available > capacity:
+        available = capacity
+    queued = capacity - available
+    # GRBL can still be executing one final block while planner shows empty.
+    if queued <= 0 and _machine_motion_active(app) and getattr(app, "_last_acked_index", -1) >= 0:
+        queued = 1
+    return max(0, queued)
+
+
 def sync_all_stop_mode_combo(app):
     mode = app.all_stop_mode.get()
     label = None
@@ -64,7 +93,7 @@ def on_current_line_mode_change(app, _event=None):
     label = ""
     if hasattr(app, "current_line_combo"):
         label = app.current_line_combo.get()
-    mode = next((code for lbl, code in CURRENT_LINE_CHOICES if lbl == label), "acked")
+    mode = next((code for lbl, code in CURRENT_LINE_CHOICES if lbl == label), "machine")
     app.current_line_mode.set(mode)
     app._update_current_highlight()
 
@@ -75,7 +104,16 @@ def update_current_highlight(app):
     max_idx = app.gview.lines_count - 1
     mode = app.current_line_mode.get()
     target_idx = None
-    if mode == "acked":
+    if mode == "machine":
+        if app._last_acked_index >= 0:
+            queued = _planner_queued_depth(app)
+            desired = app._last_acked_index - max(0, queued - 1)
+            if desired < 0:
+                desired = 0
+            target_idx = min(desired, max_idx)
+        elif app._last_sent_index >= 0:
+            target_idx = min(app._last_sent_index, max_idx)
+    elif mode == "acked":
         desired = app._last_acked_index + 1
         if desired < 0:
             desired = 0

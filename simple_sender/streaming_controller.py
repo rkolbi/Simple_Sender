@@ -381,11 +381,18 @@ class StreamingController:
             return
         done, total = self._pending_progress
         self._pending_progress = None
+        state_text = str(getattr(self.app, "_machine_state_text", "") or "").lower()
+        motion_active = bool(state_text) and not state_text.startswith("idle")
+        defer_completion = bool(total > 0 and done >= total and motion_active)
         if self.progress_pct:
-            self.progress_pct.set(int(round((done / total) * 100)) if total else 0)
-        if done and total:
+            pct = int(round((done / total) * 100)) if total else 0
+            if defer_completion and pct >= 100:
+                pct = 99
+            self.progress_pct.set(pct)
+        if done and total and not defer_completion:
             self.app._update_live_estimate(done, total)
-        self.app._maybe_notify_job_completion(done, total)
+        if not defer_completion:
+            self.app._maybe_notify_job_completion(done, total)
 
     def _schedule_buffer_flush(self) -> None:
         if self._buffer_after_id is not None:

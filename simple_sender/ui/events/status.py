@@ -40,6 +40,12 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _stream_active_or_finishing(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    return getattr(app, "_stream_state", None) in ("running", "paused")
+
+
 def _maybe_restore_pending_g90(app) -> None:
     if not getattr(app, "_pending_force_g90", False):
         return
@@ -47,7 +53,7 @@ def _maybe_restore_pending_g90(app) -> None:
         return
     if getattr(app, "_alarm_locked", False):
         return
-    if app.grbl.is_streaming() or app._stream_state in ("running", "paused"):
+    if app.grbl.is_streaming() or _stream_active_or_finishing(app):
         return
     try:
         app.grbl.send_immediate("G90", source="autolevel")
@@ -250,10 +256,14 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
             except Exception as exc:
                 _log_suppressed("Failed adjusting machine state label width", exc)
             app._update_state_highlight(display_state)
+            try:
+                app._update_current_highlight()
+            except Exception as exc:
+                _log_suppressed("Failed updating current-line highlight from status state", exc)
         _maybe_restore_pending_g90(app)
 
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
-        if app._stream_state in ("running", "paused") or app.grbl.is_streaming():
+        if _stream_active_or_finishing(app) or app.grbl.is_streaming():
             return False
         app._pending_settings_refresh = False
         app._request_settings_dump()
@@ -262,7 +272,7 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         and app._grbl_ready
         and app._status_seen
         and not app._alarm_locked
-        and app._stream_state not in ("running", "paused")
+        and not _stream_active_or_finishing(app)
     ):
         app._set_manual_controls_enabled(True)
         set_run_resume_from(app, job_controls_ready(app))
@@ -270,6 +280,74 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
     return True
+
+
+def _sync_deferred_stream_completion(app, state: str) -> None:
+    if not bool(getattr(app, "_stream_done_pending_idle", False)):
+        return
+    total = int(getattr(app, "_gcode_total_lines", 0) or 0)
+    if total <= 0:
+        return
+    done = int(getattr(app, "_last_acked_index", -1)) + 1
+    if done < total:
+        return
+    if str(state or "").lower().startswith("idle"):
+        app._stream_done_pending_idle = False
+        app._stream_state = "done"
+        try:
+            app.progress_pct.set(100)
+        except Exception as exc:
+            _log_suppressed("Failed finalizing deferred progress at stream completion", exc)
+        try:
+            app._maybe_notify_job_completion(done, total)
+        except Exception as exc:
+            _log_suppressed("Failed notifying deferred stream completion", exc)
+        try:
+            set_run_resume_from(app, job_controls_ready(app))
+            app.btn_pause.config(state="disabled")
+            app.btn_resume.config(state="disabled")
+        except Exception as exc:
+            _log_suppressed("Failed finalizing run/pause/resume controls after deferred completion", exc)
+        try:
+            app._set_manual_controls_enabled(
+                app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
+            )
+            app._set_streaming_lock(False)
+        except Exception as exc:
+            _log_suppressed("Failed finalizing manual controls after deferred completion", exc)
+        try:
+            app.settings_controller.set_streaming_lock(False)
+        except Exception:
+            pass
+        try:
+            app.toolpath_panel.set_streaming(False)
+        except Exception:
+            pass
+        if (
+            getattr(app, "_pending_settings_refresh", False)
+            and app._grbl_ready
+            and not app._alarm_locked
+            and not app.grbl.is_streaming()
+        ):
+            app._pending_settings_refresh = False
+            app._request_settings_dump()
+        if (
+            app._toolpath_reparse_deferred
+            and app._last_gcode_lines
+            and not getattr(app, "_gcode_streaming_mode", False)
+        ):
+            app._toolpath_reparse_deferred = False
+            app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
+        try:
+            app._apply_status_poll_profile()
+        except Exception as exc:
+            _log_suppressed("Failed applying status poll profile after deferred completion", exc)
+        return
+    try:
+        if int(app.progress_pct.get()) >= 100:
+            app.progress_pct.set(99)
+    except Exception:
+        pass
 
 
 def _parse_xyz_triplet(text: str) -> list[float] | None:
@@ -438,6 +516,19 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["curspindle"] = fields.spindle
     if fields.planner is not None:
+        try:
+            planner_available = int(fields.planner)
+            if planner_available < 0:
+                planner_available = 0
+            planner_capacity = int(getattr(app, "_planner_blocks_capacity", 15) or 15)
+            if planner_capacity <= 0:
+                planner_capacity = 15
+            if planner_available > planner_capacity:
+                planner_capacity = planner_available
+                app._planner_blocks_capacity = planner_capacity
+            app._planner_blocks_available = min(planner_available, planner_capacity)
+        except Exception as exc:
+            _log_suppressed("Failed tracking planner availability from status line", exc)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["planner"] = fields.planner
     if fields.rxbytes is not None:
@@ -501,5 +592,6 @@ def handle_status_event(app, raw: str):
     if not _apply_machine_state(app, fields.state, display_state):
         return
     _update_positions_and_macro_state(app, fields)
+    _sync_deferred_stream_completion(app, fields.state)
 
 

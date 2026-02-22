@@ -75,7 +75,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_reconnect": False,
     "baud_rate": 115200,
     "console_positions_enabled": False,
-    "current_line_mode": "sent",
+    "current_line_mode": "machine",
     "default_spindle_rpm": 12000,
     "dry_run_sanitize_stream": False,
     "error_dialog_burst_limit": 3,

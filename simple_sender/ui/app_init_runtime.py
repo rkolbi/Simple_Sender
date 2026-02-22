@@ -251,6 +251,8 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app._wpos_raw = (0.0, 0.0, 0.0)
     app._mpos_raw = (0.0, 0.0, 0.0)
     app._wco_raw = None
+    app._planner_blocks_available = 15
+    app._planner_blocks_capacity = 15
     app._wpos_value_labels = {}
     app._wpos_label_default_fg = {}
     app._wpos_flash_after_ids = {}
@@ -325,6 +327,7 @@ def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._stream_start_ts = None
     app._stream_pause_total = 0.0
     app._stream_paused_at = None
+    app._stream_done_pending_idle = False
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None

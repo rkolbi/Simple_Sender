@@ -286,7 +286,9 @@ def on_autolevel_overlay_change(app):
 
 
 def toggle_unit_mode(app):
-    if app._stream_state in ("running", "paused"):
+    if app._stream_state in ("running", "paused") or bool(
+        getattr(app, "_stream_done_pending_idle", False)
+    ):
         try:
             app.status.config(text="Unit toggle disabled while streaming")
         except Exception:
@@ -301,7 +303,9 @@ def toggle_unit_mode(app):
 def start_homing(app):
     if not require_grbl_connection(app):
         return
-    if app._stream_state in ("running", "paused"):
+    if app._stream_state in ("running", "paused") or bool(
+        getattr(app, "_stream_done_pending_idle", False)
+    ):
         try:
             app.status.config(text="Homing blocked while streaming")
         except Exception:

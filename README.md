@@ -61,7 +61,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
-- Python 3.10+, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
+- Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
 
 ```powershell
 python -m venv .venv
@@ -217,7 +217,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line.
 - **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
-- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep.
+- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 
 ### Line length limitations and CAM guidance
 - Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
@@ -1055,7 +1055,7 @@ Macro UI is included below along with the rest of the interface.
 - Recommendation: enable safety hold and stop-on-focus-loss when using a joystick.
 
 ### App Settings: Viewer
-- Current line highlight (dropdown): selects whether Current highlights Processing (acked) or Sent (queued) lines.
+- Current line highlight (dropdown): selects `Machine (status/planner)`, `Processing (acked)`, or `Sent (queued)`.
 - 3D view streaming refresh (sec): minimum interval between 3D redraws while streaming (0.05 - 2.0).
 - Recommendation: increase the refresh interval if the 3D view stutters during streaming.
 

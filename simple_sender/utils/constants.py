@@ -677,6 +677,7 @@ ALL_STOP_CHOICES = [
 ]
 
 CURRENT_LINE_CHOICES = [
+    ("Machine (status/planner)", "machine"),
     ("Processing (acked)", "acked"),
     ("Sent (queued)", "sent"),
 ]

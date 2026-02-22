@@ -71,6 +71,7 @@ def handle_stream_state_event(app, evt):
         app.throughput_var.set("TX: 0 B/s")
 
     if st == "loaded":
+        app._stream_done_pending_idle = False
         total = evt[2] if len(evt) > 2 else None
         app.progress_pct.set(0)
         with app.macro_executor.macro_vars() as macro_vars:
@@ -84,6 +85,7 @@ def handle_stream_state_event(app, evt):
         )
         app._set_streaming_lock(False)
     elif st == "running":
+        app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = True
             macro_vars["paused"] = False
@@ -94,6 +96,7 @@ def handle_stream_state_event(app, evt):
         app._set_manual_controls_enabled(False)
         app._set_streaming_lock(True)
     elif st == "paused":
+        app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = True
             macro_vars["paused"] = True
@@ -107,17 +110,26 @@ def handle_stream_state_event(app, evt):
             macro_vars["running"] = False
             macro_vars["paused"] = False
         if st == "done":
-            app.progress_pct.set(100)
+            state_text = str(getattr(app, "_machine_state_text", "") or "").lower()
+            motion_active = bool(state_text) and not state_text.startswith("idle")
+            app._stream_done_pending_idle = bool(motion_active)
+            app.progress_pct.set(99 if motion_active else 100)
         else:
+            app._stream_done_pending_idle = False
             app.progress_pct.set(0)
-        set_run_resume_from(app, job_controls_ready(app))
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")
-        app._set_manual_controls_enabled(
-            app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
-        )
-        app._set_streaming_lock(False)
+        if st == "done" and app._stream_done_pending_idle:
+            app._set_manual_controls_enabled(False)
+            app._set_streaming_lock(True)
+        else:
+            set_run_resume_from(app, job_controls_ready(app))
+            app._set_manual_controls_enabled(
+                app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
+            )
+            app._set_streaming_lock(False)
     elif st == "error":
+        app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -131,6 +143,7 @@ def handle_stream_state_event(app, evt):
         )
         app._set_streaming_lock(False)
     elif st == "alarm":
+        app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -141,7 +154,8 @@ def handle_stream_state_event(app, evt):
         app.btn_resume_from.config(state="disabled")
         app._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
         app._set_streaming_lock(False)
-    if st in ("running", "paused"):
+    stream_busy = st in ("running", "paused") or bool(getattr(app, "_stream_done_pending_idle", False))
+    if stream_busy:
         try:
             app.settings_controller.set_streaming_lock(True)
         except Exception:

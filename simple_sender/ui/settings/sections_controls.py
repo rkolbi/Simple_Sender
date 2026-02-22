@@ -380,8 +380,8 @@ def build_viewer_section(app, parent: ttk.Frame, row: int) -> int:
     app.current_line_desc = ttk.Label(
         view_frame,
         text=(
-            "Processing highlights the line currently executing "
-            "(the next line queued after the last ack). "
+            "Machine uses GRBL status/planner data to approximate the currently "
+            "executing line. Processing highlights the next line after the last ack. "
             "Sent highlights the most recently queued line."
         ),
         wraplength=560,

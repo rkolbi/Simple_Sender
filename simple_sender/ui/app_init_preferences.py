@@ -251,7 +251,7 @@ def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
     app.show_quick_keys_button = tk.BooleanVar(value=setting("show_quick_keys_button", True))
     app.show_quick_alo_button = tk.BooleanVar(value=setting("show_quick_alo_button", True))
     app.show_quick_release_button = tk.BooleanVar(value=setting("show_quick_release_button", True))
-    app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "acked"))
+    app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "machine"))
 
 
 def init_basic_preferences(app, app_version: str, module):

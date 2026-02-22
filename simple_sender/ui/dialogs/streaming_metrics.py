@@ -39,11 +39,14 @@ def format_throughput(bps: float) -> str:
 
 
 def maybe_notify_job_completion(app, done: int, total: int) -> None:
+    state_text = str(getattr(app, "_machine_state_text", "") or "").lower()
+    motion_active = bool(state_text) and not state_text.startswith("idle")
     if (
         app._job_started_at is None
         or app._job_completion_notified
         or total <= 0
         or done < total
+        or motion_active
     ):
         return
     start_time = app._job_started_at

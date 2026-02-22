@@ -11,6 +11,9 @@ All notable changes to this project are documented in this file.
   - shows a post-generate modal with **Read G-code**, **Save G-code**, and **Cancel**
   - **Save G-code** defaults to the app log directory with `surfacing-YYYYMMDD-HHMMSS.nc`
   - includes updated README operation docs and safety checklist for running surfacing with `Z0` set to spoilboard top
+- Regression coverage for deferred stream completion:
+  - added `tests/ui/test_status_deferred_completion.py` to verify completion finalizes only after `Idle`
+  - expanded `tests/ui/test_event_router.py` assertions for the deferred-completion lock path
 
 ### Changed
 - Jog panel control layout was reorganized:
@@ -20,6 +23,14 @@ All notable changes to this project are documented in this file.
   - kept the MPos unit toggle (`mm/inch`) in the original top-left control slot
 - Theme switching now reapplies custom button metrics after `ttk` theme changes so macro/MPos button heights remain consistent across themes.
 - README UI tour notes now match the current control locations (top bar, left panels, and unit toggle placement).
+- Streaming completion behavior is now machine-state-safe:
+  - after final line ACK, UI enters a deferred completion phase while GRBL is still moving
+  - progress remains at `99%` until status reports `Idle`, then advances to `100%` and triggers completion notification
+  - run/manual/settings/toolpath locks stay engaged during the deferred phase and release only after `Idle`
+- README was updated for consistency with current behavior:
+  - Python requirement text now matches the `3.11+` project baseline
+  - Viewer "Current line highlight" docs now include `Machine (status/planner)`
+  - completion notes now clarify that completion waits for `Idle`
 
 ## [1.6.0] - 2026-02-21
 

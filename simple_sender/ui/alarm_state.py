@@ -74,6 +74,7 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         and app._grbl_ready
         and app._status_seen
         and app._stream_state not in ("running", "paused")
+        and not bool(getattr(app, "_stream_done_pending_idle", False))
     ):
         app._set_manual_controls_enabled(True)
         if job_controls_ready(app):
