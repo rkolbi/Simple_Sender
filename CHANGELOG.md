@@ -6,10 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Added
 - Spoilboard Generator in the Overdrive tab:
-  - creates surfacing G-code in-memory from width/height/tool/stepover/feed/RPM/start XY inputs
-  - uses a relative-Z safe workflow (`+10 mm` lift at start, `-10 mm` return plunge, `+10 mm` lift at end)
+  - creates surfacing G-code in-memory from width/height/tool/stepover/feed/RPM/start XY inputs plus `Surfacing Depth (mm)` (default `0.50`)
+  - uses a relative-Z safe workflow (`+10 mm` lift at start, spindle start, `G4 P5` dwell, absolute move to start XY, plunge to `Z = -SurfacingDepth`, `+10 mm` lift at end)
   - shows a post-generate modal with **Read G-code**, **Save G-code**, and **Cancel**
   - **Save G-code** defaults to the app log directory with `surfacing-YYYYMMDD-HHMMSS.nc`
+  - includes updated README operation docs and safety checklist for running surfacing with `Z0` set to spoilboard top
 
 ## [1.6.0] - 2026-02-21
 

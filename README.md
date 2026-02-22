@@ -481,27 +481,106 @@ Use the Overdrive tab's **Spoilboard** button to generate a surfacing program wi
 - Stepover %
 - Feed XY
 - Feed Z
+- Surfacing Depth (mm, default `0.50`)
 - Spindle RPM (default `18000`)
 - Start X
 - Start Y
 
 ### Assumptions and motion flow
 - Assumes the spindle is already positioned at your desired work Z plane before running the program.
+- Surfacing Depth is an absolute cut plane below Z0 (not incremental): generated cut Z is `-Surfacing Depth`.
 - Start sequence:
   - switch to relative and raise Z by `10 mm`
-  - switch to absolute and rapid to lower-left (`Start X`, `Start Y`)
   - start spindle at the specified RPM
-  - switch to relative and feed-plunge down `10 mm` to return to the original Z plane
+  - dwell for 5 seconds (`G4 P5`)
+  - switch to absolute and rapid to lower-left (`Start X`, `Start Y`) at safe Z
+  - feed-plunge to `Z = -Surfacing Depth` using `Feed Z`
   - switch to absolute and run surfacing passes
 - End sequence:
   - switch to relative and raise Z by `10 mm`
   - switch to absolute, stop spindle, and end program (`M30`)
+- Safety validation: Surfacing Depth must be `>= 0` and `<= 6.350 mm`. A value of `0` runs passes at `Z0`.
 
 ### Post-generate options
 After generation, a blocking modal appears:
 - **Read G-code**: loads generated code directly into the viewer using the normal load pipeline (no file write).
 - **Save G-code**: opens Save dialog with default filename `surfacing-YYYYMMDD-HHMMSS.nc`, default folder set to the app log directory, and writes to disk without auto-loading.
 - **Cancel**: closes the modal and discards the generated program.
+
+### How To Run It (Z0 = Top of Spoilboard)
+These instructions assume your generated program uses `Start X = 0` and `Start Y = 0`. If you use different start coordinates, substitute those values in the setup steps.
+
+#### What this program assumes
+Before running the surfacing program, the operator must:
+1. Home the CNC (X/Y/Z).
+2. Jog the spindle to the starting corner (lower-left of the surfacing rectangle).
+3. Set X/Y Zero.
+4. Touch off the surfacing bit and set Z0 to the current top surface of the spoilboard.
+
+#### Step-by-step instructions
+##### 1) Install the surfacing bit
+- Install the spoilboard/surfacing bit and tighten.
+- Remove or countersink any screws in the surfacing area.
+- Confirm clamps, hoses, and wiring will not interfere.
+
+##### 2) Home the machine
+- Run a normal homing cycle.
+- Confirm machine coordinates look correct.
+
+##### 3) Jog to the lower-left corner of the surfacing area
+- Jog to the point you want as the lower-left corner.
+- This is typically where you set `X0 Y0`.
+
+##### 4) Set X/Y zero (Work Zero)
+- Set `X = 0` and `Y = 0` at the lower-left corner of the area.
+- Double-check that your configured upper-right values fit machine travel.
+
+##### 5) Set Z0 to the current top of the spoilboard (critical)
+- With the surfacing bit installed, touch off on the spoilboard surface (touch plate, paper method, or preferred probing method).
+- Set that point as `Z = 0.000`.
+- Meaning:
+- `Z0 = current top of spoilboard`.
+- Any negative Z cuts into the spoilboard.
+- Example: `Surfacing Depth = 0.50 mm` means the tool cuts at `Z = -0.50 mm`.
+
+##### 6) Confirm units (quick check)
+- This Spoilboard Generator currently outputs `G21`, so units are millimeters.
+- For non-spoilboard files in general: `G21` means millimeters, `G20` means inches.
+
+##### 7) Start position / clearance before running (important)
+- This generated program begins with a relative lift: `G91` then `G0 Z10.000`.
+- Start the job with the tool at `Z0` or above (not already deep below the surface).
+- If unsure, jog to `Z = +5 mm` or `Z = +10 mm` first.
+
+##### 8) Run the program and monitor the start
+When you press Run, the program will:
+1. Raise the tool `+10 mm` (relative from current Z).
+2. Start spindle at the set RPM.
+3. Wait 5 seconds.
+4. Rapid to start XY.
+5. Plunge to `Z = -SurfacingDepth` at plunge feed.
+6. Raster-surface the rectangle.
+7. Retract `+10 mm`, stop spindle, and end.
+
+Stay ready to hit Feed Hold / Pause if:
+- It moves in the wrong direction.
+- It plunges too deep.
+- Anything looks unsafe.
+
+##### 9) After it finishes
+- Vacuum chips.
+- Inspect the surface.
+- If more cleanup is needed, rerun with slightly greater surfacing depth (small increments).
+
+#### Quick safety checklist
+- Bit installed and tight.
+- Machine homed.
+- X/Y zero set at lower-left.
+- Z0 set to current top of spoilboard.
+- Tool starts at/near Z0 (or above).
+- Area clear of screws/clamps.
+- Dust collection on.
+- Finger near Feed Hold for first moves.
 
 ## Probing Workflow
 This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) and optionally running Auto-Level. Adjust the numbers for your machine and tooling.
@@ -888,8 +967,10 @@ Macro UI is included below along with the rest of the interface.
 - Tool Diameter: cutter diameter used to derive row spacing.
 - Stepover %: percentage of tool diameter used for stepover.
 - Feed XY / Feed Z: cutting and plunge feed rates.
+- \* Surfacing Depth (mm): absolute cut plane below Z0 (default `0.50`, valid range `0.00` to `6.35`).
 - Spindle RPM: spindle speed for `M3`.
 - Start X / Start Y: lower-left origin for the surfacing rectangle.
+- \* How far below Z0 to surface note: clarifies that `0.50` means `Z = -0.50`.
 - Generate: builds G-code in-memory and opens the Read/Save/Cancel modal.
 - Read G-code: loads generated program into the G-code tab without writing to disk.
 - Save G-code: saves to a user-selected path with timestamped default filename.
