@@ -408,7 +408,7 @@ def show_spoilboard_generator_dialog(app: Any) -> None:
     quick_guide_font = tkfont.nametofont("TkDefaultFont").copy()
     base_size = int(quick_guide_font.cget("size"))
     quick_guide_font.configure(size=_one_step_smaller_font_size(base_size))
-    dlg._quick_guide_font = quick_guide_font
+    setattr(dlg, "_quick_guide_font", quick_guide_font)
     ttk.Label(
         frame,
         text=(

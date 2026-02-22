@@ -39,7 +39,6 @@ def unit_toggle_label(app, mode: str | None = None) -> str:
 
 
 def update_unit_toggle_display(app):
-    reported = getattr(app, "_report_units", None)
     label_units = app.unit_mode.get()
     try:
         if not hasattr(app, "_unit_toggle_default_style"):
@@ -47,14 +46,7 @@ def update_unit_toggle_display(app):
     except Exception:
         app._unit_toggle_default_style = "TButton"
     try:
-        if reported in ("mm", "inch"):
-            palette = getattr(app, "theme_palette", None) or {}
-            accent = palette.get("accent", "#0e639c")
-            style = "SimpleSender.UnitReported.TButton"
-            app.style.configure(style, foreground=accent)
-            app.btn_unit_toggle.config(style=style)
-        else:
-            app.btn_unit_toggle.config(style=app._unit_toggle_default_style)
+        app.btn_unit_toggle.config(style=app._unit_toggle_default_style)
         app.btn_unit_toggle.config(text=unit_toggle_label(app, label_units))
     except Exception:
         pass

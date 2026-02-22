@@ -96,7 +96,11 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         ports_provider = self._list_ports_provider()
         if not self._serial_available() or ports_provider is None:
             return []
-        return [p.device for p in ports_provider.comports()]
+        try:
+            return [p.device for p in ports_provider.comports()]
+        except Exception as exc:
+            logger.warning("Failed to list serial ports: %s", exc)
+            return []
 
     def connect(self, port: str, baud: int = BAUD_DEFAULT) -> None:
         """Connect to GRBL controller.

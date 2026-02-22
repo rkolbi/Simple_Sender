@@ -36,6 +36,7 @@ UI_QUEUE_DRAIN_INTERVAL_MS = 50
 
 class UiEventQueue:
     _LOW_PRIORITY_KINDS = {"log_rx", "log_tx"}
+    _HIGH_PRIORITY_LOG_KINDS = {"log"}
     _COALESCE_KINDS = {
         "buffer_fill",
         "gcode_load_progress",
@@ -50,11 +51,14 @@ class UiEventQueue:
         self,
         maxsize: int = UI_EVENT_QUEUE_MAXSIZE,
         *,
+        high_priority_log_maxsize: int = UI_EVENT_QUEUE_MAXSIZE,
         drop_notice_interval: float = UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL,
     ) -> None:
         self._maxsize = max(1, int(maxsize))
+        self._high_priority_log_maxsize = max(1, int(high_priority_log_maxsize))
         self._drop_notice_interval = float(drop_notice_interval)
         self._high: deque[UiEvent] = deque()
+        self._high_priority_log_count = 0
         self._low: deque[UiEvent] = deque()
         self._coalesced: OrderedDict[str, UiEvent] = OrderedDict()
         self._lock = threading.Lock()
@@ -66,7 +70,15 @@ class UiEventQueue:
         kind = item[0]
         with self._lock:
             if self._is_high_priority(item, kind):
+                if kind in self._HIGH_PRIORITY_LOG_KINDS:
+                    if self._high_priority_log_count >= self._high_priority_log_maxsize:
+                        if not self._drop_oldest_high_priority_log():
+                            self._record_drop(kind)
+                            return
+                        self._record_drop(kind)
                 self._high.append(item)
+                if kind in self._HIGH_PRIORITY_LOG_KINDS:
+                    self._high_priority_log_count += 1
                 return
             if kind in self._COALESCE_KINDS:
                 if kind in self._coalesced:
@@ -84,7 +96,10 @@ class UiEventQueue:
     def get_nowait(self) -> UiEvent:
         with self._lock:
             if self._high:
-                return self._high.popleft()
+                item = self._high.popleft()
+                if item[0] in self._HIGH_PRIORITY_LOG_KINDS and self._high_priority_log_count > 0:
+                    self._high_priority_log_count -= 1
+                return item
             if self._coalesced:
                 _, item = self._coalesced.popitem(last=False)
                 return item
@@ -111,10 +126,20 @@ class UiEventQueue:
             parts = [f"{kind}={count}" for kind, count in sorted(self._drop_counts.items())]
             self._drop_counts = {}
             self._last_drop_notice = now
-        return f"[ui] Dropped {total} low-priority log event(s): " + ", ".join(parts)
+        return f"[ui] Dropped {total} queued event(s): " + ", ".join(parts)
 
     def _record_drop(self, kind: str) -> None:
         self._drop_counts[kind] = self._drop_counts.get(kind, 0) + 1
+
+    def _drop_oldest_high_priority_log(self) -> bool:
+        for idx, item in enumerate(self._high):
+            if item[0] not in self._HIGH_PRIORITY_LOG_KINDS:
+                continue
+            del self._high[idx]
+            if self._high_priority_log_count > 0:
+                self._high_priority_log_count -= 1
+            return True
+        return False
 
     def _is_high_priority(self, item: UiEvent, kind: str) -> bool:
         if kind in self._COALESCE_KINDS:

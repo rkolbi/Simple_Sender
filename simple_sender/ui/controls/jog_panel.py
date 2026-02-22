@@ -476,7 +476,7 @@ def _build_position_and_action_controls(app, align):
     app._offline_controls.add(app.btn_unit_toggle)
     apply_tooltip(
         app.btn_unit_toggle,
-        "Toggle modal units (G20/G21). Blue text means report units are tracked ($13).",
+        "Toggle modal units (G20/G21).",
     )
     app._update_unit_toggle_display()
 
