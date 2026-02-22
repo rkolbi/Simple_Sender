@@ -24,7 +24,7 @@ import os
 import queue
 import logging
 from typing import Any, cast
-from tkinter import messagebox
+from tkinter import messagebox, TclError
 
 from .status import (
     _parse_modal_units,
@@ -65,23 +65,117 @@ def _is_jog_source(source: str | None) -> bool:
     return normalized in {"joystick", "jog", "jog_hold", "jog_button"}
 
 
+def _safe_status_update(app: Any, text: str, *, context: str) -> None:
+    try:
+        app.status.config(text=text)
+    except (AttributeError, TclError, RuntimeError) as exc:
+        _log_suppressed(context, exc)
+
+
+def _clear_homing_watchdog(app: Any, context: str) -> None:
+    if not getattr(app, "_homing_in_progress", False):
+        return
+    app._homing_in_progress = False
+    app._homing_state_seen = False
+    try:
+        app.grbl.clear_watchdog_ignore("homing")
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed(context, exc)
+
+
+def _handle_log_rx_event(app: Any, raw: str) -> None:
+    _parse_modal_units(app, raw)
+    _parse_report_units_setting(app, raw)
+    probe_controller = getattr(app, "probe_controller", None)
+    if probe_controller is not None:
+        probe_controller.handle_rx_line(raw)
+    app.settings_controller.handle_line(raw)
+    app.streaming_controller.handle_log_rx(raw)
+
+
+def _handle_manual_error_event(app: Any, msg: str, source: str | None) -> None:
+    raw_msg = str(msg)
+    annotated = annotate_grbl_error(raw_msg)
+    label = str(source).strip() if source else ""
+    prefix = f"GRBL error ({label})" if label else "GRBL error"
+    show_jog_limit_hint = _is_jog_source(label) and (_is_error_15(raw_msg) or _is_error_15(annotated))
+    _clear_homing_watchdog(app, "Failed clearing homing watchdog ignore after manual error")
+    if show_jog_limit_hint:
+        _safe_status_update(app, _JOG_LIMIT_ERROR_HINT, context="Failed to update status for jog limit hint")
+    else:
+        _safe_status_update(app, f"{prefix}: {annotated}", context="Failed to update status for manual error")
+    if show_jog_limit_hint and label.lower().startswith("joystick"):
+        try:
+            if hasattr(app, "joystick_event_status"):
+                app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
+        except (AttributeError, RuntimeError, TclError) as exc:
+            _log_suppressed("Failed to update joystick status hint", exc)
+    try:
+        src_tag = f" ({label})" if label else ""
+        app.streaming_controller.handle_log(f"[ERROR{src_tag}] {annotated}")
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed("Failed to log manual error to console", exc)
+    try:
+        show_grbl_code_popup(app, annotated)
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed("Failed showing GRBL error popup", exc)
+
+
+def _handle_alarm_event(app: Any, message: str) -> None:
+    msg = annotate_grbl_alarm(str(message))
+    _clear_homing_watchdog(app, "Failed clearing homing watchdog ignore after alarm")
+    app._set_alarm_lock(True, msg)
+    app.macro_executor.notify_alarm(msg)
+    app._apply_status_poll_profile()
+    try:
+        show_grbl_code_popup(app, msg)
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed("Failed showing GRBL alarm popup", exc)
+
+
+def _handle_stream_error_event(app: Any, msg: Any, err_idx: Any) -> None:
+    parsed_idx: int | None = None
+    if err_idx is not None:
+        try:
+            parsed_idx = int(cast(int | str, err_idx))
+        except (TypeError, ValueError):
+            parsed_idx = None
+    if parsed_idx is not None and parsed_idx >= 0:
+        app._last_error_index = parsed_idx
+    _safe_status_update(app, f"Stream error: {msg}", context="Failed to update stream error status")
+    try:
+        show_grbl_code_popup(app, cast(str | None, msg))
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed("Failed showing stream error popup", exc)
+
+
+def _handle_stream_pause_reason_event(app: Any, reason: Any) -> None:
+    if not reason:
+        return
+    _safe_status_update(
+        app,
+        f"Paused ({reason})",
+        context="Failed to update pause reason status",
+    )
+
+
 def set_streaming_lock(app: Any, locked: bool):
     state = "disabled" if locked else "normal"
     try:
         app.btn_conn.config(state=state)
-    except Exception as exc:
+    except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update connect button state", exc)
     try:
         app.btn_refresh.config(state=state)
-    except Exception as exc:
+    except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update refresh button state", exc)
     try:
         app.port_combo.config(state="disabled" if locked else "readonly")
-    except Exception as exc:
+    except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update port combo state", exc)
     try:
         app.btn_unit_toggle.config(state=state)
-    except Exception as exc:
+    except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update unit toggle state", exc)
 
 
@@ -161,76 +255,26 @@ def handle_event(app: Any, evt: UiEvent):
             app.streaming_controller.handle_log_tx(message)
             return
         case ("log_rx", raw):
-            raw = cast(str, raw)
-            _parse_modal_units(app, raw)
-            _parse_report_units_setting(app, raw)
-            probe_controller = getattr(app, "probe_controller", None)
-            if probe_controller is not None:
-                probe_controller.handle_rx_line(raw)
-            app.settings_controller.handle_line(raw)
-            app.streaming_controller.handle_log_rx(raw)
+            _handle_log_rx_event(app, cast(str, raw))
             return
         case ("settings_dump_done",):
             try:
                 app.settings_controller.handle_line("ok")
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TclError) as exc:
                 _log_suppressed("Failed to process settings dump completion", exc)
             return
         case ("manual_error", msg, source):
-            raw_msg = cast(str, msg)
-            msg = annotate_grbl_error(raw_msg)
-            label = str(source).strip() if source else ""
-            prefix = f"GRBL error ({label})" if label else "GRBL error"
-            show_jog_limit_hint = _is_jog_source(label) and (_is_error_15(raw_msg) or _is_error_15(msg))
-            if getattr(app, "_homing_in_progress", False):
-                app._homing_in_progress = False
-                app._homing_state_seen = False
-                try:
-                    app.grbl.clear_watchdog_ignore("homing")
-                except Exception as exc:
-                    _log_suppressed("Failed clearing homing watchdog ignore after manual error", exc)
-            try:
-                if show_jog_limit_hint:
-                    app.status.config(text=_JOG_LIMIT_ERROR_HINT)
-                else:
-                    app.status.config(text=f"{prefix}: {msg}")
-            except Exception as exc:
-                _log_suppressed("Failed to update status for manual error", exc)
-            if show_jog_limit_hint and label.lower().startswith("joystick"):
-                try:
-                    if hasattr(app, "joystick_event_status"):
-                        app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
-                except Exception as exc:
-                    _log_suppressed("Failed to update joystick status hint", exc)
-            try:
-                src_tag = f" ({label})" if label else ""
-                app.streaming_controller.handle_log(f"[ERROR{src_tag}] {msg}")
-            except Exception as exc:
-                _log_suppressed("Failed to log manual error to console", exc)
-            try:
-                show_grbl_code_popup(app, msg)
-            except Exception as exc:
-                _log_suppressed("Failed showing GRBL error popup", exc)
+            _handle_manual_error_event(
+                app,
+                cast(str, msg),
+                cast(str | None, source),
+            )
             return
         case ("ready", is_ready):
             handle_ready_event(app, is_ready)
             return
         case ("alarm", msg):
-            msg = annotate_grbl_alarm(cast(str, msg))
-            if getattr(app, "_homing_in_progress", False):
-                app._homing_in_progress = False
-                app._homing_state_seen = False
-                try:
-                    app.grbl.clear_watchdog_ignore("homing")
-                except Exception as exc:
-                    _log_suppressed("Failed clearing homing watchdog ignore after alarm", exc)
-            app._set_alarm_lock(True, msg)
-            app.macro_executor.notify_alarm(msg)
-            app._apply_status_poll_profile()
-            try:
-                show_grbl_code_popup(app, msg)
-            except Exception as exc:
-                _log_suppressed("Failed showing GRBL alarm popup", exc)
+            _handle_alarm_event(app, cast(str, msg))
             return
         case ("status", line):
             handle_status_event(app, cast(str, line))
@@ -248,28 +292,10 @@ def handle_event(app: Any, evt: UiEvent):
             handle_stream_interrupted(app, evt)
             return
         case ("stream_error", msg, err_idx, _err_line, _name):
-            if err_idx is not None:
-                try:
-                    err_idx = int(cast(int | str, err_idx))
-                except Exception:
-                    err_idx = None
-            if err_idx is not None and err_idx >= 0:
-                app._last_error_index = err_idx
-            try:
-                app.status.config(text=f"Stream error: {msg}")
-            except Exception as exc:
-                _log_suppressed("Failed to update stream error status", exc)
-            try:
-                show_grbl_code_popup(app, cast(str | None, msg))
-            except Exception as exc:
-                _log_suppressed("Failed showing stream error popup", exc)
+            _handle_stream_error_event(app, msg, err_idx)
             return
         case ("stream_pause_reason", reason):
-            if reason:
-                try:
-                    app.status.config(text=f"Paused ({reason})")
-                except Exception as exc:
-                    _log_suppressed("Failed to update pause reason status", exc)
+            _handle_stream_pause_reason_event(app, reason)
             return
         case ("gcode_sent", idx, _line):
             app.streaming_controller.handle_gcode_sent(idx)
@@ -310,10 +336,10 @@ def handle_ui_post(app, func, args, kwargs):
 def handle_macro_prompt(app, title, message, choices, cancel_label, result_q):
     try:
         app._show_macro_prompt(title, message, choices, cancel_label, result_q)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, TclError, TypeError) as exc:
         try:
             app.streaming_controller.log(f"[macro] Prompt failed: {exc}")
-        except Exception as log_exc:
+        except (AttributeError, RuntimeError, TclError) as log_exc:
             _log_suppressed("Failed to log macro prompt failure to UI console", log_exc)
         try:
             result_q.put_nowait(cancel_label)
@@ -326,7 +352,7 @@ def handle_gcode_load_progress(app, token, done, total, label):
         return
     try:
         app._set_gcode_loading_progress(done, total, label)
-    except Exception as exc:
+    except (AttributeError, RuntimeError, TclError, TypeError, ValueError) as exc:
         _log_suppressed("Failed to update G-code loading progress", exc)
 
 
@@ -351,7 +377,7 @@ def handle_streaming_validation_prompt(
     )
     try:
         allow = messagebox.askyesno("Validate large file?", msg)
-    except Exception as exc:
+    except (RuntimeError, TclError) as exc:
         _log_suppressed("Failed to show streaming validation prompt", exc)
         allow = False
     try:
@@ -381,7 +407,7 @@ def handle_gcode_loaded_stream(app, evt):
         if cleanup_path and source is not None:
             try:
                 source.close()
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 _log_suppressed("Failed to close stale streaming source", exc)
             try:
                 os.remove(cleanup_path)

@@ -25,7 +25,8 @@ from tkinter import ttk
 from typing import Any, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
-from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO, TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
+from simple_sender.ui.widgets_buttons import StopSignButton, VirtualHoldButton
+from simple_sender.utils.constants import TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
 
 
 def _clamp_tooltip_position(
@@ -52,7 +53,7 @@ def _clamp_tooltip_position(
 def _tooltip_wraplength(widget, *, min_px: int = 240, max_px: int = 700, margin: int = 40) -> int | None:
     try:
         screen_width = int(widget.winfo_screenwidth())
-    except Exception:
+    except (AttributeError, TypeError, ValueError, tk.TclError):
         return None
     usable = max(min_px, screen_width - max(0, margin))
     return max(min_px, min(max_px, usable))
@@ -65,7 +66,7 @@ def _place_tooltip_window(widget, tip: tk.Toplevel, x: int, y: int) -> None:
         height = tip.winfo_height() or tip.winfo_reqheight()
         screen_width = int(widget.winfo_screenwidth())
         screen_height = int(widget.winfo_screenheight())
-    except Exception:
+    except (AttributeError, TypeError, ValueError, tk.TclError):
         tip.wm_geometry(f"+{int(x)}+{int(y)}")
         return
     final_x, final_y = _clamp_tooltip_position(
@@ -120,7 +121,7 @@ class ToolTip:
         if owner is not None:
             try:
                 enabled = bool(owner.tooltip_enabled.get())
-            except Exception:
+            except (AttributeError, TypeError, ValueError, tk.TclError):
                 pass
         if not enabled:
             return
@@ -131,7 +132,7 @@ class ToolTip:
         try:
             x = self.widget.winfo_pointerx() + 16
             y = self.widget.winfo_pointery() + 12
-        except Exception:
+        except tk.TclError:
             x = self.widget.winfo_rootx() + 20
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
         try:
@@ -161,13 +162,13 @@ class ToolTip:
         if self._timeout_after_id is not None:
             try:
                 self.widget.after_cancel(self._timeout_after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._timeout_after_id = None
         owner = _resolve_owner(self.widget, "tooltip_timeout_sec")
         try:
             duration = float(owner.tooltip_timeout_sec.get()) if owner is not None else TOOLTIP_TIMEOUT_DEFAULT
-        except Exception:
+        except (AttributeError, TypeError, ValueError, tk.TclError):
             duration = TOOLTIP_TIMEOUT_DEFAULT
         if duration <= 0:
             return
@@ -176,7 +177,7 @@ class ToolTip:
                 int(duration * 1000),
                 self._hide,
             )
-        except Exception:
+        except tk.TclError:
             self._timeout_after_id = None
 
     def _hide(self, _event=None):
@@ -186,7 +187,7 @@ class ToolTip:
         if self._timeout_after_id is not None:
             try:
                 self.widget.after_cancel(self._timeout_after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._timeout_after_id = None
         if self._tip is not None:
@@ -197,7 +198,7 @@ class ToolTip:
         self.text = text
         try:
             self.widget._tooltip_text = text
-        except Exception:
+        except AttributeError:
             pass
 
 
@@ -218,12 +219,12 @@ class _NotebookTabTooltips:
         self._root = None
         try:
             self._root = notebook.winfo_toplevel()
-        except Exception:
+        except (AttributeError, tk.TclError):
             self._root = notebook
         try:
             self._root.bind("<Motion>", self._on_motion, add="+")
             self._root.bind("<ButtonPress>", self._on_leave, add="+")
-        except Exception:
+        except (AttributeError, tk.TclError):
             notebook.bind("<Motion>", self._on_motion, add="+")
             notebook.bind("<ButtonPress>", self._on_leave, add="+")
         notebook.bind("<<NotebookTabChanged>>", self._on_leave, add="+")
@@ -244,7 +245,7 @@ class _NotebookTabTooltips:
                 return True
             try:
                 current = current.master
-            except Exception:
+            except AttributeError:
                 current = None
         return False
 
@@ -253,7 +254,7 @@ class _NotebookTabTooltips:
         if owner is not None:
             try:
                 return bool(owner.tooltip_enabled.get())
-            except Exception:
+            except (AttributeError, TypeError, ValueError, tk.TclError):
                 return True
         return True
 
@@ -261,13 +262,13 @@ class _NotebookTabTooltips:
         if self._after_id is not None:
             try:
                 self.notebook.after_cancel(self._after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._after_id = None
         if self._poll_after_id is not None:
             try:
                 self.notebook.after_cancel(self._poll_after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._poll_after_id = None
 
@@ -275,13 +276,13 @@ class _NotebookTabTooltips:
         if self._timeout_after_id is not None:
             try:
                 self.notebook.after_cancel(self._timeout_after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._timeout_after_id = None
         owner = _resolve_owner(self.notebook, "tooltip_timeout_sec")
         try:
             duration = float(owner.tooltip_timeout_sec.get()) if owner is not None else TOOLTIP_TIMEOUT_DEFAULT
-        except Exception:
+        except (AttributeError, TypeError, ValueError, tk.TclError):
             duration = TOOLTIP_TIMEOUT_DEFAULT
         if duration <= 0:
             return
@@ -290,7 +291,7 @@ class _NotebookTabTooltips:
                 int(duration * 1000),
                 self._hide_tip,
             )
-        except Exception:
+        except tk.TclError:
             self._timeout_after_id = None
 
     def _show_tip(self, text: str, x_root: int | None, y_root: int | None) -> None:
@@ -306,7 +307,7 @@ class _NotebookTabTooltips:
             if x_root is None or y_root is None:
                 x_root = self.notebook.winfo_pointerx()
                 y_root = self.notebook.winfo_pointery()
-        except Exception:
+        except tk.TclError:
             x_root = y_root = None
         if x_root is None or y_root is None:
             return
@@ -350,12 +351,12 @@ class _NotebookTabTooltips:
         widget = None
         try:
             widget = self.notebook.winfo_containing(x_root, y_root)
-        except Exception:
+        except tk.TclError:
             widget = None
         if widget is None and self._root is not None:
             try:
                 widget = self._root.winfo_containing(x_root, y_root)
-            except Exception:
+            except tk.TclError:
                 widget = None
         if widget is None:
             return False
@@ -368,12 +369,12 @@ class _NotebookTabTooltips:
         try:
             nx = self.notebook.winfo_rootx()
             ny = self.notebook.winfo_rooty()
-        except Exception:
+        except tk.TclError:
             return None
         for tab_id in tabs:
             try:
                 bbox = self.notebook.bbox(tab_id)
-            except Exception:
+            except tk.TclError:
                 bbox = None
             if not bbox:
                 continue
@@ -390,7 +391,7 @@ class _NotebookTabTooltips:
             idx = int(self.notebook.index(f"@{rx},{ry}"))
             if 0 <= idx < len(tabs):
                 return tabs[idx]
-        except Exception:
+        except (tk.TclError, TypeError, ValueError):
             pass
         return None
 
@@ -404,13 +405,13 @@ class _NotebookTabTooltips:
         if self._timeout_after_id is not None:
             try:
                 self.notebook.after_cancel(self._timeout_after_id)
-            except Exception:
+            except tk.TclError:
                 pass
             self._timeout_after_id = None
         if self._tip is not None:
             try:
                 self._tip.destroy()
-            except Exception:
+            except tk.TclError:
                 pass
             self._tip = None
 
@@ -422,7 +423,7 @@ class _NotebookTabTooltips:
             try:
                 x_root = self.notebook.winfo_pointerx()
                 y_root = self.notebook.winfo_pointery()
-            except Exception:
+            except tk.TclError:
                 return
         if x_root is None or y_root is None:
             if self._active_tab is not None:
@@ -448,7 +449,7 @@ class _NotebookTabTooltips:
         self._cancel_pending()
         try:
             self._after_id = self.notebook.after(TOOLTIP_DELAY_MS, self._show_pending)
-        except Exception:
+        except tk.TclError:
             self._after_id = None
 
     def _on_motion(self, event) -> None:
@@ -459,7 +460,7 @@ class _NotebookTabTooltips:
             return
         try:
             self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
-        except Exception:
+        except tk.TclError:
             self._poll_after_id = None
 
     def _poll(self) -> None:
@@ -467,12 +468,12 @@ class _NotebookTabTooltips:
         try:
             if not self.notebook.winfo_exists():
                 return
-        except Exception:
+        except tk.TclError:
             return
         self._process_hover()
         try:
             self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
-        except Exception:
+        except tk.TclError:
             self._poll_after_id = None
 
 
@@ -480,7 +481,7 @@ def _resolve_widget_bg(widget):
     if widget:
         try:
             bg = widget.cget("background")
-        except Exception:
+        except (AttributeError, tk.TclError):
             bg = ""
         if bg:
             return bg
@@ -513,150 +514,9 @@ def _resolve_widget_bg(widget):
             bg = root.cget("background")
             if bg:
                 return bg
-        except Exception:
+        except (AttributeError, tk.TclError):
             pass
     return "#f0f0f0"
-
-
-class StopSignButton(tk.Canvas):
-    def __init__(
-        self,
-        master,
-        text: str,
-        fill: str,
-        text_color: str,
-        command=None,
-        size: int = 60,
-        outline: str = "#2f2f2f",
-        **kwargs,
-    ):
-        bg = kwargs.pop("bg", None)
-        if bg is None:
-            bg = kwargs.pop("background", None)
-        if not bg:
-            bg = _resolve_widget_bg(master)
-        super().__init__(
-            master,
-            width=size,
-            height=size,
-            highlightthickness=0,
-            bd=0,
-            bg=bg,
-            **kwargs,
-        )
-        self._default_bg = bg
-        self._text = text
-        self._fill = fill
-        self._text_color = text_color
-        self._outline = outline
-        self._command = command
-        self._size = size
-        self._state = "normal"
-        self._poly: int | None = None
-        self._text_id: int | None = None
-        self._disabled_fill = self._blend_color(fill, "#f0f0f0", 0.55)
-        self._disabled_text = self._blend_color(text_color, "#808080", 0.55)
-        self._draw_octagon()
-        self._apply_state()
-        self._log_button = True
-        self.bind("<Button-1>", self._on_click, add="+")
-
-    def _blend_color(self, base: str, target: str, factor: float) -> str:
-        base = base.lstrip("#")
-        target = target.lstrip("#")
-        if len(base) != 6 or len(target) != 6:
-            return base if base.startswith("#") else f"#{base}"
-        br, bg, bb = int(base[0:2], 16), int(base[2:4], 16), int(base[4:6], 16)
-        tr, tg, tb = int(target[0:2], 16), int(target[2:4], 16), int(target[4:6], 16)
-        r = int(br + (tr - br) * factor)
-        g = int(bg + (tg - bg) * factor)
-        b = int(bb + (tb - bb) * factor)
-        return f"#{r:02x}{g:02x}{b:02x}"
-
-    def refresh_background(self):
-        bg = _resolve_widget_bg(self.master)
-        self._default_bg = bg
-        try:
-            self.config(bg=bg)
-        except Exception:
-            pass
-
-    def _draw_octagon(self):
-        size = self._size
-        pad = 2
-        s = size - pad * 2
-        cut = s * STOP_SIGN_CUT_RATIO
-        x0, y0 = pad, pad
-        x1, y1 = pad + s, pad + s
-        points = [
-            x0 + cut, y0,
-            x1 - cut, y0,
-            x1, y0 + cut,
-            x1, y1 - cut,
-            x1 - cut, y1,
-            x0 + cut, y1,
-            x0, y1 - cut,
-            x0, y0 + cut,
-        ]
-        self._poly = self.create_polygon(points, fill=self._fill, outline=self._outline, width=1)
-        self._text_id = self.create_text(
-            size / 2,
-            size / 2,
-            text=self._text,
-            fill=self._text_color,
-            justify="center",
-            font=("TkDefaultFont", 9, "bold"),
-        )
-
-    def _apply_state(self):
-        is_disabled = self._state == "disabled"
-        fill = self._disabled_fill if is_disabled else self._fill
-        text_color = self._disabled_text if is_disabled else self._text_color
-        if self._poly is not None:
-            self.itemconfig(self._poly, fill=fill)
-        if self._text_id is not None:
-            self.itemconfig(self._text_id, fill=text_color)
-        self.config(cursor="arrow" if is_disabled else "hand2")
-
-    def _on_click(self, event: Any | None = None) -> None:
-        if self._state == "disabled":
-            return
-        if callable(self._command):
-            self._command()
-
-    def configure(self, cnf: Any = None, **kwargs: Any) -> Any:
-        config_options: dict[str, Any] = {}
-        if cnf:
-            if isinstance(cnf, dict):
-                config_options.update(cnf)
-            else:
-                for item in cnf:
-                    if isinstance(item, tuple) and len(item) == 2:
-                        config_options[item[0]] = item[1]
-        config_options.update(kwargs)
-        if "text" in config_options:
-            self._text = config_options.pop("text")
-            if self._text_id is not None:
-                self.itemconfig(self._text_id, text=self._text)
-        if "command" in config_options:
-            self._command = config_options.pop("command")
-        if "state" in config_options:
-            self._state = config_options.pop("state")
-            self._apply_state()
-        return super().configure(**config_options)
-
-    def config(self, cnf: Any = None, **kwargs: Any) -> Any:
-        return self.configure(cnf, **kwargs)
-
-    def cget(self, key: str) -> Any:
-        if key == "text":
-            return self._text
-        if key == "state":
-            return self._state
-        return super().cget(key)
-
-    def invoke(self):
-        self._on_click()
 
 
 def apply_tooltip(widget, text: str):
@@ -664,7 +524,7 @@ def apply_tooltip(widget, text: str):
         return
     try:
         widget._tooltip_text = text
-    except Exception:
+    except AttributeError:
         pass
     existing = getattr(widget, "_tooltip", None)
     if isinstance(existing, ToolTip):
@@ -673,7 +533,7 @@ def apply_tooltip(widget, text: str):
     tip = ToolTip(widget, text)
     try:
         widget._tooltip = tip
-    except Exception:
+    except AttributeError:
         pass
     return tip
 
@@ -686,7 +546,7 @@ def set_tab_tooltip(notebook, tab, text: str):
         handler = _NotebookTabTooltips(notebook)
         try:
             notebook._tab_tooltip_handler = handler
-        except Exception:
+        except AttributeError:
             pass
     handler.set_tab_tooltip(tab, text)
 
@@ -705,12 +565,20 @@ def attach_numeric_keypad(
         "allow_empty": bool(allow_empty),
         "title": title or "Enter value",
     }
+    already_bound = bool(getattr(entry, "_numeric_keypad_bound", False))
+    if already_bound and getattr(entry, "_numeric_keypad_spec", None) == spec:
+        return entry
     try:
         entry._numeric_keypad_spec = spec
-    except Exception:
+    except (AttributeError, tk.TclError):
         return entry
-    entry.bind("<Button-1>", _open_numeric_keypad, add="+")
-    entry.bind("<FocusIn>", _open_numeric_keypad_from_focus, add="+")
+    if not already_bound:
+        entry.bind("<Button-1>", _open_numeric_keypad, add="+")
+        entry.bind("<FocusIn>", _open_numeric_keypad_from_focus, add="+")
+        try:
+            entry._numeric_keypad_bound = True
+        except (AttributeError, tk.TclError):
+            pass
     return entry
 
 
@@ -722,14 +590,14 @@ def _open_numeric_keypad(event):
     try:
         if not entry.winfo_viewable():
             return
-    except Exception:
+    except tk.TclError:
         pass
     owner = _resolve_owner(entry, "numeric_keypad_enabled")
     if owner is not None:
         try:
             if not bool(owner.numeric_keypad_enabled.get()):
                 return
-        except Exception:
+        except (AttributeError, TypeError, ValueError, tk.TclError):
             pass
     if _widget_disabled(entry):
         return
@@ -748,7 +616,7 @@ def _open_numeric_keypad_from_focus(event):
         x_root = entry.winfo_pointerx()
         y_root = entry.winfo_pointery()
         hovered = entry.winfo_containing(x_root, y_root) == entry
-    except Exception:
+    except tk.TclError:
         hovered = False
     if not hovered:
         return
@@ -758,7 +626,7 @@ def _open_numeric_keypad_from_focus(event):
 def _center_modal(window, parent):
     try:
         window.update_idletasks()
-    except Exception:
+    except tk.TclError:
         return
     w = window.winfo_width() or window.winfo_reqwidth()
     h = window.winfo_height() or window.winfo_reqheight()
@@ -772,7 +640,7 @@ def _center_modal(window, parent):
             py = parent.winfo_rooty()
             x = px + (pw - w) // 2
             y = py + (ph - h) // 2
-        except Exception:
+        except tk.TclError:
             parent = None
     if parent is None:
         try:
@@ -780,7 +648,7 @@ def _center_modal(window, parent):
             sh = window.winfo_screenheight()
             x = (sw - w) // 2
             y = (sh - h) // 2
-        except Exception:
+        except tk.TclError:
             x = y = 0
     window.geometry(f"+{max(0, x)}+{max(0, y)}")
 
@@ -792,12 +660,12 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             if dlg.winfo_exists():
                 dlg.lift()
                 return
-        except Exception:
+        except tk.TclError:
             pass
     parent = None
     try:
         parent = entry.winfo_toplevel()
-    except Exception:
+    except tk.TclError:
         parent = entry
     original_value = entry.get()
     current_value = original_value
@@ -807,12 +675,12 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
     dlg.transient(parent)
     try:
         dlg.lift()
-    except Exception:
+    except tk.TclError:
         pass
     dlg.resizable(False, False)
     try:
         entry._numeric_keypad_dialog = dlg
-    except Exception:
+    except AttributeError:
         pass
 
     frame = ttk.Frame(dlg, padding=12)
@@ -880,15 +748,15 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             entry.delete(0, "end")
             if new_value:
                 entry.insert(0, new_value)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             entry.event_generate("<Return>")
-        except Exception:
+        except tk.TclError:
             pass
         try:
             entry.event_generate("<FocusOut>")
-        except Exception:
+        except tk.TclError:
             pass
         _close_dialog()
 
@@ -898,15 +766,15 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
     def _close_dialog():
         try:
             dlg.grab_release()
-        except Exception:
+        except tk.TclError:
             pass
         try:
             dlg.destroy()
-        except Exception:
+        except tk.TclError:
             pass
         try:
             entry._numeric_keypad_dialog = None
-        except Exception:
+        except AttributeError:
             pass
 
     def _make_button(text: str, command, row: int, col: int, *, colspan: int = 1):
@@ -963,39 +831,39 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
         entry.focus_set()
         entry.selection_range(0, "end")
         entry.icursor("end")
-    except Exception:
+    except tk.TclError:
         pass
     dlg.protocol("WM_DELETE_WINDOW", _cancel)
     _center_modal(dlg, parent)
     try:
         dlg.update_idletasks()
         dlg.wait_visibility()
-    except Exception:
+    except tk.TclError:
         pass
     try:
         dlg.grab_set()
-    except Exception:
+    except tk.TclError:
         def _retry_grab():
             try:
                 dlg.grab_set()
-            except Exception:
+            except tk.TclError:
                 pass
         try:
             dlg.after(0, _retry_grab)
-        except Exception:
+        except tk.TclError:
             pass
 
 
 def _widget_state(widget) -> str:
     try:
         return str(widget.cget("state")).lower()
-    except Exception:
+    except (AttributeError, tk.TclError):
         pass
     try:
         state = widget.state()
         if isinstance(state, (list, tuple, set)):
             return "disabled" if "disabled" in state else "normal"
-    except Exception:
+    except (AttributeError, tk.TclError):
         pass
     return "normal"
 
@@ -1007,19 +875,16 @@ def _widget_disabled(widget) -> bool:
 def _resolve_owner(widget, attr: str):
     try:
         owner = widget.winfo_toplevel()
-    except Exception:
+    except (AttributeError, tk.TclError):
         owner = widget
     for _ in range(8):
         if owner is None:
             break
-        try:
-            if hasattr(owner, attr):
-                return owner
-        except Exception:
-            pass
+        if hasattr(owner, attr):
+            return owner
         try:
             owner = owner.master
-        except Exception:
+        except AttributeError:
             owner = None
     return None
 
@@ -1056,12 +921,12 @@ def _clean_label(text: str) -> str:
 def _default_tooltip_text(widget) -> str | None:
     try:
         cls = widget.winfo_class()
-    except Exception:
+    except (AttributeError, tk.TclError):
         cls = ""
     label = ""
     try:
         label = widget.cget("text") or ""
-    except Exception:
+    except (AttributeError, tk.TclError):
         label = getattr(widget, "_text", "") or getattr(widget, "_label", "") or ""
     label = _clean_label(str(label))
     if cls in ("TButton", "Button"):
@@ -1086,15 +951,44 @@ def _default_tooltip_text(widget) -> str | None:
 def _walk_widgets(root):
     try:
         children = root.winfo_children()
-    except Exception:
+    except (AttributeError, tk.TclError):
         return
     for child in children:
         yield child
         yield from _walk_widgets(child)
 
 
+_TOOLTIP_DEFAULT_CLASSES = {
+    "TButton",
+    "Button",
+    "TCheckbutton",
+    "TRadiobutton",
+    "TEntry",
+    "Entry",
+    "TSpinbox",
+    "Spinbox",
+    "TCombobox",
+    "TScale",
+    "Scale",
+    "Text",
+    "Treeview",
+}
+
+
+def _is_tooltip_candidate(widget) -> bool:
+    if getattr(widget, "_tooltip_text", None):
+        return True
+    try:
+        widget_cls = widget.winfo_class()
+    except (AttributeError, tk.TclError):
+        return False
+    return widget_cls in _TOOLTIP_DEFAULT_CLASSES
+
+
 def ensure_tooltips(app):
     for widget in _walk_widgets(app):
+        if not _is_tooltip_candidate(widget):
+            continue
         existing = getattr(widget, "_tooltip", None)
         if existing:
             continue
@@ -1110,37 +1004,14 @@ def ensure_tooltips(app):
 def attach_log_gcode(widget, gcode_or_func):
     try:
         widget._log_gcode_get = gcode_or_func
-    except Exception:
+    except AttributeError:
         pass
 
 
 def set_kb_id(widget, kb_id: str):
     try:
         widget._kb_id = kb_id
-    except Exception:
+    except AttributeError:
         pass
     return widget
 
-
-class VirtualHoldButton:
-    def __init__(self, label: str, kb_id: str, axis: str, direction: int):
-        self._text = label
-        self._kb_id = kb_id
-        self._hold_axis = axis
-        self._hold_direction = direction
-        self._tooltip_text = ""
-
-    def cget(self, key: str):
-        if key == "text":
-            return self._text
-        if key == "state":
-            return "normal"
-        if key == "command":
-            return None
-        raise KeyError(key)
-
-    def winfo_name(self):
-        return f"virtual_{self._kb_id}"
-
-    def winfo_class(self):
-        return "VirtualHoldButton"

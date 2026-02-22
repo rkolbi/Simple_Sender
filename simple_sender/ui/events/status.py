@@ -27,6 +27,7 @@ from typing import cast
 
 from simple_sender.ui.dro import convert_units, format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -187,14 +188,14 @@ def _parse_status_fields(raw: str) -> _StatusFields:
                 feed_str, spindle_str = part[3:].split(",", 1)
                 fields.feed = float(feed_str)
                 fields.spindle = float(spindle_str)
-            except Exception as exc:
+            except ValueError as exc:
                 _log_suppressed("Failed parsing FS field from status line", exc)
         elif part.startswith("Bf:"):
             try:
                 planner_str, rx_str = part[3:].split(",", 1)
                 fields.planner = int(planner_str)
                 fields.rxbytes = int(rx_str)
-            except Exception as exc:
+            except ValueError as exc:
                 _log_suppressed("Failed parsing Bf field from status line", exc)
         elif part.startswith("WCO:"):
             fields.wco = part[4:]
@@ -303,41 +304,19 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
         except Exception as exc:
             _log_suppressed("Failed notifying deferred stream completion", exc)
         try:
-            set_run_resume_from(app, job_controls_ready(app))
             app.btn_pause.config(state="disabled")
             app.btn_resume.config(state="disabled")
         except Exception as exc:
-            _log_suppressed("Failed finalizing run/pause/resume controls after deferred completion", exc)
+            _log_suppressed("Failed finalizing pause/resume controls after deferred completion", exc)
         try:
-            app._set_manual_controls_enabled(
-                app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
+            restore_controls_after_stream(
+                app,
+                job_ready_hook=job_controls_ready,
+                set_run_resume_hook=set_run_resume_from,
             )
-            app._set_streaming_lock(False)
         except Exception as exc:
             _log_suppressed("Failed finalizing manual controls after deferred completion", exc)
-        try:
-            app.settings_controller.set_streaming_lock(False)
-        except Exception:
-            pass
-        try:
-            app.toolpath_panel.set_streaming(False)
-        except Exception:
-            pass
-        if (
-            getattr(app, "_pending_settings_refresh", False)
-            and app._grbl_ready
-            and not app._alarm_locked
-            and not app.grbl.is_streaming()
-        ):
-            app._pending_settings_refresh = False
-            app._request_settings_dump()
-        if (
-            app._toolpath_reparse_deferred
-            and app._last_gcode_lines
-            and not getattr(app, "_gcode_streaming_mode", False)
-        ):
-            app._toolpath_reparse_deferred = False
-            app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
+        apply_stream_busy_state(app, False, log_hook=_log_suppressed)
         try:
             app._apply_status_poll_profile()
         except Exception as exc:
@@ -346,7 +325,7 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
     try:
         if int(app.progress_pct.get()) >= 100:
             app.progress_pct.set(99)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
 
 
@@ -356,9 +335,31 @@ def _parse_xyz_triplet(text: str) -> list[float] | None:
         return None
     try:
         return [float(parts[0]), float(parts[1]), float(parts[2])]
-    except Exception as exc:
+    except ValueError as exc:
         _log_suppressed("Failed parsing XYZ triplet", exc)
         return None
+
+
+def _set_var_if_changed(var, value: str) -> bool:
+    try:
+        current = var.get()
+    except Exception as exc:
+        _log_suppressed("Failed reading UI variable value", exc)
+        current = None
+    if current == value:
+        return False
+    try:
+        var.set(value)
+    except Exception as exc:
+        _log_suppressed("Failed writing UI variable value", exc)
+        return False
+    return True
+
+
+def _xyz_tuple_changed(previous: tuple[float, float, float] | None, current: tuple[float, float, float]) -> bool:
+    if not previous or len(previous) < 3:
+        return True
+    return any(abs(float(previous[idx]) - float(current[idx])) > 1e-9 for idx in range(3))
 
 
 def _flash_wpos_labels(app) -> None:
@@ -428,6 +429,7 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
     def to_modal(value: float) -> float:
         return cast(float, convert_units(value, report_units, modal_units))
 
+    macro_updates: dict[str, object] = {}
     wpos_calc = None
     mpos_calc = None
     if mpos_vals and wpos_vals is None and wco_vals:
@@ -444,78 +446,99 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
         ]
 
     if mpos_vals:
-        try:
-            app._mpos_raw = tuple(mpos_vals)
-            app.mpos_x.set(format_dro_value(mpos_vals[0], report_units, modal_units))
-            app.mpos_y.set(format_dro_value(mpos_vals[1], report_units, modal_units))
-            app.mpos_z.set(format_dro_value(mpos_vals[2], report_units, modal_units))
-            with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["mx"] = to_modal(mpos_vals[0])
-                macro_vars["my"] = to_modal(mpos_vals[1])
-                macro_vars["mz"] = to_modal(mpos_vals[2])
-        except Exception as exc:
-            _log_suppressed("Failed updating machine-position DRO values", exc)
+        mpos_tuple = (mpos_vals[0], mpos_vals[1], mpos_vals[2])
+        mpos_changed = _xyz_tuple_changed(getattr(app, "_mpos_raw", None), mpos_tuple)
+        app._mpos_raw = mpos_tuple
+        if mpos_changed:
+            try:
+                mpos_x = format_dro_value(mpos_vals[0], report_units, modal_units)
+                mpos_y = format_dro_value(mpos_vals[1], report_units, modal_units)
+                mpos_z = format_dro_value(mpos_vals[2], report_units, modal_units)
+                _set_var_if_changed(app.mpos_x, mpos_x)
+                _set_var_if_changed(app.mpos_y, mpos_y)
+                _set_var_if_changed(app.mpos_z, mpos_z)
+            except Exception as exc:
+                _log_suppressed("Failed updating machine-position DRO values", exc)
+        macro_updates["mx"] = to_modal(mpos_vals[0])
+        macro_updates["my"] = to_modal(mpos_vals[1])
+        macro_updates["mz"] = to_modal(mpos_vals[2])
     elif mpos_calc:
-        try:
-            app.mpos_x.set(format_dro_value(mpos_calc[0], report_units, modal_units))
-            app.mpos_y.set(format_dro_value(mpos_calc[1], report_units, modal_units))
-            app.mpos_z.set(format_dro_value(mpos_calc[2], report_units, modal_units))
-            with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["mx"] = to_modal(mpos_calc[0])
-                macro_vars["my"] = to_modal(mpos_calc[1])
-                macro_vars["mz"] = to_modal(mpos_calc[2])
-        except Exception as exc:
-            _log_suppressed("Failed updating computed machine-position DRO values", exc)
+        mpos_calc_tuple = (mpos_calc[0], mpos_calc[1], mpos_calc[2])
+        mpos_changed = _xyz_tuple_changed(getattr(app, "_mpos_raw", None), mpos_calc_tuple)
+        app._mpos_raw = mpos_calc_tuple
+        if mpos_changed:
+            try:
+                mpos_x = format_dro_value(mpos_calc[0], report_units, modal_units)
+                mpos_y = format_dro_value(mpos_calc[1], report_units, modal_units)
+                mpos_z = format_dro_value(mpos_calc[2], report_units, modal_units)
+                _set_var_if_changed(app.mpos_x, mpos_x)
+                _set_var_if_changed(app.mpos_y, mpos_y)
+                _set_var_if_changed(app.mpos_z, mpos_z)
+            except Exception as exc:
+                _log_suppressed("Failed updating computed machine-position DRO values", exc)
+        macro_updates["mx"] = to_modal(mpos_calc[0])
+        macro_updates["my"] = to_modal(mpos_calc[1])
+        macro_updates["mz"] = to_modal(mpos_calc[2])
 
     if wpos_vals:
-        try:
-            app._wpos_raw = tuple(wpos_vals)
-            app.wpos_x.set(format_dro_value(wpos_vals[0], report_units, modal_units))
-            app.wpos_y.set(format_dro_value(wpos_vals[1], report_units, modal_units))
-            app.wpos_z.set(format_dro_value(wpos_vals[2], report_units, modal_units))
-            with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["wx"] = to_modal(wpos_vals[0])
-                macro_vars["wy"] = to_modal(wpos_vals[1])
-                macro_vars["wz"] = to_modal(wpos_vals[2])
+        wpos_tuple = (wpos_vals[0], wpos_vals[1], wpos_vals[2])
+        wpos_changed = _xyz_tuple_changed(getattr(app, "_wpos_raw", None), wpos_tuple)
+        app._wpos_raw = wpos_tuple
+        if wpos_changed:
             try:
-                app.toolpath_panel.set_position(
-                    to_mm(wpos_vals[0]),
-                    to_mm(wpos_vals[1]),
-                    to_mm(wpos_vals[2]),
-                )
+                wpos_x = format_dro_value(wpos_vals[0], report_units, modal_units)
+                wpos_y = format_dro_value(wpos_vals[1], report_units, modal_units)
+                wpos_z = format_dro_value(wpos_vals[2], report_units, modal_units)
+                _set_var_if_changed(app.wpos_x, wpos_x)
+                _set_var_if_changed(app.wpos_y, wpos_y)
+                _set_var_if_changed(app.wpos_z, wpos_z)
+                try:
+                    app.toolpath_panel.set_position(
+                        to_mm(wpos_vals[0]),
+                        to_mm(wpos_vals[1]),
+                        to_mm(wpos_vals[2]),
+                    )
+                except Exception as exc:
+                    _log_suppressed("Failed updating toolpath position from WPos", exc)
             except Exception as exc:
-                _log_suppressed("Failed updating toolpath position from WPos", exc)
-        except Exception as exc:
-            _log_suppressed("Failed updating WPos DRO values", exc)
-        _flash_wpos_labels(app)
+                _log_suppressed("Failed updating WPos DRO values", exc)
+        macro_updates["wx"] = to_modal(wpos_vals[0])
+        macro_updates["wy"] = to_modal(wpos_vals[1])
+        macro_updates["wz"] = to_modal(wpos_vals[2])
+        if wpos_changed:
+            _flash_wpos_labels(app)
     elif wpos_calc:
-        try:
-            app._wpos_raw = tuple(wpos_calc)
-            app.wpos_x.set(format_dro_value(wpos_calc[0], report_units, modal_units))
-            app.wpos_y.set(format_dro_value(wpos_calc[1], report_units, modal_units))
-            app.wpos_z.set(format_dro_value(wpos_calc[2], report_units, modal_units))
-            with app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["wx"] = to_modal(wpos_calc[0])
-                macro_vars["wy"] = to_modal(wpos_calc[1])
-                macro_vars["wz"] = to_modal(wpos_calc[2])
+        wpos_calc_tuple = (wpos_calc[0], wpos_calc[1], wpos_calc[2])
+        wpos_changed = _xyz_tuple_changed(getattr(app, "_wpos_raw", None), wpos_calc_tuple)
+        app._wpos_raw = wpos_calc_tuple
+        if wpos_changed:
             try:
-                app.toolpath_panel.set_position(
-                    to_mm(wpos_calc[0]),
-                    to_mm(wpos_calc[1]),
-                    to_mm(wpos_calc[2]),
-                )
+                wpos_x = format_dro_value(wpos_calc[0], report_units, modal_units)
+                wpos_y = format_dro_value(wpos_calc[1], report_units, modal_units)
+                wpos_z = format_dro_value(wpos_calc[2], report_units, modal_units)
+                _set_var_if_changed(app.wpos_x, wpos_x)
+                _set_var_if_changed(app.wpos_y, wpos_y)
+                _set_var_if_changed(app.wpos_z, wpos_z)
+                try:
+                    app.toolpath_panel.set_position(
+                        to_mm(wpos_calc[0]),
+                        to_mm(wpos_calc[1]),
+                        to_mm(wpos_calc[2]),
+                    )
+                except Exception as exc:
+                    _log_suppressed("Failed updating toolpath position from computed WPos", exc)
             except Exception as exc:
-                _log_suppressed("Failed updating toolpath position from computed WPos", exc)
-        except Exception as exc:
-            _log_suppressed("Failed updating computed WPos DRO values", exc)
+                _log_suppressed("Failed updating computed WPos DRO values", exc)
+        macro_updates["wx"] = to_modal(wpos_calc[0])
+        macro_updates["wy"] = to_modal(wpos_calc[1])
+        macro_updates["wz"] = to_modal(wpos_calc[2])
 
     if fields.feed is not None:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["curfeed"] = fields.feed
+        macro_updates["curfeed"] = fields.feed
     if fields.spindle is not None:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["curspindle"] = fields.spindle
+        macro_updates["curspindle"] = fields.spindle
     if fields.planner is not None:
+        macro_updates["planner"] = fields.planner
         try:
             planner_available = int(fields.planner)
             if planner_available < 0:
@@ -529,35 +552,22 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
             app._planner_blocks_available = min(planner_available, planner_capacity)
         except Exception as exc:
             _log_suppressed("Failed tracking planner availability from status line", exc)
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["planner"] = fields.planner
     if fields.rxbytes is not None:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["rxbytes"] = fields.rxbytes
+        macro_updates["rxbytes"] = fields.rxbytes
     if wco_vals:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["wcox"] = to_modal(wco_vals[0])
-            macro_vars["wcoy"] = to_modal(wco_vals[1])
-            macro_vars["wcoz"] = to_modal(wco_vals[2])
+        macro_updates["wcox"] = to_modal(wco_vals[0])
+        macro_updates["wcoy"] = to_modal(wco_vals[1])
+        macro_updates["wcoz"] = to_modal(wco_vals[2])
     if fields.pins is not None:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["pins"] = fields.pins
+        macro_updates["pins"] = fields.pins
+    ov_values: tuple[int, int, int] | None = None
     if fields.ov:
         feed_val = spindle_val = None
         try:
             ov_parts = [int(float(v)) for v in fields.ov.split(",")]
             if len(ov_parts) >= 3:
                 feed_val, spindle_val = ov_parts[0], ov_parts[2]
-                with app.macro_executor.macro_vars() as macro_vars:
-                    changed = (
-                        macro_vars.get("OvFeed") != ov_parts[0]
-                        or macro_vars.get("OvRapid") != ov_parts[1]
-                        or macro_vars.get("OvSpindle") != ov_parts[2]
-                    )
-                    macro_vars["OvFeed"] = ov_parts[0]
-                    macro_vars["OvRapid"] = ov_parts[1]
-                    macro_vars["OvSpindle"] = ov_parts[2]
-                    macro_vars["_OvChanged"] = bool(changed)
+                ov_values = (ov_parts[0], ov_parts[1], ov_parts[2])
         except Exception as exc:
             _log_suppressed("Failed parsing override values from status line", exc)
         else:
@@ -568,8 +578,24 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
             app._refresh_override_info()
     pin_state = {char for char in (fields.pins or "").upper() if char.isalpha()}
     endstop_active = bool(pin_state & {"X", "Y", "Z"})
-    with app.macro_executor.macro_vars() as macro_vars:
-        prb_value = macro_vars.get("PRB")
+    prb_value = None
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            if ov_values is not None:
+                changed = (
+                    macro_vars.get("OvFeed") != ov_values[0]
+                    or macro_vars.get("OvRapid") != ov_values[1]
+                    or macro_vars.get("OvSpindle") != ov_values[2]
+                )
+                macro_updates["OvFeed"] = ov_values[0]
+                macro_updates["OvRapid"] = ov_values[1]
+                macro_updates["OvSpindle"] = ov_values[2]
+                macro_updates["_OvChanged"] = bool(changed)
+            if macro_updates:
+                macro_vars.update(macro_updates)
+            prb_value = macro_vars.get("PRB")
+    except Exception as exc:
+        _log_suppressed("Failed updating macro status values", exc)
     probe_active = bool(pin_state & {"P"}) or bool(prb_value)
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
     app._update_led_panel(endstop_active, probe_active, hold_active)

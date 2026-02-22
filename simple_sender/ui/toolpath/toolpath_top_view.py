@@ -66,6 +66,11 @@ class TopViewPanel(ttk.Frame):
         self._position_item: Any | None = None
         self._overlay_grid: ProbeGrid | None = None
         self._status_message: str | None = None
+        self._scene_revision = 0
+        self._last_render_signature: tuple[int, int, int] | None = None
+
+    def _invalidate_scene(self) -> None:
+        self._scene_revision += 1
 
     def set_lines(
         self,
@@ -80,15 +85,17 @@ class TopViewPanel(ttk.Frame):
         if arc_step_rad is not None:
             try:
                 self._arc_step_rad = max(1e-6, float(arc_step_rad))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         if not lines:
             self.segments = []
             self.bounds = None
             self._status_message = None
+            self._invalidate_scene()
             self._schedule_render()
             return
         self._status_message = "Generating top view..."
+        self._invalidate_scene()
         self._schedule_render()
 
         def worker(parse_lines=lines, parse_token=token, max_segs=max_segments) -> None:
@@ -122,6 +129,7 @@ class TopViewPanel(ttk.Frame):
             self.segments = list(segments) if segments else []
             self.bounds = bounds
             self._status_message = None
+            self._invalidate_scene()
             self._schedule_render()
             return
         self._parse_token += 1
@@ -129,6 +137,7 @@ class TopViewPanel(ttk.Frame):
         self.segments = list(segments) if segments else []
         self.bounds = bounds
         self._status_message = None
+        self._invalidate_scene()
         self._schedule_render()
 
     def _apply_parse_result(self, token: int, result: Any) -> None:
@@ -137,6 +146,7 @@ class TopViewPanel(ttk.Frame):
         self.segments = result.segments
         self.bounds = result.bounds
         self._status_message = None
+        self._invalidate_scene()
         self._schedule_render()
 
     def clear(self) -> None:
@@ -148,15 +158,18 @@ class TopViewPanel(ttk.Frame):
         self.position = None
         self._overlay_grid = None
         self._status_message = None
+        self._invalidate_scene()
         self._schedule_render()
 
     def set_autolevel_grid(self, grid: ProbeGrid | None) -> None:
         self._overlay_grid = grid
+        self._invalidate_scene()
         if self._visible:
             self._schedule_render()
 
     def set_job_name(self, name: str | None) -> None:
         self._job_name = str(name) if name else ""
+        self._invalidate_scene()
         self._schedule_render()
 
     def set_visible(self, visible: bool) -> None:
@@ -203,9 +216,14 @@ class TopViewPanel(ttk.Frame):
         h = self.canvas.winfo_height()
         if w <= 1 or h <= 1:
             return
+        signature = (w, h, self._scene_revision)
+        if signature == self._last_render_signature:
+            self._update_position_marker()
+            return
         self.canvas.delete("all")
         self._position_item = None
         self._render_params = None
+        self._last_render_signature = signature
         if not self.segments:
             msg = self._status_message or "No G-code loaded"
             if self._job_name:
@@ -350,7 +368,7 @@ class TopViewPanel(ttk.Frame):
             if self._position_item is not None:
                 try:
                     self.canvas.delete(self._position_item)
-                except Exception:
+                except tk.TclError:
                     pass
                 self._position_item = None
             return

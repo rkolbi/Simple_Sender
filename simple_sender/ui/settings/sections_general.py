@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import queue
 import subprocess
 import sys
 import tkinter as tk
@@ -154,7 +155,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     def _apply_scale_preset(value: float) -> None:
         try:
             app.ui_scale.set(value)
-        except Exception:
+        except (AttributeError, tk.TclError, TypeError, ValueError):
             pass
         on_ui_scale_change()
     apply_tooltip(
@@ -187,12 +188,12 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     def _sync_tooltip_timeout_state() -> None:
         try:
             enabled = bool(app.tooltip_enabled.get())
-        except Exception:
+        except (AttributeError, tk.TclError, TypeError, ValueError):
             enabled = True
         state = "normal" if enabled else "disabled"
         try:
             app.tooltip_timeout_entry.configure(state=state)
-        except Exception:
+        except (AttributeError, tk.TclError):
             pass
 
     def _on_tooltip_setting_change() -> None:
@@ -214,7 +215,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     )
     try:
         app.tooltip_enabled.trace_add("write", lambda *_args: _sync_tooltip_timeout_state())
-    except Exception:
+    except (AttributeError, tk.TclError):
         pass
 
     ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
@@ -590,11 +591,11 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
     def _log_status(text: str) -> None:
         try:
             app.ui_q.put(("log", text))
-        except Exception:
+        except (AttributeError, TypeError, queue.Full):
             pass
         try:
             app.status.config(text=text)
-        except Exception:
+        except (AttributeError, tk.TclError):
             pass
 
     def _run_power_action(action: str, label: str) -> None:
@@ -606,19 +607,19 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
             return
         try:
             app._save_settings()
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, tk.TclError):
             pass
         try:
             subprocess.Popen(["systemctl", action])
             _log_status(f"[system] {label} requested")
             return
-        except Exception:
+        except (OSError, ValueError):
             pass
         fallback_args = ["shutdown", "-h", "now"] if action == "poweroff" else ["shutdown", "-r", "now"]
         try:
             subprocess.Popen(fallback_args)
             _log_status(f"[system] {label} requested")
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             _log_status(f"[system] {label} failed: {exc}")
 
     btn_row = ttk.Frame(power_frame)

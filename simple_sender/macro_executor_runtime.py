@@ -47,7 +47,7 @@ class MacroRunnerMixin(MacroExecutorState):
         try:
             checker(color)
             return True
-        except Exception:
+        except (TypeError, ValueError, RuntimeError):
             return False
 
     def _macro_timeout_setting(self, attr_name: str, default_value: float) -> float:
@@ -56,7 +56,7 @@ class MacroRunnerMixin(MacroExecutorState):
             if hasattr(value, "get"):
                 value = value.get()
             timeout_s = float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return float(default_value)
         if timeout_s <= 0:
             return 0.0
@@ -74,7 +74,7 @@ class MacroRunnerMixin(MacroExecutorState):
             if hasattr(enabled, "get"):
                 enabled = enabled.get()
             return bool(enabled)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return True
 
     def _macro_audit(self, message: str, *, force: bool = False) -> None:
@@ -101,7 +101,7 @@ class MacroRunnerMixin(MacroExecutorState):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-        except Exception as exc:
+        except (OSError, UnicodeError) as exc:
             messagebox.showerror("Macro error", str(exc))
             self._macro_lock.release()
             return
@@ -148,7 +148,7 @@ class MacroRunnerMixin(MacroExecutorState):
         elif hasattr(self.app, "_start_macro_status"):
             try:
                 self.app._start_macro_status(name)
-            except Exception:
+            except (AttributeError, RuntimeError):
                 pass
         try:
             with self._macro_vars_lock:
@@ -273,7 +273,7 @@ class MacroRunnerMixin(MacroExecutorState):
             elif hasattr(self.app, "_stop_macro_status"):
                 try:
                     self.app._stop_macro_status()
-                except Exception:
+                except (AttributeError, RuntimeError):
                     pass
             duration = time.perf_counter() - start
             if duration >= 0.2:
@@ -298,7 +298,11 @@ class MacroRunnerMixin(MacroExecutorState):
             message = "Unknown compile error"
         location = f"File: {path or 'Unknown macro file'}\nLine {line_no}: {raw_line.strip() or '<empty line>'}"
         text = f"{message}\n\n{location}"
-        self.app._post_ui_thread(messagebox.showerror, "Macro compile error", text)
+        post_ui = getattr(self.app, "_post_ui_thread", None)
+        if callable(post_ui):
+            post_ui(messagebox.showerror, "Macro compile error", text)
+            return
+        self.ui_q.put(("log", f"[macro] Compile error notification: {message}"))
 
     def notify_alarm(self, message: str | None):
         if self._alarm_notified:
@@ -315,6 +319,8 @@ class MacroRunnerMixin(MacroExecutorState):
         self._alarm_notified = False
 
     def _macro_send(self, command: str, *, wait_for_idle: bool = True):
+        if not self.grbl.is_connected():
+            raise RuntimeError("Controller disconnected during macro execution.")
         if hasattr(self.app, "_send_manual"):
             self.app._send_manual(command, "macro")
         else:
@@ -322,5 +328,5 @@ class MacroRunnerMixin(MacroExecutorState):
         if wait_for_idle:
             completed = self.grbl.wait_for_manual_completion()
             if not completed:
-                self.ui_q.put(("log", "[macro] Command completion timed out"))
+                raise TimeoutError("Command completion timed out.")
             self._macro_wait_for_idle()

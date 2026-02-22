@@ -122,7 +122,7 @@ def _format_word_from_str(letter: str, value: str, max_decimals: int | None = No
         return f"{letter}{_trim_number_str(value)}"
     try:
         number = float(value)
-    except Exception:
+    except ValueError:
         return f"{letter}{_trim_number_str(value)}"
     return f"{letter}{_format_float(number, max_decimals)}"
 
@@ -142,6 +142,47 @@ def _build_compact_line(
 
 def _is_safe_word_line(line: str) -> bool:
     return not WORD_PAT.sub("", line).strip()
+
+
+def _collect_g_codes(words: list[tuple[str, str]]) -> Set[float]:
+    g_codes: Set[float] = set()
+    for w, val in words:
+        if w != "G":
+            continue
+        try:
+            g_codes.add(round(float(val), 3))
+        except ValueError:
+            continue
+    return g_codes
+
+
+def _apply_modal_g_codes(state: _SplitState, g_codes: Set[float]) -> None:
+    if 20.0 in g_codes:
+        state.units = 25.4
+    if 21.0 in g_codes:
+        state.units = 1.0
+    if 90.0 in g_codes:
+        state.absolute = True
+    if 91.0 in g_codes:
+        state.absolute = False
+    if 93.0 in g_codes:
+        state.feed_mode = "G93"
+    if 94.0 in g_codes:
+        state.feed_mode = "G94"
+
+
+def _resolve_motion(g_codes: Set[float], has_axis: bool, last_motion: int) -> Optional[int]:
+    if 0.0 in g_codes:
+        return 0
+    if 1.0 in g_codes:
+        return 1
+    if 2.0 in g_codes:
+        return 2
+    if 3.0 in g_codes:
+        return 3
+    if has_axis:
+        return last_motion
+    return None
 
 
 def _split_linear_move(
@@ -281,29 +322,8 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             out_lines.append(line)
             continue
 
-        g_codes: Set[float] = set()
-        for w, val in words:
-            if w == "G":
-                try:
-                    g_codes.add(round(float(val), 3))
-                except Exception:
-                    pass
-
-        def has_g(code: float) -> bool:
-            return round(code, 3) in g_codes
-
-        if has_g(20):
-            state.units = 25.4
-        if has_g(21):
-            state.units = 1.0
-        if has_g(90):
-            state.absolute = True
-        if has_g(91):
-            state.absolute = False
-        if has_g(93):
-            state.feed_mode = "G93"
-        if has_g(94):
-            state.feed_mode = "G94"
+        g_codes = _collect_g_codes(words)
+        _apply_modal_g_codes(state, g_codes)
 
         sx, sy, sz = state.x, state.y, state.z
         nx, ny, nz = sx, sy, sz
@@ -319,7 +339,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
                 continue
             try:
                 raw_val = float(val)
-            except Exception:
+            except ValueError:
                 continue
             fval = raw_val * state.units
             if w == "X":
@@ -335,7 +355,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
                 has_z = True
                 nz = fval if state.absolute else (nz + fval)
 
-        if has_g(92):
+        if 92.0 in g_codes:
             if not (has_x or has_y or has_z):
                 if state.g92_enabled:
                     state.x += state.g92_offset[0]
@@ -371,7 +391,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             else:
                 out_lines.append(line)
             continue
-        if has_g(92.1):
+        if 92.1 in g_codes:
             if state.g92_enabled:
                 state.x += state.g92_offset[0]
                 state.y += state.g92_offset[1]
@@ -393,7 +413,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             else:
                 out_lines.append(line)
             continue
-        if has_g(92.2):
+        if 92.2 in g_codes:
             if state.g92_enabled:
                 state.x += state.g92_offset[0]
                 state.y += state.g92_offset[1]
@@ -414,7 +434,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             else:
                 out_lines.append(line)
             continue
-        if has_g(92.3):
+        if 92.3 in g_codes:
             if not state.g92_enabled:
                 state.x -= state.g92_offset[0]
                 state.y -= state.g92_offset[1]
@@ -436,18 +456,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
                 out_lines.append(line)
             continue
 
-        motion: Optional[int] = None
-        for g in g_codes:
-            if abs(g - 0) < 1e-3:
-                motion = 0
-            elif abs(g - 1) < 1e-3:
-                motion = 1
-            elif abs(g - 2) < 1e-3:
-                motion = 2
-            elif abs(g - 3) < 1e-3:
-                motion = 3
-        if motion is None and has_axis:
-            motion = state.last_motion
+        motion = _resolve_motion(g_codes, has_axis, state.last_motion)
         split_allowed = all(code in SPLIT_ALLOWED_G_CODES for code in g_codes)
 
         if line_len <= max_len:
@@ -640,29 +649,8 @@ def split_gcode_lines_stream(
             emit(raw_text if preserve_raw else line)
             continue
 
-        g_codes: Set[float] = set()
-        for w, val in words:
-            if w == "G":
-                try:
-                    g_codes.add(round(float(val), 3))
-                except Exception:
-                    pass
-
-        def has_g(code: float) -> bool:
-            return round(code, 3) in g_codes
-
-        if has_g(20):
-            state.units = 25.4
-        if has_g(21):
-            state.units = 1.0
-        if has_g(90):
-            state.absolute = True
-        if has_g(91):
-            state.absolute = False
-        if has_g(93):
-            state.feed_mode = "G93"
-        if has_g(94):
-            state.feed_mode = "G94"
+        g_codes = _collect_g_codes(words)
+        _apply_modal_g_codes(state, g_codes)
 
         sx, sy, sz = state.x, state.y, state.z
         nx, ny, nz = sx, sy, sz
@@ -678,7 +666,7 @@ def split_gcode_lines_stream(
                 continue
             try:
                 raw_val = float(val)
-            except Exception:
+            except ValueError:
                 continue
             fval = raw_val * state.units
             if w == "X":
@@ -694,7 +682,7 @@ def split_gcode_lines_stream(
                 has_z = True
                 nz = fval if state.absolute else (nz + fval)
 
-        if has_g(92):
+        if 92.0 in g_codes:
             if not (has_x or has_y or has_z):
                 if state.g92_enabled:
                     state.x += state.g92_offset[0]
@@ -728,7 +716,7 @@ def split_gcode_lines_stream(
             else:
                 emit(raw_text if preserve_raw else line)
             continue
-        if has_g(92.1):
+        if 92.1 in g_codes:
             if state.g92_enabled:
                 state.x += state.g92_offset[0]
                 state.y += state.g92_offset[1]
@@ -748,7 +736,7 @@ def split_gcode_lines_stream(
             else:
                 emit(raw_text if preserve_raw else line)
             continue
-        if has_g(92.2):
+        if 92.2 in g_codes:
             if state.g92_enabled:
                 state.x += state.g92_offset[0]
                 state.y += state.g92_offset[1]
@@ -767,7 +755,7 @@ def split_gcode_lines_stream(
             else:
                 emit(raw_text if preserve_raw else line)
             continue
-        if has_g(92.3):
+        if 92.3 in g_codes:
             if not state.g92_enabled:
                 state.x -= state.g92_offset[0]
                 state.y -= state.g92_offset[1]
@@ -787,18 +775,7 @@ def split_gcode_lines_stream(
                 emit(raw_text if preserve_raw else line)
             continue
 
-        motion: Optional[int] = None
-        for g in g_codes:
-            if abs(g - 0) < 1e-3:
-                motion = 0
-            elif abs(g - 1) < 1e-3:
-                motion = 1
-            elif abs(g - 2) < 1e-3:
-                motion = 2
-            elif abs(g - 3) < 1e-3:
-                motion = 3
-        if motion is None and has_axis:
-            motion = state.last_motion
+        motion = _resolve_motion(g_codes, has_axis, state.last_motion)
         split_allowed = all(code in SPLIT_ALLOWED_G_CODES for code in g_codes)
 
         if line_len <= max_len:

@@ -448,10 +448,7 @@ class AutoLevelDialogController:
             if not self.deps.messagebox.askyesno("Save preset", f"Overwrite preset '{name}'?"):
                 return
         self.app.auto_level_presets[name] = snapshot
-        try:
-            self.app.settings["auto_level_presets"] = dict(self.app.auto_level_presets)
-        except Exception:
-            pass
+        self._persist_auto_level_presets()
         self.refresh_preset_values()
         self.preset_var.set(name)
 
@@ -464,12 +461,15 @@ class AutoLevelDialogController:
             return
         if name in self.app.auto_level_presets:
             del self.app.auto_level_presets[name]
-        try:
-            self.app.settings["auto_level_presets"] = dict(self.app.auto_level_presets)
-        except Exception:
-            pass
+        self._persist_auto_level_presets()
         self.refresh_preset_values()
         self.preset_var.set("")
+
+    def _persist_auto_level_presets(self) -> None:
+        try:
+            self.app.settings["auto_level_presets"] = dict(self.app.auto_level_presets)
+        except (AttributeError, TypeError):
+            pass
 
     def _avoidance_snapshot(self) -> list[dict[str, Any]]:
         snapshot: list[dict[str, Any]] = []

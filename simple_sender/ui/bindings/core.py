@@ -22,6 +22,7 @@
 
 import logging
 import time
+import tkinter as tk
 from tkinter import messagebox
 from types import ModuleType
 from typing import Any
@@ -83,6 +84,18 @@ except ImportError as exc:
 else:
     pygame = _pygame_module
     PYGAME_AVAILABLE = True
+
+
+def _pygame_error_types(py: ModuleType | None = None) -> tuple[type[BaseException], ...]:
+    error_types: list[type[BaseException]] = [AttributeError, RuntimeError, OSError, TypeError, ValueError]
+    module = py if py is not None else pygame
+    if module is not None:
+        err_type = getattr(module, "error", None)
+        if isinstance(err_type, type) and issubclass(err_type, BaseException):
+            error_types.append(err_type)
+    # Keep stable order while removing duplicates.
+    return tuple(dict.fromkeys(error_types))
+
 
 def toggle_keyboard_bindings(app):
     current = bool(app.keyboard_bindings_enabled.get())
@@ -166,13 +179,14 @@ def discover_joysticks(app, py, count: int) -> list[str]:
     instances: dict[int, Any] = {}
     if count < 0:
         count = 0
+    error_types = _pygame_error_types(py)
     for idx in range(count):
         try:
             joy = py.joystick.Joystick(idx)
             joy.init()
             name = joy.get_name()
             instances[idx] = joy
-        except Exception:
+        except error_types:
             name = f"Joystick {idx}"
         names.append(name)
     app._joystick_instances = instances
@@ -223,6 +237,7 @@ def update_joystick_live_status(app, py) -> None:
         app.joystick_live_status.set("Joystick state: none detected.")
         return
     lines = []
+    error_types = _pygame_error_types(py)
     for joy_id, joy in sorted(app._joystick_instances.items()):
         try:
             axes_count = min(getattr(joy, "get_numaxes", lambda: 0)(), 4)
@@ -237,7 +252,7 @@ def update_joystick_live_status(app, py) -> None:
                 if value != (0, 0):
                     hats.append(f"{i}:{value}")
             hats = hats[:4]
-        except Exception:
+        except error_types:
             continue
         axes_text = ",".join(axes) if axes else "n/a"
         btn_text = ",".join(pressed) if pressed else "none"
@@ -256,11 +271,12 @@ def refresh_joystick_test_info(app):
     if py is None:
         app.joystick_test_status.set("pygame is not installed. Install it to detect USB joysticks.")
         return
+    error_types = _pygame_error_types(py)
     try:
         py.init()
         py.joystick.init()
         count = py.joystick.get_count()
-    except Exception as exc:
+    except error_types as exc:
         app.joystick_test_status.set(f"Joystick init failed: {exc}")
         return
     if count <= 0:
@@ -296,6 +312,7 @@ def ensure_joystick_backend(app):
         return False
     if app._joystick_backend_ready:
         return True
+    error_types = _pygame_error_types(py)
     try:
         py.init()
         py.joystick.init()
@@ -306,7 +323,7 @@ def ensure_joystick_backend(app):
         update_joystick_device_status(app, count, reason="Init")
         app._joystick_backend_ready = True
         return True
-    except Exception as exc:
+    except error_types as exc:
         logger.exception("Joystick backend initialization failed: %s", exc)
         return False
 
@@ -330,9 +347,10 @@ def maybe_refresh_joystick_devices(
     if not force and (now - last_check) < (interval_ms / 1000.0):
         return False
     app._joystick_last_discovery = now
+    error_types = _pygame_error_types(py)
     try:
         count = py.joystick.get_count()
-    except Exception as exc:
+    except error_types as exc:
         logger.exception("Joystick discovery failed: %s", exc)
         return False
     if not force:
@@ -354,7 +372,7 @@ def stop_joystick_polling(app):
     if app._joystick_poll_id is not None:
         try:
             app.after_cancel(app._joystick_poll_id)
-        except Exception:
+        except tk.TclError:
             pass
         app._joystick_poll_id = None
 
@@ -451,9 +469,17 @@ def clear_key_sequence_buffer(app):
     if app._key_sequence_after_id is not None:
         try:
             app.after_cancel(app._key_sequence_after_id)
-        except Exception:
+        except tk.TclError:
             pass
     app._key_sequence_after_id = None
+
+
+def _is_widget_disabled(widget) -> bool:
+    try:
+        return str(widget.cget("state")).lower() == "disabled"
+    except (AttributeError, KeyError, tk.TclError):
+        return False
+
 
 def keyboard_binding_allowed(app) -> bool:
     if bool(getattr(app, "_screen_lock_active", False)):
@@ -462,20 +488,20 @@ def keyboard_binding_allowed(app) -> bool:
         return False
     try:
         current_grab = app.grab_current()
-    except Exception:
+    except tk.TclError:
         current_grab = None
     if current_grab is not None:
         return False
     try:
         widget = app.focus_get()
-    except Exception:
+    except tk.TclError:
         return False
     if widget is None:
         return True
     try:
         if widget.winfo_toplevel() is not app:
             return False
-    except Exception:
+    except tk.TclError:
         return False
     cls = widget.winfo_class()
     if cls in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox"):
@@ -485,34 +511,25 @@ def keyboard_binding_allowed(app) -> bool:
 def on_key_jog_stop(app, _event=None):
     if not app._keyboard_binding_allowed():
         return
-    try:
-        if app.btn_jog_cancel.cget("state") == "disabled":
-            return
-    except Exception:
+    if _is_widget_disabled(getattr(app, "btn_jog_cancel", None)):
         return
     try:
         app._stop_joystick_hold()
-    except Exception:
+    except (AttributeError, tk.TclError):
         pass
     app.grbl.jog_cancel()
 
 def on_key_all_stop(app, _event=None):
     if not app._keyboard_binding_allowed():
         return
-    try:
-        if app.btn_all_stop.cget("state") == "disabled":
-            return
-    except Exception:
+    if _is_widget_disabled(getattr(app, "btn_all_stop", None)):
         return
     app._all_stop_action()
 
 def on_key_binding(app, btn):
     if not app._keyboard_binding_allowed():
         return
-    try:
-        if btn.cget("state") == "disabled":
-            return
-    except Exception:
+    if _is_widget_disabled(btn):
         return
     app._log_button_action(btn)
     app._invoke_button(btn)
@@ -522,11 +539,11 @@ def invoke_button(app, btn):
         try:
             btn.invoke()
             return
-        except Exception:
+        except tk.TclError:
             pass
     try:
         cmd = btn.cget("command")
-    except Exception:
+    except (AttributeError, KeyError, tk.TclError):
         cmd = None
     if callable(cmd):
         cmd()
@@ -543,7 +560,7 @@ def log_button_action(app, btn):
             gcode = getter()
         elif isinstance(getter, str):
             gcode = getter
-    except Exception:
+    except (AttributeError, TypeError, ValueError, tk.TclError):
         gcode = ""
     ts = time.strftime("%H:%M:%S")
     if tip and gcode:

@@ -43,7 +43,7 @@ def on_gui_logging_change(app):
     status = "enabled" if app.gui_logging_enabled.get() else "disabled"
     try:
         app.streaming_controller.handle_log(f"[settings] GUI logging {status}")
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -51,11 +51,11 @@ def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
     try:
         app._scrollbar_width_default = _style_scrollbar_width(getattr(app, "style", None))
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app._apply_scrollbar_width()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -81,11 +81,11 @@ def _style_scrollbar_width(style) -> int | None:
         return None
     try:
         value = style.lookup("TScrollbar", "width")
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         return None
     try:
         return int(value)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         return None
 
 def _coerce_scrollbar_width(value, default: str = "wide") -> str:
@@ -105,7 +105,7 @@ def _coerce_scrollbar_width(value, default: str = "wide") -> str:
 def _coerce_ui_scale(value, default: float = 1.0) -> float:
     try:
         scale = float(value)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         return default
     if scale <= 0:
         return default
@@ -126,14 +126,14 @@ def _apply_scaled_named_fonts(app, scale: float) -> None:
         for name in _UI_SCALE_NAMED_FONTS:
             try:
                 size = int(tkfont.nametofont(name).cget("size"))
-            except Exception:
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
                 continue
             bases[name] = size
         app._ui_scale_named_font_bases = bases
     for name, base in bases.items():
         try:
             tkfont.nametofont(name).configure(size=_scaled_font_size(base, scale))
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             continue
 
 
@@ -149,11 +149,11 @@ def _apply_scaled_custom_fonts(app, scale: float) -> None:
         if key not in bases:
             try:
                 bases[key] = int(font.cget("size"))
-            except Exception:
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
                 continue
         try:
             font.configure(size=_scaled_font_size(bases[key], scale))
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             continue
 
 
@@ -162,26 +162,26 @@ def apply_ui_scale(app, value: float | None = None) -> float:
     if raw is None:
         try:
             raw = app.ui_scale.get()
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             raw = 1.0
     scale = _coerce_ui_scale(raw, 1.0)
     try:
         app.tk.call("tk", "scaling", scale)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         return scale
     _apply_scaled_named_fonts(app, scale)
     _apply_scaled_custom_fonts(app, scale)
     try:
         app.ui_scale.set(scale)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app.settings["ui_scale"] = scale
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app.update_idletasks()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     return scale
 
@@ -191,7 +191,7 @@ def apply_scrollbar_width(app, value: str | None = None) -> str:
     if raw is None:
         try:
             raw = app.scrollbar_width.get()
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             raw = "wide"
     choice = _coerce_scrollbar_width(raw, "wide")
     if choice == "default":
@@ -206,15 +206,15 @@ def apply_scrollbar_width(app, value: str | None = None) -> str:
         app.style.configure("TScrollbar", width=width)
         app.style.configure("Vertical.TScrollbar", width=width)
         app.style.configure("Horizontal.TScrollbar", width=width)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app.scrollbar_width.set(choice)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app.settings["scrollbar_width"] = choice
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     return choice
 
@@ -223,7 +223,7 @@ def on_scrollbar_width_change(app, _event=None):
     choice = apply_scrollbar_width(app)
     try:
         app.status.config(text=f"Scrollbar width: {choice}")
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -231,11 +231,11 @@ def on_ui_scale_change(app, _event=None):
     scale = apply_ui_scale(app)
     try:
         app.status.config(text=f"UI scale: {scale:.2f}x")
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app._save_settings()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -251,7 +251,7 @@ def on_performance_mode_change(app):
     app._apply_status_poll_profile()
     try:
         app.status.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -273,15 +273,15 @@ def on_autolevel_overlay_change(app):
     grid = app._auto_level_grid if show else None
     try:
         app.toolpath_panel.set_autolevel_overlay(grid)
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app.settings["show_autolevel_overlay"] = show
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     try:
         app._refresh_autolevel_overlay_button()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
 
 
@@ -291,7 +291,7 @@ def toggle_unit_mode(app):
     ):
         try:
             app.status.config(text="Unit toggle disabled while streaming")
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             pass
         return
     new_mode = "inch" if app.unit_mode.get() == "mm" else "mm"
@@ -308,7 +308,7 @@ def start_homing(app):
     ):
         try:
             app.status.config(text="Homing blocked while streaming")
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             pass
         return
     app._homing_in_progress = True
@@ -319,14 +319,14 @@ def start_homing(app):
     app._update_state_highlight("Homing")
     try:
         app.grbl.home()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         app._homing_in_progress = False
         app._homing_state_seen = False
 
 def confirm_and_run(app, label: str, func):
     try:
         need_confirm = bool(app.training_wheels.get())
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         need_confirm = False
     now = time.time()
     last_ts = app._confirm_last_time.get(label, 0.0)
@@ -363,7 +363,7 @@ def _job_estimate_text(app) -> tuple[str, str, str]:
     rapid_min = stats.get("rapid_min")
     try:
         factor = app._estimate_factor_value()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         factor = 1.0
     feed_only = "n/a"
     total = "n/a"
@@ -393,7 +393,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     if path and os.path.isfile(path):
         try:
             size = os.path.getsize(path)
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             size = None
     feed_only, total, finish_at = _job_estimate_text(app)
 
@@ -456,7 +456,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
                     win.lift()
                     win.focus_force()
                     return
-            except Exception:
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
                 pass
         win = tk.Toplevel(dialog)
         details_window["win"] = win
@@ -479,7 +479,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             details_window["win"] = None
             try:
                 win.destroy()
-            except Exception:
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
                 pass
 
         btn_row = ttk.Frame(container)
@@ -496,13 +496,13 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         result["ok"] = True
         try:
             dialog.destroy()
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             pass
 
     def cancel():
         try:
             dialog.destroy()
-        except Exception:
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
             pass
 
     confirm_label = "START"
@@ -517,7 +517,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     center_window(dialog, app)
     try:
         dialog.grab_set()
-    except Exception:
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         pass
     dialog.wait_window()
     return result["ok"]

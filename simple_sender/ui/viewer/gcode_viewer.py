@@ -272,7 +272,8 @@ class GcodeViewer(ttk.Frame):
         if 0 <= idx < self.lines_count:
             start, end = self._line_range(idx)
             self.text.tag_add("current", start, end)
-            self.text.see(start)  # Auto-scroll
+            if self.text.dlineinfo(start) is None:
+                self.text.see(start)
             self._current_idx = idx
         else:
             self._current_idx = -1

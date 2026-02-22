@@ -44,6 +44,34 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 
+
+def parse_setting_line(line: str) -> tuple[str, str, int | None] | None:
+    stripped = str(line or "").strip()
+    if not (stripped.startswith("$") and "=" in stripped):
+        return None
+    key, value = stripped.split("=", 1)
+    idx = parse_setting_index(key)
+    return key, value.strip(), idx
+
+
+def parse_setting_index(key: str) -> int | None:
+    text = str(key or "").strip()
+    if not text.startswith("$"):
+        return None
+    try:
+        return int(text[1:])
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_setting_float(settings_data: dict[str, tuple[str, int | None]], key: str) -> float | None:
+    raw = settings_data.get(key, ("", None))[0]
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class GRBLSettingsController:
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -139,7 +167,7 @@ class GRBLSettingsController:
     def handle_line(self, line: str) -> None:
         if not self._settings_capture:
             s = line.strip()
-            if s.startswith("$") and "=" in s:
+            if parse_setting_line(s):
                 self.start_capture("Captured $$ output")
             else:
                 return
@@ -149,13 +177,10 @@ class GRBLSettingsController:
         low = s.lower()
         if low != "ok" and not low.startswith("error"):
             self._settings_raw_lines.append(s)
-        if s.startswith("$") and "=" in s:
-            key, value = s.split("=", 1)
-            try:
-                idx = int(key[1:])
-            except Exception:
-                idx = None
-            self._settings_data[key] = (value.strip(), idx)
+        parsed = parse_setting_line(s)
+        if parsed:
+            key, value, idx = parsed
+            self._settings_data[key] = (value, idx)
             return
         if low == "ok":
             self._settings_capture = False
@@ -331,29 +356,23 @@ class GRBLSettingsController:
         self.app.status.config(text=f"Settings: {len(items)} values")
 
     def _update_rapid_rates(self) -> None:
-        try:
-            rx = float(self._settings_data.get("$110", ("", None))[0])
-            ry = float(self._settings_data.get("$111", ("", None))[0])
-            rz = float(self._settings_data.get("$112", ("", None))[0])
-            if rx > 0 and ry > 0 and rz > 0:
-                self.app._rapid_rates = (rx, ry, rz)
-                self.app._rapid_rates_source = "grbl"
-                return
-        except Exception:
-            pass
+        rx = parse_setting_float(self._settings_data, "$110")
+        ry = parse_setting_float(self._settings_data, "$111")
+        rz = parse_setting_float(self._settings_data, "$112")
+        if rx is not None and ry is not None and rz is not None and rx > 0 and ry > 0 and rz > 0:
+            self.app._rapid_rates = (rx, ry, rz)
+            self.app._rapid_rates_source = "grbl"
+            return
         self.app._rapid_rates = None
         self.app._rapid_rates_source = None
 
     def _update_accel_rates(self) -> None:
-        try:
-            ax = float(self._settings_data.get("$120", ("", None))[0])
-            ay = float(self._settings_data.get("$121", ("", None))[0])
-            az = float(self._settings_data.get("$122", ("", None))[0])
-            if ax > 0 and ay > 0 and az > 0:
-                self.app._accel_rates = (ax, ay, az)
-                return
-        except Exception:
-            pass
+        ax = parse_setting_float(self._settings_data, "$120")
+        ay = parse_setting_float(self._settings_data, "$121")
+        az = parse_setting_float(self._settings_data, "$122")
+        if ax is not None and ay is not None and az is not None and ax > 0 and ay > 0 and az > 0:
+            self.app._accel_rates = (ax, ay, az)
+            return
         self.app._accel_rates = None
 
     def _render_settings_raw(self, header: str | None = None) -> None:
@@ -392,10 +411,7 @@ class GRBLSettingsController:
         entry.place(x=x, y=y, width=w, height=h)
         entry.insert(0, current)
         entry.focus_set()
-        try:
-            idx = int(key[1:]) if key.startswith("$") else None
-        except Exception:
-            idx = None
+        idx = parse_setting_index(key)
         if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
             attach_numeric_keypad(entry, allow_decimal=True)
         self._settings_entry_meta[entry] = (key, item)
@@ -424,10 +440,7 @@ class GRBLSettingsController:
             if key and item and tree:
                 new_val = entry.get().strip()
                 if new_val:
-                    try:
-                        idx = int(key[1:]) if key.startswith("$") else None
-                    except Exception:
-                        idx = None
+                    idx = parse_setting_index(key)
                     if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
                         try:
                             val_num = float(new_val)
@@ -498,26 +511,15 @@ class GRBLSettingsController:
             self._settings_tooltip_hide()
             return
         key = values[0]
-        try:
-            idx = int(key[1:])
-        except Exception:
-            idx = None
+        idx = parse_setting_index(str(key))
         info = self.app._grbl_setting_info.get(key, {})
         desc = info.get("desc", "")
         units = info.get("units", "")
         tooltip = info.get("tooltip", "")
         baseline_val = self._settings_baseline.get(key, "")
         current_val = self._settings_values.get(key, "")
-        limits = None
-        try:
-            limits = GRBL_SETTING_LIMITS.get(int(key[1:]), None)
-        except Exception:
-            limits = None
-        allow_text = False
-        try:
-            allow_text = int(key[1:]) in GRBL_NON_NUMERIC_SETTINGS
-        except Exception:
-            allow_text = False
+        limits = GRBL_SETTING_LIMITS.get(idx, None) if idx is not None else None
+        allow_text = bool(idx is not None and idx in GRBL_NON_NUMERIC_SETTINGS)
         value_line = (
             f"Pending: {current_val} (last saved: {baseline_val})"
             if current_val != baseline_val

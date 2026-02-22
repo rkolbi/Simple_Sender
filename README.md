@@ -407,6 +407,26 @@ G0 X0 Y0
 
 This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI prompt, and stores the pass number so later macros can inspect `park_pass`.
 
+### Macro reliability checklist
+Use this checklist when creating job-critical macros:
+
+1) Add `%update` before reading live coordinates (`wx/wy/wz`, `mx/my/mz`, overrides, `planner`, `rxbytes`) so values come from a fresh status report.
+2) Make modal intent explicit near motion lines (`G90`/`G91`, plane, feed mode). Use `STATE_RETURN` before finishing if the macro changes modal context that should not leak into later commands.
+3) Place `%wait` after long motions/probes when the next line depends on machine state being settled.
+4) Prefer `%msg` logs at key checkpoints (`start`, `before probe`, `after capture`, `before run`) so failures can be diagnosed from the log file.
+5) Configure macro line/total timeout values in `App Settings > Macros` for unattended or long-running routines.
+6) For operator intervention, use `PROMPT` with explicit buttons (`Continue|Abort`) and branch on `prompt_cancelled`/`prompt_choice`.
+
+### Macro troubleshooting
+| Symptom | Likely cause | Recommended fix |
+| --- | --- | --- |
+| Macro button does not appear | File is not named `Macro-1`..`Macro-8` (or legacy `Maccro-*`) in a discovered macro directory. | Verify filename and location (`simple_sender/macros`, `macros/` beside `main.py`, or script directory). |
+| Button appears but macro does not run | App is streaming, in alarm, disconnected, or blocked by Training Wheels confirmation. | Stop stream / clear alarm / reconnect, then retry and confirm prompts. |
+| Coordinates used by the macro are stale | Macro reads `wx/wy/wz` or modal values before a fresh status report. | Insert `%update` before using live variables. |
+| Macro reaches 100% too early or appears "done" before motion settles | Controller accepted final lines but machine has not reported fresh `Idle` yet. | Keep `Machine` current-line mode selected; prefer `%wait` at sequence boundaries and watch for final `Idle` in status/logs. |
+| Macro hangs waiting | Controller stayed non-idle (hold/alarm/door) or a wait condition never clears. | Inspect state/pins in status, add `%msg` checkpoints, and set line/total macro timeouts. |
+| Unexpected units/modal behavior after macro | Macro changed units/distance/WCS and did not restore expected state. | Add `STATE_RETURN` (or explicit restore commands) near macro end. |
+
 ## Estimation & 3D View
 - Estimates bounds, feed time, rapid time (uses $110-112, then machine profile, then fallback) with factor slider; shows "fallback" or "profile" when applicable. Live remaining estimate during streaming.
 - 3D View: Rapid/Feed/Arc legend toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, live position marker, save/load/reset view; streaming refresh interval lives in App Settings > Viewer. For streaming (large) loads, 3D rendering is off by default and the 3D Render (3DR) toggle prompts before enabling a full preview.
@@ -653,7 +673,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 21, 2026): full suite passes locally; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
+Current baseline in this repository (validated on February 22, 2026): `642 passed, 1 skipped` on `python -m pytest tests -q`; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
 
 Run a subset:
 ```powershell
@@ -717,6 +737,8 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
+- `simple_sender/ui/widgets_buttons.py`: button-focused widgets extracted from `widgets.py` (StopSign, home, jog, and colored macro button classes).
+- `simple_sender/ui/widgets.py`: shared UI helpers (tooltips, numeric keypad, keyboard IDs, layout utilities) plus compatibility re-exports for button widgets.
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
 - `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
@@ -786,7 +808,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 148 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-21), and local/CI hooks now enforce `--expected-count 148`.
+5. Static typing gates currently run mypy against 148 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-22), and local/CI hooks now enforce `--expected-count 148`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 
 ## FAQ

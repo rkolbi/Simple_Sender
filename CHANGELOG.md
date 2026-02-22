@@ -31,6 +31,19 @@ All notable changes to this project are documented in this file.
   - Python requirement text now matches the `3.11+` project baseline
   - Viewer "Current line highlight" docs now include `Machine (status/planner)`
   - completion notes now clarify that completion waits for `Idle`
+- Type-checking compatibility for jog step controls was tightened:
+  - `simple_sender/ui/controls/jog_panel.py` now safely coerces step values without mypy arg-type violations
+- Module/documentation alignment updates:
+  - README module layout now documents the `ui/widgets_buttons.py` extraction and `ui/widgets.py` compatibility re-exports
+  - README testing and typing verification notes were refreshed to the latest validated baseline date
+
+### Baseline Validation (local, 2026-02-22)
+- `python tools/check_mypy_targets.py --expected-count 148`: PASS
+- `python -m mypy --config-file mypy.ini`: PASS (`148` source files)
+- `python -m pytest tests -q`: PASS (`642` passed, `1` skipped)
+- `python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term`: PASS
+- `python tools/check_core_coverage.py coverage.xml`: PASS (aggregate critical coverage `89.4%`)
+- `run_tests.bat`: PASS end-to-end (`mypy`, full `pytest`+coverage, and critical-path coverage gate)
 
 ## [1.6.0] - 2026-02-21
 

@@ -63,12 +63,10 @@ def apply_keyboard_bindings(app):
             label = app._normalize_key_label(str(app._key_bindings.get(binding_id, "")).strip())
             if not label:
                 continue
-            is_custom = True
         else:
             label = app._default_key_for_button(btn)
             if not label:
                 continue
-            is_custom = False
         seq = app._key_sequence_tuple(label)
         if not seq:
             continue
@@ -158,7 +156,7 @@ def button_label(app, btn) -> str:
     label = ""
     try:
         label = btn.cget("text")
-    except Exception:
+    except (AttributeError, KeyError, tk.TclError):
         label = ""
     if not label:
         label = getattr(btn, "_text", "")
@@ -259,7 +257,7 @@ def start_kb_edit(app, row, col):
     if app._kb_edit is not None:
         try:
             app._kb_edit.destroy()
-        except Exception:
+        except tk.TclError:
             pass
         app._kb_edit = None
     x, y, w, h = bbox
@@ -306,7 +304,7 @@ def kb_capture_key(app, event, row, entry):
     if event.keysym in ("Escape",):
         try:
             entry.destroy()
-        except Exception:
+        except tk.TclError:
             pass
         app._kb_edit_state.pop(entry, None)
         app._kb_edit = None
@@ -343,7 +341,7 @@ def commit_kb_edit(app, row, entry, label_override: str | None = None):
     if label_override is None:
         try:
             new_val = entry.get()
-        except Exception:
+        except tk.TclError:
             new_val = ""
     else:
         new_val = label_override
@@ -352,7 +350,7 @@ def commit_kb_edit(app, row, entry, label_override: str | None = None):
         if after_id is not None:
             entry.after_cancel(after_id)
         entry.destroy()
-    except Exception:
+    except tk.TclError:
         pass
     app._kb_edit = None
     placeholder = state.get("placeholder") if state else False

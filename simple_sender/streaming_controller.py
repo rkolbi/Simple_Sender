@@ -24,9 +24,11 @@ import logging
 import time
 from typing import Callable
 import tkinter as tk
+from collections import deque
 
 from simple_sender.utils.constants import MAX_CONSOLE_LINES
 from simple_sender.types import AppProtocol, GcodeViewLike
+from simple_sender.ui.stream_completion import should_defer_completion
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ class StreamingController:
         self.buffer_fill: tk.StringVar | None = None
         self.buffer_fill_pct: tk.IntVar | None = None
         self.throughput_var: tk.StringVar | None = None
-        self._console_lines: list[ConsoleEntry] = []
+        self._console_lines: deque[ConsoleEntry] = deque(maxlen=MAX_CONSOLE_LINES)
         self._console_filter: str | None = None
         self._pending_console_entries: list[ConsoleEntry] = []
         self._pending_console_trim: int = 0
@@ -159,10 +161,9 @@ class StreamingController:
         entry: ConsoleEntry = (s, tag)
         if self._should_skip_console_entry_for_toggles(entry):
             return
+        dropped = 1 if len(self._console_lines) >= MAX_CONSOLE_LINES else 0
         self._console_lines.append(entry)
-        overflow = len(self._console_lines) - MAX_CONSOLE_LINES
-        if overflow > 0:
-            self._console_lines = self._console_lines[overflow:]
+        if dropped:
             if self._console_filter is not None:
                 if bool(self.app.performance_mode.get()):
                     self._queue_console_render()
@@ -170,9 +171,9 @@ class StreamingController:
                 self._render_console()
                 return
             if bool(self.app.performance_mode.get()):
-                self._pending_console_trim += overflow
+                self._pending_console_trim += dropped
             else:
-                self._trim_console_widget(overflow)
+                self._trim_console_widget(dropped)
         if not self._console_filter_match(entry):
             return
         if bool(self.app.performance_mode.get()):
@@ -269,7 +270,7 @@ class StreamingController:
 
     def clear_console(self) -> None:
         """Clear all console content and pending entries."""
-        self._console_lines = []
+        self._console_lines.clear()
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
@@ -381,9 +382,7 @@ class StreamingController:
             return
         done, total = self._pending_progress
         self._pending_progress = None
-        state_text = str(getattr(self.app, "_machine_state_text", "") or "").lower()
-        motion_active = bool(state_text) and not state_text.startswith("idle")
-        defer_completion = bool(total > 0 and done >= total and motion_active)
+        defer_completion = should_defer_completion(self.app, done, total, now_ts=time.time())
         if self.progress_pct:
             pct = int(round((done / total) * 100)) if total else 0
             if defer_completion and pct >= 100:

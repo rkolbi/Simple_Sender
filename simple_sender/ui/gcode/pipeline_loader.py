@@ -67,7 +67,7 @@ def _close_temp_file(temp_file: IO[str] | None) -> None:
         return
     try:
         temp_file.close()
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
@@ -78,6 +78,16 @@ def _remove_temp_path(deps, temp_path: str | None) -> None:
         deps.os.remove(temp_path)
     except OSError:
         pass
+
+
+def _format_adjusted_lines_message(modified_count: int, split_count: int, max_line_length: int) -> str:
+    base = (
+        f"[gcode] Adjusted {modified_count} line(s) to fit "
+        f"{max_line_length}-byte limit"
+    )
+    if split_count:
+        return f"{base} (split {split_count})."
+    return f"{base}."
 
 
 def _split_stream_to_temp_file(
@@ -307,16 +317,11 @@ def _stream_from_disk(
         ))
         return
     if split_result.modified_count:
-        if split_result.split_count:
-            msg = (
-                f"[gcode] Adjusted {split_result.modified_count} line(s) to fit "
-                f"{deps.MAX_LINE_LENGTH}-byte limit (split {split_result.split_count})."
-            )
-        else:
-            msg = (
-                f"[gcode] Adjusted {split_result.modified_count} line(s) to fit "
-                f"{deps.MAX_LINE_LENGTH}-byte limit."
-            )
+        msg = _format_adjusted_lines_message(
+            split_result.modified_count,
+            split_result.split_count,
+            deps.MAX_LINE_LENGTH,
+        )
         app.ui_q.put(("log", msg))
     output_lines = split_result.lines_written
     report = None
@@ -436,16 +441,11 @@ def _load_non_streaming_or_fallback_stream(
         ))
         return
     if result.modified_count:
-        if result.split_count:
-            msg = (
-                f"[gcode] Adjusted {result.modified_count} line(s) to fit "
-                f"{deps.MAX_LINE_LENGTH}-byte limit (split {result.split_count})."
-            )
-        else:
-            msg = (
-                f"[gcode] Adjusted {result.modified_count} line(s) to fit "
-                f"{deps.MAX_LINE_LENGTH}-byte limit."
-            )
+        msg = _format_adjusted_lines_message(
+            result.modified_count,
+            result.split_count,
+            deps.MAX_LINE_LENGTH,
+        )
         app.ui_q.put(("log", msg))
     lines = result.lines
     report = deps.validate_gcode_lines(lines)
@@ -480,12 +480,12 @@ def load_gcode_from_path(app, path: str, module):
         use_streaming = False
     try:
         validate_streaming = bool(app.validate_streaming_gcode.get())
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         validate_streaming = False
 
     try:
         raw_line_threshold = int(app.streaming_line_threshold.get())
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         raw_line_threshold = deps.GCODE_STREAMING_LINE_THRESHOLD
     streaming_line_threshold = raw_line_threshold if raw_line_threshold > 0 else None
 

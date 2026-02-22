@@ -22,8 +22,18 @@
 
 import os
 import time
+import logging
+import tkinter as tk
 
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from simple_sender.ui.stream_completion import should_defer_done_until_idle
+from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
+
+logger = logging.getLogger(__name__)
+
+
+def _log_stream_ui_issue(context: str, exc: BaseException) -> None:
+    logger.debug("%s: %s", context, exc)
 
 
 def handle_stream_state_event(app, evt):
@@ -45,7 +55,7 @@ def handle_stream_state_event(app, evt):
             app.throughput_var.set("TX: 0 B/s")
         try:
             status_text = app.status.cget("text")
-        except Exception:
+        except (AttributeError, tk.TclError):
             status_text = ""
         if status_text.startswith(("Stream error", "Paused", "Resuming")):
             try:
@@ -57,8 +67,8 @@ def handle_stream_state_event(app, evt):
                     name = getattr(app.grbl, "_gcode_name", "") or ""
                 label = f"Streaming: {name}" if name else "Streaming..."
                 app.status.config(text=label)
-            except Exception:
-                pass
+            except (AttributeError, tk.TclError, TypeError) as exc:
+                logger.debug("Failed updating streaming status label: %s", exc)
     elif st == "paused":
         if app._stream_paused_at is None:
             app._stream_paused_at = now
@@ -79,11 +89,12 @@ def handle_stream_state_event(app, evt):
             macro_vars["paused"] = False
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")
-        set_run_resume_from(app, job_controls_ready(app, bool(total)))
-        app._set_manual_controls_enabled(
-            app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
+        restore_controls_after_stream(
+            app,
+            loaded_total=total,
+            job_ready_hook=job_controls_ready,
+            set_run_resume_hook=set_run_resume_from,
         )
-        app._set_streaming_lock(False)
     elif st == "running":
         app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
@@ -110,10 +121,9 @@ def handle_stream_state_event(app, evt):
             macro_vars["running"] = False
             macro_vars["paused"] = False
         if st == "done":
-            state_text = str(getattr(app, "_machine_state_text", "") or "").lower()
-            motion_active = bool(state_text) and not state_text.startswith("idle")
-            app._stream_done_pending_idle = bool(motion_active)
-            app.progress_pct.set(99 if motion_active else 100)
+            defer_done = should_defer_done_until_idle(app, now_ts=now)
+            app._stream_done_pending_idle = bool(defer_done)
+            app.progress_pct.set(99 if defer_done else 100)
         else:
             app._stream_done_pending_idle = False
             app.progress_pct.set(0)
@@ -123,25 +133,25 @@ def handle_stream_state_event(app, evt):
             app._set_manual_controls_enabled(False)
             app._set_streaming_lock(True)
         else:
-            set_run_resume_from(app, job_controls_ready(app))
-            app._set_manual_controls_enabled(
-                app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
+            restore_controls_after_stream(
+                app,
+                job_ready_hook=job_controls_ready,
+                set_run_resume_hook=set_run_resume_from,
             )
-            app._set_streaming_lock(False)
     elif st == "error":
         app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
         app.progress_pct.set(0)
-        set_run_resume_from(app, job_controls_ready(app))
+        restore_controls_after_stream(
+            app,
+            job_ready_hook=job_controls_ready,
+            set_run_resume_hook=set_run_resume_from,
+        )
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")
         app.status.config(text=f"Stream error: {evt[2]}")
-        app._set_manual_controls_enabled(
-            app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
-        )
-        app._set_streaming_lock(False)
     elif st == "alarm":
         app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
@@ -155,33 +165,7 @@ def handle_stream_state_event(app, evt):
         app._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
         app._set_streaming_lock(False)
     stream_busy = st in ("running", "paused") or bool(getattr(app, "_stream_done_pending_idle", False))
-    if stream_busy:
-        try:
-            app.settings_controller.set_streaming_lock(True)
-        except Exception:
-            pass
-        app.toolpath_panel.set_streaming(True)
-    else:
-        try:
-            app.settings_controller.set_streaming_lock(False)
-        except Exception:
-            pass
-        app.toolpath_panel.set_streaming(False)
-        if (
-            getattr(app, "_pending_settings_refresh", False)
-            and app._grbl_ready
-            and not app._alarm_locked
-            and not app.grbl.is_streaming()
-        ):
-            app._pending_settings_refresh = False
-            app._request_settings_dump()
-        if (
-            app._toolpath_reparse_deferred
-            and app._last_gcode_lines
-            and not getattr(app, "_gcode_streaming_mode", False)
-        ):
-            app._toolpath_reparse_deferred = False
-            app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
+    apply_stream_busy_state(app, stream_busy, log_hook=_log_stream_ui_issue)
     app._apply_status_poll_profile()
 
 

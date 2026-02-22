@@ -23,6 +23,7 @@
 import tkinter as tk
 import logging
 from tkinter import ttk
+from typing import Any, cast
 
 from simple_sender.ui.widgets import (
     StopSignButton,
@@ -49,6 +50,27 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _nearest_step_index(values: list[float], target: float) -> int:
+    if not values:
+        return 0
+    return min(range(len(values)), key=lambda i: abs(values[i] - target))
+
+
+def _coerce_step_value(value: object, fallback: float, context: str) -> float:
+    try:
+        return float(cast(Any, value))
+    except (TypeError, ValueError) as exc:
+        _log_suppressed(context, exc)
+        return float(fallback)
+
+
+def _select_jog_feed(dx: float, dy: float, dz: float, feed_xy: float, feed_z: float) -> float:
+    # Use Z feed only for pure Z moves; mixed/XY moves use XY feed.
+    if abs(dz) > 0 and abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON:
+        return float(feed_z)
+    return float(feed_xy)
 
 
 def _bind_position_column_sync(app, align) -> None:
@@ -123,12 +145,8 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
     app._xy_step_values = list(JOG_STEP_XY_VALUES)
 
     def _xy_step_index_for(value: float) -> int:
-        try:
-            val = float(value)
-        except Exception as exc:
-            _log_suppressed("Invalid XY step value; falling back to default", exc)
-            val = app._xy_step_values[0]
-        return min(range(len(app._xy_step_values)), key=lambda i: abs(app._xy_step_values[i] - val))
+        val = _coerce_step_value(value, app._xy_step_values[0], "Invalid XY step value; falling back to default")
+        return _nearest_step_index(app._xy_step_values, val)
 
     app._xy_step_index = tk.IntVar(value=_xy_step_index_for(app.step_xy.get()))
 
@@ -181,12 +199,8 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
     app._z_step_values = list(JOG_STEP_Z_VALUES)
 
     def _z_step_index_for(value: float) -> int:
-        try:
-            val = float(value)
-        except Exception as exc:
-            _log_suppressed("Invalid Z step value; falling back to default", exc)
-            val = app._z_step_values[0]
-        return min(range(len(app._z_step_values)), key=lambda i: abs(app._z_step_values[i] - val))
+        val = _coerce_step_value(value, app._z_step_values[0], "Invalid Z step value; falling back to default")
+        return _nearest_step_index(app._z_step_values, val)
 
     app._z_step_index = tk.IntVar(value=_z_step_index_for(app.step_z.get()))
 
@@ -598,10 +612,7 @@ def build_jog_panel(app, parent):
     sep_mpos, sep_wpos, sep_jog_line = _build_position_and_action_controls(app, align)
 
     def _jog_feed_for_move(dx, dy, dz) -> float:
-        # Use Z feed only for pure Z moves; otherwise use XY feed.
-        if abs(dz) > 0 and abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON:
-            return float(app.jog_feed_z.get())
-        return float(app.jog_feed_xy.get())
+        return _select_jog_feed(dx, dy, dz, app.jog_feed_xy.get(), app.jog_feed_z.get())
 
     def j(dx, dy, dz):
         if not app.grbl.is_connected():

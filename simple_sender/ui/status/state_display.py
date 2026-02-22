@@ -24,6 +24,8 @@ from simple_sender.utils.constants import ALL_STOP_CHOICES, CURRENT_LINE_CHOICES
 
 
 def _machine_motion_active(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
     state = str(getattr(app, "_machine_state_text", "") or "").lower()
     if not state:
         return False

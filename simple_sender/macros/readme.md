@@ -38,3 +38,34 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
 - Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab and release/start-job checklist dialogs.
+
+## Core Directives
+
+- `%wait`: pause macro execution until GRBL reports `Idle`.
+- `%update`: request a fresh status update before using `wx/wy/wz` or modal values.
+- `%msg <text>`: write status text to the console with a `[macro]` prefix.
+- `%if running`, `%if paused`, `%if not running`: gate a line by stream state.
+- `STATE_RETURN` (or `%state_return`): restore the modal snapshot captured at macro start.
+
+## Shared State
+
+- Macros can share values via `macro.state.*`, for example:
+  - `%macro.state.STOCK_TOP = wz`
+  - `G0 Z[macro.state.STOCK_TOP]`
+- The app also keeps runtime values in `_macro_vars` (`wx/wy/wz`, overrides, planner/rx bytes, `PRB`, etc.).
+
+## Reliability Checklist
+
+1. Add `%update` immediately before reading live coordinates.
+2. Make modal intent explicit (`G90`/`G91`, feed mode, units) near motion lines.
+3. Use `%wait` after long moves or probe cycles.
+4. End with `STATE_RETURN` if the macro changes modal state.
+5. Set line/total macro timeouts in `App Settings > Macros` for unattended routines.
+
+## Quick Troubleshooting
+
+- Button missing: ensure file name is `Macro-1`..`Macro-8` (or legacy `Maccro-*`) in a discovered macros directory.
+- Macro blocked: streaming/alarm/disconnected states prevent execution by design.
+- Stale coordinates: insert `%update` before using `wx/wy/wz`.
+- Appears complete too early: keep Current Line mode on `Machine` and watch for final `Idle`.
+- Unexpected units/modal state: add `STATE_RETURN` or explicit restore lines.
