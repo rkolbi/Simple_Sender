@@ -27,7 +27,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from simple_sender.utils.constants import ALL_STOP_CHOICES
-from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
+from simple_sender.ui.widgets_tooltips import apply_tooltip
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     diagnostics_frame = ttk.LabelFrame(parent, text="Diagnostics", padding=8)

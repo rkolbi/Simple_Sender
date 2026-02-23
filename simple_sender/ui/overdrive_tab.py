@@ -22,7 +22,8 @@
 
 from tkinter import ttk
 
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     DEFAULT_SPINDLE_RPM,
     RT_FO_MINUS_10,

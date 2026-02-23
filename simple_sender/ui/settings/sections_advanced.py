@@ -30,7 +30,9 @@ from simple_sender.utils.constants import (
     TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
 )
 from simple_sender.ui.autolevel_dialog.prefs import pref_dict, pref_float, pref_interp
-from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad, set_kb_id
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import set_kb_id
 
 def build_safety_aids_section(app, parent: ttk.Frame, row: int) -> int:
     tw_frame = ttk.LabelFrame(parent, text="Safety Aids", padding=8)

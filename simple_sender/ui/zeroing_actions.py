@@ -20,7 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode
 
 
 _WCS_TO_P = {

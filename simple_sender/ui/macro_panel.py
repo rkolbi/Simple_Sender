@@ -25,7 +25,8 @@ from tkinter import ttk, messagebox
 from typing import Any, Callable, cast
 
 from simple_sender.utils.macro_headers import parse_macro_header
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.ui.dialogs.popup_utils import center_window
 
 class MacroPanel:

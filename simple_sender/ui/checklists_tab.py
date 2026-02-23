@@ -34,7 +34,7 @@ from simple_sender.ui.checklist_files import (
     format_checklist_title,
     load_checklist_items,
 )
-from simple_sender.ui.widgets import set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 
 def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:

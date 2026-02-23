@@ -22,7 +22,7 @@
 
 from tkinter import ttk
 
-from simple_sender.ui.widgets import set_kb_id
+from simple_sender.ui.widgets_common import set_kb_id
 
 
 def _unit_scale(unit_mode: str) -> float:

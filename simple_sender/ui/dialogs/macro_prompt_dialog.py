@@ -26,7 +26,7 @@ from tkinter import ttk
 from typing import Callable
 
 from simple_sender.ui.dialogs.popup_utils import center_window
-from simple_sender.ui.widgets import set_kb_id
+from simple_sender.ui.widgets_common import set_kb_id
 
 
 def show_macro_prompt(

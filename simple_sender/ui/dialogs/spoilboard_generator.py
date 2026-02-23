@@ -33,7 +33,7 @@ from typing import Any
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.dialogs.popup_utils import center_window
-from simple_sender.ui.widgets import attach_numeric_keypad
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.utils.logging_config import get_log_dir
 
 MM_PER_INCH = 25.4

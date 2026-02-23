@@ -27,7 +27,7 @@ from .alarm_recovery_dialog import show_alarm_recovery
 from .macro_prompt_dialog import show_macro_prompt
 from .spoilboard_generator import show_spoilboard_generator_dialog
 from .popup_utils import center_window
-from simple_sender.ui.widgets import attach_numeric_keypad
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 
 
 def show_auto_level_dialog(app):

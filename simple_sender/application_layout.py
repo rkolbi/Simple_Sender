@@ -38,7 +38,7 @@ from simple_sender.ui.dialogs.diagnostics import (
 from simple_sender.ui.dialogs.logs import show_logs_dialog
 from simple_sender.ui.dialogs.macro_manager import show_macro_manager
 from simple_sender.ui.main_layout import build_main_layout
-from simple_sender.ui.widgets import ensure_tooltips
+from simple_sender.ui.widgets_tooltips import ensure_tooltips
 from simple_sender.ui.all_stop import position_all_stop_offset
 
 class LayoutMixin:

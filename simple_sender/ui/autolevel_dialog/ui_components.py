@@ -28,7 +28,8 @@ from typing import Any
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.widgets import apply_tooltip, attach_numeric_keypad
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
+from simple_sender.ui.widgets_tooltips import apply_tooltip
 
 
 def grid_row(

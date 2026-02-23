@@ -24,7 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.ui.led_panel import refresh_led_backgrounds
-from simple_sender.ui.widgets import StopSignButton
+from simple_sender.ui.widgets_buttons import StopSignButton
 
 
 def refresh_stop_button_backgrounds(app):

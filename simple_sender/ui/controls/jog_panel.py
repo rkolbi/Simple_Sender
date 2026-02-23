@@ -25,12 +25,9 @@ import logging
 from tkinter import ttk
 from typing import Any, cast
 
-from simple_sender.ui.widgets import (
-    StopSignButton,
-    apply_tooltip,
-    attach_log_gcode,
-    set_kb_id,
-)
+from simple_sender.ui.widgets_buttons import StopSignButton
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     JOG_FEED_EPSILON,
     JOG_PANEL_ALL_STOP_OFFSET_IN,

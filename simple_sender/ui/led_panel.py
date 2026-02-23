@@ -24,7 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from simple_sender.ui.widgets import _resolve_widget_bg
+from simple_sender.ui.widgets_common import _resolve_widget_bg
 
 
 def _bool_from_var(value: Any, default: bool = True) -> bool:

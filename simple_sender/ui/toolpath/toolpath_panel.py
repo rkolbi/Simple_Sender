@@ -28,7 +28,7 @@ from typing import Any, Iterable, Optional
 from simple_sender.autolevel.grid import ProbeGrid
 from .toolpath_3d import Toolpath3D
 from .toolpath_top_view import TopViewPanel
-from simple_sender.ui.widgets import set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 from simple_sender.utils.constants import (
     VIEW_3D_ARC_STEP_DEFAULT,
     VIEW_3D_DRAW_PERCENT_DEFAULT,

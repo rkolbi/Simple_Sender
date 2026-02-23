@@ -40,7 +40,8 @@ from simple_sender.ui.icons import (
     ICON_UNLOCK,
     icon_label,
 )
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 
 def update_job_button_mode(app, mode: str) -> None:
     btn = getattr(app, "btn_open", None)

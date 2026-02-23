@@ -23,7 +23,8 @@
 from tkinter import ttk
 from typing import Any
 
-from simple_sender.ui.widgets import apply_tooltip, set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import set_kb_id
 
 
 def _bool_from_var(value: Any, default: bool = True) -> bool:

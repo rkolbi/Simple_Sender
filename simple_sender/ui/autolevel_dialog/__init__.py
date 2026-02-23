@@ -39,7 +39,7 @@ from simple_sender.gcode_parser import (
     split_gcode_lines_stream,
 )
 from simple_sender.ui.dialogs.popup_utils import center_window
-from simple_sender.ui.widgets import set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 from .workflow import _apply_auto_level_to_path as _apply_auto_level_to_path_impl
 

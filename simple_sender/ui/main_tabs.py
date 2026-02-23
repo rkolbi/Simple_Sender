@@ -30,7 +30,7 @@ from simple_sender.ui.console import build_console_tab
 from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
-from simple_sender.ui.widgets import set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 logger = logging.getLogger(__name__)
 

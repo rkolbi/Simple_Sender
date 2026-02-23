@@ -28,7 +28,7 @@ from types import ModuleType
 from typing import Any, cast
 
 from simple_sender.ui import bindings as input_bindings
-from simple_sender.ui.widgets import VirtualHoldButton
+from simple_sender.ui.widgets_buttons import VirtualHoldButton
 
 
 class InputBindingsMixin:

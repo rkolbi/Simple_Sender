@@ -1,5 +1,5 @@
 ﻿# Simple Sender - Full Manual
-![Release: 1.6.0](https://img.shields.io/badge/release-1.6.0-blue)
+![Release: 1.7.0](https://img.shields.io/badge/release-1.7.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Don't trust it until you've validated it a few times.
@@ -703,9 +703,14 @@ Type checking (mypy):
 python -m mypy
 ```
 
+Ruff syntax/pyflakes gate:
+```powershell
+python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools
+```
+
 Validate mypy target manifest and README count note:
 ```powershell
-python tools/check_mypy_targets.py --expected-count 148
+python tools/check_mypy_targets.py --expected-count 151
 ```
 
 One-command local gate:
@@ -718,7 +723,7 @@ Import stability check (same gate used in CI):
 python -c "import simple_sender.ui.settings"
 ```
 
-Optional pre-commit hooks (mypy manifest + mypy):
+Optional pre-commit hooks (mypy manifest + ruff + mypy):
 ```powershell
 python -m pip install pre-commit
 pre-commit install
@@ -738,7 +743,10 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
 - `simple_sender/ui/widgets_buttons.py`: button-focused widgets extracted from `widgets.py` (StopSign, home, jog, and colored macro button classes).
-- `simple_sender/ui/widgets.py`: shared UI helpers (tooltips, numeric keypad, keyboard IDs, layout utilities) plus compatibility re-exports for button widgets.
+- `simple_sender/ui/widgets_common.py`: shared widget utilities (background resolution plus button metadata helpers for keyboard IDs/log tags).
+- `simple_sender/ui/widgets_tooltips.py`: tooltip-focused UI helpers (tooltip rendering, tab tooltips, disabled-reason text resolution, and bulk tooltip attachment).
+- `simple_sender/ui/widgets_keypad.py`: numeric keypad helpers for touch-friendly numeric entry widgets.
+- `simple_sender/ui/widgets.py`: deprecated compatibility re-exports for button + tooltip + keypad + common widget helpers (planned removal in `v1.8.0`, no earlier than `2026-06-01`).
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
 - `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
@@ -808,7 +816,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 148 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-22), and local/CI hooks now enforce `--expected-count 148`.
+5. Static typing gates currently run mypy against 151 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-23), and local/CI hooks now enforce `--expected-count 151`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 
 ## FAQ

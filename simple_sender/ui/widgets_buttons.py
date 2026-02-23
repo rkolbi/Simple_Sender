@@ -28,7 +28,7 @@ from simple_sender.utils.constants import STOP_SIGN_CUT_RATIO
 
 def _resolve_bg(master) -> str:
     try:
-        from .widgets import _resolve_widget_bg
+        from .widgets_common import _resolve_widget_bg
 
         return str(_resolve_widget_bg(master))
     except Exception:

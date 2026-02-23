@@ -99,7 +99,7 @@ def center_window(window, parent=None) -> None:
 
     window.geometry(f"+{max(0, x)}+{max(0, y)}")
     try:
-        from simple_sender.ui.widgets import ensure_tooltips
+        from simple_sender.ui.widgets_tooltips import ensure_tooltips
         ensure_tooltips(window)
     except Exception:
         return

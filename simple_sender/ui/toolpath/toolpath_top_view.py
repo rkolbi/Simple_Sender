@@ -28,7 +28,7 @@ from typing import Any, Iterable, Sequence
 
 from simple_sender.autolevel.grid import ProbeGrid
 from simple_sender.gcode_parser import parse_gcode_lines
-from simple_sender.ui.widgets import _resolve_widget_bg
+from simple_sender.ui.widgets_common import _resolve_widget_bg
 from simple_sender.utils.constants import (
     TOOLPATH_CANVAS_MARGIN,
     TOOLPATH_GRID_MAX_POINTS,

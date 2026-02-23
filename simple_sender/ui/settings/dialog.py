@@ -40,7 +40,7 @@ from .sections import (
     build_viewer_section,
     build_zeroing_section,
 )
-from simple_sender.ui.widgets import set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 
 def build_app_settings_tab(app, notebook):

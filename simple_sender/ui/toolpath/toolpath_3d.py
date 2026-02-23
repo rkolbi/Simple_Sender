@@ -29,7 +29,8 @@ from simple_sender.autolevel.grid import ProbeGrid
 from .toolpath_3d_data import Toolpath3DDataMixin
 from .toolpath_3d_interaction import Toolpath3DInteractionMixin
 from .toolpath_3d_rendering import Toolpath3DRenderMixin
-from simple_sender.ui.widgets import apply_tooltip, set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_common import set_kb_id
 from simple_sender.utils.constants import (
     TOOLPATH_STREAMING_RENDER_INTERVAL_DEFAULT,
     VIEW_3D_ARC_STEP_DEFAULT,

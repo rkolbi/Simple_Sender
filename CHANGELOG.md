@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+No entries yet.
+
+## [1.7.0] - 2026-02-23
+
 ### Added
 - Spoilboard Generator in the Overdrive tab:
   - creates surfacing G-code in-memory from width/height/tool/stepover/feed/RPM/start XY inputs plus `Surfacing Depth (mm)` (default `0.50`)
@@ -14,6 +18,14 @@ All notable changes to this project are documented in this file.
 - Regression coverage for deferred stream completion:
   - added `tests/ui/test_status_deferred_completion.py` to verify completion finalizes only after `Idle`
   - expanded `tests/ui/test_event_router.py` assertions for the deferred-completion lock path
+- Ruff syntax/pyflakes quality gate was added across local/CI workflows:
+  - `requirements-dev.txt` now includes pinned `ruff`
+  - `.github/workflows/tests.yml` now runs `python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools`
+  - `.pre-commit-config.yaml` now includes an equivalent `ruff` hook
+  - `run_tests.bat` now executes the same `ruff` gate before mypy/pytest
+- Widget-module test coverage now includes direct-module edge cases:
+  - added keypad focus-hover delegation assertions in `tests/ui/test_widgets_numeric_keypad.py`
+  - added tooltip instance-reuse assertions in `tests/ui/test_widgets_tooltips.py`
 
 ### Changed
 - Jog panel control layout was reorganized:
@@ -36,14 +48,20 @@ All notable changes to this project are documented in this file.
 - Module/documentation alignment updates:
   - README module layout now documents the `ui/widgets_buttons.py` extraction and `ui/widgets.py` compatibility re-exports
   - README testing and typing verification notes were refreshed to the latest validated baseline date
+- Mypy target-manifest gate was resynced to the current manifest size:
+  - local/CI hooks now enforce `--expected-count 151`
+  - README pre-release note now reflects `151` configured mypy targets (verified `2026-02-23`)
+- `simple_sender/ui/widgets.py` now carries a deprecation timeline note:
+  - deprecated as of `2026-02-23`
+  - planned removal target `v1.8.0` (no earlier than `2026-06-01`)
 
-### Baseline Validation (local, 2026-02-22)
-- `python tools/check_mypy_targets.py --expected-count 148`: PASS
-- `python -m mypy --config-file mypy.ini`: PASS (`148` source files)
-- `python -m pytest tests -q`: PASS (`642` passed, `1` skipped)
-- `python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term`: PASS
-- `python tools/check_core_coverage.py coverage.xml`: PASS (aggregate critical coverage `89.4%`)
-- `run_tests.bat`: PASS end-to-end (`mypy`, full `pytest`+coverage, and critical-path coverage gate)
+### Baseline Validation (local, 2026-02-23)
+- `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 151`: PASS
+- `.venv\Scripts\python.exe -m ruff check --select E9,F63,F7,F82 simple_sender tests tools`: PASS
+- `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`151` source files)
+- `.venv\Scripts\python.exe -m pytest -q`: PASS
+- `.venv\Scripts\python.exe -m pytest --cov=simple_sender --cov-report=xml -q`: PASS
+- `.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: PASS (aggregate critical coverage `91.5%`)
 
 ## [1.6.0] - 2026-02-21
 

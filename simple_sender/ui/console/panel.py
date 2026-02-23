@@ -23,7 +23,8 @@
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.widgets import apply_tooltip, attach_log_gcode, set_kb_id, set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import apply_tooltip, set_tab_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 
 
 def build_console_tab(app, notebook: ttk.Notebook) -> ttk.Frame:

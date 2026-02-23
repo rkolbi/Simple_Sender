@@ -26,7 +26,7 @@ from typing import Any
 
 from . import joystick_hold
 from . import joystick as joystick_bindings
-from simple_sender.ui.widgets import StopSignButton, VirtualHoldButton
+from simple_sender.ui.widgets_buttons import StopSignButton, VirtualHoldButton
 from simple_sender.utils.constants import CLEAR_ICON
 
 

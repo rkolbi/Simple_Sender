@@ -27,14 +27,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Sequence
 
-from simple_sender.ui.widgets import (
-    ToolTip,
-    apply_tooltip,
-    attach_log_gcode,
-    attach_numeric_keypad,
-    set_kb_id,
-    set_tab_tooltip,
-)
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
+from simple_sender.ui.widgets_tooltips import ToolTip, apply_tooltip, set_tab_tooltip
+from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     GRBL_NON_NUMERIC_SETTINGS,
     GRBL_SETTING_KEYS,
