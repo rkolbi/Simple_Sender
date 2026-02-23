@@ -54,6 +54,9 @@ No entries yet.
 - `simple_sender/ui/widgets.py` now carries a deprecation timeline note:
   - deprecated as of `2026-02-23`
   - planned removal target `v1.8.0` (no earlier than `2026-06-01`)
+- Preflight gating now treats incremental-only (`G91`) modal hazard reports as non-blocking:
+  - preserves intentional spoilboard generator relative Z-lift behavior
+  - avoids blocking run start when validation issues are only standalone `G91` modal notes
 
 ### Baseline Validation (local, 2026-02-23)
 - `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 151`: PASS

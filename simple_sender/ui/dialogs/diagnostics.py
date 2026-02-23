@@ -220,6 +220,40 @@ def _get_travel_limits(app: Any) -> dict[str, float]:
     return out
 
 
+def _is_incremental_hazard_only(report: Any) -> bool:
+    if report is None:
+        return False
+    if int(getattr(report, "line_issue_count", 0)) <= 0:
+        return False
+    if int(getattr(report, "long_line_count", 0)) > 0:
+        return False
+    if getattr(report, "unsupported_axes", None):
+        return False
+    if getattr(report, "unsupported_words", None):
+        return False
+    if getattr(report, "unsupported_g_codes", None):
+        return False
+    if getattr(report, "unsupported_m_codes", None):
+        return False
+    if getattr(report, "grbl_warnings", None):
+        return False
+    hazards = set(getattr(report, "modal_hazards", set()) or set())
+    expected = {"G91 (incremental distance mode)"}
+    if hazards != expected:
+        return False
+    line_issues = list(getattr(report, "line_issues", []) or [])
+    if not line_issues:
+        return False
+    for issue in line_issues:
+        line_text = str(getattr(issue, "line", "")).strip().upper()
+        if line_text != "G91":
+            return False
+        issue_texts = tuple(str(text) for text in getattr(issue, "issues", tuple()))
+        if issue_texts != ("Modal hazard: G91 (incremental distance mode)",):
+            return False
+    return True
+
+
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
     failures: list[str] = []
     warnings: list[str] = []
@@ -285,7 +319,11 @@ def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
         else:
             failures.append("Validation report is unavailable.")
     else:
-        if getattr(report, "line_issue_count", 0) > 0:
+        if _is_incremental_hazard_only(report):
+            warnings.append(
+                "Validation note: incremental mode (G91) is used; confirm this is intentional."
+            )
+        elif getattr(report, "line_issue_count", 0) > 0:
             failures.append(
                 f"Validation found issues on {int(getattr(report, 'line_issue_count', 0))} line(s)."
             )
