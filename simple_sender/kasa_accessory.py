@@ -378,8 +378,12 @@ class AccessoryRouter:
             try:
                 self._log(message)
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Failed writing Kasa message via injected logger: %s",
+                    exc,
+                    exc_info=exc,
+                )
         logger.warning(message)
 
     def shutdown(self, timeout: float = 1.0) -> None:

@@ -20,10 +20,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.ui.log_viewer import LogViewer
+
+logger = logging.getLogger(__name__)
 
 
 def show_logs_dialog(app) -> None:
@@ -34,8 +37,9 @@ def show_logs_dialog(app) -> None:
                 existing.lift()
                 existing.focus_force()
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed reusing existing logs window: %s", exc, exc_info=exc)
+            app._logs_window = None
 
     win = tk.Toplevel(app)
     app._logs_window = win

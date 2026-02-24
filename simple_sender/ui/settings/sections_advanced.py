@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 
@@ -33,6 +34,18 @@ from simple_sender.ui.autolevel_dialog.prefs import pref_dict, pref_float, pref_
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import set_kb_id
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def build_safety_aids_section(app, parent: ttk.Frame, row: int) -> int:
     tw_frame = ttk.LabelFrame(parent, text="Safety Aids", padding=8)
@@ -67,8 +80,8 @@ def _build_interface_performance_row(app, interface_frame, row: int) -> int:
             enabled = False
         try:
             app.btn_performance_mode.config(text=f"Performance: {'On' if enabled else 'Off'}")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed refreshing performance-mode button label", exc)
 
     def _toggle_performance_mode() -> None:
         before = False
@@ -82,8 +95,8 @@ def _build_interface_performance_row(app, interface_frame, row: int) -> int:
         else:
             try:
                 app.performance_mode.set(not before)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed toggling performance_mode variable from App Settings", exc)
             on_change = getattr(app, "_on_performance_mode_change", None)
             if callable(on_change):
                 on_change()
@@ -99,8 +112,8 @@ def _build_interface_performance_row(app, interface_frame, row: int) -> int:
     _refresh_performance_button()
     try:
         app.performance_mode.trace_add("write", lambda *_args: _refresh_performance_button())
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed binding performance_mode trace for button refresh", exc)
     return row + 1
 
 
@@ -429,8 +442,8 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
         app.auto_level_job_prefs = prefs
         try:
             app.settings["auto_level_job_prefs"] = dict(prefs)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed persisting auto-level job preference presets", exc)
 
     ttk.Label(auto_level_frame, text="Job size thresholds (area, mm^2)").grid(
         row=0, column=0, columnspan=3, sticky="w"

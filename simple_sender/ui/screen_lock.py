@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 from tkinter import messagebox
 from typing import Any
 
@@ -36,6 +37,16 @@ SCREEN_LOCK_EVENTS = (
     "<KeyPress>",
     "<KeyRelease>",
 )
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _install_bindtag(app: Any, widget: Any) -> None:
@@ -132,8 +143,8 @@ def init_screen_lock_guard(app: Any) -> None:
             continue
     try:
         app.bind_all("<Map>", app._on_screen_lock_widget_mapped, add="+")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed binding <Map> handler for screen-lock bindtag install", exc)
     _install_bindtag_recursive(app, app)
     refresh_screen_lock_toggle_text(app)
 
@@ -159,13 +170,13 @@ def toggle_screen_lock(app: Any) -> None:
     app._screen_lock_active = not active
     try:
         app._clear_key_sequence_buffer()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed clearing key-sequence buffer while toggling screen lock", exc)
     if app._screen_lock_active:
         try:
             app._stop_joystick_hold()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed stopping joystick hold when screen lock enabled", exc)
     refresh_screen_lock_toggle_text(app)
     try:
         app.status.config(
@@ -173,5 +184,5 @@ def toggle_screen_lock(app: Any) -> None:
             if app._screen_lock_active
             else "Screen unlocked"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating status text after screen lock toggle", exc)

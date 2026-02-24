@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import os
 import threading
 from datetime import datetime
@@ -29,6 +30,17 @@ from typing import Any, Callable
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.dialogs.diagnostics import run_preflight_gate
 from simple_sender.utils.constants import BAUD_DEFAULT
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
@@ -49,7 +61,8 @@ def _safe_initial_dir(path: str) -> str:
         return ""
     try:
         path = os.path.expanduser(str(path))
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed expanding initial G-code directory path", exc)
         return ""
     if os.name == "nt":
         if path.startswith("\\\\") or path.startswith("//"):
@@ -66,11 +79,13 @@ def _safe_initial_dir(path: str) -> str:
             dtype = ctypes.windll.kernel32.GetDriveTypeW(root)
             if dtype not in (DRIVE_REMOVABLE, DRIVE_FIXED, DRIVE_RAMDISK):
                 return ""
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed validating Windows drive type for initial directory", exc)
             return ""
     try:
         return path if os.path.isdir(path) else ""
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed checking initial G-code directory existence", exc)
         return ""
 
 
@@ -79,7 +94,8 @@ def refresh_ports(app, auto_connect: bool = False):
     last = ""
     try:
         last = getattr(app, "_auto_reconnect_last_port", "") or ""
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading auto-reconnect last port", exc)
         last = ""
     if not last:
         last = (app.settings.get("last_port") or "").strip()
@@ -98,48 +114,50 @@ def refresh_ports(app, auto_connect: bool = False):
             app.current_port.set(last)
             try:
                 app.toggle_connect()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed auto-connecting to last known port after refresh", exc)
 
 
 def _set_connection_controls_pending(app, label: str) -> None:
     try:
         app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state="disabled")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed setting connect button to pending state", exc)
     try:
         app.btn_refresh.config(state="disabled")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed disabling refresh button while connection pending", exc)
     try:
         app.port_combo.config(state="disabled")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed disabling port combobox while connection pending", exc)
 
 
 def _sync_connection_controls(app) -> None:
     try:
         connected = bool(getattr(app, "connected", False))
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading connected flag while syncing connection controls", exc)
         connected = False
     try:
         is_streaming = bool(app.grbl.is_streaming())
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading streaming state while syncing connection controls", exc)
         is_streaming = False
     btn_state = "disabled" if is_streaming else "normal"
     label = "Disconnect" if connected else "Connect"
     try:
         app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state=btn_state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed syncing connect button state", exc)
     try:
         app.btn_refresh.config(state=btn_state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed syncing refresh button state", exc)
     try:
         app.port_combo.config(state="disabled" if is_streaming else "readonly")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed syncing port combobox state", exc)
 
 
 def toggle_connect(app):
@@ -157,8 +175,8 @@ def toggle_connect(app):
     is_connected = bool(getattr(app, "connected", False))
     try:
         is_connected = is_connected or bool(app.grbl.is_connected())
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reading GRBL connected state in toggle_connect", exc)
     if is_connected:
         app._user_disconnect = True
         app._auto_reconnect_pending = False
@@ -203,21 +221,21 @@ def start_connect_worker(
             if show_error:
                 try:
                     app.after(0, lambda exc=exc: messagebox.showerror("Connect failed", str(exc)))
-                except Exception:
-                    pass
+                except Exception as schedule_exc:
+                    _log_suppressed("Failed scheduling connect-failed error dialog", schedule_exc)
             callback = on_failure
             if callback is not None:
                 try:
                     app.after(0, lambda exc=exc: callback(exc))
-                except Exception:
-                    pass
+                except Exception as schedule_exc:
+                    _log_suppressed("Failed scheduling connect-failure callback", schedule_exc)
         finally:
             app._connecting = False
             if not connected_ok:
                 try:
                     app.after(0, lambda: _sync_connection_controls(app))
-                except Exception:
-                    pass
+                except Exception as schedule_exc:
+                    _log_suppressed("Failed scheduling connection-control sync after connect failure", schedule_exc)
 
     app._connecting = True
     _set_connection_controls_pending(app, "Connecting...")
@@ -242,8 +260,11 @@ def start_disconnect_worker(app):
             if not disconnected_ok:
                 try:
                     app.after(0, lambda: _sync_connection_controls(app))
-                except Exception:
-                    pass
+                except Exception as schedule_exc:
+                    _log_suppressed(
+                        "Failed scheduling connection-control sync after disconnect failure",
+                        schedule_exc,
+                    )
 
     app._disconnecting = True
     _set_connection_controls_pending(app, "Disconnecting...")
@@ -266,8 +287,8 @@ def open_gcode(app):
     try:
         if getattr(app, "notebook", None) is not None and getattr(app, "gcode_tab", None) is not None:
             app.notebook.select(app.gcode_tab)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed switching notebook to G-code tab after file selection", exc)
     app._load_gcode_from_path(path)
 
 

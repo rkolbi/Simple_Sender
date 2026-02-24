@@ -80,8 +80,12 @@ class MacroPromptMixin(MacroExecutorState):
                             self.ui_q.put(
                                 ("log", f"[macro] Message expression error [{expr_text}]: {exc}")
                             )
-                        except Exception:
-                            pass
+                        except Exception as queue_exc:
+                            logger.debug(
+                                "Failed queueing macro message expression error: %s",
+                                queue_exc,
+                                exc_info=queue_exc,
+                            )
                         result = ""
                     if isinstance(result, float):
                         out.append(str(round(result, 4)))

@@ -47,6 +47,22 @@ def _stream_active_or_finishing(app) -> bool:
     return getattr(app, "_stream_state", None) in ("running", "paused")
 
 
+def _homing_idle_grace_seconds(app) -> float:
+    interval = 0.2
+    poll_interval = getattr(app, "status_poll_interval", None)
+    try:
+        if poll_interval is not None and hasattr(poll_interval, "get"):
+            interval = float(poll_interval.get())
+        elif poll_interval is not None:
+            interval = float(poll_interval)
+    except Exception as exc:
+        _log_suppressed("Failed reading status poll interval for homing grace", exc)
+        interval = 0.2
+    if interval <= 0:
+        interval = 0.2
+    return max(0.3, min(2.0, interval * 3.0))
+
+
 def _maybe_restore_pending_g90(app) -> None:
     if not getattr(app, "_pending_force_g90", False):
         return
@@ -217,8 +233,10 @@ def _resolve_display_state(app, state: str) -> str:
     if state_lower.startswith("idle"):
         start_ts = getattr(app, "_homing_start_ts", 0.0)
         timeout_s = getattr(app, "_homing_timeout_s", 30.0)
-        timed_out = start_ts and (time.time() - start_ts) > timeout_s
-        if getattr(app, "_homing_state_seen", False) or timed_out:
+        elapsed = max(0.0, (time.time() - start_ts)) if start_ts else 0.0
+        timed_out = bool(start_ts) and elapsed > timeout_s
+        grace_elapsed = (not start_ts) or (elapsed >= _homing_idle_grace_seconds(app))
+        if getattr(app, "_homing_state_seen", False) or timed_out or grace_elapsed:
             app._homing_in_progress = False
             app._homing_state_seen = False
             try:
@@ -325,8 +343,8 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
     try:
         if int(app.progress_pct.get()) >= 100:
             app.progress_pct.set(99)
-    except (AttributeError, TypeError, ValueError):
-        pass
+    except (AttributeError, TypeError, ValueError) as exc:
+        _log_suppressed("Failed clamping deferred completion progress", exc)
 
 
 def _parse_xyz_triplet(text: str) -> list[float] | None:

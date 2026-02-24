@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import threading
 import time
 from typing import Any, Callable, cast
@@ -28,6 +29,17 @@ from tkinter import messagebox, ttk
 
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.utils.grbl_errors import extract_grbl_code
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class ErrorDialogManager:
@@ -92,8 +104,8 @@ class ErrorDialogManager:
                     self.app.streaming_controller.handle_log(msg)
                 else:
                     self.app.ui_q.put(("log", msg))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed writing error-dialog suppression message to logs", exc)
             self._sync_to_app()
             self.set_status("Dialogs: Suppressed")
             return False
@@ -175,8 +187,8 @@ def install_dialog_loggers(app):
     def _showerror(title, message, **kwargs):
         try:
             app.streaming_controller.handle_log(f"[dialog] {title}: {message}")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed logging showerror dialog message", exc)
         return orig_error(title, message, **kwargs)
 
     messagebox.showerror = cast(Callable[..., Any], _showerror)
@@ -211,15 +223,15 @@ def _close_grbl_code_popup(app) -> None:
     if after_id is not None:
         try:
             app.after_cancel(after_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling GRBL code popup auto-dismiss timer", exc)
     app._grbl_code_popup_after_id = None
     popup = getattr(app, "_grbl_code_popup", None)
     try:
         if popup is not None and popup.winfo_exists():
             popup.destroy()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed destroying GRBL code popup window", exc)
     app._grbl_code_popup = None
     app._grbl_code_popup_vars = None
 
@@ -235,8 +247,8 @@ def _ensure_grbl_code_popup(app):
     try:
         if popup is not None and popup.winfo_exists() and isinstance(popup_vars, dict):
             return popup, popup_vars
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed checking existing GRBL code popup state", exc)
 
     popup = tk.Toplevel(app)
     popup.title("GRBL Alert")
@@ -314,8 +326,8 @@ def _schedule_grbl_popup_close(app) -> None:
     if after_id is not None:
         try:
             app.after_cancel(after_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling existing GRBL code popup auto-dismiss timer before reschedule", exc)
     app._grbl_code_popup_after_id = None
     if auto_close_s <= 0:
         return

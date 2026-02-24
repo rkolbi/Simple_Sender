@@ -21,11 +21,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from datetime import datetime
+import logging
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
 
 from simple_sender.ui.dialogs.popup_utils import center_window
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def format_throughput(bps: float) -> str:
@@ -63,8 +75,8 @@ def maybe_notify_job_completion(app, done: int, total: int) -> None:
     )
     try:
         app.streaming_controller.handle_log(f"[job] {summary}")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed logging job completion summary", exc)
     message = (
         "Job completed.\n\n"
         f"Started: {start_text}\n"
@@ -76,8 +88,8 @@ def maybe_notify_job_completion(app, done: int, total: int) -> None:
     if bool(app.job_completion_beep.get()):
         try:
             app.bell()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed playing job completion bell", exc)
 
 
 def _start_completion_flash(app) -> None:
@@ -102,8 +114,8 @@ def _stop_completion_flash(app) -> None:
     if flash_id is not None:
         try:
             app.after_cancel(flash_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling completion flash timer", exc)
     app._completion_flash_id = None
     app._completion_flash_on = False
     app.progress_pct.set(0)
@@ -147,13 +159,13 @@ def _show_job_completion_dialog(app, message: str) -> None:
         _stop_completion_flash(app)
         try:
             dialog.destroy()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed destroying job completion dialog", exc)
 
     btn.configure(command=close)
     dialog.protocol("WM_DELETE_WINDOW", close)
     try:
         dialog.grab_set()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed setting job completion dialog grab", exc)
     center_window(dialog, app)

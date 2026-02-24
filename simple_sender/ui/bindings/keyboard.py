@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -28,6 +29,17 @@ from . import joystick_hold
 from . import joystick as joystick_bindings
 from simple_sender.ui.widgets_buttons import StopSignButton, VirtualHoldButton
 from simple_sender.utils.constants import CLEAR_ICON
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def update_keyboard_live_status(app, label: str | None = None) -> None:
@@ -257,8 +269,8 @@ def start_kb_edit(app, row, col):
     if app._kb_edit is not None:
         try:
             app._kb_edit.destroy()
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed destroying existing keyboard-edit entry before starting new capture", exc)
         app._kb_edit = None
     x, y, w, h = bbox
     value = app.kb_table.set(row, "key")
@@ -304,8 +316,8 @@ def kb_capture_key(app, event, row, entry):
     if event.keysym in ("Escape",):
         try:
             entry.destroy()
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed destroying keyboard-edit entry on Escape", exc)
         app._kb_edit_state.pop(entry, None)
         app._kb_edit = None
         return "break"
@@ -350,8 +362,8 @@ def commit_kb_edit(app, row, entry, label_override: str | None = None):
         if after_id is not None:
             entry.after_cancel(after_id)
         entry.destroy()
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed finalizing keyboard-edit entry commit", exc)
     app._kb_edit = None
     placeholder = state.get("placeholder") if state else False
     if label_override is None and placeholder:

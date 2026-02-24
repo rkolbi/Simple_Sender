@@ -24,6 +24,7 @@
 """
 
 # Standard library imports
+import logging
 import os
 import sys
 from typing import Any, TYPE_CHECKING
@@ -136,6 +137,16 @@ _APP_MIXINS = (
     UiTogglesMixin,
     StateUiMixin,
 )
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _install_app_mixin_methods(target_cls: type, mixins: tuple[type, ...]) -> None:
@@ -209,8 +220,8 @@ class App(tk.Tk):
         if bool(self.fullscreen_on_startup.get()):
             try:
                 self.attributes("-fullscreen", True)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed enabling fullscreen on startup", exc)
         self._apply_ui_scale(self.settings.get("ui_scale", 1.5))
         init_toolpath_settings(self)
         init_runtime_state(self, default_jog_feed_xy, default_jog_feed_z, _MACRO_SEARCH_DIRS)
@@ -238,8 +249,8 @@ class App(tk.Tk):
         if isinstance(geometry, str) and geometry:
             try:
                 self.geometry(geometry)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed applying saved window geometry", exc)
         self._load_grbl_setting_info()
         self.streaming_controller.bind_button_logging()
         self._virtual_hold_buttons = self._create_virtual_hold_buttons()

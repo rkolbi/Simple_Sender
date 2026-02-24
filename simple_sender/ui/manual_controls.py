@@ -20,7 +20,19 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
@@ -53,15 +65,15 @@ def set_manual_controls_enabled(app, enabled: bool):
                     w.config(state="normal")
                     continue
                 w.config(state="disabled")
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed disabling manual control while alarm lock active", exc)
         return
     connected = bool(getattr(app, "connected", False))
     for w in app._manual_controls:
         try:
             w.config(state=_manual_control_state(app, w, enabled, connected))
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed setting manual control state", exc)
     if enabled and connected:
         app._set_unit_mode(app.unit_mode.get())
         app._set_step_xy(app.step_xy.get())

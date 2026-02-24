@@ -20,12 +20,24 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
 from simple_sender.utils.constants import TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _clamp_tooltip_position(
@@ -120,8 +132,8 @@ class ToolTip:
         if owner is not None:
             try:
                 enabled = bool(owner.tooltip_enabled.get())
-            except (AttributeError, TypeError, ValueError, tk.TclError):
-                pass
+            except (AttributeError, TypeError, ValueError, tk.TclError) as exc:
+                _log_suppressed("Failed reading tooltip_enabled flag", exc)
         if not enabled:
             return
         text = _resolve_tooltip_text(self.widget, self.text)
@@ -161,8 +173,8 @@ class ToolTip:
         if self._timeout_after_id is not None:
             try:
                 self.widget.after_cancel(self._timeout_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling existing tooltip timeout", exc)
             self._timeout_after_id = None
         owner = _resolve_owner(self.widget, "tooltip_timeout_sec")
         try:
@@ -186,8 +198,8 @@ class ToolTip:
         if self._timeout_after_id is not None:
             try:
                 self.widget.after_cancel(self._timeout_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling tooltip timeout on hide", exc)
             self._timeout_after_id = None
         if self._tip is not None:
             self._tip.destroy()
@@ -197,8 +209,8 @@ class ToolTip:
         self.text = text
         try:
             self.widget._tooltip_text = text
-        except AttributeError:
-            pass
+        except AttributeError as exc:
+            _log_suppressed("Failed storing tooltip text on widget", exc)
 
 
 class _NotebookTabTooltips:
@@ -261,22 +273,22 @@ class _NotebookTabTooltips:
         if self._after_id is not None:
             try:
                 self.notebook.after_cancel(self._after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling pending notebook tooltip show timer", exc)
             self._after_id = None
         if self._poll_after_id is not None:
             try:
                 self.notebook.after_cancel(self._poll_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling notebook tooltip poll timer", exc)
             self._poll_after_id = None
 
     def _schedule_timeout(self) -> None:
         if self._timeout_after_id is not None:
             try:
                 self.notebook.after_cancel(self._timeout_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling notebook tooltip timeout timer", exc)
             self._timeout_after_id = None
         owner = _resolve_owner(self.notebook, "tooltip_timeout_sec")
         try:
@@ -390,8 +402,8 @@ class _NotebookTabTooltips:
             idx = int(self.notebook.index(f"@{rx},{ry}"))
             if 0 <= idx < len(tabs):
                 return tabs[idx]
-        except (tk.TclError, TypeError, ValueError):
-            pass
+        except (tk.TclError, TypeError, ValueError) as exc:
+            _log_suppressed("Failed resolving notebook tab id from pointer coordinates", exc)
         return None
 
     def _hide_tip(self) -> None:
@@ -404,14 +416,14 @@ class _NotebookTabTooltips:
         if self._timeout_after_id is not None:
             try:
                 self.notebook.after_cancel(self._timeout_after_id)
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed cancelling notebook tooltip timeout on hide", exc)
             self._timeout_after_id = None
         if self._tip is not None:
             try:
                 self._tip.destroy()
-            except tk.TclError:
-                pass
+            except tk.TclError as exc:
+                _log_suppressed("Failed destroying notebook tooltip window", exc)
             self._tip = None
 
     def _on_leave(self, _event=None) -> None:
@@ -481,8 +493,8 @@ def apply_tooltip(widget, text: str):
         return
     try:
         widget._tooltip_text = text
-    except AttributeError:
-        pass
+    except AttributeError as exc:
+        _log_suppressed("Failed storing tooltip text on widget in apply_tooltip", exc)
     existing = getattr(widget, "_tooltip", None)
     if isinstance(existing, ToolTip):
         existing.set_text(text)
@@ -490,8 +502,8 @@ def apply_tooltip(widget, text: str):
     tip = ToolTip(widget, text)
     try:
         widget._tooltip = tip
-    except AttributeError:
-        pass
+    except AttributeError as exc:
+        _log_suppressed("Failed storing tooltip instance on widget", exc)
     return tip
 
 
@@ -503,22 +515,22 @@ def set_tab_tooltip(notebook, tab, text: str):
         handler = _NotebookTabTooltips(notebook)
         try:
             notebook._tab_tooltip_handler = handler
-        except AttributeError:
-            pass
+        except AttributeError as exc:
+            _log_suppressed("Failed storing notebook tab-tooltip handler", exc)
     handler.set_tab_tooltip(tab, text)
 
 
 def _widget_state(widget) -> str:
     try:
         return str(widget.cget("state")).lower()
-    except (AttributeError, tk.TclError):
-        pass
+    except (AttributeError, tk.TclError) as exc:
+        _log_suppressed("Failed reading widget state via cget", exc)
     try:
         state = widget.state()
         if isinstance(state, (list, tuple, set)):
             return "disabled" if "disabled" in state else "normal"
-    except (AttributeError, tk.TclError):
-        pass
+    except (AttributeError, tk.TclError) as exc:
+        _log_suppressed("Failed reading widget state via state()", exc)
     return "normal"
 
 

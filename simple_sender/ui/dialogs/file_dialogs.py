@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter.font as tkfont
 
 _FILE_DIALOG_FONTS = (
@@ -32,6 +33,16 @@ _FILE_DIALOG_FONTS = (
     "TkIconFont",
     "TkTooltipFont",
 )
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _coerce_scale(value, default: float = 1.4) -> float:
@@ -99,13 +110,13 @@ def run_file_dialog(app, func, *args, **kwargs):
     try:
         try:
             app.tk.call("tk", "scaling", old_scale * scale)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed applying temporary Tk scaling for file dialog", exc)
         _apply_scaled_fonts(sizes, scale)
         return func(*args, **kwargs)
     finally:
         try:
             app.tk.call("tk", "scaling", old_scale)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring Tk scaling after file dialog", exc)
         _restore_fonts(sizes)

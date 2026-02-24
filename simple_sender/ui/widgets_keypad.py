@@ -20,11 +20,23 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
 from simple_sender.ui.widgets_tooltips import _resolve_owner, _widget_disabled
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def attach_numeric_keypad(
@@ -53,9 +65,69 @@ def attach_numeric_keypad(
         entry.bind("<FocusIn>", _open_numeric_keypad_from_focus, add="+")
         try:
             entry._numeric_keypad_bound = True
-        except (AttributeError, tk.TclError):
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            _log_suppressed("Failed setting keypad-bound marker on entry", exc)
     return entry
+
+
+class _PromptEntryProxy:
+    def __init__(self, parent, initial_value: str, on_apply):
+        self._parent = parent
+        self._value = str(initial_value)
+        self._on_apply = on_apply
+
+    def get(self) -> str:
+        return self._value
+
+    def delete(self, _start, _end=None) -> None:
+        self._value = ""
+
+    def insert(self, _index, text: str) -> None:
+        self._value = str(text)
+
+    def event_generate(self, event: str) -> None:
+        if event == "<Return>" and callable(self._on_apply):
+            self._on_apply(self._value)
+
+    def winfo_toplevel(self):
+        if self._parent is None:
+            return self
+        try:
+            return self._parent.winfo_toplevel()
+        except Exception as exc:
+            _log_suppressed("Failed resolving keypad prompt toplevel", exc)
+            return self._parent
+
+    def focus_set(self) -> None:
+        return
+
+    def selection_range(self, _start, _end) -> None:
+        return
+
+    def icursor(self, _index) -> None:
+        return
+
+
+def prompt_numeric_keypad(
+    parent,
+    *,
+    initial_value: str = "",
+    allow_decimal: bool = True,
+    allow_negative: bool = False,
+    allow_empty: bool = True,
+    title: str | None = None,
+    on_apply=None,
+) -> None:
+    proxy = _PromptEntryProxy(parent, initial_value, on_apply)
+    _show_numeric_keypad(
+        proxy,
+        {
+            "allow_decimal": bool(allow_decimal),
+            "allow_negative": bool(allow_negative),
+            "allow_empty": bool(allow_empty),
+            "title": title or "Enter value",
+        },
+    )
 
 
 def _open_numeric_keypad(event):
@@ -66,15 +138,15 @@ def _open_numeric_keypad(event):
     try:
         if not entry.winfo_viewable():
             return
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed checking entry viewable state before keypad open", exc)
     owner = _resolve_owner(entry, "numeric_keypad_enabled")
     if owner is not None:
         try:
             if not bool(owner.numeric_keypad_enabled.get()):
                 return
-        except (AttributeError, TypeError, ValueError, tk.TclError):
-            pass
+        except (AttributeError, TypeError, ValueError, tk.TclError) as exc:
+            _log_suppressed("Failed reading numeric keypad enabled flag", exc)
     if _widget_disabled(entry):
         return
     _show_numeric_keypad(entry, spec)
@@ -136,8 +208,8 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             if dlg.winfo_exists():
                 dlg.lift()
                 return
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed lifting existing numeric keypad dialog", exc)
     parent = None
     try:
         parent = entry.winfo_toplevel()
@@ -151,13 +223,13 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
     dlg.transient(parent)
     try:
         dlg.lift()
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed lifting numeric keypad dialog", exc)
     dlg.resizable(False, False)
     try:
         entry._numeric_keypad_dialog = dlg
-    except AttributeError:
-        pass
+    except AttributeError as exc:
+        _log_suppressed("Failed storing keypad dialog reference on entry", exc)
 
     frame = ttk.Frame(dlg, padding=12)
     frame.pack(fill="both", expand=True)
@@ -224,16 +296,16 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             entry.delete(0, "end")
             if new_value:
                 entry.insert(0, new_value)
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed applying keypad value to entry", exc)
         try:
             entry.event_generate("<Return>")
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed generating keypad <Return> event", exc)
         try:
             entry.event_generate("<FocusOut>")
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed generating keypad <FocusOut> event", exc)
         _close_dialog()
 
     def _cancel():
@@ -242,16 +314,16 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
     def _close_dialog():
         try:
             dlg.grab_release()
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed releasing keypad dialog grab", exc)
         try:
             dlg.destroy()
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed destroying keypad dialog", exc)
         try:
             entry._numeric_keypad_dialog = None
-        except AttributeError:
-            pass
+        except AttributeError as exc:
+            _log_suppressed("Failed clearing keypad dialog reference on entry", exc)
 
     def _make_button(text: str, command, row: int, col: int, *, colspan: int = 1):
         btn = ttk.Button(
@@ -308,24 +380,26 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
         entry.focus_set()
         entry.selection_range(0, "end")
         entry.icursor("end")
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed restoring focus to keypad target entry", exc)
     dlg.protocol("WM_DELETE_WINDOW", _cancel)
     _center_modal(dlg, parent)
     try:
         dlg.update_idletasks()
         dlg.wait_visibility()
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed waiting for keypad dialog visibility", exc)
     try:
         dlg.grab_set()
-    except tk.TclError:
+    except tk.TclError as exc:
+        _log_suppressed("Failed setting keypad dialog grab", exc)
+
         def _retry_grab():
             try:
                 dlg.grab_set()
-            except tk.TclError:
-                pass
+            except tk.TclError as retry_exc:
+                _log_suppressed("Failed retrying keypad dialog grab", retry_exc)
         try:
             dlg.after(0, _retry_grab)
-        except tk.TclError:
-            pass
+        except tk.TclError as schedule_exc:
+            _log_suppressed("Failed scheduling keypad dialog grab retry", schedule_exc)

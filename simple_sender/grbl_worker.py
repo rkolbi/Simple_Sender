@@ -82,8 +82,17 @@ from .utils.constants import (
 from .utils.exceptions import SerialWriteError
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
 _RX_LOGGER = None
 _RX_LOGGER_LOCK = threading.Lock()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _get_rx_logger():
@@ -267,8 +276,8 @@ class GrblWorker(
             return
         try:
             rx_logger.info("RX %s", line)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed writing RX serial line to debug logger", exc)
 
     def _log_tx_line(self, line: str) -> None:
         if not line:
@@ -278,8 +287,8 @@ class GrblWorker(
             return
         try:
             rx_logger.info("TX %s", line)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed writing TX serial line to debug logger", exc)
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -339,11 +348,11 @@ class GrblWorker(
     
     def _clear_outgoing(self) -> None:
         """Clear the outgoing command queue."""
-        try:
-            while True:
+        while True:
+            try:
                 self._outgoing_q.get_nowait()
-        except queue.Empty:
-            pass
+            except queue.Empty:
+                break
         self._manual_pending_item = None
         self._emit_buffer_fill()
     

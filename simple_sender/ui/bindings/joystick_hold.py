@@ -35,6 +35,16 @@ from simple_sender.utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
 JOYSTICK_HOLD_LIMIT_MARGIN_MM = 0.25
 JOYSTICK_HOLD_FALLBACK_DISTANCE_MM = 5000.0
@@ -147,8 +157,8 @@ def max_hold_distance(app, axis: str, direction: int) -> float:
     unit_mode = "mm"
     try:
         unit_mode = str(app.unit_mode.get())
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reading unit mode while calculating joystick hold distance", exc)
     fallback = _from_mm(JOYSTICK_HOLD_FALLBACK_DISTANCE_MM, unit_mode)
     min_distance = max(float(JOYSTICK_HOLD_MIN_DISTANCE), 0.0001)
     limit_mm = _axis_limit_mm(app, axis)
@@ -195,8 +205,8 @@ def _joystick_binding_pressed(app, binding: dict[str, Any] | None, *, release: b
     if py is not None:
         try:
             py.event.pump()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed pumping pygame event queue during joystick hold read", exc)
     joy_id = binding.get("joy_id")
     joy = app._joystick_instances.get(joy_id)
     if joy is None:
@@ -274,8 +284,8 @@ def send_hold_jog(app):
             if app.grbl.manual_queue_busy():
                 app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed scheduling joystick hold retry while manual queue busy", exc)
     binding = app._joystick_bindings.get(binding_id)
     if not _joystick_binding_pressed(app, binding, release=True):
         missed = getattr(app, "_joystick_hold_missed_polls", 0) + 1
@@ -311,8 +321,8 @@ def send_hold_jog(app):
         app._joystick_hold_last_ts = time.monotonic()
         try:
             app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
-        except Exception:
-            pass
+        except Exception as schedule_exc:
+            _log_suppressed("Failed scheduling joystick hold retry after send failure", schedule_exc)
         return
     app._joystick_hold_jog_sent = True
 
@@ -323,18 +333,18 @@ def stop_hold(app, binding_id: str | None = None):
     if app._joystick_hold_after_id is not None:
         try:
             app.after_cancel(app._joystick_hold_after_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling joystick hold timer", exc)
         app._joystick_hold_after_id = None
     if app._active_joystick_hold_binding:
         try:
             app.grbl.jog_cancel()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed sending jog cancel while stopping joystick hold", exc)
         try:
             app.grbl.cancel_pending_jogs()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clearing pending jogs while stopping joystick hold", exc)
     app._active_joystick_hold_binding = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None

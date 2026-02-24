@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 
 from simple_sender.utils.constants import (
@@ -28,13 +29,23 @@ from simple_sender.utils.constants import (
 )
 
 ALL_STOP_POSITION_RETRY_MS = 50
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def all_stop_action(app):
     try:
         app._stop_joystick_hold()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed stopping joystick hold before ALL STOP action", exc)
     if not app._require_grbl_connection():
         return
     mode = app.all_stop_mode.get()
@@ -81,5 +92,5 @@ def position_all_stop_offset(app, event=None):
     btn.place(in_=slot.master, x=x, y=y)
     try:
         btn.tk.call("raise", btn._w)
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed raising ALL STOP button after placement", exc)

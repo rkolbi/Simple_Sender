@@ -353,8 +353,8 @@ def handle_macro_prompt(app, title, message, choices, cancel_label, result_q):
             _log_suppressed("Failed to log macro prompt failure to UI console", log_exc)
         try:
             result_q.put_nowait(cancel_label)
-        except queue.Full:
-            pass
+        except queue.Full as exc:
+            _log_suppressed("Macro prompt result queue was full while reporting failure", exc)
 
 
 def handle_gcode_load_progress(app, token, done, total, label):
@@ -377,8 +377,8 @@ def handle_streaming_validation_prompt(
     if token != app._gcode_load_token:
         try:
             result_q.put_nowait(False)
-        except queue.Full:
-            pass
+        except queue.Full as exc:
+            _log_suppressed("Streaming validation prompt result queue was full for stale token", exc)
         return
     msg = (
         f"Validate streaming G-code for '{name}'?\n\n"
@@ -392,8 +392,8 @@ def handle_streaming_validation_prompt(
         allow = False
     try:
         result_q.put_nowait(allow)
-    except queue.Full:
-        pass
+    except queue.Full as exc:
+        _log_suppressed("Streaming validation prompt result queue was full", exc)
 
 
 def handle_gcode_loaded(app, evt):

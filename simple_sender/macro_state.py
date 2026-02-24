@@ -23,10 +23,22 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Callable
 
 from simple_sender.utils.constants import RT_STATUS
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def macro_wait_for_idle(
@@ -135,8 +147,8 @@ def macro_force_mm(
     macro_send("G21")
     try:
         app._set_unit_mode("mm")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed syncing app unit mode to mm during macro force-mm", exc)
     with macro_vars_lock:
         macro_vars["units"] = "G21"
 
@@ -162,8 +174,8 @@ def macro_restore_units(
     macro_send(units)
     try:
         app._set_unit_mode("mm" if units.upper() == "G21" else "inch")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed syncing app unit mode during macro unit restore", exc)
     with macro_vars_lock:
         macro_vars["units"] = units
 
@@ -200,8 +212,8 @@ def macro_restore_state(
     if units:
         try:
             app._set_unit_mode("mm" if units.upper() == "G21" else "inch")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed syncing app unit mode during macro state restore", exc)
         with macro_vars_lock:
             macro_vars["units"] = units
     ui_q.put(("log", "[macro] STATE_RETURN restored modal state."))

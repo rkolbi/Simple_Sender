@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import queue
 import tkinter as tk
 from tkinter import ttk
@@ -27,6 +28,17 @@ from typing import Callable
 
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.ui.widgets_common import set_kb_id
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def show_macro_prompt(
@@ -55,8 +67,8 @@ def show_macro_prompt(
                 result_q.put(label)
             try:
                 dlg.destroy()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed closing macro prompt dialog", exc)
 
         def _make_command(label: str) -> Callable[[], None]:
             return lambda: choose(label)
@@ -74,7 +86,7 @@ def show_macro_prompt(
     except Exception as exc:
         try:
             app.streaming_controller.log(f"[macro] Prompt failed: {exc}")
-        except Exception:
-            pass
+        except Exception as log_exc:
+            _log_suppressed("Failed logging macro prompt failure", log_exc)
         if result_q.empty():
             result_q.put(cancel_label)

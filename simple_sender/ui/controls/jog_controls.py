@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 
 from simple_sender.utils.constants import (
@@ -30,6 +31,17 @@ from simple_sender.utils.constants import (
 )
 
 from simple_sender.ui.icons import ICON_UNITS, icon_label
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def unit_toggle_label(app, mode: str | None = None) -> str:
@@ -43,13 +55,14 @@ def update_unit_toggle_display(app):
     try:
         if not hasattr(app, "_unit_toggle_default_style"):
             app._unit_toggle_default_style = app.btn_unit_toggle.cget("style") or "TButton"
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading unit-toggle default style", exc)
         app._unit_toggle_default_style = "TButton"
     try:
         app.btn_unit_toggle.config(style=app._unit_toggle_default_style)
         app.btn_unit_toggle.config(text=unit_toggle_label(app, label_units))
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating unit-toggle button display", exc)
 
 
 def set_unit_mode(app, mode: str):
@@ -62,23 +75,23 @@ def set_unit_mode(app, mode: str):
         macro_vars["units"] = "G21" if mode == "mm" else "G20"
     try:
         update_unit_toggle_display(app)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed refreshing unit-toggle display after mode change", exc)
     try:
         app._convert_estimate_rates(old_mode, mode)
         app._update_estimate_rate_units_label()
         if app._last_gcode_lines:
             app._update_gcode_stats(app._last_gcode_lines)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating estimate rates after unit mode change", exc)
     try:
         app._refresh_dro_display()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed refreshing DRO after unit mode change", exc)
     try:
         app._refresh_gcode_stats_display()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed refreshing G-code stats display after unit mode change", exc)
 
 
 def set_step_xy(app, value: float):
@@ -90,14 +103,14 @@ def set_step_xy(app, value: float):
         idx = min(range(len(values)), key=lambda i: abs(values[i] - value))
         try:
             app._xy_step_index.set(idx)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating XY step index variable", exc)
         label = getattr(app, "_xy_step_value_label", None)
         if label is not None:
             try:
                 label.config(text=f"{values[idx]:g}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating XY step label", exc)
         progress = getattr(app, "_xy_step_progress", None)
         if progress is not None:
             try:
@@ -105,20 +118,20 @@ def set_step_xy(app, value: float):
                     maximum=max(len(values) - 1, 1),
                     value=idx,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating XY step progress bar", exc)
         minus_btn = getattr(app, "_xy_step_minus", None)
         plus_btn = getattr(app, "_xy_step_plus", None)
         if minus_btn is not None:
             try:
                 minus_btn.config(state="disabled" if idx <= 0 else "normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating XY step minus button state", exc)
         if plus_btn is not None:
             try:
                 plus_btn.config(state="disabled" if idx >= len(values) - 1 else "normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating XY step plus button state", exc)
 
 
 def set_step_z(app, value: float):
@@ -130,14 +143,14 @@ def set_step_z(app, value: float):
         idx = min(range(len(values)), key=lambda i: abs(values[i] - value))
         try:
             app._z_step_index.set(idx)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating Z step index variable", exc)
         label = getattr(app, "_z_step_value_label", None)
         if label is not None:
             try:
                 label.config(text=f"{values[idx]:g}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating Z step label", exc)
         progress = getattr(app, "_z_step_progress", None)
         if progress is not None:
             try:
@@ -145,31 +158,33 @@ def set_step_z(app, value: float):
                     maximum=max(len(values) - 1, 1),
                     value=idx,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating Z step progress bar", exc)
         minus_btn = getattr(app, "_z_step_minus", None)
         plus_btn = getattr(app, "_z_step_plus", None)
         if minus_btn is not None:
             try:
                 minus_btn.config(state="disabled" if idx <= 0 else "normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating Z step minus button state", exc)
         if plus_btn is not None:
             try:
                 plus_btn.config(state="disabled" if idx >= len(values) - 1 else "normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating Z step plus button state", exc)
 
 
 def validate_jog_feed_var(app, var: tk.DoubleVar, fallback_default: float):
     try:
         val = float(var.get())
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed parsing jog feed value; applying fallback", exc)
         val = None
     if val is None or val <= 0:
         try:
             fallback = float(fallback_default)
-        except Exception:
+        except Exception as exc:
+            _log_suppressed("Failed parsing jog feed fallback default", exc)
             fallback = fallback_default
         var.set(fallback)
         return
@@ -188,7 +203,8 @@ def apply_safe_mode_profile(app) -> None:
     unit_mode = "mm"
     try:
         unit_mode = app.unit_mode.get() or "mm"
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading unit mode for safe jog profile", exc)
         unit_mode = "mm"
     scale = 1.0 if unit_mode == "mm" else 1.0 / 25.4
     feed_xy = SAFE_JOG_FEED_XY * scale
@@ -204,23 +220,23 @@ def apply_safe_mode_profile(app) -> None:
         app.settings["jog_feed_z"] = feed_z
         app.settings["step_xy"] = step_xy
         app.settings["step_z"] = step_z
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed persisting safe jog profile settings", exc)
     try:
         app._set_step_xy(step_xy)
         app._set_step_z(step_z)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed applying safe jog step values", exc)
     try:
         app._on_jog_feed_change_xy()
         app._on_jog_feed_change_z()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed validating safe jog feed values", exc)
     try:
         app.streaming_controller.handle_log(
             f"[safe mode] Jog feeds set to {feed_xy:g}/{feed_z:g} "
             f"{'mm' if unit_mode == 'mm' else 'in'}/min, steps {step_xy:g}/{step_z:g} "
             f"{'mm' if unit_mode == 'mm' else 'in'}."
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed logging safe jog profile application", exc)

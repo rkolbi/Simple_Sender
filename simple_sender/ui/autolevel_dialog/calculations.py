@@ -22,12 +22,24 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable
 from typing import Any
 
 from simple_sender.autolevel.grid import ProbeGrid
 from simple_sender.utils.constants import MAX_LINE_LENGTH
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _find_overlong_lines(
@@ -95,8 +107,8 @@ def _log_split_result(log_fn: Callable[[str], None] | None, split_result: Any) -
         )
     try:
         log_fn(msg)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed emitting split-adjustment log message", exc)
 
 
 def _coerce_avoidance(area: object, fallback: dict) -> dict:
@@ -107,8 +119,8 @@ def _coerce_avoidance(area: object, fallback: dict) -> dict:
         try:
             if isinstance(value, (int, float, str)):
                 return float(value)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed coercing avoidance-area numeric value to float", exc)
         return float(default)
 
     return {

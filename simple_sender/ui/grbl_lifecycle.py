@@ -22,11 +22,23 @@
 
 import os
 import time
+import logging
 from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def handle_connection_event(app, is_on: bool, port):
@@ -46,17 +58,17 @@ def handle_connection_event(app, is_on: bool, port):
         app._report_units = None
         try:
             app._update_unit_toggle_display()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed refreshing unit toggle display after connect", exc)
         app.btn_conn.config(text=icon_label(ICON_CONNECT, "Disconnect"), state="normal")
         try:
             app.btn_refresh.config(state="normal")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed enabling refresh button after connect", exc)
         try:
             app.port_combo.config(state="readonly")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed setting port combobox readonly after connect", exc)
         app._connected_port = port
         app._grbl_ready = False
         app._alarm_locked = False
@@ -67,8 +79,8 @@ def handle_connection_event(app, is_on: bool, port):
         app._machine_state_text = f"CONNECTED ({port})"
         try:
             app._ensure_state_label_width(app._machine_state_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed ensuring machine-state label width after connect", exc)
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text=f"Connected: {port} (waiting for Grbl)")
         app.btn_stop.config(state="normal")
@@ -83,22 +95,22 @@ def handle_connection_event(app, is_on: bool, port):
             elif app._last_gcode_lines:
                 name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
                 app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring loaded G-code after connect", exc)
     else:
         try:
             app._stop_macro_status()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed stopping macro status poll after disconnect", exc)
         app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"), state="normal")
         try:
             app.btn_refresh.config(state="normal")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed enabling refresh button after disconnect", exc)
         try:
             app.port_combo.config(state="readonly")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed setting port combobox readonly after disconnect", exc)
         app._connected_port = None
         app._grbl_ready = False
         app._alarm_locked = False
@@ -108,14 +120,14 @@ def handle_connection_event(app, is_on: bool, port):
         app._report_units = None
         try:
             app._update_unit_toggle_display()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed refreshing unit toggle display after disconnect", exc)
         app.machine_state.set("DISCONNECTED")
         app._machine_state_text = "DISCONNECTED"
         try:
             app._ensure_state_label_width(app._machine_state_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed ensuring machine-state label width after disconnect", exc)
         app._update_state_highlight(app._machine_state_text)
         app.status.config(text="Disconnected")
         disable_job_controls(app)
@@ -164,12 +176,12 @@ def handle_ready_event(app, ready):
         app.status.config(text=f"Connected: {app._connected_port}")
         try:
             app._send_manual("$G", "status")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed requesting modal state with $G after ready", exc)
         try:
             app._send_manual("$$", "status")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed requesting settings with $$ after ready", exc)
         if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
             app._resume_after_disconnect = False
             total_lines = (
@@ -210,8 +222,8 @@ def maybe_auto_reconnect(app):
         if not bool(app.reconnect_on_open.get()):
             app._auto_reconnect_pending = False
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reading reconnect-on-open setting during auto-reconnect", exc)
     now = time.time()
     if now < app._auto_reconnect_next_ts:
         return

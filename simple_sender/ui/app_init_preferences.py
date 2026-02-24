@@ -20,6 +20,21 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
+import sys
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
 def _init_behavior_preferences(
     app,
     *,
@@ -121,16 +136,19 @@ def _init_behavior_preferences(
     app.vacuum_outlet = tk.IntVar(value=_outlet_setting("vacuum_outlet", 1))
     app.light_enabled = tk.BooleanVar(value=setting("light_enabled", False))
     app.light_outlet = tk.IntVar(value=_outlet_setting("light_outlet", 2))
+    if not sys.platform.startswith("linux"):
+        app.kasa_enabled.set(False)
+        app.vacuum_enabled.set(False)
+        app.light_enabled.set(False)
+        app.kasa_device_identifier.set("")
     if app.joystick_bindings_enabled.get() and not pygame_available:
         app.joystick_bindings_enabled.set(False)
     app._joystick_auto_enable_requested = bool(app.joystick_bindings_enabled.get())
     app.job_completion_popup = tk.BooleanVar(value=setting("job_completion_popup", True))
     app.job_completion_beep = tk.BooleanVar(value=setting("job_completion_beep", False))
-    pos_enabled = bool(setting("console_positions_enabled", True))
-    legacy_status_enabled = bool(setting("console_status_enabled", False))
-    combined_console_enabled = pos_enabled or legacy_status_enabled
-    app.console_positions_enabled = tk.BooleanVar(value=combined_console_enabled)
-    app.console_status_enabled = tk.BooleanVar(value=legacy_status_enabled)
+    app.console_positions_enabled = tk.BooleanVar(
+        value=bool(setting("console_positions_enabled", True))
+    )
     app.ui_scale = tk.DoubleVar(value=setting("ui_scale", 1.0))
     app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
 
@@ -198,8 +216,8 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
     ):
         try:
             app._ui_scale_named_font_bases[name] = int(tkfont.nametofont(name).cget("size"))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed caching named-font base size for UI scaling", exc)
     app.style.configure(
         app.home_button_style,
         anchor="center",
@@ -250,8 +268,8 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
             continue
         try:
             app._ui_scale_custom_font_bases[key] = int(font.cget("size"))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed caching custom-font base size for UI scaling", exc)
 
 
 def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
@@ -300,6 +318,6 @@ def init_basic_preferences(app, app_version: str, module):
     app._apply_theme(theme_choice)
     try:
         app._apply_scrollbar_width()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed applying configured scrollbar width during app init preferences", exc)
     _init_visibility_preferences(app, setting=setting, app_version=app_version, tk=tk)

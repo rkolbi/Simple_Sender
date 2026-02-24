@@ -36,14 +36,23 @@ from simple_sender.utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 def _save_bindings(app) -> None:
     saver = getattr(app, "_save_settings", None)
     if callable(saver):
         try:
             saver()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed saving joystick bindings", exc)
 
 
 def _single_connected_joy_id(app) -> Any | None:
@@ -148,9 +157,7 @@ def poll_joystick_events(
                 if not active and getattr(app, "_active_joystick_hold_binding", None):
                     app._stop_joystick_hold()
         if app._joystick_capture_state and not events:
-            if app._poll_joystick_states_from_hardware(py):
-                # ensure we still schedule next poll immediately after capturing
-                pass
+            app._poll_joystick_states_from_hardware(py)
     except Exception as exc:
         logger.exception("Joystick polling failed: %s", exc)
         if getattr(app, "_active_joystick_hold_binding", None):
@@ -278,8 +285,8 @@ def handle_joystick_event(
         if timer_id is not None:
             try:
                 app.after_cancel(timer_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed canceling joystick capture timeout timer in key-handler path", exc)
         if capture_state.get("mode") == "safety":
             binding = app._joystick_binding_from_event(key)
             if binding:
@@ -335,8 +342,8 @@ def handle_joystick_event(
             if prior_source is None:
                 try:
                     delattr(app, "_manual_input_source")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed clearing manual-input-source marker after joystick action", exc)
             else:
                 app._manual_input_source = prior_source
 
@@ -464,8 +471,8 @@ def start_joystick_capture(app, row) -> None:
     app._joystick_capture_state = state
     try:
         app.kb_table.set(row, "joystick", JOYSTICK_LISTENING_TEXT)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed showing joystick capture listening text", exc)
     app._ensure_joystick_polling_running()
 
 
@@ -480,15 +487,15 @@ def cancel_joystick_capture(app) -> None:
     if timer_id is not None:
         try:
             app.after_cancel(timer_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling joystick capture timer", exc)
     row = state.get("row")
     original = state.get("original", "None")
     if row and hasattr(app, "kb_table") and app.kb_table.exists(row):
         try:
             app.kb_table.set(row, "joystick", original)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring joystick capture table cell text", exc)
     app._joystick_capture_state = None
 
 
@@ -528,8 +535,8 @@ def cancel_joystick_safety_capture(app) -> None:
     if timer_id is not None:
         try:
             app.after_cancel(timer_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling joystick safety capture timer", exc)
     original = state.get("original", "Safety button: None")
     app.joystick_safety_status.set(original)
     app._joystick_capture_state = None

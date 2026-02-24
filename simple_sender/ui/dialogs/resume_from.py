@@ -20,10 +20,22 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 from tkinter import messagebox
 
 from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
 from simple_sender.types import LineSource
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
@@ -99,13 +111,13 @@ def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str]
             elif w == "F":
                 try:
                     feed = float(val)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed parsing feed value while building resume preamble", exc)
             elif w == "S":
                 try:
                     spindle_speed = float(val)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed parsing spindle-speed value while building resume preamble", exc)
 
     preamble = []
     for item in (units, distance, plane, arc_mode, feed_mode, coord):

@@ -22,6 +22,7 @@
 """Top view toolpath panel."""
 
 import threading
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Iterable, Sequence
@@ -44,6 +45,16 @@ _TOOLPATH_SEGMENT_COLORS = {
     "feed": "#2c6dd2",
     "arc": "#2aa876",
 }
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class TopViewPanel(ttk.Frame):
@@ -85,8 +96,8 @@ class TopViewPanel(ttk.Frame):
         if arc_step_rad is not None:
             try:
                 self._arc_step_rad = max(1e-6, float(arc_step_rad))
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                _log_suppressed("Failed applying custom arc-step value for Top View parse", exc)
         if not lines:
             self.segments = []
             self.bounds = None
@@ -368,8 +379,8 @@ class TopViewPanel(ttk.Frame):
             if self._position_item is not None:
                 try:
                     self.canvas.delete(self._position_item)
-                except tk.TclError:
-                    pass
+                except tk.TclError as exc:
+                    _log_suppressed("Failed deleting stale Top View position marker", exc)
                 self._position_item = None
             return
         params = self._render_params

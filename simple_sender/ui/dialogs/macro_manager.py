@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
@@ -35,6 +36,17 @@ from simple_sender.ui.macro_files import (
     remove_macro_slot,
     write_macro_slot,
 )
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class _MacroManagerDialog:
@@ -173,8 +185,8 @@ class _MacroManagerDialog:
             self.btn_down.configure(state=state)
             self.btn_duplicate.configure(state=state)
             self.duplicate_combo.configure(state="readonly" if enabled else "disabled")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed toggling Macro Manager editor controls", exc)
 
     def _pick_color(self, target_var: tk.StringVar, title: str) -> None:
         initial = target_var.get().strip() or None
@@ -325,8 +337,8 @@ class _MacroManagerDialog:
             panel = getattr(self.app, "macro_panel", None)
             if panel is not None and hasattr(panel, "refresh"):
                 panel.refresh()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed refreshing macro panel buttons after macro edit", exc)
 
     def _write_slot(
         self,
@@ -457,8 +469,8 @@ class _MacroManagerDialog:
     def close(self) -> None:
         try:
             setattr(self.app, "_macro_manager_window", None)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clearing app macro manager window reference", exc)
         self.window.destroy()
 
 
@@ -470,10 +482,10 @@ def show_macro_manager(app: Any) -> None:
                 existing.lift()
                 existing.focus_force()
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring existing Macro Manager window", exc)
     dialog = _MacroManagerDialog(app)
     try:
         app._macro_manager_window = dialog.window
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed storing macro manager window reference on app", exc)

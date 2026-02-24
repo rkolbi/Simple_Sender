@@ -20,12 +20,25 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import os
 import threading
 import traceback
 from tkinter import messagebox
 
 from simple_sender.ui.dialogs.error_dialogs_ui import close_grbl_code_popup
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def format_exception(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -47,15 +60,15 @@ def log_exception(
             app.streaming_controller.handle_log(header)
             for ln in tb.splitlines():
                 app.streaming_controller.handle_log(ln)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed writing exception details to streaming controller log", exc)
     else:
         try:
             app.ui_q.put(("log", header))
             for ln in tb.splitlines():
                 app.ui_q.put(("log", ln))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed queueing exception details to UI log queue", exc)
     if show_dialog:
         if app._should_show_error_dialog():
             app._post_ui_thread(messagebox.showerror, dialog_title, tb)
@@ -80,15 +93,15 @@ def on_close(app):
     app._closing = True
     try:
         close_grbl_code_popup(app)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed closing GRBL code popup during shutdown", exc)
     try:
         accessory_router = getattr(app, "accessory_router", None)
         if accessory_router is not None:
             try:
                 accessory_router.shutdown(timeout=1.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed shutting down accessory router during app close", exc)
         app._save_settings()
         app.grbl.disconnect()
     except Exception as exc:
@@ -98,13 +111,13 @@ def on_close(app):
         cleanup_path = getattr(source, "_cleanup_path", None)
         try:
             source.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed closing streaming G-code source during shutdown", exc)
         if cleanup_path:
             try:
                 os.remove(cleanup_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                _log_suppressed("Failed deleting temporary G-code cleanup file during shutdown", exc)
         app._gcode_source = None
     app._stop_joystick_hold()
     app._stop_joystick_polling()
@@ -112,6 +125,6 @@ def on_close(app):
     if py is not None:
         try:
             py.quit()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed quitting pygame during shutdown", exc)
     app.destroy()

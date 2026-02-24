@@ -38,6 +38,15 @@ from simple_sender.utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def parse_setting_line(line: str) -> tuple[str, str, int | None] | None:
@@ -233,8 +242,8 @@ class GRBLSettingsController:
                         self._finish_settings_save_failed(error_message)
 
                     self.app.after(0, finish_failed)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed scheduling GRBL settings-save failure callback on UI thread", exc)
                 return
             self.app.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
             try:
@@ -259,8 +268,8 @@ class GRBLSettingsController:
         if message:
             try:
                 self.app.status.config(text=f"Settings save failed: {message}")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating status text for GRBL settings save failure", exc)
 
     def _set_settings_edit_enabled(self, enabled: bool) -> None:
         if not enabled:
@@ -494,8 +503,8 @@ class GRBLSettingsController:
             self._settings_entry_meta.pop(entry, None)
             try:
                 entry.destroy()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed destroying inline GRBL setting edit entry after commit", exc)
             self._settings_edit_entry = None
 
     def _cancel_pending_setting_edit(self) -> None:
@@ -505,8 +514,8 @@ class GRBLSettingsController:
         self._settings_entry_meta.pop(entry, None)
         try:
             entry.destroy()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed destroying inline GRBL setting edit entry on cancel", exc)
         self._settings_edit_entry = None
 
     def _update_setting_row_tags(self, key: str) -> None:

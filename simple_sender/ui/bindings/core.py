@@ -72,6 +72,15 @@ from simple_sender.utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 PYGAME_IMPORT_ERROR = ""
 pygame: ModuleType | None = None
@@ -372,8 +381,8 @@ def stop_joystick_polling(app):
     if app._joystick_poll_id is not None:
         try:
             app.after_cancel(app._joystick_poll_id)
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed canceling joystick poll timer", exc)
         app._joystick_poll_id = None
 
 def ensure_joystick_polling_running(app):
@@ -469,8 +478,8 @@ def clear_key_sequence_buffer(app):
     if app._key_sequence_after_id is not None:
         try:
             app.after_cancel(app._key_sequence_after_id)
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed canceling key-sequence timeout timer", exc)
     app._key_sequence_after_id = None
 
 
@@ -515,8 +524,8 @@ def on_key_jog_stop(app, _event=None):
         return
     try:
         app._stop_joystick_hold()
-    except (AttributeError, tk.TclError):
-        pass
+    except (AttributeError, tk.TclError) as exc:
+        _log_suppressed("Failed stopping joystick hold before jog cancel keyboard action", exc)
     app.grbl.jog_cancel()
 
 def on_key_all_stop(app, _event=None):
@@ -539,8 +548,8 @@ def invoke_button(app, btn):
         try:
             btn.invoke()
             return
-        except tk.TclError:
-            pass
+        except tk.TclError as exc:
+            _log_suppressed("Failed invoking Tk button command directly", exc)
     try:
         cmd = btn.cget("command")
     except (AttributeError, KeyError, tk.TclError):

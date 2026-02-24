@@ -96,7 +96,7 @@ class StopSignButton(tk.Canvas):
         try:
             self.config(bg=bg)
         except tk.TclError:
-            pass
+            return
 
     def _draw_octagon(self):
         size = self._size

@@ -20,9 +20,21 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 from tkinter import ttk
 
 from simple_sender.ui.widgets_common import set_kb_id
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _unit_scale(unit_mode: str) -> float:
@@ -55,9 +67,23 @@ def refresh_dro_display(app) -> None:
         app.wpos_z.set(format_dro_value(wpos[2], report_units, unit_mode))
 
 
-def dro_value_row(app, parent, axis, var, *, ttk_mod=None, grid_info=None):
+def dro_value_row(
+    app,
+    parent,
+    axis,
+    var,
+    *,
+    ttk_mod=None,
+    set_kb_id_func=None,
+    grid_info=None,
+    action_text: str | None = None,
+    action_cmd=None,
+    action_kb_id: str | None = None,
+):
     if ttk_mod is None:
         ttk_mod = ttk
+    if set_kb_id_func is None:
+        set_kb_id_func = set_kb_id
     row = ttk_mod.Frame(parent)
     if grid_info:
         row.grid(**grid_info)
@@ -66,25 +92,36 @@ def dro_value_row(app, parent, axis, var, *, ttk_mod=None, grid_info=None):
     if hasattr(app, "_wpos_rows"):
         try:
             app._wpos_rows[axis] = row
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed caching WPos row container reference", exc)
     ttk_mod.Label(row, text=f"{axis}:", width=3).grid(row=0, column=0, sticky="w")
     ttk_mod.Label(
         row,
         textvariable=var,
-        width=7,
+        width=8,
         font=app.dro_value_font,
     ).grid(row=0, column=1, sticky="w")
-    # Keep a hidden button area so the MPos rows mirror the WPos layout.
-    btn = ttk_mod.Button(
-        row,
-        text="",
-        style=app.HIDDEN_MPOS_BUTTON_STYLE,
-        state="disabled",
-        width=9,
-        takefocus=False,
-    )
+    if action_cmd is not None:
+        btn = ttk_mod.Button(
+            row,
+            text=action_text or "",
+            style="TButton",
+            command=action_cmd,
+        )
+        if action_kb_id:
+            set_kb_id_func(btn, action_kb_id)
+    else:
+        # Keep a hidden button area so the MPos rows mirror the WPos layout.
+        btn = ttk_mod.Button(
+            row,
+            text="",
+            style=app.HIDDEN_MPOS_BUTTON_STYLE,
+            state="disabled",
+            width=9,
+            takefocus=False,
+        )
     btn.grid(row=0, column=2, sticky="w")
+    return btn
 
 
 def dro_row(app, parent, axis, var, zero_cmd, *, ttk_mod=None, set_kb_id_func=None, grid_info=None):
@@ -109,8 +146,8 @@ def dro_row(app, parent, axis, var, zero_cmd, *, ttk_mod=None, set_kb_id_func=No
         try:
             app._wpos_value_labels[axis] = value_label
             app._wpos_label_default_fg[axis] = value_label.cget("foreground")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed caching WPos value-label references", exc)
     btn = ttk_mod.Button(row, text=f"Zero {axis}", command=zero_cmd)
     btn.grid(row=0, column=2, sticky="w")
     set_kb_id_func(btn, f"zero_{axis.lower()}")

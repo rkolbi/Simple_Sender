@@ -25,6 +25,8 @@ import logging
 from tkinter import ttk
 from typing import Any, cast
 
+from simple_sender.ui.dro import convert_units
+from simple_sender.ui.widgets_keypad import prompt_numeric_keypad
 from simple_sender.ui.widgets_buttons import StopSignButton
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
@@ -39,6 +41,7 @@ from simple_sender.utils.constants import (
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 JOG_STOP_POSITION_RETRY_MS = 50
+_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -68,6 +71,68 @@ def _select_jog_feed(dx: float, dy: float, dz: float, feed_xy: float, feed_z: fl
     if abs(dz) > 0 and abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON:
         return float(feed_z)
     return float(feed_xy)
+
+
+def _axis_components(axis: str, delta: float) -> tuple[float, float, float]:
+    axis_key = str(axis).upper()
+    if axis_key == "X":
+        return float(delta), 0.0, 0.0
+    if axis_key == "Y":
+        return 0.0, float(delta), 0.0
+    if axis_key == "Z":
+        return 0.0, 0.0, float(delta)
+    return 0.0, 0.0, 0.0
+
+
+def _current_mpos_axis(app, axis: str) -> float | None:
+    axis_key = str(axis).upper()
+    idx = _AXIS_INDEX.get(axis_key)
+    if idx is None:
+        return None
+    unit_mode = "mm"
+    try:
+        unit_mode = str(app.unit_mode.get() or "mm")
+    except Exception:
+        unit_mode = "mm"
+    mpos = getattr(app, "_mpos_raw", None)
+    if isinstance(mpos, (list, tuple)) and len(mpos) > idx:
+        try:
+            raw = float(cast(Any, mpos[idx]))
+            report_units = getattr(app, "_report_units", None) or unit_mode
+            return float(convert_units(raw, str(report_units), unit_mode))
+        except (TypeError, ValueError) as exc:
+            _log_suppressed("Failed converting current MPos from report units", exc)
+        except Exception as exc:
+            _log_suppressed("Unexpected error reading current MPos", exc)
+    var = getattr(app, f"mpos_{axis_key.lower()}", None)
+    if var is None:
+        return None
+    try:
+        return float(var.get())
+    except (TypeError, ValueError) as exc:
+        _log_suppressed("Failed parsing displayed MPos value", exc)
+    except Exception as exc:
+        _log_suppressed("Unexpected error parsing displayed MPos value", exc)
+    return None
+
+
+def _jog_axis_to_target(
+    app,
+    axis: str,
+    target_value: float,
+    jog_move,
+    *,
+    source: str | None = None,
+) -> bool:
+    current = _current_mpos_axis(app, axis)
+    if current is None:
+        current = 0.0
+    delta = float(target_value) - float(current)
+    dx, dy, dz = _axis_components(axis, delta)
+    if abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON and abs(dz) < JOG_FEED_EPSILON:
+        return False
+    jog_move(dx, dy, dz, source=source)
+    return True
 
 
 def _bind_position_column_sync(app, align) -> None:
@@ -401,7 +466,7 @@ def _configure_jog_grid_columns(align) -> None:
     align.grid_columnconfigure(12, weight=0)  # ALL STOP
 
 
-def _build_position_and_action_controls(app, align):
+def _build_position_and_action_controls(app, align, *, open_mpos_target):
     ttk.Label(align, text="Machine Position (MPos)").grid(row=0, column=0, sticky="w", pady=(0, 4))
     ttk.Label(align, text="Work Position (WPos)").grid(row=0, column=2, sticky="w", pady=(0, 4))
     ttk.Label(align, text="Jog").grid(row=0, column=4, columnspan=7, sticky="w", pady=(0, 4))
@@ -414,24 +479,37 @@ def _build_position_and_action_controls(app, align):
     sep_bg = style.lookup("TFrame", "background") or app.cget("bg")
     sep_jog_line = tk.Frame(align, width=1, bg=sep_bg)
 
-    app._dro_value_row(
+    app.btn_jog_mpos_x_to = app._dro_value_row(
         align,
         "X",
         app.mpos_x,
         grid_info={"row": 1, "column": 0, "sticky": "ew", "pady": 2},
+        action_text="Jog to X",
+        action_cmd=lambda: open_mpos_target("X"),
+        action_kb_id="jog_mpos_x_to",
     )
-    app._dro_value_row(
+    app.btn_jog_mpos_y_to = app._dro_value_row(
         align,
         "Y",
         app.mpos_y,
         grid_info={"row": 2, "column": 0, "sticky": "ew", "pady": 2},
+        action_text="Jog to Y",
+        action_cmd=lambda: open_mpos_target("Y"),
+        action_kb_id="jog_mpos_y_to",
     )
-    app._dro_value_row(
+    app.btn_jog_mpos_z_to = app._dro_value_row(
         align,
         "Z",
         app.mpos_z,
         grid_info={"row": 3, "column": 0, "sticky": "ew", "pady": 2},
+        action_text="Jog to Z",
+        action_cmd=lambda: open_mpos_target("Z"),
+        action_kb_id="jog_mpos_z_to",
     )
+    app._manual_controls.extend([app.btn_jog_mpos_x_to, app.btn_jog_mpos_y_to, app.btn_jog_mpos_z_to])
+    apply_tooltip(app.btn_jog_mpos_x_to, "Open keypad and jog X to an absolute machine coordinate.")
+    apply_tooltip(app.btn_jog_mpos_y_to, "Open keypad and jog Y to an absolute machine coordinate.")
+    apply_tooltip(app.btn_jog_mpos_z_to, "Open keypad and jog Z to an absolute machine coordinate.")
 
     app.btn_zero_x = app._dro_row(
         align,
@@ -606,23 +684,54 @@ def build_jog_panel(app, parent):
     align = ttk.Frame(top)
     align.pack(fill="x")
     _configure_jog_grid_columns(align)
-    sep_mpos, sep_wpos, sep_jog_line = _build_position_and_action_controls(app, align)
 
     def _jog_feed_for_move(dx, dy, dz) -> float:
         return _select_jog_feed(dx, dy, dz, app.jog_feed_xy.get(), app.jog_feed_z.get())
 
-    def j(dx, dy, dz):
+    def j(dx, dy, dz, *, source=None):
         if not app.grbl.is_connected():
             app.streaming_controller.log("Jog ignored - GRBL is not connected.")
             return
         feed = _jog_feed_for_move(dx, dy, dz)
-        source = getattr(app, "_manual_input_source", None) or "jog"
-        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source)
+        source_tag = source or getattr(app, "_manual_input_source", None) or "jog"
+        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source_tag)
 
     def jog_cmd(dx, dy, dz):
         feed = _jog_feed_for_move(dx, dy, dz)
         gunit = "G21" if app.unit_mode.get() == "mm" else "G20"
         return f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
+
+    def _open_mpos_target(axis: str) -> None:
+        axis_key = str(axis).upper()
+        current = _current_mpos_axis(app, axis_key)
+        initial = f"{float(current):.3f}" if current is not None else "0.000"
+
+        def _apply_target(value_text: str) -> None:
+            text = str(value_text or "").strip()
+            if text == "":
+                return
+            try:
+                target = float(text)
+            except (TypeError, ValueError):
+                app.streaming_controller.log(f"Jog {axis_key} ignored - invalid target '{text}'.")
+                return
+            _jog_axis_to_target(app, axis_key, target, j, source="jog_to_target")
+
+        prompt_numeric_keypad(
+            app,
+            initial_value=initial,
+            allow_decimal=True,
+            allow_negative=True,
+            allow_empty=False,
+            title=f"Jog {axis_key} to (MPos)",
+            on_apply=_apply_target,
+        )
+
+    sep_mpos, sep_wpos, sep_jog_line = _build_position_and_action_controls(
+        app,
+        align,
+        open_mpos_target=_open_mpos_target,
+    )
 
     _build_xy_jog_controls(app, align, j, jog_cmd)
     pad_bg = _apply_separator_styles(app, sep_mpos, sep_wpos, sep_jog_line)

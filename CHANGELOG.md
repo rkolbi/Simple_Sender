@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Changed
+- No unreleased changes yet.
+
+## [1.7.5] - 2026-02-24
+
+### Changed
+- Runtime release metadata was aligned for this release:
+  - app version string is now `1.7.5`
+  - README release badge now shows `1.7.5`
+- Kasa functions are now Linux-only (matching the existing System reboot/shutdown controls):
+  - Kasa settings UI is hidden on non-Linux platforms
+  - runtime Kasa actions are disabled on non-Linux platforms
+  - saved settings force Kasa toggles off on non-Linux platforms
+- Runtime dependency pinning was tightened for reproducible installs:
+  - pinned `python-kasa==0.10.2`
 - Legacy cleanup pass removed deprecated compatibility surfaces and duplicate module files:
   - removed `simple_sender/ui/widgets.py` compatibility shim
   - removed legacy single-file `simple_sender/ui/grbl_settings.py` in favor of `simple_sender/ui/grbl_settings/`
@@ -19,6 +33,16 @@ All notable changes to this project are documented in this file.
 - Local test harness hardening:
   - `run_tests.bat` now auto-selects `.venv\Scripts\python.exe` when available
   - Ruff gate now prefers `.venv\Scripts\ruff.exe` to avoid broken global launcher setups
+- Homing-status behavior was tightened for very short homing cycles:
+  - if status polling does not observe an explicit `Home` state, the UI now clears the temporary `Homing` indicator after a short poll-based idle grace window
+  - avoids lingering `Homing` status after quick/no-travel homing completes
+- Spoilboard settings migration cleanup:
+  - removed legacy surfacing-depth upgrade handling from `ui/dialogs/spoilboard_generator.py`
+  - removed startup compatibility migrations from `ui/app_init_settings.py`; startup now reads only current settings keys/values
+- Compatibility-surface removal:
+  - `ui/autolevel_dialog/__init__.py` no longer provides wrapper entry points
+  - dialogs now call `ui/autolevel_dialog/dialog_controller.py` directly
+  - removed legacy `console_status_enabled`/`keybindings_enabled` compatibility handling
 - Typing-manifest gate was resynced after cleanup:
   - mypy explicit target count is now `150`
   - local/CI hooks now enforce `--expected-count 150`

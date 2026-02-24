@@ -21,8 +21,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
+import logging
 from types import SimpleNamespace
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 @dataclass(frozen=True)
@@ -55,8 +67,8 @@ class ProbeController:
         try:
             with self.app.macro_executor.macro_vars() as macro_vars:
                 macro_vars["PRB"] = None
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clearing PRB macro variable in probe controller", exc)
 
     def register_callback(self, callback: Callable[[ProbeReport], None]) -> None:
         if callback not in self._callbacks:
@@ -80,13 +92,13 @@ class ProbeController:
                 macro_vars["prby"] = report.y
                 macro_vars["prbz"] = report.z
                 macro_vars["PRB"] = report.as_namespace()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating probe macro variables from PRB report", exc)
         for callback in list(self._callbacks):
             try:
                 callback(report)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Probe callback raised while handling PRB report", exc)
 
     def _parse_probe_report(self, raw: str) -> ProbeReport | None:
         line = raw.strip()

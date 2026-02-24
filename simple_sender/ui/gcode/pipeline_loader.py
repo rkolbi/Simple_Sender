@@ -68,7 +68,7 @@ def _close_temp_file(temp_file: IO[str] | None) -> None:
     try:
         temp_file.close()
     except (OSError, ValueError):
-        pass
+        return
 
 
 def _remove_temp_path(deps, temp_path: str | None) -> None:
@@ -77,7 +77,7 @@ def _remove_temp_path(deps, temp_path: str | None) -> None:
     try:
         deps.os.remove(temp_path)
     except OSError:
-        pass
+        return
 
 
 def _format_adjusted_lines_message(modified_count: int, split_count: int, max_line_length: int) -> str:

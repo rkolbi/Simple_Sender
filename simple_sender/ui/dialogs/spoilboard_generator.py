@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import tkinter as tk
@@ -39,8 +40,16 @@ from simple_sender.utils.logging_config import get_log_dir
 MM_PER_INCH = 25.4
 DEFAULT_SURFACING_DEPTH_MM = 0.5
 MAX_SURFACING_DEPTH_MM = 0.250 * MM_PER_INCH
-LEGACY_SURFACING_DEPTH_INCH = 0.010
-LEGACY_SURFACING_DEPTH_MM = LEGACY_SURFACING_DEPTH_INCH * MM_PER_INCH
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 @dataclass(frozen=True)
@@ -120,8 +129,8 @@ def _load_generated_gcode_into_app(app: Any, gcode_text: str, virtual_name: str)
     try:
         if getattr(app, "notebook", None) is not None and getattr(app, "gcode_tab", None) is not None:
             app.notebook.select(app.gcode_tab)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed switching to G-code tab before loading generated spoilboard program", exc)
     app._apply_loaded_gcode(virtual_name, lines, validated=False)
 
 
@@ -146,17 +155,17 @@ def _save_generated_gcode(
         fh.write(gcode_text)
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(path)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed saving last G-code directory after spoilboard export", exc)
     msg = f"Saved: {path}"
     try:
         app.status.config(text=msg)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating status text after spoilboard export", exc)
     try:
         app.streaming_controller.log(msg)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed logging spoilboard export message", exc)
     return str(path)
 
 
@@ -181,8 +190,8 @@ def _show_post_generate_options(app: Any, gcode_text: str, default_name: str) ->
         choice["value"] = value
         try:
             dlg.destroy()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed closing spoilboard post-generate options dialog", exc)
 
     ttk.Button(frame, text="Read G-code", command=lambda: _choose("read")).grid(
         row=1, column=0, padx=(0, 6), pady=(10, 0), sticky="ew"
@@ -236,9 +245,8 @@ def _resolve_default_surfacing_depth_mm(defaults: dict[str, Any]) -> tuple[float
         depth_mm *= MM_PER_INCH
 
     user_set_flag = bool(defaults.get("surfacing_depth_user_set", False))
-    if not user_set_flag and (_is_close(depth_mm, LEGACY_SURFACING_DEPTH_INCH) or _is_close(depth_mm, LEGACY_SURFACING_DEPTH_MM)):
-        return DEFAULT_SURFACING_DEPTH_MM, True
-    return depth_mm, False
+    use_default_text = (not user_set_flag) and _is_close(depth_mm, DEFAULT_SURFACING_DEPTH_MM)
+    return depth_mm, use_default_text
 
 
 def _one_step_smaller_font_size(size: int) -> int:
@@ -312,8 +320,8 @@ def show_spoilboard_generator_dialog(app: Any) -> None:
     def _cancel() -> None:
         try:
             dlg.destroy()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed closing spoilboard generator dialog", exc)
 
     def _generate() -> None:
         try:
@@ -380,8 +388,8 @@ def show_spoilboard_generator_dialog(app: Any) -> None:
                 "unit_mode": "mm",
                 "surfacing_depth_user_set": True,
             }
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed persisting spoilboard generator defaults", exc)
         lines = build_spoilboard_gcode_lines(params)
         gcode_text = "\n".join(lines) + "\n"
         virtual_name = default_spoilboard_program_name()
@@ -435,5 +443,5 @@ def show_spoilboard_generator_dialog(app: Any) -> None:
     if entries:
         try:
             entries[0].focus_set()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed focusing first spoilboard generator input field", exc)

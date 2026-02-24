@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from datetime import datetime, timedelta
+import logging
 import os
 import time
 import tkinter as tk
@@ -30,6 +31,17 @@ import tkinter.font as tkfont
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def toggle_tooltips(app):
@@ -43,20 +55,20 @@ def on_gui_logging_change(app):
     status = "enabled" if app.gui_logging_enabled.get() else "disabled"
     try:
         app.streaming_controller.handle_log(f"[settings] GUI logging {status}")
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed logging GUI logging setting change", exc)
 
 
 def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
     try:
         app._scrollbar_width_default = _style_scrollbar_width(getattr(app, "style", None))
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed caching default scrollbar width after theme change", exc)
     try:
         app._apply_scrollbar_width()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed applying configured scrollbar width after theme change", exc)
 
 
 _UI_SCALE_NAMED_FONTS = (
@@ -173,16 +185,16 @@ def apply_ui_scale(app, value: float | None = None) -> float:
     _apply_scaled_custom_fonts(app, scale)
     try:
         app.ui_scale.set(scale)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed writing normalized UI scale to Tk variable", exc)
     try:
         app.settings["ui_scale"] = scale
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting normalized UI scale setting", exc)
     try:
         app.update_idletasks()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating idle tasks after UI scale change", exc)
     return scale
 
 
@@ -206,16 +218,16 @@ def apply_scrollbar_width(app, value: str | None = None) -> str:
         app.style.configure("TScrollbar", width=width)
         app.style.configure("Vertical.TScrollbar", width=width)
         app.style.configure("Horizontal.TScrollbar", width=width)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed applying scrollbar width styles", exc)
     try:
         app.scrollbar_width.set(choice)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed writing normalized scrollbar width to Tk variable", exc)
     try:
         app.settings["scrollbar_width"] = choice
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting scrollbar width setting", exc)
     return choice
 
 
@@ -223,20 +235,20 @@ def on_scrollbar_width_change(app, _event=None):
     choice = apply_scrollbar_width(app)
     try:
         app.status.config(text=f"Scrollbar width: {choice}")
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for scrollbar width change", exc)
 
 
 def on_ui_scale_change(app, _event=None):
     scale = apply_ui_scale(app)
     try:
         app.status.config(text=f"UI scale: {scale:.2f}x")
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for UI scale change", exc)
     try:
         app._save_settings()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed saving settings after UI scale change", exc)
 
 
 def toggle_performance(app):
@@ -251,8 +263,8 @@ def on_performance_mode_change(app):
     app._apply_status_poll_profile()
     try:
         app.status.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for performance mode change", exc)
 
 
 def toggle_console_pos_status(app):
@@ -273,16 +285,16 @@ def on_autolevel_overlay_change(app):
     grid = app._auto_level_grid if show else None
     try:
         app.toolpath_panel.set_autolevel_overlay(grid)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating Auto-Level overlay visibility", exc)
     try:
         app.settings["show_autolevel_overlay"] = show
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting Auto-Level overlay preference", exc)
     try:
         app._refresh_autolevel_overlay_button()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed refreshing Auto-Level overlay toggle button", exc)
 
 
 def toggle_unit_mode(app):
@@ -291,8 +303,8 @@ def toggle_unit_mode(app):
     ):
         try:
             app.status.config(text="Unit toggle disabled while streaming")
-        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-            pass
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed updating status text when unit toggle blocked", exc)
         return
     new_mode = "inch" if app.unit_mode.get() == "mm" else "mm"
     if app.grbl.is_connected():
@@ -308,8 +320,8 @@ def start_homing(app):
     ):
         try:
             app.status.config(text="Homing blocked while streaming")
-        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-            pass
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed updating status text when homing blocked", exc)
         return
     app._homing_in_progress = True
     app._homing_state_seen = False
@@ -456,8 +468,8 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
                     win.lift()
                     win.focus_force()
                     return
-            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-                pass
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+                _log_suppressed("Failed focusing existing validation-details window", exc)
         win = tk.Toplevel(dialog)
         details_window["win"] = win
         win.title("G-code validation details")
@@ -479,8 +491,8 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             details_window["win"] = None
             try:
                 win.destroy()
-            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-                pass
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+                _log_suppressed("Failed closing validation-details window", exc)
 
         btn_row = ttk.Frame(container)
         btn_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
@@ -496,14 +508,14 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         result["ok"] = True
         try:
             dialog.destroy()
-        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-            pass
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed closing run-confirmation dialog on accept", exc)
 
     def cancel():
         try:
             dialog.destroy()
-        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-            pass
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed closing run-confirmation dialog on cancel", exc)
 
     confirm_label = "START"
     if report is not None and getattr(report, "line_issue_count", 0) > 0:
@@ -517,8 +529,8 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     center_window(dialog, app)
     try:
         dialog.grab_set()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        pass
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed setting run-confirmation dialog grab", exc)
     dialog.wait_window()
     return result["ok"]
 

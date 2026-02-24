@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import hashlib
+import logging
 import os
 import queue
 import sys
@@ -54,6 +55,17 @@ from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.viewer.preview_policy import configure_toolpath_preview, set_preview_streaming_state
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
 from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def load_gcode_from_path(app, path: str):
@@ -137,19 +149,19 @@ def clear_gcode(app):
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
         try:
             existing_source.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed closing existing G-code source during clear", exc)
         if cleanup_path:
             try:
                 os.remove(cleanup_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                _log_suppressed("Failed removing temporary G-code cleanup file during clear", exc)
     app._gcode_source = None
     set_preview_streaming_state(app, False)
     try:
         app._set_job_button_mode("read_job")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed resetting job button mode after clear", exc)
     app._gcode_total_lines = 0
     app._resume_after_disconnect = False
     app._resume_from_index = None
@@ -198,8 +210,8 @@ def _reset_autolevel_state(app) -> None:
     ):
         try:
             os.remove(leveled_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            _log_suppressed("Failed removing temporary auto-level output during reset", exc)
     app._auto_level_grid = None
     app._auto_level_height_map = None
     app._auto_level_bounds = None
@@ -211,8 +223,8 @@ def _reset_autolevel_state(app) -> None:
     app._auto_level_leveled_name = None
     try:
         app.toolpath_panel.set_autolevel_overlay(None)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed clearing auto-level overlay during reset", exc)
 
 
 def _find_overlong_lines(

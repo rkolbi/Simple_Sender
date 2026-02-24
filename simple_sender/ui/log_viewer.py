@@ -221,4 +221,4 @@ class LogViewer(ttk.Frame):
         try:
             self.winfo_toplevel().destroy()
         except Exception:
-            pass
+            return

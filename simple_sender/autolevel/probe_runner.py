@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
+import logging
 import threading
 import time
 from typing import Any, Callable, cast
@@ -28,6 +29,17 @@ from typing import Any, Callable, cast
 from simple_sender.autolevel.grid import ProbeGrid
 from simple_sender.autolevel.height_map import HeightMap
 from simple_sender.autolevel.probe_controller import ProbeReport
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 @dataclass(frozen=True)
@@ -124,13 +136,13 @@ class AutoLevelProbeRunner:
                             z_val = height_map.get_index(ix, iy)
                             if z_val is not None:
                                 on_point(ix, iy, z_val)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log_suppressed("Auto-level on_point callback raised", exc)
                 if on_progress:
                     try:
                         on_progress(idx + 1, total)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log_suppressed("Auto-level on_progress callback raised", exc)
             ok = True
         except Exception as exc:
             reason = reason or f"Error: {exc}"
@@ -149,8 +161,8 @@ class AutoLevelProbeRunner:
             if on_done:
                 try:
                     on_done(ok, reason)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Auto-level on_done callback raised", exc)
 
     def _snapshot_modal_state(self) -> tuple[str | None, str | None]:
         try:
@@ -268,5 +280,5 @@ class AutoLevelProbeRunner:
     def _log(self, message: str) -> None:
         try:
             self.app.ui_q.put(("log", message))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed queueing auto-level probe runner log message", exc)

@@ -74,8 +74,12 @@ class MacroCommandMixin(MacroExecutorState):
             logger.exception("Macro expression evaluation failed")
             try:
                 self.ui_q.put(("log", f"[macro] Expression evaluation failed: {exc}"))
-            except Exception:
-                pass
+            except Exception as queue_exc:
+                logger.debug(
+                    "Failed queueing macro expression error log: %s",
+                    queue_exc,
+                    exc_info=queue_exc,
+                )
             raise
 
     def _macro_eval_globals(self) -> dict:

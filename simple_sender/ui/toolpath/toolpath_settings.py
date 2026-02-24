@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import os
 import tkinter as tk
 from tkinter import messagebox
@@ -40,6 +41,17 @@ from simple_sender.utils.constants import (
     TOOLPATH_STREAMING_RENDER_INTERVAL_MAX,
     TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
 )
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _can_use_toolpath(app) -> bool:
@@ -121,8 +133,8 @@ def init_toolpath_settings(app):
         if saved_draw_percent is not None:
             try:
                 perf_candidates.append(float(saved_draw_percent))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed parsing saved toolpath draw percent while deriving performance slider", exc)
         if saved_full == 0 or saved_interactive == 0:
             perf_candidates.append(100.0)
         else:
@@ -320,8 +332,8 @@ def schedule_toolpath_arc_detail_reparse(app):
     if app._toolpath_arc_detail_reparse_after_id:
         try:
             app.after_cancel(app._toolpath_arc_detail_reparse_after_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling pending toolpath arc-detail reparse timer", exc)
     app._toolpath_arc_detail_reparse_after_id = app.after(
         app._toolpath_arc_detail_reparse_delay, app._run_toolpath_arc_detail_reparse
     )

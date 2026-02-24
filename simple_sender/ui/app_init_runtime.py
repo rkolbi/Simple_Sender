@@ -20,7 +20,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 from typing import Any, cast
+
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_key_bindings(app) -> None:
@@ -239,8 +243,8 @@ def _init_worker_and_runtime_controllers(
     app.grbl.set_status_query_failure_limit(app.status_query_failure_limit.get())
     try:
         app._on_homing_watchdog_change()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed applying initial homing watchdog settings: %s", exc, exc_info=exc)
 
     app.macro_executor = deps.MacroExecutor(app, macro_search_dirs=macro_search_dirs)
     app.probe_controller = deps.ProbeController(app)

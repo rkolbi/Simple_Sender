@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
+import logging
 import math
 import os
 from typing import Iterable
@@ -34,6 +35,17 @@ from simple_sender.gcode_parser import (
     _format_float,
     clean_gcode_line,
 )
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 @dataclass(frozen=True)
@@ -416,14 +428,14 @@ def level_gcode_file(
     except _LevelerError as exc:
         try:
             os.remove(output_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing output file after leveler validation error", remove_exc)
         return LevelFileResult(None, 0, exc.message, False)
     except Exception as exc:
         try:
             os.remove(output_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing output file after leveler write failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
     return LevelFileResult(output_path, lines_written, None, False)
 
@@ -450,8 +462,8 @@ def write_gcode_lines(
     except Exception as exc:
         try:
             os.remove(output_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing output file after write_gcode_lines failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
     return LevelFileResult(output_path, lines_written, None, False)
 

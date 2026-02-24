@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import os
 import tempfile
 from collections.abc import Callable, Iterable
@@ -41,6 +42,17 @@ from simple_sender.gcode_parser_split import GcodeSplitResult, GcodeSplitStreamR
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 
 from .calculations import _format_overlong_error, _log_split_result
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _level_from_source_lines(
@@ -157,15 +169,15 @@ def _level_and_write_auto_level_output(
     except Exception as exc:
         try:
             os.remove(target_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing target path after auto-level read/write failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
 
     if stream_result.failed_index is not None:
         try:
             os.remove(target_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing target path after stream split overflow", remove_exc)
         error = _format_overlong_error(
             [],
             fallback_index=stream_result.failed_index,
@@ -230,24 +242,24 @@ def _level_and_write_auto_level_output(
         if temp_path:
             try:
                 os.remove(temp_path)
-            except OSError:
-                pass
+            except OSError as remove_exc:
+                _log_suppressed("Failed removing temporary split file after rewrite failure", remove_exc)
         try:
             os.remove(target_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing target path after rewrite failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
 
     if stream_result.failed_index is not None:
         if temp_path:
             try:
                 os.remove(temp_path)
-            except OSError:
-                pass
+            except OSError as remove_exc:
+                _log_suppressed("Failed removing temporary split file after second stream split overflow", remove_exc)
         try:
             os.remove(target_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing target path after second stream split overflow", remove_exc)
         error = _format_overlong_error(
             [],
             fallback_index=stream_result.failed_index,
@@ -264,12 +276,12 @@ def _level_and_write_auto_level_output(
         if temp_path:
             try:
                 os.remove(temp_path)
-            except OSError:
-                pass
+            except OSError as remove_exc:
+                _log_suppressed("Failed removing temporary split file after final replace failure", remove_exc)
         try:
             os.remove(target_path)
-        except OSError:
-            pass
+        except OSError as remove_exc:
+            _log_suppressed("Failed removing target path after final replace failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
     return LevelFileResult(
         target_path,

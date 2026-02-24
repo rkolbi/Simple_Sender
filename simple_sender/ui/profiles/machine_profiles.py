@@ -20,7 +20,19 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 from tkinter import messagebox
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def load_machine_profiles(app) -> list[dict]:
@@ -128,8 +140,8 @@ def update_profile_units_label(app):
     if hasattr(app, "profile_rate_units"):
         try:
             app.profile_rate_units.config(text=label)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating machine-profile rate units label", exc)
 
 
 def on_profile_units_change(app, _event=None):
@@ -159,8 +171,8 @@ def on_profile_select(app, _event=None):
 def new_profile(app):
     try:
         app.profile_combo.set("")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed clearing profile combobox selection in new_profile", exc)
     app.active_profile_name.set("")
     app.profile_name_var.set("")
     app.profile_units_var.set(app.unit_mode.get())
@@ -221,8 +233,8 @@ def save_profile(app):
     refresh_profile_combo(app)
     try:
         app.profile_combo.set(name)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed selecting saved machine profile in combobox", exc)
     apply_profile_to_vars(app, profile)
     apply_profile_units(app, profile)
     if app._last_gcode_lines:

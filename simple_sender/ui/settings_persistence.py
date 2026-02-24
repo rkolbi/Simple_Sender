@@ -22,6 +22,7 @@
 
 import logging
 import os
+import sys
 from typing import cast
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
@@ -29,6 +30,15 @@ from simple_sender.utils.exceptions import SettingsLoadError, SettingsSaveError
 from simple_sender.kasa_accessory import validate_outlet_mapping
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def load_settings(app) -> dict:
@@ -334,6 +344,16 @@ def _read_outlet_setting(app, *, attr_name: str, key: str, default: int, label: 
 
 
 def _build_kasa_settings(app) -> dict[str, object]:
+    if not sys.platform.startswith("linux"):
+        return {
+            "kasa_enabled": False,
+            "kasa_device_identifier": "",
+            "vacuum_enabled": False,
+            "vacuum_outlet": 1,
+            "light_enabled": False,
+            "light_outlet": 2,
+        }
+
     kasa_enabled_var = getattr(app, "kasa_enabled", None)
     kasa_enabled = bool(kasa_enabled_var.get()) if kasa_enabled_var is not None else False
     device_identifier_var = getattr(app, "kasa_device_identifier", None)
@@ -460,8 +480,6 @@ def save_settings(app):
     )
 
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
-    data.pop("keybindings_enabled", None)
-    data.pop("console_status_enabled", None)
     last_port = ""
     try:
         last_port = getattr(app, "_auto_reconnect_last_port", "") or ""
@@ -514,11 +532,11 @@ def save_settings(app):
         try:
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
             app.status.config(text="Settings save failed")
-        except Exception:
-            pass
+        except Exception as log_exc:
+            _log_suppressed("Failed reporting SettingsSaveError to UI queue/status", log_exc)
     except Exception as exc:
         try:
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
             app.status.config(text="Settings save failed")
-        except Exception:
-            pass
+        except Exception as log_exc:
+            _log_suppressed("Failed reporting unexpected settings-save error to UI queue/status", log_exc)

@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import json
 import os
 import shutil
@@ -27,6 +28,17 @@ from tkinter import filedialog, messagebox
 
 from simple_sender.autolevel.height_map import HeightMap
 from .helpers import update_stats_summary
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def save_leveled(app, status_var) -> None:
@@ -66,8 +78,8 @@ def save_leveled(app, status_var) -> None:
         return
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(save_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed saving last G-code directory after Save Leveled", exc)
     status_var.set(f"Saved leveled job: {os.path.basename(save_path)}")
 
 
@@ -99,8 +111,8 @@ def save_height_map(app, status_var) -> None:
         return
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(save_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed saving last G-code directory after Save Height Map", exc)
     status_var.set(f"Saved height map: {os.path.basename(save_path)}")
 
 
@@ -144,26 +156,26 @@ def load_height_map(
     update_stats_summary(height_map, stats_var)
     try:
         apply_btn.config(state="normal" if height_map.is_complete() else "disabled")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed toggling Apply button state after loading height map", exc)
     if save_map_btn is not None:
         try:
             save_map_btn.config(state="normal" if height_map.is_complete() else "disabled")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed toggling Save Map button state after loading height map", exc)
     if save_btn is not None and (
         isinstance(getattr(app, "_auto_level_leveled_lines", None), list)
         or getattr(app, "_auto_level_leveled_path", None)
     ):
         try:
             save_btn.config(state="normal")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed toggling Save Leveled button state after loading height map", exc)
     map_summary_var.set(
         f"Loaded map: {len(height_map.xs)} x {len(height_map.ys)} "
         f"({len(height_map.xs) * len(height_map.ys)} points)"
     )
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(load_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed saving last G-code directory after Load Height Map", exc)

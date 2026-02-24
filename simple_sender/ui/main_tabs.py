@@ -55,8 +55,8 @@ def update_tab_visibility(app, nb=None):
         else:
             app._unbind_app_settings_mousewheel()
             app._unbind_app_settings_touch_scroll()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed updating App Settings input bindings: %s", exc, exc_info=exc)
 
 
 def on_tab_changed(app, event):

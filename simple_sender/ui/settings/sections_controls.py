@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import sys
 from tkinter import ttk
 
 from simple_sender.utils.constants import (
@@ -367,6 +368,8 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
 
 
 def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
+    if not sys.platform.startswith("linux"):
+        return row
     kasa_frame = ttk.LabelFrame(parent, text="Kasa Plug", padding=8)
     kasa_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     kasa_frame.grid_columnconfigure(1, weight=1)

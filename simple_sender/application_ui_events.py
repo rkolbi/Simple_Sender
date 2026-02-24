@@ -24,6 +24,7 @@
 """
 
 # Standard library imports
+import logging
 import queue
 from typing import Any, cast
 
@@ -51,6 +52,16 @@ from simple_sender.ui.settings import (
 )
 
 MACRO_STATUS_SCROLL_INTERVAL_MS = 200
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class UiEventsMixin:
@@ -122,8 +133,8 @@ class UiEventsMixin:
         enabled = bool(app.auto_level_enabled.get())
         try:
             app.settings["auto_level_enabled"] = enabled
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed persisting auto-level-enabled preference", exc)
         frame = getattr(app, "auto_level_frame", None)
         if frame is not None:
             try:
@@ -131,8 +142,8 @@ class UiEventsMixin:
                     frame.grid()
                 else:
                     frame.grid_remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed toggling auto-level settings frame visibility", exc)
         if enabled:
             if getattr(app, "_last_gcode_lines", None) or getattr(app, "_gcode_source", None):
                 app._set_job_button_mode("auto_level")
@@ -171,10 +182,10 @@ class UiEventsMixin:
             app.machine_state.set(display)
             try:
                 app._ensure_state_label_width(display)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                _log_suppressed("Failed ensuring machine-state label width during macro-status scroll", exc)
+        except Exception as exc:
+            _log_suppressed("Failed updating machine-state text during macro-status scroll", exc)
         app._macro_status_after_id = app.after(
             MACRO_STATUS_SCROLL_INTERVAL_MS,
             self._update_macro_status_display,
@@ -189,14 +200,14 @@ class UiEventsMixin:
         if after_id:
             try:
                 app.after_cancel(after_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed canceling macro-status scroll timer", exc)
         app._macro_status_after_id = None
         app.machine_state.set(app._machine_state_text)
         try:
             app._ensure_state_label_width(app._machine_state_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring machine-state label width after macro-status stop", exc)
         app._update_state_highlight(app._machine_state_text)
 
     def _on_resume_button_visibility_change(self):

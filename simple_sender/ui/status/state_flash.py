@@ -20,7 +20,19 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def apply_state_fg(app, color: str | None, fg: str | None = None):
@@ -31,8 +43,8 @@ def apply_state_fg(app, color: str | None, fg: str | None = None):
         return
     try:
         lbl.config(background=target, foreground=text_color)
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed applying machine-state label flash colors", exc)
 
 
 def ensure_state_label_width(app, text: str | None) -> None:
@@ -52,22 +64,22 @@ def ensure_state_label_width(app, text: str | None) -> None:
         width = needed
         try:
             app._machine_state_max_chars = width
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed storing machine-state max-width cache", exc)
     if width <= 0:
         return
     try:
         lbl.config(width=width)
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed applying machine-state label width", exc)
 
 
 def cancel_state_flash(app):
     if app._state_flash_after_id:
         try:
             app.after_cancel(app._state_flash_after_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed canceling machine-state flash timer", exc)
     app._state_flash_after_id = None
     app._state_flash_color = None
     app._state_flash_on = False

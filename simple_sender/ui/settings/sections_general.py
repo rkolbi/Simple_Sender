@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import queue
 import subprocess
 import sys
@@ -29,6 +30,18 @@ from tkinter import messagebox, ttk
 from simple_sender.utils.constants import ALL_STOP_CHOICES
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     diagnostics_frame = ttk.LabelFrame(parent, text="Diagnostics", padding=8)
@@ -156,8 +169,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     def _apply_scale_preset(value: float) -> None:
         try:
             app.ui_scale.set(value)
-        except (AttributeError, tk.TclError, TypeError, ValueError):
-            pass
+        except (AttributeError, tk.TclError, TypeError, ValueError) as exc:
+            _log_suppressed("Failed setting UI scale preset value", exc)
         on_ui_scale_change()
     apply_tooltip(
         app.ui_scale_entry,
@@ -194,8 +207,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         state = "normal" if enabled else "disabled"
         try:
             app.tooltip_timeout_entry.configure(state=state)
-        except (AttributeError, tk.TclError):
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            _log_suppressed("Failed updating tooltip timeout entry enabled state", exc)
 
     def _on_tooltip_setting_change() -> None:
         refresh_tooltips = getattr(app, "_refresh_tooltips_toggle_text", None)
@@ -216,8 +229,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     )
     try:
         app.tooltip_enabled.trace_add("write", lambda *_args: _sync_tooltip_timeout_state())
-    except (AttributeError, tk.TclError):
-        pass
+    except (AttributeError, tk.TclError) as exc:
+        _log_suppressed("Failed wiring tooltip-enabled variable trace handler", exc)
 
     ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
         row=4, column=0, sticky="w", padx=(0, 10), pady=4
@@ -592,12 +605,12 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
     def _log_status(text: str) -> None:
         try:
             app.ui_q.put(("log", text))
-        except (AttributeError, TypeError, queue.Full):
-            pass
+        except (AttributeError, TypeError, queue.Full) as exc:
+            _log_suppressed("Failed queueing Linux power-action status message", exc)
         try:
             app.status.config(text=text)
-        except (AttributeError, tk.TclError):
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            _log_suppressed("Failed updating status label for Linux power action", exc)
 
     def _run_power_action(action: str, label: str) -> None:
         confirm = messagebox.askyesno(
@@ -608,14 +621,14 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
             return
         try:
             app._save_settings()
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, tk.TclError):
-            pass
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, tk.TclError) as exc:
+            _log_suppressed("Failed saving settings before Linux power action", exc)
         try:
             subprocess.Popen(["systemctl", action])
             _log_status(f"[system] {label} requested")
             return
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _log_suppressed("Failed invoking systemctl power action; trying shutdown fallback", exc)
         fallback_args = ["shutdown", "-h", "now"] if action == "poweroff" else ["shutdown", "-r", "now"]
         try:
             subprocess.Popen(fallback_args)

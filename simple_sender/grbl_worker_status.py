@@ -42,6 +42,15 @@ from .utils.validation import validate_interval
 
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _annotate_alarm(message: str) -> str:
@@ -410,8 +419,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             self._watchdog_trip_ts = now
                             try:
                                 self.ui_q.put(("log", "[watchdog] No RX from GRBL; pausing stream."))
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                _log_suppressed("Failed queueing watchdog pause log message", exc)
                         if (
                             idle >= WATCHDOG_DISCONNECT_TIMEOUT
                             and (self._streaming or self._ready)
@@ -434,8 +443,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                                 "log",
                                 f"[status] Query failed ({self._status_query_failures}/{self._status_query_failure_limit})",
                             ))
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _log_suppressed("Failed queueing status-query failure log message", exc)
                         if self._status_query_failures >= self._status_query_failure_limit:
                             self._signal_disconnect(f"Status query error: {e}")
                             stop_evt.set()

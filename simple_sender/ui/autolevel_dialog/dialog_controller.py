@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import tempfile
@@ -30,7 +31,7 @@ import time
 import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
-from tkinter import ttk
+from tkinter import ttk, messagebox, simpledialog
 from typing import Any, cast
 
 from simple_sender.autolevel.grid import AdaptiveGridSpec, ProbeBounds, ProbeGrid, build_adaptive_grid
@@ -70,6 +71,17 @@ from .profiles import (
 )
 from .ui_components import build_avoidance_tab, grid_row
 
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 @dataclass(frozen=True)
 class AutoLevelDialogDependencies:
@@ -80,6 +92,22 @@ class AutoLevelDialogDependencies:
     center_window_fn: Callable[[Any, Any], None]
     set_tab_tooltip_fn: Callable[[Any, Any, str], None]
     apply_auto_level_to_path_fn: Callable[..., tuple[LevelFileResult, bool, str | None]]
+
+
+def build_auto_level_dialog_dependencies() -> AutoLevelDialogDependencies:
+    from simple_sender.ui.dialogs.popup_utils import center_window
+    from simple_sender.ui.widgets_tooltips import set_tab_tooltip
+    from .workflow import _apply_auto_level_to_path
+
+    return AutoLevelDialogDependencies(
+        tk_module=tk,
+        ttk_module=ttk,
+        messagebox=messagebox,
+        simpledialog=simpledialog,
+        center_window_fn=center_window,
+        set_tab_tooltip_fn=set_tab_tooltip,
+        apply_auto_level_to_path_fn=_apply_auto_level_to_path,
+    )
 
 
 class AutoLevelDialogController:
@@ -468,8 +496,8 @@ class AutoLevelDialogController:
     def _persist_auto_level_presets(self) -> None:
         try:
             self.app.settings["auto_level_presets"] = dict(self.app.auto_level_presets)
-        except (AttributeError, TypeError):
-            pass
+        except (AttributeError, TypeError) as exc:
+            _log_suppressed("Failed persisting auto-level presets to settings", exc)
 
     def _avoidance_snapshot(self) -> list[dict[str, Any]]:
         snapshot: list[dict[str, Any]] = []
@@ -605,8 +633,8 @@ class AutoLevelDialogController:
         }
         try:
             self.app.settings["auto_level_settings"] = dict(self.app.auto_level_settings)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed persisting auto-level settings snapshot", exc)
 
         spec = AdaptiveGridSpec(
             base_spacing=base_spacing,
@@ -742,8 +770,8 @@ class AutoLevelDialogController:
                         show_overlay = True
                     try:
                         self.app.toolpath_panel.set_autolevel_overlay(grid if show_overlay else None)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log_suppressed("Failed updating toolpath auto-level overlay after probe completion", exc)
                     self.apply_btn.config(state="normal")
                     if self.save_map_btn is not None:
                         self.save_map_btn.config(state="normal")
@@ -832,8 +860,8 @@ class AutoLevelDialogController:
             if getattr(self.app, "_auto_level_leveled_temp", False) and old_path:
                 try:
                     os.remove(old_path)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _log_suppressed("Failed removing previous temporary leveled file before regeneration", exc)
             output_path = self._make_output_path(path)
             header_lines = self._header_lines_for(path)
             log_fn = None
@@ -967,8 +995,8 @@ class AutoLevelDialogController:
                 if widget is None:
                     continue
                 widget.config(state=state)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed toggling auto-level dialog control state", exc)
         if self.close_btn is not None:
             self.close_btn.config(text="Cancel" if not enabled else "Close")
 
@@ -1196,8 +1224,8 @@ class AutoLevelDialogController:
             try:
                 if self.app._auto_level_height_map.is_complete():
                     self.apply_btn.config(state="normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed enabling auto-level Apply button while hydrating dialog state", exc)
         if (isinstance(self.original_lines, list) and self.original_lines) or self.original_path:
             self.revert_btn.config(state="normal")
         if isinstance(getattr(self.app, "_auto_level_leveled_lines", None), list) or getattr(
@@ -1208,8 +1236,8 @@ class AutoLevelDialogController:
             try:
                 if self.app._auto_level_height_map.is_complete():
                     self.save_map_btn.config(state="normal")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed enabling auto-level Save Map button while hydrating dialog state", exc)
             try:
                 height_map = self.app._auto_level_height_map
                 self.map_summary_var.set(
@@ -1217,8 +1245,8 @@ class AutoLevelDialogController:
                     f"({len(height_map.xs) * len(height_map.ys)} points)"
                 )
                 update_stats_summary(height_map, self.stats_var)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed hydrating auto-level loaded-map summary state", exc)
 
     def _poll_start_state(self) -> None:
         if self.dlg is None or not self.dlg.winfo_exists():
@@ -1227,6 +1255,11 @@ class AutoLevelDialogController:
         self.dlg.after(AUTOLEVEL_START_STATE_POLL_MS, self._poll_start_state)
 
 
-def show_auto_level_dialog(app: Any, deps: AutoLevelDialogDependencies) -> None:
+def show_auto_level_dialog(
+    app: Any,
+    deps: AutoLevelDialogDependencies | None = None,
+) -> None:
+    if deps is None:
+        deps = build_auto_level_dialog_dependencies()
     AutoLevelDialogController(app, deps).show()
 

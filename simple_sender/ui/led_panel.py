@@ -20,11 +20,23 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
 from simple_sender.ui.widgets_common import _resolve_widget_bg
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _bool_from_var(value: Any, default: bool = True) -> bool:
@@ -92,13 +104,13 @@ def refresh_led_backgrounds(app):
     for canvas, _ in getattr(app, "_led_indicators", {}).values():
         try:
             canvas.config(bg=bg)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed applying LED panel canvas background color", exc)
     for container in getattr(app, "_led_indicator_containers", {}).values():
         try:
             container.config(bg=bg)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed applying LED indicator container background color", exc)
 
 
 def update_led_visibility(app):

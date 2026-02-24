@@ -37,6 +37,15 @@ from .utils.validation import validate_feed_rate, validate_unit_mode, validate_r
 
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class GrblWorkerCommandMixin(GrblWorkerState):
@@ -57,8 +66,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             logger.warning("Cannot send immediate command during streaming")
             try:
                 self.ui_q.put(("log", f"[manual blocked] {command.strip()} (streaming active)"))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed queueing blocked manual-command log while streaming", exc)
             return
         
         if source:
@@ -84,10 +93,10 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                         self.suspend_watchdog(timeout, reason="homing")
                         try:
                             self.ui_q.put(("log", f"[watchdog] Homing grace {timeout:g}s"))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                        except Exception as exc:
+                            _log_suppressed("Failed queueing watchdog homing-grace log", exc)
+            except Exception as exc:
+                _log_suppressed("Failed configuring watchdog homing grace window", exc)
         
         self._outgoing_q.put(command)
     

@@ -20,7 +20,20 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
+
 from simple_sender.gcode_source import FileGcodeSource
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def apply_loaded_gcode(
@@ -97,19 +110,19 @@ def apply_loaded_gcode(
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
         try:
             existing_source.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed closing existing G-code source before applying newly loaded job", exc)
         if cleanup_path:
             try:
                 deps.os.remove(cleanup_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                _log_suppressed("Failed removing existing G-code source cleanup path", exc)
     app._gcode_source = streaming_source
     deps.set_preview_streaming_state(app, streaming_source is not None)
     try:
         app._set_job_button_mode("auto_level" if (lines or streaming_source is not None) else "read_job")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating job button mode after applying loaded G-code", exc)
     app._gcode_total_lines = total_lines if total_lines is not None else len(lines)
     if streaming_source is not None:
         app.grbl.load_gcode(streaming_source, name=deps.os.path.basename(path))

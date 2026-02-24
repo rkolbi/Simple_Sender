@@ -130,8 +130,8 @@ class ControlsMixin:
     def _refresh_override_info(self) -> None:
         refresh_override_info(self)
 
-    def _dro_value_row(self, parent: tk.Widget, axis: str, var: tk.StringVar, **kwargs: Any) -> None:
-        dro_value_row(self, parent, axis, var, **kwargs)
+    def _dro_value_row(self, parent: tk.Widget, axis: str, var: tk.StringVar, **kwargs: Any) -> Any:
+        return dro_value_row(self, parent, axis, var, **kwargs)
 
     def _dro_row(
         self,

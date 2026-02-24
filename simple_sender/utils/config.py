@@ -99,7 +99,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "joystick_safety_enabled": False,
     "kasa_device_identifier": "",
     "kasa_enabled": False,
-    "jog_feed": 1000.0,
     "jog_feed_xy": 4000.0,
     "jog_feed_z": 500.0,
     "jog_step": 1.0,
@@ -386,8 +385,8 @@ class Settings:
                 try:
                     shutil.copy2(backup_path, filepath)
                     logger.info("Settings restored from backup")
-                except IOError:
-                    pass
+                except IOError as restore_exc:
+                    logger.debug("Failed restoring settings backup after save error: %s", restore_exc, exc_info=restore_exc)
             
             raise SettingsSaveError(f"Failed to save: {e}")
             
@@ -400,8 +399,8 @@ class Settings:
             if temp_path.exists():
                 try:
                     temp_path.unlink()
-                except OSError:
-                    pass
+                except OSError as cleanup_exc:
+                    logger.debug("Failed deleting temporary settings file: %s", cleanup_exc, exc_info=cleanup_exc)
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get setting value.

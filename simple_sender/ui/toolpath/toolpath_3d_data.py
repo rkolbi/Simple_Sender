@@ -22,6 +22,7 @@
 """3D toolpath parsing and data helpers."""
 
 import threading
+import logging
 import time
 from typing import Any, Callable, cast
 
@@ -34,6 +35,17 @@ from simple_sender.utils.constants import (
     VIEW_3D_ARC_STEP_FAST_THRESHOLD,
 )
 from simple_sender.utils.hashing import hash_lines as _hash_lines
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class Toolpath3DDataMixin:
@@ -88,8 +100,8 @@ class Toolpath3DDataMixin:
             return
         try:
             self._perf_callback(label, duration)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed invoking toolpath 3D performance callback", exc)
 
     def _invalidate_render_cache(self):
         self._cached_projection_state = None
@@ -113,8 +125,8 @@ class Toolpath3DDataMixin:
             if scale is not None:
                 try:
                     scale.set(percent)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed syncing draw-percent scale widget", exc)
         self._invalidate_render_cache()
         self._schedule_render()
         if (

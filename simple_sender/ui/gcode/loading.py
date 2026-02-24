@@ -20,18 +20,31 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.ui.dialogs.popup_utils import center_window
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def ensure_gcode_loading_popup(app):
     if app._gcode_load_popup is not None:
         try:
             if app._gcode_load_popup.winfo_exists():
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed checking existing G-code loading popup state", exc)
     popup = tk.Toplevel(app)
     popup.title("Loading G-code")
     popup.transient(app)
@@ -57,8 +70,8 @@ def show_gcode_loading(app):
         if not popup.winfo_viewable():
             popup.deiconify()
         popup.lift()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed showing G-code loading popup", exc)
 
 def hide_gcode_loading(app):
     popup = app._gcode_load_popup
@@ -67,8 +80,8 @@ def hide_gcode_loading(app):
             if app._gcode_load_popup_bar is not None:
                 app._gcode_load_popup_bar.stop()
             popup.withdraw()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed hiding G-code loading popup", exc)
     app.gcode_load_var.set("")
 
 def set_gcode_loading_indeterminate(app, text: str):

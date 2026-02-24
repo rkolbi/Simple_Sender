@@ -143,8 +143,8 @@ class Toolpath3DInteractionMixin:
         if self._fast_mode_after_id is not None:
             try:
                 cast(Any, self).after_cancel(self._fast_mode_after_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed cancelling previous 3D fast-mode timer: %s", exc, exc_info=exc)
         self._fast_mode_after_id = cast(Any, self).after(
             int(self._fast_mode_duration * 1000), self._exit_fast_mode
         )

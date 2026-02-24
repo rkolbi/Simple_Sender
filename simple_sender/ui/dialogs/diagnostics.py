@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import json
 import os
 from datetime import datetime
@@ -48,6 +49,16 @@ RUN_CHECKLIST_ITEMS = [
     "Verify tool, clamp clearance, and safe Z height.",
     "Dry-run in air if the job is new or the setup changed.",
 ]
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
@@ -79,8 +90,8 @@ def open_release_checklist(app):
                 existing.lift()
                 existing.focus_force()
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring existing release checklist window", exc)
     win = tk.Toplevel(app)
     app._release_checklist_window = win
     win.title("Release checklist")
@@ -124,8 +135,8 @@ def open_run_checklist(app):
                 existing.lift()
                 existing.focus_force()
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed restoring existing run checklist window", exc)
     win = tk.Toplevel(app)
     app._run_checklist_window = win
     win.title("Start Job checklist")
@@ -351,23 +362,23 @@ def run_preflight_gate(app: Any) -> bool:
                 app.ui_q.put(("log", "[preflight] Override accepted; starting despite gate failures."))
                 for item in failures:
                     app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed writing preflight override details to UI log queue", exc)
             try:
                 app.status.config(text="Preflight overridden: starting job")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed updating status text after preflight override", exc)
             return True
         try:
             app.status.config(text="Run blocked: preflight gate failed")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed updating status text when preflight blocks run", exc)
         return False
     if warnings:
         try:
             app.ui_q.put(("log", "[preflight] " + "; ".join(warnings)))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed writing preflight warnings to UI log queue", exc)
     return True
 
 
@@ -466,8 +477,8 @@ def export_session_diagnostics(app) -> None:
     if dir_name:
         try:
             os.makedirs(dir_name, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed creating export directory for diagnostics report", exc)
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as outfile:
             outfile.write("\n".join(lines))

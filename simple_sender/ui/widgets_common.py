@@ -20,8 +20,20 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _resolve_widget_bg(widget):
@@ -61,21 +73,21 @@ def _resolve_widget_bg(widget):
             bg = root.cget("background")
             if bg:
                 return bg
-        except (AttributeError, tk.TclError):
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            _log_suppressed("Failed reading toplevel background while resolving widget bg", exc)
     return "#f0f0f0"
 
 
 def attach_log_gcode(widget, gcode_or_func):
     try:
         widget._log_gcode_get = gcode_or_func
-    except AttributeError:
-        pass
+    except AttributeError as exc:
+        _log_suppressed("Failed attaching log G-code provider to widget", exc)
 
 
 def set_kb_id(widget, kb_id: str):
     try:
         widget._kb_id = kb_id
-    except AttributeError:
-        pass
+    except AttributeError as exc:
+        _log_suppressed("Failed attaching keyboard-id metadata to widget", exc)
     return widget

@@ -32,6 +32,15 @@ from tkinter import messagebox
 from simple_sender.utils.constants import MACRO_GPAT, RT_STATUS
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _maybe_set_unit_mode(app, unit_mode: str | None) -> None:
@@ -39,8 +48,8 @@ def _maybe_set_unit_mode(app, unit_mode: str | None) -> None:
         return
     try:
         app._set_unit_mode(unit_mode)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed applying macro-requested unit mode", exc)
 
 
 def _handle_prompt_command(

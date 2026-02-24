@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 import threading
 import time
 from typing import Any
@@ -35,6 +37,20 @@ from simple_sender.kasa_accessory import (
 
 
 OUTLET_LABELS = ("Outlet 1", "Outlet 2")
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _kasa_supported() -> bool:
+    return sys.platform.startswith("linux")
 
 
 def outlet_label(outlet_id: int) -> str:
@@ -51,6 +67,16 @@ def outlet_id_from_label(label: str, default: int) -> int:
 
 
 def kasa_settings_snapshot(app) -> dict[str, Any]:
+    if not _kasa_supported():
+        return {
+            "kasa_enabled": False,
+            "kasa_device_identifier": "",
+            "kasa_outlet_count": 2,
+            "vacuum_enabled": False,
+            "vacuum_outlet": 1,
+            "light_enabled": False,
+            "light_outlet": 2,
+        }
     vacuum_outlet = int(getattr(app, "vacuum_outlet", 1).get()) if hasattr(app, "vacuum_outlet") else 1
     light_outlet = int(getattr(app, "light_outlet", 2).get()) if hasattr(app, "light_outlet") else 2
     if vacuum_outlet not in (1, 2):
@@ -78,8 +104,8 @@ def log_kasa_message(app, message: str) -> None:
         return
     try:
         app.ui_q.put(("log", f"[kasa] {text}"))
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed queueing Kasa log message to UI thread", exc)
 
 
 def _set_widget_state(widget: Any, state: str) -> None:
@@ -87,8 +113,8 @@ def _set_widget_state(widget: Any, state: str) -> None:
         return
     try:
         widget.config(state=state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating Kasa widget state", exc)
 
 
 def _coerce_outlet_setting(app, field_name: str, label_name: str, *, default: int) -> int:
@@ -104,13 +130,13 @@ def _coerce_outlet_setting(app, field_name: str, label_name: str, *, default: in
         value = default
         try:
             outlet_var.set(value)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed normalizing Kasa outlet variable", exc)
     if label_var is not None:
         try:
             label_var.set(outlet_label(value))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed syncing Kasa outlet label variable", exc)
     return value
 
 
@@ -135,13 +161,13 @@ def _apply_kasa_device_choice(app, discovered: list[DeviceInfo]) -> None:
         selected_option = combo_values[0]
         try:
             app.kasa_device_identifier.set(label_to_identifier[selected_option])
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed selecting first discovered Kasa device identifier", exc)
     if hasattr(app, "kasa_device_choice"):
         try:
             app.kasa_device_choice.set(selected_option)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed syncing Kasa device combobox selection", exc)
 
 
 def _set_outlet_status(app, result: OutletCommandResult) -> None:
@@ -169,11 +195,34 @@ def on_kasa_command_result(app, result: OutletCommandResult) -> None:
         return
     try:
         app._post_ui_thread(_apply)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed posting Kasa command result to UI thread", exc)
 
 
 def refresh_kasa_controls_state(app) -> None:
+    if not _kasa_supported():
+        if hasattr(app, "kasa_validation_var"):
+            try:
+                app.kasa_validation_var.set("Kasa control is available on Linux only.")
+            except Exception as exc:
+                _log_suppressed("Failed updating Linux-only Kasa validation message", exc)
+        for widget_name in (
+            "kasa_enable_check",
+            "btn_kasa_discover",
+            "kasa_device_combo",
+            "vacuum_check",
+            "light_check",
+            "vacuum_outlet_combo",
+            "light_outlet_combo",
+            "btn_kasa_refresh_outlets",
+            "btn_kasa_outlet1_on",
+            "btn_kasa_outlet1_off",
+            "btn_kasa_outlet2_on",
+            "btn_kasa_outlet2_off",
+        ):
+            _set_widget_state(getattr(app, widget_name, None), "disabled")
+        return
+
     enabled = bool(getattr(app, "kasa_enabled", False).get()) if hasattr(app, "kasa_enabled") else False
     has_device = bool(
         str(getattr(app, "kasa_device_identifier", "").get() or "").strip()
@@ -229,18 +278,18 @@ def validate_kasa_outlet_mapping(app, *, changed: str | None = None) -> bool:
         if hasattr(app, "light_enabled"):
             try:
                 app.light_enabled.set(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed disabling light control for single-outlet Kasa device", exc)
         if hasattr(app, "light_outlet"):
             try:
                 app.light_outlet.set(1)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed forcing light outlet to Outlet 1 for single-outlet Kasa device", exc)
         if hasattr(app, "light_outlet_label"):
             try:
                 app.light_outlet_label.set("Outlet 1")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed forcing light outlet label for single-outlet Kasa device", exc)
         msg = "Single-outlet Kasa device detected: Vacuum control only."
         if hasattr(app, "kasa_validation_var"):
             app.kasa_validation_var.set(msg)
@@ -289,6 +338,29 @@ def on_kasa_mapping_change(app, changed: str | None = None) -> None:
 
 
 def on_kasa_master_change(app) -> None:
+    if not _kasa_supported():
+        if hasattr(app, "kasa_enabled"):
+            try:
+                app.kasa_enabled.set(False)
+            except Exception as exc:
+                _log_suppressed("Failed forcing Kasa master toggle off on non-Linux platform", exc)
+        if hasattr(app, "vacuum_enabled"):
+            try:
+                app.vacuum_enabled.set(False)
+            except Exception as exc:
+                _log_suppressed("Failed forcing Kasa vacuum toggle off on non-Linux platform", exc)
+        if hasattr(app, "light_enabled"):
+            try:
+                app.light_enabled.set(False)
+            except Exception as exc:
+                _log_suppressed("Failed forcing Kasa light toggle off on non-Linux platform", exc)
+        if hasattr(app, "kasa_device_identifier"):
+            try:
+                app.kasa_device_identifier.set("")
+            except Exception as exc:
+                _log_suppressed("Failed clearing Kasa device identifier on non-Linux platform", exc)
+        refresh_kasa_controls_state(app)
+        return
     if hasattr(app, "accessory_router"):
         app.accessory_router.reset_debounce()
     if not bool(app.kasa_enabled.get()):
@@ -298,6 +370,14 @@ def on_kasa_master_change(app) -> None:
 
 
 def on_kasa_device_selected(app, _event=None) -> None:
+    if not _kasa_supported():
+        if hasattr(app, "kasa_device_identifier"):
+            try:
+                app.kasa_device_identifier.set("")
+            except Exception as exc:
+                _log_suppressed("Failed clearing Kasa device selection on non-Linux platform", exc)
+        refresh_kasa_controls_state(app)
+        return
     option = str(app.kasa_device_choice.get() or "").strip()
     identifier = str(getattr(app, "_kasa_device_label_to_identifier", {}).get(option, "") or "").strip()
     if not identifier and option and "@" in option:
@@ -329,18 +409,18 @@ def _handle_outlet_list_success(app, outlets: list[OutletInfo]) -> None:
         if hasattr(app, "light_enabled"):
             try:
                 app.light_enabled.set(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed disabling light toggle after Kasa outlet refresh", exc)
         if hasattr(app, "light_outlet"):
             try:
                 app.light_outlet.set(1)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed forcing light outlet to 1 after Kasa outlet refresh", exc)
         if hasattr(app, "light_outlet_label"):
             try:
                 app.light_outlet_label.set("Outlet 1")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed forcing light outlet label after Kasa outlet refresh", exc)
         if hasattr(app, "kasa_validation_var"):
             app.kasa_validation_var.set(msg)
         log_kasa_message(app, msg)
@@ -352,11 +432,14 @@ def _handle_outlet_list_success(app, outlets: list[OutletInfo]) -> None:
 def _post_ui(app, func, *args) -> None:
     try:
         app._post_ui_thread(func, *args)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed posting Kasa callback to UI thread", exc)
 
 
 def discover_kasa_devices(app) -> None:
+    if not _kasa_supported():
+        refresh_kasa_controls_state(app)
+        return
     if not bool(app.kasa_enabled.get()):
         return
 
@@ -370,6 +453,9 @@ def discover_kasa_devices(app) -> None:
 
 
 def refresh_kasa_outlet_list(app) -> None:
+    if not _kasa_supported():
+        refresh_kasa_controls_state(app)
+        return
     if not bool(app.kasa_enabled.get()):
         return
     identifier = str(app.kasa_device_identifier.get() or "").strip()
@@ -386,6 +472,9 @@ def refresh_kasa_outlet_list(app) -> None:
 
 
 def test_kasa_outlet(app, outlet_id: int, on: bool) -> None:
+    if not _kasa_supported():
+        refresh_kasa_controls_state(app)
+        return
     accepted = app.accessory_router.request_outlet_state(
         int(outlet_id),
         bool(on),
@@ -396,6 +485,8 @@ def test_kasa_outlet(app, outlet_id: int, on: bool) -> None:
 
 
 def handle_outgoing_gcode_line(app, line: str, source: str) -> None:
+    if not _kasa_supported():
+        return
     if not hasattr(app, "accessory_router") or not hasattr(app, "spindle_command_detector"):
         return
     if not bool(app.kasa_enabled.get()):

@@ -1,5 +1,5 @@
 ﻿# Simple Sender - Full Manual
-![Release: 1.7.0](https://img.shields.io/badge/release-1.7.0-blue)
+![Release: 1.7.5](https://img.shields.io/badge/release-1.7.5-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Don't trust it until you've validated it a few times.
@@ -61,7 +61,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
-- Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings).
+- Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
 
 ```powershell
 python -m venv .venv
@@ -169,7 +169,7 @@ This is a practical, end-to-end flow with rationale for key options.
 
     ![-](pics/grblsettingstab.JPG)
     
-  - **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+- **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
     ![](pics/appsettingstab.JPG)
   
@@ -204,6 +204,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics export captures recent status/console history, and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
+- **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
@@ -747,7 +748,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/widgets_tooltips.py`: tooltip-focused UI helpers (tooltip rendering, tab tooltips, disabled-reason text resolution, and bulk tooltip attachment).
 - `simple_sender/ui/widgets_keypad.py`: numeric keypad helpers for touch-friendly numeric entry widgets.
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
-- `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
+- `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog entrypoint + dependency wiring (`show_auto_level_dialog()` / `build_auto_level_dialog_dependencies()`).
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
 - `simple_sender/types.py`: shared protocols and stream-state value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) used by the worker pipeline.
@@ -807,7 +808,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
-- Auto-Level dialog flow has been decomposed into a dedicated controller module (`ui/autolevel_dialog/dialog_controller.py`) while preserving public entry points in `ui/autolevel_dialog/__init__.py`.
+- Auto-Level dialog flow is routed directly through `ui/autolevel_dialog/dialog_controller.py` and `ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
 - Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 
 ## Pre-release Notes

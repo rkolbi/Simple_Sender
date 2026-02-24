@@ -37,6 +37,15 @@ from simple_sender.utils.constants import (
 from simple_sender.utils.macro_headers import parse_macro_header
 from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class MacroRunnerMixin(MacroExecutorState):
@@ -148,8 +157,8 @@ class MacroRunnerMixin(MacroExecutorState):
         elif hasattr(self.app, "_start_macro_status"):
             try:
                 self.app._start_macro_status(name)
-            except (AttributeError, RuntimeError):
-                pass
+            except (AttributeError, RuntimeError) as exc:
+                _log_suppressed("Failed starting macro status indicator on UI thread", exc)
         try:
             with self._macro_vars_lock:
                 self._macro_local_vars = {"app": self.app, "os": os}
@@ -273,8 +282,8 @@ class MacroRunnerMixin(MacroExecutorState):
             elif hasattr(self.app, "_stop_macro_status"):
                 try:
                     self.app._stop_macro_status()
-                except (AttributeError, RuntimeError):
-                    pass
+                except (AttributeError, RuntimeError) as exc:
+                    _log_suppressed("Failed stopping macro status indicator on UI thread", exc)
             duration = time.perf_counter() - start
             if duration >= 0.2:
                 avg = duration / executed if executed else duration

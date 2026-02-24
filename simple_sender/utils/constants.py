@@ -246,7 +246,8 @@ def _is_raspberry_pi() -> bool:
             if "raspberry pi" in handle.read().lower():
                 return True
     except Exception:
-        pass
+        machine = platform.machine().lower()
+        return machine in ("armv6l", "armv7l", "aarch64", "arm64")
     machine = platform.machine().lower()
     return machine in ("armv6l", "armv7l", "aarch64", "arm64")
 

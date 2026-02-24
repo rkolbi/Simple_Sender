@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import os
 import tkinter as tk
 import tkinter.font as tkfont
@@ -42,6 +43,18 @@ from simple_sender.ui.icons import (
 )
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
+
 
 def update_job_button_mode(app, mode: str) -> None:
     btn = getattr(app, "btn_open", None)
@@ -81,14 +94,14 @@ def update_job_button_mode(app, mode: str) -> None:
             tooltip = "Probe only the job bounds and build a height map."
         try:
             btn._disabled_reason = reason
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed setting Auto-Level disabled reason on job button", exc)
         apply_tooltip(btn, tooltip)
         set_kb_id(btn, "auto_level")
         try:
             app._offline_controls.add(btn)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed adding Auto-Level job button to offline controls", exc)
     else:
         btn.config(
             text=icon_label(ICON_JOB_READ, "Read Job"),
@@ -96,14 +109,14 @@ def update_job_button_mode(app, mode: str) -> None:
         )
         try:
             btn._disabled_reason = None
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed clearing disabled reason on Read Job button", exc)
         apply_tooltip(btn, "Load a G-code job for streaming (read-only).")
         set_kb_id(btn, "gcode_open")
         try:
             app._offline_controls.add(btn)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed adding Read Job button to offline controls", exc)
     hint = getattr(app, "job_button_hint", None)
     if hint is not None:
         visible = bool(getattr(app, "_job_button_hint_visible", False))
@@ -114,32 +127,32 @@ def update_job_button_mode(app, mode: str) -> None:
                 hint.pack(side="left", padx=(6, 0), after=btn)
                 try:
                     app._job_button_hint_visible = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed marking job-button hint visible", exc)
         elif visible:
             try:
                 hint.pack_forget()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed hiding job-button hint", exc)
             try:
                 app._job_button_hint_visible = False
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed marking job-button hint hidden", exc)
     try:
         app._job_button_mode = mode
         app._job_button_streaming = streaming
         app._job_button_leveled = leveled
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed caching job-button mode state", exc)
     try:
         btn._force_disabled = bool(mode == "auto_level" and leveled)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed setting job-button force-disabled flag", exc)
     if mode == "auto_level" and leveled:
         try:
             btn.config(state="disabled")
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed disabling Auto-Level button for leveled file", exc)
     try:
         ready = (
             bool(getattr(app, "connected", False))
@@ -148,8 +161,8 @@ def update_job_button_mode(app, mode: str) -> None:
             and not bool(getattr(app, "_alarm_locked", False))
         )
         app._set_manual_controls_enabled(ready)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed refreshing manual controls after job-button mode update", exc)
 
 
 def on_resume_button_visibility_change(app):
@@ -236,12 +249,12 @@ def build_toolbar(app):
     app.job_button_hint = ttk.Label(bar, text="")
     try:
         app._job_button_hint_visible = False
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed initializing job-button hint visibility flag", exc)
     try:
         app._job_button_mode = "read_job"
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed initializing default job-button mode", exc)
     app.btn_clear = ttk.Button(
         bar,
         text=icon_label(ICON_JOB_CLEAR, "Clear Job"),
@@ -340,7 +353,8 @@ def build_toolbar(app):
     base_font = tkfont.nametofont("TkDefaultFont")
     try:
         size = int(base_font.cget("size"))
-    except Exception:
+    except Exception as exc:
+        _log_suppressed("Failed reading toolbar base font size; using default", exc)
         size = 10
     style = ttk.Style()
     frame_style = bar.cget("style") or "TFrame"
@@ -362,15 +376,15 @@ def build_toolbar(app):
     app.machine_state_label.pack(side="right", fill="y")
     try:
         app._state_default_bg = app.machine_state_label.cget("background")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed caching default state-label background", exc)
     try:
         app._machine_state_max_chars = len("DISCONNECTED") + 2
         app.machine_state_label.config(width=app._machine_state_max_chars)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed sizing machine-state label width", exc)
     try:
         app._ensure_state_label_width(app.machine_state.get())
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed enforcing machine-state label width", exc)
 

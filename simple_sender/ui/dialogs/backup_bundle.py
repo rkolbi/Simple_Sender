@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import shutil
@@ -33,6 +34,17 @@ from typing import Any
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.macro_files import discover_macro_assets, get_writable_macro_dir
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _bundle_default_dir() -> Path:
@@ -59,8 +71,8 @@ def _safe_bundle_name(name: str) -> str:
 def export_backup_bundle(app: Any) -> None:
     try:
         app._save_settings()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed saving settings before backup-bundle export", exc)
     path = run_file_dialog(
         app,
         filedialog.asksaveasfilename,
@@ -100,8 +112,8 @@ def export_backup_bundle(app: Any) -> None:
         return
     try:
         app.status.config(text=f"Backup bundle exported: {os.path.basename(path)}")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating status after backup-bundle export", exc)
     messagebox.showinfo("Backup bundle", f"Bundle saved:\n{path}")
 
 
@@ -163,8 +175,8 @@ def import_backup_bundle(app: Any) -> None:
             panel = getattr(app, "macro_panel", None)
             if panel is not None and hasattr(panel, "refresh"):
                 panel.refresh()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed refreshing macro panel after backup-bundle import", exc)
 
     notes: list[str] = []
     notes.append(f"Settings imported: {'yes' if imported_settings else 'no'}")
@@ -175,6 +187,6 @@ def import_backup_bundle(app: Any) -> None:
     notes.append("Restart the app to fully apply imported settings/checklists.")
     try:
         app.status.config(text=f"Backup bundle imported: {os.path.basename(path)}")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed updating status after backup-bundle import", exc)
     messagebox.showinfo("Backup bundle", "\n".join(notes))

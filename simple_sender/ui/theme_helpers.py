@@ -20,11 +20,23 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.ui.led_panel import refresh_led_backgrounds
 from simple_sender.ui.widgets_buttons import StopSignButton
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def refresh_stop_button_backgrounds(app):
@@ -101,8 +113,8 @@ def _reapply_button_metrics(app) -> None:
             padding=(8, 4),
             font=app.icon_button_font,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reapplying icon button metrics", exc)
     try:
         style_name = getattr(app, "home_button_style", "")
         if style_name:
@@ -113,8 +125,8 @@ def _reapply_button_metrics(app) -> None:
                 padding=touch_padding,
                 font=app.home_button_font,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reapplying home button metrics", exc)
     try:
         style.configure(
             app.mpos_button_style,
@@ -122,8 +134,8 @@ def _reapply_button_metrics(app) -> None:
             justify="center",
             padding=touch_padding,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reapplying MPos button metrics", exc)
     try:
         style.configure(
             app.macro_button_style,
@@ -131,16 +143,16 @@ def _reapply_button_metrics(app) -> None:
             justify="center",
             padding=touch_padding,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reapplying macro button metrics", exc)
     try:
         style.configure(
             "SimpleSender.UnitReported.TButton",
             anchor="center",
             justify="center",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed reapplying unit-toggle button metrics", exc)
 
 
 def apply_theme(app, theme: str):
@@ -157,27 +169,27 @@ def apply_theme(app, theme: str):
                 app.theme_palette = palette
                 try:
                     app.configure(background=palette["bg"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed applying window background for selected theme", exc)
                 try:
                     _apply_icon_button_theme(app, palette)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed applying icon button theme overrides", exc)
             else:
                 app.theme_palette = {}
             try:
                 _apply_home_button_theme(app, palette or {})
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed applying home button theme overrides", exc)
             try:
                 app.style.configure("TNotebook.Tab", font=app.tab_font)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed applying notebook tab font after theme change", exc)
             try:
                 app.style.configure("TNotebook.Tab", padding=(10, 4))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed applying notebook tab padding after theme change", exc)
             refresh_stop_button_backgrounds(app)
             refresh_led_backgrounds(app)
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _log_suppressed("Failed applying requested Tk theme", exc)

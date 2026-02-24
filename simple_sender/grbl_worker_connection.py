@@ -44,6 +44,15 @@ from .utils.validation import (
 )
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 class _FallbackSerialException(Exception):
@@ -280,8 +289,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self.ui_q.put(("log", f"[worker] {context}: {exc}"))
             for ln in tb.splitlines():
                 self.ui_q.put(("log", ln))
-        except Exception:
-            pass
+        except Exception as queue_exc:
+            _log_suppressed("Failed queueing worker exception details", queue_exc)
 
     def _signal_disconnect(self, reason: str | None = None) -> None:
         """Signal an unexpected disconnect and reset internal state."""
@@ -291,8 +300,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             if self.ser is not None:
                 try:
                     self.ser.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log_suppressed("Failed closing serial port while signaling disconnect", exc)
         finally:
             self.ser = None
         self._streaming = False
@@ -315,10 +324,10 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self.ui_q.put(("ready", False))
             self.ui_q.put(("stream_state", "stopped", reason))
             self.ui_q.put(("conn", False, None))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_suppressed("Failed queueing disconnect state updates to UI", exc)
         if reason:
             try:
                 self.ui_q.put(("log", f"[disconnect] {reason}"))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_suppressed("Failed queueing disconnect reason log to UI", exc)
