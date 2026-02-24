@@ -35,6 +35,11 @@ from simple_sender.autolevel.probe_runner import AutoLevelProbeRunner
 from simple_sender.grbl_worker import GrblWorker
 from simple_sender.macro_executor import MacroExecutor
 from simple_sender.streaming_controller import StreamingController
+from simple_sender.kasa_accessory import (
+    AccessoryRouter,
+    SpindleCommandDetector,
+    create_default_kasa_controller,
+)
 from simple_sender.ui.grbl_settings import GRBLSettingsController
 from simple_sender.ui.bindings import PYGAME_AVAILABLE
 from simple_sender.ui.macro_panel import MacroPanel

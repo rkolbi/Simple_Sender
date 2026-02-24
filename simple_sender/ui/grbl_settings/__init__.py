@@ -415,12 +415,43 @@ class GRBLSettingsController:
         def commit(_event: tk.Event | None = None) -> None:
             self._commit_pending_setting_edit()
 
+        def commit_focus_out(_event: tk.Event | None = None) -> None:
+            if self._focus_out_targets_numeric_keypad(entry):
+                return
+            self._commit_pending_setting_edit()
+
         def cancel(_event: tk.Event | None = None) -> None:
             self._cancel_pending_setting_edit()
 
         entry.bind("<Return>", commit)
-        entry.bind("<FocusOut>", commit)
+        entry.bind("<FocusOut>", commit_focus_out)
         entry.bind("<Escape>", cancel)
+
+    def _focus_out_targets_numeric_keypad(self, entry: ttk.Entry) -> bool:
+        dlg = getattr(entry, "_numeric_keypad_dialog", None)
+        if dlg is None:
+            return False
+        try:
+            if not bool(dlg.winfo_exists()):
+                return False
+        except Exception:
+            return False
+        focus_widget: Any | None
+        try:
+            focus_widget = entry.focus_get()
+        except Exception:
+            focus_widget = None
+        if focus_widget is None:
+            return True
+        widget: Any | None = focus_widget
+        while widget is not None:
+            if widget == dlg:
+                return True
+            widget = getattr(widget, "master", None)
+        try:
+            return bool(focus_widget.winfo_toplevel() == dlg)
+        except Exception:
+            return False
 
     def _commit_pending_setting_edit(self) -> None:
         if self._settings_saving:

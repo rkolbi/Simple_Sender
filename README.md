@@ -710,7 +710,7 @@ python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools
 
 Validate mypy target manifest and README count note:
 ```powershell
-python tools/check_mypy_targets.py --expected-count 151
+python tools/check_mypy_targets.py --expected-count 150
 ```
 
 One-command local gate:
@@ -742,11 +742,10 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
 - `simple_sender/ui/dro.py`: DRO formatting and row builders (testable via injected ttk helpers).
-- `simple_sender/ui/widgets_buttons.py`: button-focused widgets extracted from `widgets.py` (StopSign, home, jog, and colored macro button classes).
+- `simple_sender/ui/widgets_buttons.py`: button-focused widgets (StopSign, home, jog, and colored macro button classes).
 - `simple_sender/ui/widgets_common.py`: shared widget utilities (background resolution plus button metadata helpers for keyboard IDs/log tags).
 - `simple_sender/ui/widgets_tooltips.py`: tooltip-focused UI helpers (tooltip rendering, tab tooltips, disabled-reason text resolution, and bulk tooltip attachment).
 - `simple_sender/ui/widgets_keypad.py`: numeric keypad helpers for touch-friendly numeric entry widgets.
-- `simple_sender/ui/widgets.py`: deprecated compatibility re-exports for button + tooltip + keypad + common widget helpers (planned removal in `v1.8.0`, no earlier than `2026-06-01`).
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
 - `simple_sender/ui/autolevel_dialog/__init__.py`: thin compatibility wrappers for `show_auto_level_dialog()` and `_apply_auto_level_to_path()`.
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
@@ -816,7 +815,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 151 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-23), and local/CI hooks now enforce `--expected-count 151`.
+5. Static typing gates currently run mypy against 150 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-24), and local/CI hooks now enforce `--expected-count 150`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 
 ## FAQ

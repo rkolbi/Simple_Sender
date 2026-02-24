@@ -30,6 +30,15 @@ def _init_behavior_preferences(
     watchdog_homing_timeout: float,
     tk,
 ) -> None:
+    def _outlet_setting(key: str, fallback: int) -> int:
+        try:
+            value = int(setting(key, fallback))
+        except Exception:
+            value = int(fallback)
+        if value not in (1, 2):
+            return int(fallback)
+        return value
+
     app.tooltip_enabled = tk.BooleanVar(value=setting("tooltips_enabled", True))
     app.tooltip_timeout_sec = tk.DoubleVar(value=setting("tooltip_timeout_sec", 10.0))
     app.numeric_keypad_enabled = tk.BooleanVar(
@@ -104,6 +113,14 @@ def _init_behavior_preferences(
     app.joystick_safety_enabled = tk.BooleanVar(
         value=setting("joystick_safety_enabled", False)
     )
+    app.kasa_enabled = tk.BooleanVar(value=setting("kasa_enabled", False))
+    app.kasa_device_identifier = tk.StringVar(
+        value=str(setting("kasa_device_identifier", "") or "").strip()
+    )
+    app.vacuum_enabled = tk.BooleanVar(value=setting("vacuum_enabled", False))
+    app.vacuum_outlet = tk.IntVar(value=_outlet_setting("vacuum_outlet", 1))
+    app.light_enabled = tk.BooleanVar(value=setting("light_enabled", False))
+    app.light_outlet = tk.IntVar(value=_outlet_setting("light_outlet", 2))
     if app.joystick_bindings_enabled.get() and not pygame_available:
         app.joystick_bindings_enabled.set(False)
     app._joystick_auto_enable_requested = bool(app.joystick_bindings_enabled.get())

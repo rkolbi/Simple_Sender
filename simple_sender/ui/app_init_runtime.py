@@ -113,6 +113,51 @@ def _init_connection_runtime_state(app) -> None:
     app._disconnect_thread = None
 
 
+def _init_kasa_runtime_state(app, tk) -> None:
+    if not hasattr(app, "kasa_enabled"):
+        app.kasa_enabled = tk.BooleanVar(value=False)
+    if not hasattr(app, "kasa_device_identifier"):
+        app.kasa_device_identifier = tk.StringVar(value="")
+    if not hasattr(app, "vacuum_enabled"):
+        app.vacuum_enabled = tk.BooleanVar(value=False)
+    if not hasattr(app, "vacuum_outlet"):
+        app.vacuum_outlet = tk.IntVar(value=1)
+    if not hasattr(app, "light_enabled"):
+        app.light_enabled = tk.BooleanVar(value=False)
+    if not hasattr(app, "light_outlet"):
+        app.light_outlet = tk.IntVar(value=2)
+
+    try:
+        vacuum_outlet = int(app.vacuum_outlet.get())
+    except Exception:
+        vacuum_outlet = 1
+    try:
+        light_outlet = int(app.light_outlet.get())
+    except Exception:
+        light_outlet = 2
+    if vacuum_outlet not in (1, 2):
+        vacuum_outlet = 1
+    if light_outlet not in (1, 2):
+        light_outlet = 2
+    app.vacuum_outlet.set(vacuum_outlet)
+    app.light_outlet.set(light_outlet)
+    app.vacuum_outlet_label = tk.StringVar(value=f"Outlet {vacuum_outlet}")
+    app.light_outlet_label = tk.StringVar(value=f"Outlet {light_outlet}")
+    app.kasa_device_choice = tk.StringVar(
+        value=str(app.kasa_device_identifier.get() or "").strip()
+    )
+    app.kasa_outlet_info_var = tk.StringVar(value="Outlet list: not loaded")
+    app.kasa_validation_var = tk.StringVar(value="")
+    app.kasa_outlet_1_status = tk.StringVar(value="Last command: none")
+    app.kasa_outlet_2_status = tk.StringVar(value="Last command: none")
+    app._kasa_device_label_to_identifier = {}
+    app._kasa_discovered_devices = []
+    app._kasa_outlets = []
+    app._kasa_outlet_count = 2
+    app._kasa_outlet_updating = False
+    app._kasa_last_valid_outlets = (vacuum_outlet, light_outlet)
+
+
 def _clamp_float_setting(setting, key: str, fallback: float) -> float:
     try:
         value = float(setting(key, fallback))
@@ -204,6 +249,14 @@ def _init_worker_and_runtime_controllers(
     app.macro_panel = deps.MacroPanel(app)
     app.toolpath_panel = deps.ToolpathPanel(app)
     app.settings_controller = deps.GRBLSettingsController(app)
+    app.spindle_command_detector = deps.SpindleCommandDetector()
+    app.kasa_controller = deps.create_default_kasa_controller()
+    app.accessory_router = deps.AccessoryRouter(
+        controller=app.kasa_controller,
+        settings_provider=getattr(app, "_kasa_settings_snapshot", lambda: {}),
+        log=getattr(app, "_log_kasa_message", None),
+        command_result_callback=getattr(app, "_on_kasa_command_result", None),
+    )
     app._install_dialog_loggers()
     app.report_callback_exception = app._tk_report_callback_exception
     app._apply_status_poll_profile()
@@ -412,6 +465,7 @@ def init_runtime_state(
     _init_keyboard_runtime_state(app)
     _init_joystick_runtime_state(app, tk)
     _init_connection_runtime_state(app)
+    _init_kasa_runtime_state(app, tk)
     _init_error_dialog_runtime_state(app, setting, tk)
     _init_worker_and_runtime_controllers(
         app,

@@ -19,7 +19,7 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
 - `Macro-2` - **Park over Bit Setter**: parks over fixed sensor coordinates in machine coordinates.
 - `Macro-3` - **Job Setup**: guided setup chooser that asks for `XYZ Plate`, `Z Plate`, or `Manual`, then runs the matching setup flow and captures `macro.state.TOOL_REFERENCE`.
 - `Macro-4` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`.
-- `BKUP_Macro-3/4/5/7` are backup/reference files and are not loaded as active macro buttons.
+- Backup/reference macro files are intentionally kept outside this folder to avoid accidental runtime loading.
 
 ## Recommended Flow
 

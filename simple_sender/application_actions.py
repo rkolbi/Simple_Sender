@@ -24,7 +24,7 @@
 """
 
 # Standard library imports
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from simple_sender.ui.app_commands import (
     ensure_serial_available,
     open_gcode,
@@ -54,6 +54,19 @@ from simple_sender.ui.ui_actions import (
     require_grbl_connection,
     run_if_connected,
     send_manual,
+)
+from simple_sender.ui.kasa_actions import (
+    discover_kasa_devices,
+    handle_outgoing_gcode_line,
+    kasa_settings_snapshot,
+    log_kasa_message,
+    on_kasa_command_result,
+    on_kasa_device_selected,
+    on_kasa_mapping_change,
+    on_kasa_master_change,
+    refresh_kasa_controls_state,
+    refresh_kasa_outlet_list,
+    test_kasa_outlet,
 )
 
 class ActionsMixin:
@@ -132,3 +145,36 @@ class ActionsMixin:
 
     def _send_manual(self, command: str, source: str) -> None:
         send_manual(self, command, source)
+
+    def _kasa_settings_snapshot(self) -> dict[str, Any]:
+        return cast(dict[str, Any], kasa_settings_snapshot(self))
+
+    def _log_kasa_message(self, message: str) -> None:
+        log_kasa_message(self, message)
+
+    def _on_kasa_command_result(self, result) -> None:
+        on_kasa_command_result(self, result)
+
+    def _on_kasa_master_change(self) -> None:
+        on_kasa_master_change(self)
+
+    def _on_kasa_mapping_change(self, changed: str | None = None) -> None:
+        on_kasa_mapping_change(self, changed)
+
+    def _on_kasa_device_selected(self, event=None) -> None:
+        on_kasa_device_selected(self, event)
+
+    def _discover_kasa_devices(self) -> None:
+        discover_kasa_devices(self)
+
+    def _refresh_kasa_outlet_list(self) -> None:
+        refresh_kasa_outlet_list(self)
+
+    def _test_kasa_outlet(self, outlet_id: int, on: bool) -> None:
+        test_kasa_outlet(self, outlet_id, on)
+
+    def _refresh_kasa_controls_state(self) -> None:
+        refresh_kasa_controls_state(self)
+
+    def _handle_outgoing_gcode_line(self, line: str, source: str) -> None:
+        handle_outgoing_gcode_line(self, line, source)

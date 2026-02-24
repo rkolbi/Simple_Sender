@@ -27,6 +27,7 @@ from .sections_advanced import (
     build_toolpath_settings_section,
 )
 from .sections_controls import (
+    build_kasa_plug_section,
     build_viewer_section,
     build_jogging_section,
     build_keyboard_shortcuts_section,
@@ -51,6 +52,7 @@ __all__ = [
     "build_viewer_section",
     "build_interface_section",
     "build_jogging_section",
+    "build_kasa_plug_section",
     "build_keyboard_shortcuts_section",
     "build_macros_section",
     "build_power_section",

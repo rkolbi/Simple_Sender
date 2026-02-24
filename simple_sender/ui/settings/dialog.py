@@ -30,6 +30,7 @@ from .sections import (
     build_estimation_section,
     build_interface_section,
     build_jogging_section,
+    build_kasa_plug_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
     build_power_section,
@@ -88,6 +89,7 @@ def build_app_settings_tab(app, notebook):
     next_row = build_jogging_section(app, app._app_settings_inner, next_row)
     next_row = build_zeroing_section(app, app._app_settings_inner, next_row)
     next_row = build_keyboard_shortcuts_section(app, app._app_settings_inner, next_row)
+    next_row = build_kasa_plug_section(app, app._app_settings_inner, next_row)
     next_row = build_macros_section(app, app._app_settings_inner, next_row)
 
     next_row += 1

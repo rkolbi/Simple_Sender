@@ -83,6 +83,12 @@ def on_close(app):
     except Exception:
         pass
     try:
+        accessory_router = getattr(app, "accessory_router", None)
+        if accessory_router is not None:
+            try:
+                accessory_router.shutdown(timeout=1.0)
+            except Exception:
+                pass
         app._save_settings()
         app.grbl.disconnect()
     except Exception as exc:

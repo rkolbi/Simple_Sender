@@ -275,7 +275,6 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
         ("1", lambda: _press_digit("1")),
         ("2", lambda: _press_digit("2")),
         ("3", lambda: _press_digit("3")),
-        ("0", lambda: _press_digit("0")),
     ]
     row = 1
     col = 0
@@ -286,6 +285,8 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             col = 0
             row += 1
 
+    _make_button("0", lambda: _press_digit("0"), row, 0)
+    row += 1
     col = 0
     if spec.get("allow_decimal", True):
         _make_button(".", _press_decimal, row, col)

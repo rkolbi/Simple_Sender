@@ -253,6 +253,11 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("log_tx", message):
             app.streaming_controller.handle_log_tx(message)
+            try:
+                if hasattr(app, "_handle_outgoing_gcode_line"):
+                    app._handle_outgoing_gcode_line(cast(str, message), "manual")
+            except Exception as exc:
+                _log_suppressed("Failed processing outbound manual line for Kasa routing", exc)
             return
         case ("log_rx", raw):
             _handle_log_rx_event(app, cast(str, raw))
@@ -297,8 +302,13 @@ def handle_event(app: Any, evt: UiEvent):
         case ("stream_pause_reason", reason):
             _handle_stream_pause_reason_event(app, reason)
             return
-        case ("gcode_sent", idx, _line):
+        case ("gcode_sent", idx, line):
             app.streaming_controller.handle_gcode_sent(idx)
+            try:
+                if hasattr(app, "_handle_outgoing_gcode_line"):
+                    app._handle_outgoing_gcode_line(cast(str, line), "stream")
+            except Exception as exc:
+                _log_suppressed("Failed processing outbound streamed line for Kasa routing", exc)
             return
         case ("gcode_acked", idx):
             app.streaming_controller.handle_gcode_acked(idx)

@@ -4,7 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-No entries yet.
+### Changed
+- Legacy cleanup pass removed deprecated compatibility surfaces and duplicate module files:
+  - removed `simple_sender/ui/widgets.py` compatibility shim
+  - removed legacy single-file `simple_sender/ui/grbl_settings.py` in favor of `simple_sender/ui/grbl_settings/`
+  - removed duplicate flat toolpath modules in favor of `simple_sender/ui/toolpath/`
+  - removed duplicate flat `autolevel_dialog`, `console`, and `dialogs` modules in favor of package implementations
+  - removed remaining unused root UI duplicates and dead entrypoints:
+    - `simple_sender/ui/gcode_viewer.py`, `simple_sender/ui/preview_policy.py`, `simple_sender/ui/popup_utils.py`
+    - `simple_sender/ui/alarm_recovery_dialog.py`, `simple_sender/ui/macro_prompt_dialog.py`
+    - `simple_sender/ui/autolevel_prefs.py`, `simple_sender/ui/gcode_tab.py`, `simple_sender/ui/gcode_view.py`
+- Removed backup macro artifacts from runtime macro directory:
+  - deleted `simple_sender/macros/BKUP_Macro-3/4/5/7`
+- Local test harness hardening:
+  - `run_tests.bat` now auto-selects `.venv\Scripts\python.exe` when available
+  - Ruff gate now prefers `.venv\Scripts\ruff.exe` to avoid broken global launcher setups
+- Typing-manifest gate was resynced after cleanup:
+  - mypy explicit target count is now `150`
+  - local/CI hooks now enforce `--expected-count 150`
 
 ## [1.7.0] - 2026-02-23
 

@@ -31,6 +31,10 @@ from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import set_kb_id
 
+
+_KASA_OUTLET_OPTIONS = ("Outlet 1", "Outlet 2")
+
+
 def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     macro_frame = ttk.LabelFrame(parent, text="Macros", padding=8)
     macro_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
@@ -359,6 +363,193 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.keyboard_live_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    return row + 1
+
+
+def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
+    kasa_frame = ttk.LabelFrame(parent, text="Kasa Plug", padding=8)
+    kasa_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+    kasa_frame.grid_columnconfigure(1, weight=1)
+
+    app.kasa_enable_check = ttk.Checkbutton(
+        kasa_frame,
+        text="Enable Kasa Plug control",
+        variable=app.kasa_enabled,
+        command=app._on_kasa_master_change,
+    )
+    app.kasa_enable_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+    apply_tooltip(
+        app.kasa_enable_check,
+        "Master switch for Kasa outlet control. Disabled means no background Kasa commands.",
+    )
+
+    discovery_row = ttk.Frame(kasa_frame)
+    discovery_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 6))
+    discovery_row.grid_columnconfigure(1, weight=1)
+    app.btn_kasa_discover = ttk.Button(
+        discovery_row,
+        text="Discover",
+        command=app._discover_kasa_devices,
+    )
+    app.btn_kasa_discover.grid(row=0, column=0, sticky="w")
+    apply_tooltip(app.btn_kasa_discover, "Scan LAN for Kasa devices.")
+    app.kasa_device_combo = ttk.Combobox(
+        discovery_row,
+        textvariable=app.kasa_device_choice,
+        state="readonly",
+        width=48,
+    )
+    app.kasa_device_combo.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+    app.kasa_device_combo.bind("<<ComboboxSelected>>", app._on_kasa_device_selected)
+    apply_tooltip(
+        app.kasa_device_combo,
+        "Choose one physical Kasa device (requires at least two outlets).",
+    )
+
+    app.kasa_outlet_info_label = ttk.Label(
+        kasa_frame,
+        textvariable=app.kasa_outlet_info_var,
+        justify="left",
+        wraplength=560,
+    )
+    app.kasa_outlet_info_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+    vacuum_row = ttk.Frame(kasa_frame)
+    vacuum_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+    vacuum_row.grid_columnconfigure(2, weight=1)
+    app.vacuum_check = ttk.Checkbutton(
+        vacuum_row,
+        text="Vacuum",
+        variable=app.vacuum_enabled,
+        command=lambda: app._on_kasa_mapping_change("vacuum_enable"),
+    )
+    app.vacuum_check.grid(row=0, column=0, sticky="w")
+    ttk.Label(vacuum_row, text="Outlet").grid(row=0, column=1, sticky="w", padx=(12, 6))
+    app.vacuum_outlet_combo = ttk.Combobox(
+        vacuum_row,
+        textvariable=app.vacuum_outlet_label,
+        state="readonly",
+        values=_KASA_OUTLET_OPTIONS,
+        width=12,
+    )
+    app.vacuum_outlet_combo.grid(row=0, column=2, sticky="w")
+    app.vacuum_outlet_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda _evt: (
+            app.vacuum_outlet.set(
+                2 if str(app.vacuum_outlet_label.get() or "").strip().endswith("2") else 1
+            ),
+            app._on_kasa_mapping_change("vacuum"),
+        ),
+    )
+    apply_tooltip(app.vacuum_outlet_combo, "Select which outlet controls Vacuum.")
+
+    light_row = ttk.Frame(kasa_frame)
+    light_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+    light_row.grid_columnconfigure(2, weight=1)
+    app.light_check = ttk.Checkbutton(
+        light_row,
+        text="Spindle Light",
+        variable=app.light_enabled,
+        command=lambda: app._on_kasa_mapping_change("light_enable"),
+    )
+    app.light_check.grid(row=0, column=0, sticky="w")
+    ttk.Label(light_row, text="Outlet").grid(row=0, column=1, sticky="w", padx=(12, 6))
+    app.light_outlet_combo = ttk.Combobox(
+        light_row,
+        textvariable=app.light_outlet_label,
+        state="readonly",
+        values=_KASA_OUTLET_OPTIONS,
+        width=12,
+    )
+    app.light_outlet_combo.grid(row=0, column=2, sticky="w")
+    app.light_outlet_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda _evt: (
+            app.light_outlet.set(
+                2 if str(app.light_outlet_label.get() or "").strip().endswith("2") else 1
+            ),
+            app._on_kasa_mapping_change("light"),
+        ),
+    )
+    apply_tooltip(app.light_outlet_combo, "Select which outlet controls Spindle Light.")
+
+    app.kasa_validation_label = ttk.Label(
+        kasa_frame,
+        textvariable=app.kasa_validation_var,
+        justify="left",
+        wraplength=560,
+        foreground="#b00020",
+    )
+    app.kasa_validation_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+    test_frame = ttk.LabelFrame(kasa_frame, text="Test Outlets", padding=8)
+    test_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
+    test_frame.grid_columnconfigure(1, weight=1)
+
+    app.btn_kasa_refresh_outlets = ttk.Button(
+        test_frame,
+        text="Refresh Outlet List",
+        command=app._refresh_kasa_outlet_list,
+    )
+    app.btn_kasa_refresh_outlets.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+    apply_tooltip(
+        app.btn_kasa_refresh_outlets,
+        "Re-read outlets from the selected Kasa device.",
+    )
+
+    outlet1_row = ttk.Frame(test_frame)
+    outlet1_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 2))
+    ttk.Label(outlet1_row, text="Outlet 1").pack(side="left")
+    app.btn_kasa_outlet1_on = ttk.Button(
+        outlet1_row,
+        text="ON",
+        command=lambda: app._test_kasa_outlet(1, True),
+        width=6,
+    )
+    app.btn_kasa_outlet1_on.pack(side="left", padx=(8, 4))
+    app.btn_kasa_outlet1_off = ttk.Button(
+        outlet1_row,
+        text="OFF",
+        command=lambda: app._test_kasa_outlet(1, False),
+        width=6,
+    )
+    app.btn_kasa_outlet1_off.pack(side="left")
+    app.kasa_outlet_1_status_label = ttk.Label(
+        test_frame,
+        textvariable=app.kasa_outlet_1_status,
+        justify="left",
+        wraplength=520,
+    )
+    app.kasa_outlet_1_status_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+    outlet2_row = ttk.Frame(test_frame)
+    outlet2_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 2))
+    ttk.Label(outlet2_row, text="Outlet 2").pack(side="left")
+    app.btn_kasa_outlet2_on = ttk.Button(
+        outlet2_row,
+        text="ON",
+        command=lambda: app._test_kasa_outlet(2, True),
+        width=6,
+    )
+    app.btn_kasa_outlet2_on.pack(side="left", padx=(8, 4))
+    app.btn_kasa_outlet2_off = ttk.Button(
+        outlet2_row,
+        text="OFF",
+        command=lambda: app._test_kasa_outlet(2, False),
+        width=6,
+    )
+    app.btn_kasa_outlet2_off.pack(side="left")
+    app.kasa_outlet_2_status_label = ttk.Label(
+        test_frame,
+        textvariable=app.kasa_outlet_2_status,
+        justify="left",
+        wraplength=520,
+    )
+    app.kasa_outlet_2_status_label.grid(row=4, column=0, columnspan=2, sticky="w")
+
+    app._on_kasa_mapping_change(None)
+    app._refresh_kasa_controls_state()
     return row + 1
 
 

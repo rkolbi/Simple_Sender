@@ -26,6 +26,7 @@ from typing import cast
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import STATUS_POLL_DEFAULT
 from simple_sender.utils.exceptions import SettingsLoadError, SettingsSaveError
+from simple_sender.kasa_accessory import validate_outlet_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,69 @@ def _build_macro_and_autolevel_settings(
     }
 
 
+def _read_outlet_setting(app, *, attr_name: str, key: str, default: int, label: str) -> int:
+    var = getattr(app, attr_name, None)
+    fallback = app.settings.get(key, DEFAULT_SETTINGS.get(key, default))
+    if var is None:
+        value = fallback
+    else:
+        value = _safe_int(app, var, fallback, label)
+    try:
+        outlet = int(value)
+    except Exception:
+        outlet = int(default)
+    if outlet not in (1, 2):
+        app.ui_q.put(("log", f"[settings] Invalid {label}; using {default}."))
+        outlet = int(default)
+    return outlet
+
+
+def _build_kasa_settings(app) -> dict[str, object]:
+    kasa_enabled_var = getattr(app, "kasa_enabled", None)
+    kasa_enabled = bool(kasa_enabled_var.get()) if kasa_enabled_var is not None else False
+    device_identifier_var = getattr(app, "kasa_device_identifier", None)
+    device_identifier = (
+        str(device_identifier_var.get() or "").strip()
+        if device_identifier_var is not None
+        else str(app.settings.get("kasa_device_identifier", "") or "").strip()
+    )
+    vacuum_enabled_var = getattr(app, "vacuum_enabled", None)
+    vacuum_enabled = bool(vacuum_enabled_var.get()) if vacuum_enabled_var is not None else False
+    light_enabled_var = getattr(app, "light_enabled", None)
+    light_enabled = bool(light_enabled_var.get()) if light_enabled_var is not None else False
+    vacuum_outlet = _read_outlet_setting(
+        app,
+        attr_name="vacuum_outlet",
+        key="vacuum_outlet",
+        default=1,
+        label="Vacuum outlet",
+    )
+    light_outlet = _read_outlet_setting(
+        app,
+        attr_name="light_outlet",
+        key="light_outlet",
+        default=2,
+        label="Spindle Light outlet",
+    )
+    valid, message = validate_outlet_mapping(
+        vacuum_enabled=vacuum_enabled,
+        vacuum_outlet=vacuum_outlet,
+        light_enabled=light_enabled,
+        light_outlet=light_outlet,
+    )
+    if not valid:
+        light_outlet = 1 if vacuum_outlet == 2 else 2
+        app.ui_q.put(("log", f"[settings] {message} Auto-adjusted Spindle Light to Outlet {light_outlet}."))
+    return {
+        "kasa_enabled": kasa_enabled,
+        "kasa_device_identifier": device_identifier,
+        "vacuum_enabled": vacuum_enabled,
+        "vacuum_outlet": vacuum_outlet,
+        "light_enabled": light_enabled,
+        "light_outlet": light_outlet,
+    }
+
+
 def save_settings(app):
     show_rapid, show_feed, show_arc = app.toolpath_panel.get_display_options()
     draw_percent = app.toolpath_panel.get_draw_percent()
@@ -441,6 +505,7 @@ def save_settings(app):
             macro_probe_margin_value=macro_probe_margin_value,
         )
     )
+    data.update(_build_kasa_settings(app))
     app.settings = data
     app._settings_store.data = app.settings
     try:
