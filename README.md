@@ -2,7 +2,7 @@
 ![Release: 1.7.5](https://img.shields.io/badge/release-1.7.5-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
-### Work in progress (beta). Don't trust it until you've validated it a few times.
+### Work in progress (beta). Please run a few dry-run validations before real cuts.
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
@@ -30,6 +30,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [Probing Workflow](#probing-workflow)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Joystick Bindings](#joystick-bindings)
+- [Kasa Plug (Linux)](#kasa-plug-linux)
 - [Logs & Filters](#logs--filters)
 - [Testing](#testing)
 - [Module Layout](#module-layout)
@@ -655,6 +656,25 @@ If you prefer guided probing, the macro set includes touch-plate and reference-t
 - The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.
 - Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
 
+## Kasa Plug (Linux)
+Use this when you want spindle-related G-code to control smart outlets, such as a shop vacuum and spindle light, from inside the sender.
+
+- Linux only: this section is hidden on non-Linux platforms.
+- Trigger behavior: when the app sends `M3`/`M4`, enabled Kasa outlets turn on; when it sends `M5`, they turn off.
+- Safety: keep a physical e-stop/power cutoff available. Kasa control is convenience automation, not a safety system.
+
+### Friendly walkthrough
+The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the master toggle, discover your device on the LAN, and pick it from the dropdown. Then map **Vacuum** and **Spindle Light** to outlet numbers and use the built-in outlet test buttons to confirm each mapping before cutting. If the selected Kasa device only exposes one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.
+
+### How-to (first setup)
+1) Open **App Settings -> Kasa Plug** (Linux only).
+2) Enable **Enable Kasa Plug control**.
+3) Click **Discover**, then choose your device in the dropdown.
+4) Click **Refresh Outlet List** to read available outlets from the selected device.
+5) Enable **Vacuum** and/or **Spindle Light**, then choose an outlet for each one.
+6) Use **Test Outlets** (`ON`/`OFF`) to verify each outlet responds correctly.
+7) Send a quick spindle command (`M3` then `M5`) and confirm the mapped outlets follow on/off state.
+
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
 - The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload and **Export Logs...** to save a zip bundle for support.
@@ -674,7 +694,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 22, 2026): `642 passed, 1 skipped` on `python -m pytest tests -q`; Tk-dependent tests may be skipped when Tcl/Tk is unavailable.
+Current baseline in this repository (validated on February 24, 2026): `704 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -708,6 +728,7 @@ Ruff syntax/pyflakes gate:
 ```powershell
 python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools
 ```
+If `python -m ruff` fails on Windows due a broken global launcher, run `.\.venv\Scripts\ruff.exe check --select E9,F63,F7,F82 simple_sender tests tools` instead.
 
 Validate mypy target manifest and README count note:
 ```powershell
@@ -735,7 +756,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
-- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI, toolpath) imported and installed onto `App`; these helpers now import their UI dependencies directly (instead of routing through `ui/app_exports.py`).
+- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI, toolpath) imported and installed onto `App`; these helpers now import UI dependencies directly (legacy `ui/app_exports.py` compatibility routing has been removed).
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, toolpath, input bindings, dialogs).
 - `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists/3D).
 - `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
@@ -747,8 +768,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/widgets_common.py`: shared widget utilities (background resolution plus button metadata helpers for keyboard IDs/log tags).
 - `simple_sender/ui/widgets_tooltips.py`: tooltip-focused UI helpers (tooltip rendering, tab tooltips, disabled-reason text resolution, and bulk tooltip attachment).
 - `simple_sender/ui/widgets_keypad.py`: numeric keypad helpers for touch-friendly numeric entry widgets.
-- `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller (dialog lifecycle, callbacks, probe/apply orchestration, and UI wiring).
-- `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog entrypoint + dependency wiring (`show_auto_level_dialog()` / `build_auto_level_dialog_dependencies()`).
+- `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller plus entrypoint/dependency wiring (`show_auto_level_dialog()` / `build_auto_level_dialog_dependencies()`).
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
 - `simple_sender/types.py`: shared protocols and stream-state value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) used by the worker pipeline.
@@ -808,7 +828,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
-- Auto-Level dialog flow is routed directly through `ui/autolevel_dialog/dialog_controller.py` and `ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
+- Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
 - Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 
 ## Pre-release Notes
