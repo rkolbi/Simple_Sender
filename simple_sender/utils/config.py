@@ -140,6 +140,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "theme": "vista",
     "ui_scale": 1.5,
     "scrollbar_width": "wide",
+    "touch_scroll_mode": "thumb_and_swipe",
     "toolpath_arc_detail_deg": 9.031746031746032,
     "toolpath_draw_percent": 82,
     "toolpath_full_limit": 33611,
@@ -257,6 +258,11 @@ def _repair_invalid_settings(merged: Dict[str, Any], defaults: Dict[str, Any]) -
     if mode not in ("mm", "inch"):
         repaired["unit_mode"] = defaults["unit_mode"]
         repaired_keys.append("unit_mode")
+
+    touch_scroll_mode = str(repaired.get("touch_scroll_mode", "") or "").strip().lower()
+    if touch_scroll_mode not in {"thumb_only", "thumb_and_swipe"}:
+        repaired["touch_scroll_mode"] = defaults.get("touch_scroll_mode", "thumb_and_swipe")
+        repaired_keys.append("touch_scroll_mode")
 
     if repaired_keys:
         logger.warning(

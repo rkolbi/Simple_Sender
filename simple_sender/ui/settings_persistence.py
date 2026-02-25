@@ -226,6 +226,14 @@ def _build_ui_settings(
                 DEFAULT_SETTINGS.get("scrollbar_width", "wide"),
             )
         ).strip().lower(),
+        "touch_scroll_mode": str(
+            app.touch_scroll_mode.get()
+            if hasattr(app, "touch_scroll_mode")
+            else app.settings.get(
+                "touch_scroll_mode",
+                DEFAULT_SETTINGS.get("touch_scroll_mode", "thumb_and_swipe"),
+            )
+        ).strip().lower(),
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),

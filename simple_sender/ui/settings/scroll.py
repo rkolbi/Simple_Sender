@@ -25,6 +25,8 @@ from tkinter import ttk
 
 _TOUCH_SCROLL_THRESHOLD = 6
 _WHEEL_DELTA_UNIT = 120
+_TOUCH_SCROLL_MODE_SWIPE = "thumb_and_swipe"
+_TOUCH_SCROLL_MODE_THUMB_ONLY = "thumb_only"
 
 
 def _is_descendant(widget, ancestor) -> bool:
@@ -34,6 +36,54 @@ def _is_descendant(widget, ancestor) -> bool:
             return True
         current = getattr(current, "master", None)
     return False
+
+
+def _is_scrollbar_widget(widget) -> bool:
+    if isinstance(widget, (tk.Scrollbar, ttk.Scrollbar)):
+        return True
+    try:
+        klass = str(widget.winfo_class() or "").lower()
+    except Exception:
+        return False
+    return "scrollbar" in klass
+
+
+def _resolve_touch_scroll_mode(app) -> str:
+    raw = None
+    var = getattr(app, "touch_scroll_mode", None)
+    if var is not None:
+        try:
+            raw = var.get()
+        except Exception:
+            raw = None
+    if raw is None:
+        try:
+            raw = getattr(app, "settings", {}).get("touch_scroll_mode", _TOUCH_SCROLL_MODE_SWIPE)
+        except Exception:
+            raw = _TOUCH_SCROLL_MODE_SWIPE
+    normalized = str(raw or "").strip().lower().replace(" ", "_").replace("+", "_and_")
+    if normalized in {_TOUCH_SCROLL_MODE_SWIPE, _TOUCH_SCROLL_MODE_THUMB_ONLY}:
+        return normalized
+    return _TOUCH_SCROLL_MODE_SWIPE
+
+
+def _touch_swipe_enabled(app) -> bool:
+    return _resolve_touch_scroll_mode(app) == _TOUCH_SCROLL_MODE_SWIPE
+
+
+def _pointer_widget(app):
+    canvas = getattr(app, "app_settings_canvas", None)
+    if canvas is None:
+        return None
+    try:
+        x_root = int(canvas.winfo_pointerx())
+        y_root = int(canvas.winfo_pointery())
+    except Exception:
+        return None
+    try:
+        return canvas.winfo_containing(x_root, y_root)
+    except Exception:
+        return None
 
 
 def _touch_scroll_allowed(app, widget) -> bool:
@@ -56,10 +106,10 @@ def _touch_scroll_allowed(app, widget) -> bool:
             ttk.Combobox,
             ttk.Scale,
             ttk.Spinbox,
-            tk.Scrollbar,
-            ttk.Scrollbar,
         ),
     ):
+        return False
+    if _is_scrollbar_widget(widget):
         return False
     return True
 
@@ -133,8 +183,25 @@ def on_app_settings_touch_start(app, event):
     if not hasattr(app, "app_settings_canvas"):
         return
     if getattr(app, "_app_settings_touch_enabled", True) is False:
+        app._app_settings_touch_active = False
+        app._app_settings_touch_moved = False
         return
-    if not _touch_scroll_allowed(app, getattr(event, "widget", None)):
+    widget = getattr(event, "widget", None)
+    pointer_widget = _pointer_widget(app)
+    if _is_scrollbar_widget(pointer_widget):
+        app._app_settings_touch_active = False
+        app._app_settings_touch_moved = False
+        return
+    if not _touch_scroll_allowed(app, widget):
+        if pointer_widget is not None and _touch_scroll_allowed(app, pointer_widget):
+            widget = pointer_widget
+        else:
+            app._app_settings_touch_active = False
+            app._app_settings_touch_moved = False
+            return
+    if _is_scrollbar_widget(widget):
+        app._app_settings_touch_active = False
+        app._app_settings_touch_moved = False
         return
     canvas = app.app_settings_canvas
     x = canvas.winfo_pointerx() - canvas.winfo_rootx()
@@ -147,8 +214,15 @@ def on_app_settings_touch_start(app, event):
 
 def on_app_settings_touch_move(app, event):
     if getattr(app, "_app_settings_touch_enabled", True) is False:
+        app._app_settings_touch_active = False
+        app._app_settings_touch_moved = False
         return
     if not getattr(app, "_app_settings_touch_active", False):
+        return
+    pointer_widget = _pointer_widget(app)
+    if _is_scrollbar_widget(pointer_widget) or _is_scrollbar_widget(getattr(event, "widget", None)):
+        app._app_settings_touch_active = False
+        app._app_settings_touch_moved = False
         return
     canvas = app.app_settings_canvas
     x = canvas.winfo_pointerx() - canvas.winfo_rootx()
@@ -172,7 +246,7 @@ def on_app_settings_touch_end(app, _event=None):
 def bind_app_settings_touch_scroll(app):
     if not hasattr(app, "app_settings_canvas"):
         return
-    app._app_settings_touch_enabled = True
+    app._app_settings_touch_enabled = _touch_swipe_enabled(app)
     if getattr(app, "_app_settings_touch_bound", False):
         return
     bind_all = getattr(app, "bind_all", None)

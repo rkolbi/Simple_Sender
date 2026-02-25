@@ -133,6 +133,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.ui_scale = tk.DoubleVar(master=parent, value=1.0)
     if not hasattr(app, "scrollbar_width"):
         app.scrollbar_width = tk.StringVar(master=parent, value="wide")
+    if not hasattr(app, "touch_scroll_mode"):
+        app.touch_scroll_mode = tk.StringVar(master=parent, value="thumb_and_swipe")
     if not hasattr(app, "numeric_keypad_enabled"):
         app.numeric_keypad_enabled = tk.BooleanVar(master=parent, value=True)
     if not hasattr(app, "tooltip_enabled"):
@@ -199,6 +201,25 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.scrollbar_width_combo,
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
+    ttk.Label(theme_frame, text="Touch scroll mode").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
+    app.touch_scroll_mode_combo = ttk.Combobox(
+        theme_frame,
+        state="readonly",
+        values=["thumb_and_swipe", "thumb_only"],
+        textvariable=app.touch_scroll_mode,
+        width=20,
+    )
+    app.touch_scroll_mode_combo.grid(row=3, column=1, sticky="w", pady=4)
+    on_touch_scroll_mode_change = getattr(
+        app,
+        "_on_touch_scroll_mode_change",
+        lambda *_args, **_kwargs: None,
+    )
+    app.touch_scroll_mode_combo.bind("<<ComboboxSelected>>", on_touch_scroll_mode_change)
+    apply_tooltip(
+        app.touch_scroll_mode_combo,
+        "Thumb only keeps swipe scrolling off in App Settings; thumb_and_swipe enables both thumb drag and swipe.",
+    )
     def _sync_tooltip_timeout_state() -> None:
         try:
             enabled = bool(app.tooltip_enabled.get())
@@ -222,7 +243,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.tooltip_enabled,
         command=_on_tooltip_setting_change,
     )
-    app.tooltips_enabled_check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.tooltips_enabled_check.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.tooltips_enabled_check,
         "Show tooltips on hover (disabled controls include the reason).",
@@ -233,10 +254,10 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         _log_suppressed("Failed wiring tooltip-enabled variable trace handler", exc)
 
     ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
-        row=4, column=0, sticky="w", padx=(0, 10), pady=4
+        row=5, column=0, sticky="w", padx=(0, 10), pady=4
     )
     tooltip_timeout_row = ttk.Frame(theme_frame)
-    tooltip_timeout_row.grid(row=4, column=1, sticky="w", pady=4)
+    tooltip_timeout_row.grid(row=5, column=1, sticky="w", pady=4)
     app.tooltip_timeout_entry = ttk.Entry(
         tooltip_timeout_row, textvariable=app.tooltip_timeout_sec, width=10
     )
@@ -253,7 +274,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable numeric keypad popups (click numeric fields)",
         variable=app.numeric_keypad_enabled,
     )
-    app.numeric_keypad_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.numeric_keypad_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.numeric_keypad_check,
         "Show the touch keypad when tapping numeric fields.",

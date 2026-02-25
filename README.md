@@ -1066,6 +1066,7 @@ Macro UI is included below along with the rest of the interface.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
+- Touch scroll mode: choose `thumb_only` (disable App Settings swipe scrolling) or `thumb_and_swipe` (enable both thumb drag and swipe in App Settings).
 - Enable tooltips: toggles hover tips across the app (clicked controls suppress their tooltip until pointer leave/re-enter).
 - Tooltip display duration (sec): auto-hide timer (0 keeps tooltips visible).
 - Enable numeric keypad popups: shows or hides the touch keypad on numeric fields.

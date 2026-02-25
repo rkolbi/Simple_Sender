@@ -151,6 +151,16 @@ def _init_behavior_preferences(
     )
     app.ui_scale = tk.DoubleVar(value=setting("ui_scale", 1.0))
     app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
+    touch_scroll_mode_raw = str(
+        setting(
+            "touch_scroll_mode",
+            default_settings.get("touch_scroll_mode", "thumb_and_swipe"),
+        )
+        or ""
+    ).strip().lower()
+    if touch_scroll_mode_raw not in {"thumb_only", "thumb_and_swipe"}:
+        touch_scroll_mode_raw = "thumb_and_swipe"
+    app.touch_scroll_mode = tk.StringVar(value=touch_scroll_mode_raw)
 
 
 def _init_style_preferences(app, *, tkfont, ttk) -> None:

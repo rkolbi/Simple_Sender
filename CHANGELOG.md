@@ -16,6 +16,9 @@ All notable changes to this project are documented in this file.
   - dialog includes an explicit `Use System Picker` fallback to the OS-native chooser
 
 ### Changed
+- Touchscreen scrollbar responsiveness:
+  - scrollbar drag handling now keeps an active-drag watchdog loop so thumb movement stays responsive even when some motion events are dropped by touch drivers
+  - App Settings now includes a touch scroll mode (`thumb_only` vs `thumb_and_swipe`) so operators can disable swipe-gesture interception when they want thumb-only scrollbar control
 - Backend stream/manual queue hardening:
   - manual/immediate queue is now bounded (`MANUAL_COMMAND_QUEUE_MAXSIZE`) and enqueue is non-blocking
   - saturated queue paths drop new manual commands explicitly instead of blocking worker locks

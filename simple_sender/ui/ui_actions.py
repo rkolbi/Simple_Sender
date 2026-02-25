@@ -92,6 +92,7 @@ _SCROLLBAR_WIDTHS = {
     "wider": 32,
     "widest": 40,
 }
+_TOUCH_SCROLL_MODES = {"thumb_only", "thumb_and_swipe"}
 
 def _style_scrollbar_width(style) -> int | None:
     if style is None:
@@ -115,6 +116,15 @@ def _coerce_scrollbar_width(value, default: str = "wide") -> str:
     if normalized == "narrow":
         return "default"
     if normalized in _SCROLLBAR_WIDTHS or normalized == "default":
+        return normalized
+    return default
+
+
+def _coerce_touch_scroll_mode(value, default: str = "thumb_and_swipe") -> str:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower().replace(" ", "_").replace("+", "_and_")
+    if normalized in _TOUCH_SCROLL_MODES:
         return normalized
     return default
 
@@ -254,6 +264,42 @@ def on_ui_scale_change(app, _event=None):
         app._save_settings()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed saving settings after UI scale change", exc)
+
+
+def on_touch_scroll_mode_change(app, _event=None):
+    mode = _coerce_touch_scroll_mode(
+        app.touch_scroll_mode.get() if hasattr(app, "touch_scroll_mode") else None,
+        "thumb_and_swipe",
+    )
+    try:
+        app.touch_scroll_mode.set(mode)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed writing normalized touch-scroll mode to Tk variable", exc)
+    try:
+        app.settings["touch_scroll_mode"] = mode
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting touch-scroll mode", exc)
+
+    if mode == "thumb_only":
+        try:
+            app._unbind_app_settings_touch_scroll()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed disabling App Settings swipe scroll for thumb-only mode", exc)
+    else:
+        try:
+            app._bind_app_settings_touch_scroll()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed enabling App Settings swipe scroll for thumb+swipe mode", exc)
+    try:
+        app.status.config(
+            text=(
+                "Touch scroll mode: Thumb only"
+                if mode == "thumb_only"
+                else "Touch scroll mode: Thumb + swipe"
+            )
+        )
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for touch-scroll mode change", exc)
 
 
 def toggle_performance(app):

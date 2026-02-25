@@ -55,6 +55,7 @@ from simple_sender.ui.ui_actions import (
     on_gui_logging_change,
     on_performance_mode_change,
     on_scrollbar_width_change,
+    on_touch_scroll_mode_change,
     on_theme_change,
     on_ui_scale_change,
     toggle_console_pos_status,
@@ -121,6 +122,9 @@ class UiTogglesMixin:
 
     def _on_scrollbar_width_change(self, _event=None):
         on_scrollbar_width_change(self, _event)
+
+    def _on_touch_scroll_mode_change(self, _event=None):
+        on_touch_scroll_mode_change(self, _event)
 
     def _refresh_stop_button_backgrounds(self):
         refresh_stop_button_backgrounds(self)
