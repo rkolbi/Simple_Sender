@@ -146,47 +146,48 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Left panels:** MPos (unit toggle), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro row (Home plus Macro-1..Macro-8 buttons when files exist).
 
 - **Tabs:**
-  - **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
-
-    ![](pics/g-codetab.jpg)
   
-  - **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
+  **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
   
-    ![-](pics/consoletab.JPG)
-    
-  - **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
+  ![](pics/g-codetab.jpg)
   
-    ![](pics/logstab.JPG)
-
-  - **Overdrive:** Spindle ON/OFF controls, a Spoilboard Generator button, plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
+  **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
-    ![-](pics/overdrivetab.JPG)
-    
-  - **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
+  ![-](pics/consoletab.JPG)
   
-    ![-](pics/rawtab.JPG)
-    
-  - **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
-
-    ![-](pics/grblsettingstab.JPG)
-    
-- **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
   
-    ![](pics/appsettingstab.JPG)
+  ![](pics/logstab.JPG)
   
-  - **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including the Release/Start Job checklist dialogs and the status-bar Release quick button.
+  **Overdrive:** Spindle ON/OFF controls, a Spoilboard Generator button, plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
   
-    ![-](pics/checkliststab.JPG)
-    
-  - **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
+  ![-](pics/overdrivetab.JPG)
   
-    ![-](pics/2dviewtab.JPG)
-    
-  - **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
+  **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
   
-    ![-](pics/3dviewtab.JPG)
+  ![-](pics/rawtab.JPG)
   
-- **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
+  **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
+  
+  ![-](pics/grblsettingstab.JPG)
+  
+  **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  
+  ![](pics/appsettingstab.JPG)
+  
+  **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including the Release/Start Job checklist dialogs and the status-bar Release quick button.
+  
+  ![-](pics/checkliststab.JPG)
+  
+  **Top View:** Quick 2D plan trace of the loaded job with segment counts, view info, and the job-name overlay for fast bounds checks.
+  
+  ![-](pics/2dviewtab.JPG)
+  
+  **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
+  
+  ![-](pics/3dviewtab.JPG)
+  
+  **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, 3D Render (3DR), Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
 ## Status Lights
 - **Placement:** The LEDs sit inline with the status bar so they stay next to the quick buttons (Tips, 3D Render, Keys, Auto-Level Overlay, Release) and provide a quick glance of machine triggers.
@@ -260,6 +261,8 @@ Macro file header format:
 
 Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
 `App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
+
+In the image below, macro files **Macro-1** through **Macro-4** are present in the macros folder, so they appear in the button bar; **Macro-5** through **Macro-8** are missing, so those buttons aren’t shown.
 
 ![-](pics/macros.jpg)
 
