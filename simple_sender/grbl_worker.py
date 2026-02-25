@@ -97,6 +97,18 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _format_realtime_for_log(command: bytes) -> str:
+    if not command:
+        return ""
+    parts: list[str] = []
+    for value in command:
+        if 32 <= value <= 126:
+            parts.append(chr(value))
+        else:
+            parts.append(f"0x{value:02X}")
+    return " ".join(parts)
+
+
 def _get_rx_logger():
     global _RX_LOGGER
     if _RX_LOGGER is not None:
@@ -334,6 +346,9 @@ class GrblWorker(
         timeout_exc = _serial_timeout_exception_type(serial_module)
         serial_exc = _serial_exception_type(serial_module)
         try:
+            rendered = _format_realtime_for_log(command)
+            if rendered:
+                self._log_tx_line(f"RT {rendered}")
             with self._write_lock:
                 total = 0
                 length = len(command)

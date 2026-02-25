@@ -257,30 +257,24 @@ def _cancel_hold_fallback_timer(app) -> None:
     app._joystick_hold_fallback_after_id = None
 
 
-def _send_feed_hold_fallback(app) -> None:
-    state_text = str(getattr(app, "_machine_state_text", "")).strip().lower()
-    if state_text and not state_text.startswith("jog"):
-        return
-    try:
-        app.grbl.hold()
-    except Exception as exc:
-        _log_suppressed("Failed sending feed hold fallback for joystick hold stop", exc)
+def _send_jog_cancel_fallback(app) -> None:
+    for _ in range(JOYSTICK_HOLD_CANCEL_ATTEMPTS):
+        try:
+            app.grbl.jog_cancel()
+        except Exception as exc:
+            _log_suppressed("Failed sending fallback jog cancel after joystick hold stop", exc)
     try:
         app.grbl.cancel_pending_jogs()
     except Exception as exc:
-        _log_suppressed("Failed clearing pending jogs during feed hold fallback", exc)
-    try:
-        app.grbl.jog_cancel()
-    except Exception as exc:
-        _log_suppressed("Failed sending jog cancel during feed hold fallback", exc)
+        _log_suppressed("Failed clearing pending jogs during joystick hold fallback", exc)
 
 
-def _schedule_feed_hold_fallback(app) -> None:
+def _schedule_jog_cancel_fallback(app) -> None:
     _cancel_hold_fallback_timer(app)
 
     def _run_fallback() -> None:
         app._joystick_hold_fallback_after_id = None
-        _send_feed_hold_fallback(app)
+        _send_jog_cancel_fallback(app)
 
     try:
         app._joystick_hold_fallback_after_id = app.after(
@@ -288,7 +282,7 @@ def _schedule_feed_hold_fallback(app) -> None:
             _run_fallback,
         )
     except Exception as exc:
-        _log_suppressed("Failed scheduling feed hold fallback after joystick hold stop", exc)
+        _log_suppressed("Failed scheduling jog-cancel fallback after joystick hold stop", exc)
 
 
 def start_hold(app, binding_id: str):
@@ -388,7 +382,7 @@ def stop_hold(app, binding_id: str | None = None):
             app.grbl.cancel_pending_jogs()
         except Exception as exc:
             _log_suppressed("Failed clearing pending jogs while stopping joystick hold", exc)
-        _schedule_feed_hold_fallback(app)
+        _schedule_jog_cancel_fallback(app)
     app._active_joystick_hold_binding = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None

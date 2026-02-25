@@ -226,7 +226,7 @@ JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS = 200
 """Maximum elapsed time between hold-release polls before forced jog stop."""
 
 JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS = 120
-"""Delay before issuing feed-hold fallback after jog-cancel (ms)."""
+"""Delay before issuing a secondary jog-cancel fallback after release (ms)."""
 
 JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER = 3.0
 """Maximum multiple of the repeat interval used to compute hold jog distance."""

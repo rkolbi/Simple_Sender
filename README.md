@@ -235,7 +235,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Joystick hold-jog bindings (`X/Y/Z +/- (Hold)`) send one long jog command per press.
 - On hold-jog stop/release, the sender issues jog-cancel and clears pending jog commands.
 - A hold-jog deadman timeout now force-cancels motion if joystick hold polling stalls.
-- If GRBL still reports jog state shortly after cancel, a feed-hold (`!`) fallback is issued automatically.
+- If GRBL still reports jog state shortly after cancel, an additional jog-cancel fallback is issued automatically.
 - Hold-jog distance targets remaining travel when GRBL max travel (`$130/$131/$132`) and machine position are known; otherwise a conservative long move is used and release still cancels motion.
 - If joystick communication/backend is lost during hold-jog (device unplugged, backend failure, polling error, or bindings disabled), the active jog is cancelled immediately.
 - Unit toggle button (MPos panel) flips mm/inch and label; jogs blocked during streaming/alarm.
@@ -662,7 +662,7 @@ If you prefer guided probing, the macro set includes touch-plate and reference-t
 - The Live input state panel reports joystick axes/buttons/hats and the latest keyboard input while testing; hot-plug status updates when devices connect/disconnect.
 - When the toggle is left on before closing, the app now reopens with joystick capturing enabled automatically (just like auto-reconnecting to the last serial port), so you can pick up where you left off without another click.
 - The Keyboard Shortcuts list now exposes six additional `X- (Hold)`, `X+ (Hold)`, `Y- (Hold)`, `Y+ (Hold)`, `Z- (Hold)`, and `Z+ (Hold)` entries. When one is held, the sender issues a single long jog move at the jog feed and stops it on release with jog-cancel (`0x85`) for smoother motion on lower-power hosts.
-- Jog safety path for hold bindings is fail-safe: release checks are polled continuously, missed poll gaps trigger deadman cancel, and a delayed feed-hold fallback is sent if jog-cancel is not enough.
+- Jog safety path for hold bindings is fail-safe: release checks are polled continuously, missed poll gaps trigger deadman cancel, and a delayed extra jog-cancel fallback is sent if needed.
 - Joystick button release for jog-bound actions (`jog_*` bindings) now actively sends jog-cancel + pending-jog purge even if a backend release event is dropped.
 - If USB joystick communication drops during a hold jog (unplug/hot-plug loss, backend failure, or polling exception), the sender automatically issues the same jog stop/cancel path.
 - The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.
