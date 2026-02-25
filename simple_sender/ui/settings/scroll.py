@@ -24,6 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 
 _TOUCH_SCROLL_THRESHOLD = 6
+_WHEEL_DELTA_UNIT = 120
 
 
 def _is_descendant(widget, ancestor) -> bool:
@@ -62,6 +63,28 @@ def _touch_scroll_allowed(app, widget) -> bool:
         return False
     return True
 
+
+def _wheel_steps(app, event, remainder_attr: str) -> int:
+    delta = getattr(event, "delta", 0) or 0
+    if delta:
+        try:
+            carry = float(getattr(app, remainder_attr, 0.0) or 0.0) + float(delta)
+        except Exception:
+            carry = float(delta)
+        steps = int(carry / _WHEEL_DELTA_UNIT)
+        try:
+            setattr(app, remainder_attr, carry - (steps * _WHEEL_DELTA_UNIT))
+        except Exception:
+            pass
+        return -steps
+    num = getattr(event, "num", None)
+    if num == 4:
+        return -1
+    if num == 5:
+        return 1
+    return 0
+
+
 def update_app_settings_scrollregion(app):
     if not hasattr(app, "app_settings_canvas"):
         return
@@ -70,33 +93,46 @@ def update_app_settings_scrollregion(app):
 def on_app_settings_mousewheel(app, event):
     if not hasattr(app, "app_settings_canvas"):
         return
-    delta = 0
-    if event.delta:
-        delta = -int(event.delta / 120)
-    elif getattr(event, "num", None) == 4:
-        delta = -1
-    elif getattr(event, "num", None) == 5:
-        delta = 1
+    if getattr(app, "_app_settings_mousewheel_enabled", True) is False:
+        return
+    widget = getattr(event, "widget", None)
+    inner = getattr(app, "_app_settings_inner", None)
+    canvas = getattr(app, "app_settings_canvas", None)
+    if widget is not None and inner is not None:
+        if not _is_descendant(widget, inner) and not _is_descendant(widget, canvas):
+            return
+    delta = _wheel_steps(app, event, "_app_settings_mousewheel_remainder")
     if delta:
         app.app_settings_canvas.yview_scroll(delta, "units")
+        return "break"
 
 def bind_app_settings_mousewheel(app):
     if not hasattr(app, "app_settings_canvas"):
         return
-    app.app_settings_canvas.bind_all("<MouseWheel>", app._on_app_settings_mousewheel)
-    app.app_settings_canvas.bind_all("<Button-4>", app._on_app_settings_mousewheel)
-    app.app_settings_canvas.bind_all("<Button-5>", app._on_app_settings_mousewheel)
+    app._app_settings_mousewheel_enabled = True
+    if getattr(app, "_app_settings_mousewheel_bound", False):
+        return
+    bind_all = getattr(app, "bind_all", None)
+    if callable(bind_all):
+        bind_all("<MouseWheel>", app._on_app_settings_mousewheel, add="+")
+        bind_all("<Button-4>", app._on_app_settings_mousewheel, add="+")
+        bind_all("<Button-5>", app._on_app_settings_mousewheel, add="+")
+    else:
+        app.app_settings_canvas.bind_all("<MouseWheel>", app._on_app_settings_mousewheel, add="+")
+        app.app_settings_canvas.bind_all("<Button-4>", app._on_app_settings_mousewheel, add="+")
+        app.app_settings_canvas.bind_all("<Button-5>", app._on_app_settings_mousewheel, add="+")
+    app._app_settings_mousewheel_bound = True
 
 def unbind_app_settings_mousewheel(app):
     if not hasattr(app, "app_settings_canvas"):
         return
-    app.app_settings_canvas.unbind_all("<MouseWheel>")
-    app.app_settings_canvas.unbind_all("<Button-4>")
-    app.app_settings_canvas.unbind_all("<Button-5>")
+    app._app_settings_mousewheel_enabled = False
 
 
 def on_app_settings_touch_start(app, event):
     if not hasattr(app, "app_settings_canvas"):
+        return
+    if getattr(app, "_app_settings_touch_enabled", True) is False:
         return
     if not _touch_scroll_allowed(app, getattr(event, "widget", None)):
         return
@@ -110,6 +146,8 @@ def on_app_settings_touch_start(app, event):
 
 
 def on_app_settings_touch_move(app, event):
+    if getattr(app, "_app_settings_touch_enabled", True) is False:
+        return
     if not getattr(app, "_app_settings_touch_active", False):
         return
     canvas = app.app_settings_canvas
@@ -134,14 +172,24 @@ def on_app_settings_touch_end(app, _event=None):
 def bind_app_settings_touch_scroll(app):
     if not hasattr(app, "app_settings_canvas"):
         return
-    app.app_settings_canvas.bind_all("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
-    app.app_settings_canvas.bind_all("<B1-Motion>", app._on_app_settings_touch_move, add="+")
-    app.app_settings_canvas.bind_all("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
+    app._app_settings_touch_enabled = True
+    if getattr(app, "_app_settings_touch_bound", False):
+        return
+    bind_all = getattr(app, "bind_all", None)
+    if callable(bind_all):
+        bind_all("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
+        bind_all("<B1-Motion>", app._on_app_settings_touch_move, add="+")
+        bind_all("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
+    else:
+        app.app_settings_canvas.bind_all("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
+        app.app_settings_canvas.bind_all("<B1-Motion>", app._on_app_settings_touch_move, add="+")
+        app.app_settings_canvas.bind_all("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
+    app._app_settings_touch_bound = True
 
 
 def unbind_app_settings_touch_scroll(app):
     if not hasattr(app, "app_settings_canvas"):
         return
-    app.app_settings_canvas.unbind_all("<ButtonPress-1>")
-    app.app_settings_canvas.unbind_all("<B1-Motion>")
-    app.app_settings_canvas.unbind_all("<ButtonRelease-1>")
+    app._app_settings_touch_enabled = False
+    app._app_settings_touch_active = False
+    app._app_settings_touch_moved = False

@@ -10,6 +10,10 @@ All notable changes to this project are documented in this file.
   - UI event router updates status text with cumulative dropped-command totals when the manual queue is saturated
 - Integration coverage for serial-jitter disconnect behavior:
   - added streaming workflow test that forces serial write errors mid-stream and verifies interrupt/disconnect state transitions
+- Touch-first G-code file browser for `Read Job`:
+  - added an in-app folder/file picker with large tap targets for touchscreen workflows
+  - includes Home/Up/Refresh navigation plus Windows drive shortcuts
+  - dialog includes an explicit `Use System Picker` fallback to the OS-native chooser
 
 ### Changed
 - Backend stream/manual queue hardening:
@@ -34,7 +38,8 @@ All notable changes to this project are documented in this file.
   - README now documents manual queue drop reporting, loader cancellation behavior, settings repair behavior, and latest backend hardening notes
   - README now links to a release checklist section with explicit jog-release safety criteria
   - README joystick and jogging sections now document deadman/fallback jog-stop behavior
-  - README testing baseline now reflects the latest local `pytest tests -q` result (`727 passed, 3 skipped` on 2026-02-25)
+  - README now documents the new touch-friendly `Read Job` file-browser flow and system-picker fallback
+  - README testing baseline now reflects the latest local `pytest tests -q` result (`735 passed, 2 skipped` on 2026-02-25)
   - release checklist template now uses current mypy target count (`150`) and version placeholders
   - release checklist now includes a hardware jog-release smoke test (UI, joystick button/axis, safety-hold release, unplug, focus-loss)
   - profiling baseline document now includes current local 2026-02-25 results

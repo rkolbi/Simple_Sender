@@ -27,8 +27,13 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
-from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.dialogs.diagnostics import run_preflight_gate
+from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.ui.dialogs.touch_file_browser import (
+    USE_SYSTEM_FILE_PICKER,
+    browse_for_gcode_path,
+)
+from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.utils.constants import BAUD_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -87,6 +92,30 @@ def _safe_initial_dir(path: str) -> str:
     except Exception as exc:
         _log_suppressed("Failed checking initial G-code directory existence", exc)
         return ""
+
+
+def _native_gcode_dialog(app, initial_dir: str) -> str:
+    return str(
+        run_file_dialog(
+            app,
+            filedialog.askopenfilename,
+            title="Open G-code",
+            initialdir=initial_dir,
+            filetypes=[("G-code", "*.nc *.gcode *.tap *.txt"), ("All files", "*.*")],
+        )
+        or ""
+    )
+
+
+def choose_gcode_path(app, initial_dir: str) -> str:
+    try:
+        chosen = str(browse_for_gcode_path(app, initial_dir=initial_dir) or "")
+    except Exception as exc:
+        _log_suppressed("Touch file browser failed; falling back to system picker", exc)
+        return _native_gcode_dialog(app, initial_dir)
+    if chosen == USE_SYSTEM_FILE_PICKER:
+        return _native_gcode_dialog(app, initial_dir)
+    return chosen
 
 
 def refresh_ports(app, auto_connect: bool = False):
@@ -277,11 +306,7 @@ def open_gcode(app):
         messagebox.showwarning("Busy", "Stop the stream before loading a new G-code file.")
         return
     initial_dir = _safe_initial_dir(app.settings.get("last_gcode_dir", ""))
-    path = filedialog.askopenfilename(
-        title="Open G-code",
-        initialdir=initial_dir,
-        filetypes=[("G-code", "*.nc *.gcode *.tap *.txt"), ("All files", "*.*")],
-    )
+    path = choose_gcode_path(app, initial_dir)
     if not path:
         return
     try:

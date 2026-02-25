@@ -222,8 +222,9 @@ def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
     migrated = copy.deepcopy(loaded)
 
     if "jog_step" in migrated:
+        legacy_raw = migrated.get("jog_step")
         try:
-            legacy_step = float(migrated.get("jog_step"))
+            legacy_step = None if legacy_raw is None else float(legacy_raw)
         except (TypeError, ValueError):
             legacy_step = None
         if legacy_step is not None:
