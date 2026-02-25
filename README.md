@@ -33,6 +33,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [Kasa Plug (Linux)](#kasa-plug-linux)
 - [Logs & Filters](#logs--filters)
 - [Testing](#testing)
+- [Release Checklist](#release-checklist)
 - [Module Layout](#module-layout)
 - [Performance Profiling](#performance-profiling)
 - [Troubleshooting](#troubleshooting)
@@ -759,6 +760,11 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
+
+## Release Checklist
+- Full release checklist: `ref/release_checklist_v1.7.0.md`.
+- Run the **Hardware jog-release smoke check** section in that file before live CNC use.
+- Pass criteria for jog safety: releasing any jog button/axis input must stop motion immediately.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).

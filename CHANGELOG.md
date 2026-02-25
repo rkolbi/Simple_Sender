@@ -28,6 +28,8 @@ All notable changes to this project are documented in this file.
   - split path uses lighter safe-line matching and `findall`/set-subset checks in hot loops
 - Documentation refresh:
   - README now documents manual queue drop reporting, loader cancellation behavior, settings repair behavior, and latest backend hardening notes
+  - README now links to a release checklist section with explicit jog-release safety criteria
+  - release checklist now includes a hardware jog-release smoke test (UI, joystick button/axis, safety-hold release, unplug, focus-loss)
   - profiling baseline document now includes current local 2026-02-25 results
 
 ### Fixed

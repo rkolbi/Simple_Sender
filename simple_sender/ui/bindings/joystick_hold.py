@@ -25,10 +25,8 @@ import time
 from typing import Any
 
 from simple_sender.utils.constants import (
-    JOYSTICK_AXIS_RELEASE_THRESHOLD,
     JOYSTICK_AXIS_THRESHOLD,
     JOYSTICK_HOLD_DEFINITIONS,
-    JOYSTICK_HOLD_MISS_LIMIT,
     JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
     JOYSTICK_HOLD_MIN_DISTANCE,
@@ -50,6 +48,7 @@ JOYSTICK_HOLD_LIMIT_MARGIN_MM = 0.25
 JOYSTICK_HOLD_FALLBACK_DISTANCE_MM = 5000.0
 JOYSTICK_HOLD_AXIS_LIMIT_KEYS = {"X": "$130", "Y": "$131", "Z": "$132"}
 JOYSTICK_HOLD_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
+JOYSTICK_HOLD_CANCEL_ATTEMPTS = 2
 
 
 def is_virtual_hold_button(btn) -> bool:
@@ -221,9 +220,9 @@ def _joystick_binding_pressed(app, binding: dict[str, Any] | None, *, release: b
             if idx is None or direction is None:
                 return False
             value = float(joy.get_axis(idx))
-            threshold = float(
-                JOYSTICK_AXIS_RELEASE_THRESHOLD if release else JOYSTICK_AXIS_THRESHOLD
-            )
+            # Safety-first behavior: once the axis drops below activation level,
+            # treat it as released and stop jog motion immediately.
+            threshold = float(JOYSTICK_AXIS_THRESHOLD)
             if direction == 1:
                 return value >= threshold
             if direction == -1:
@@ -288,13 +287,7 @@ def send_hold_jog(app):
             _log_suppressed("Failed scheduling joystick hold retry while manual queue busy", exc)
     binding = app._joystick_bindings.get(binding_id)
     if not _joystick_binding_pressed(app, binding, release=True):
-        missed = getattr(app, "_joystick_hold_missed_polls", 0) + 1
-        app._joystick_hold_missed_polls = missed
-        if missed >= JOYSTICK_HOLD_MISS_LIMIT:
-            stop_hold(app, binding_id)
-            return
-        app._joystick_hold_last_ts = time.monotonic()
-        app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
+        stop_hold(app, binding_id)
         return
     app._joystick_hold_missed_polls = 0
     hold_axis = hold_vector_for_binding(app, binding_id)
@@ -337,10 +330,11 @@ def stop_hold(app, binding_id: str | None = None):
             _log_suppressed("Failed canceling joystick hold timer", exc)
         app._joystick_hold_after_id = None
     if app._active_joystick_hold_binding:
-        try:
-            app.grbl.jog_cancel()
-        except Exception as exc:
-            _log_suppressed("Failed sending jog cancel while stopping joystick hold", exc)
+        for _ in range(JOYSTICK_HOLD_CANCEL_ATTEMPTS):
+            try:
+                app.grbl.jog_cancel()
+            except Exception as exc:
+                _log_suppressed("Failed sending jog cancel while stopping joystick hold", exc)
         try:
             app.grbl.cancel_pending_jogs()
         except Exception as exc:
@@ -362,10 +356,7 @@ def check_release(app):
     if _joystick_binding_pressed(app, binding, release=True):
         app._joystick_hold_missed_polls = 0
         return
-    missed = getattr(app, "_joystick_hold_missed_polls", 0) + 1
-    app._joystick_hold_missed_polls = missed
-    if missed >= JOYSTICK_HOLD_MISS_LIMIT:
-        stop_hold(app, active)
+    stop_hold(app, active)
 
 
 def binding_pressed(app, binding: dict[str, Any] | None, *, release: bool = False) -> bool:

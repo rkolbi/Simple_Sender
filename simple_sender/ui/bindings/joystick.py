@@ -354,10 +354,25 @@ def is_virtual_hold_button(app, btn) -> bool:
 
 def handle_joystick_button_release(app, key: tuple) -> None:
     _resolved_key, btn = _lookup_bound_button(app, key)
-    if not btn or not app._is_virtual_hold_button(btn):
+    if not btn:
         return
     binding_id = app._button_binding_id(btn)
-    app._stop_joystick_hold(binding_id)
+    if app._is_virtual_hold_button(btn):
+        app._stop_joystick_hold(binding_id)
+        return
+    if not str(binding_id).startswith("jog_"):
+        return
+    grbl = getattr(app, "grbl", None)
+    if grbl is None:
+        return
+    try:
+        grbl.jog_cancel()
+    except Exception as exc:
+        _log_suppressed("Failed sending jog cancel on joystick button release", exc)
+    try:
+        grbl.cancel_pending_jogs()
+    except Exception as exc:
+        _log_suppressed("Failed canceling pending jogs on joystick button release", exc)
 
 
 def start_joystick_hold(app, binding_id: str) -> None:
