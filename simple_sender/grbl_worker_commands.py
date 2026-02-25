@@ -100,8 +100,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                 _log_suppressed("Failed configuring watchdog homing grace window", exc)
         
         with self._stream_lock:
-            self._outgoing_q.put(command)
-            self._manual_source_queue.append(command_source)
+            self._enqueue_manual_command(command, command_source)
     
     def unlock(self) -> None:
         """Send unlock command ($X) to clear alarm state."""
@@ -193,7 +192,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
     def manual_queue_backpressure(self) -> bool:
         """Return True when manual queue is blocked by buffer limits."""
         with self._stream_lock:
-            return self._manual_pending_item is not None
+            return self._manual_pending_item is not None or self._outgoing_q.full()
     
     def jog(
         self,

@@ -22,7 +22,7 @@
 
 
 from dataclasses import dataclass
-from typing import IO, Protocol, cast
+from typing import IO, Protocol, Sequence, cast
 
 
 def _format_mb(value: int | None) -> str:
@@ -42,6 +42,10 @@ class _SystemCommandError(Exception):
         self.text = text
 
 
+class _GcodeLoadCancelled(Exception):
+    """Raised when a newer load token supersedes the active worker."""
+
+
 class _SplitStreamResultLike(Protocol):
     lines_written: int
     split_count: int
@@ -54,7 +58,7 @@ class _SplitStreamResultLike(Protocol):
 @dataclass(slots=True)
 class _StreamTempData:
     temp_path: str
-    offsets: list[int]
+    offsets: Sequence[int]
     preview_lines: list[str]
     lines_hash: str | None
     split_result: _SplitStreamResultLike
@@ -90,6 +94,18 @@ def _format_adjusted_lines_message(modified_count: int, split_count: int, max_li
     return f"{base}."
 
 
+def _check_load_token(app, token: int) -> None:
+    if token != app._gcode_load_token:
+        raise _GcodeLoadCancelled()
+
+
+def _new_offset_index(deps):
+    try:
+        return deps.array.array("Q")
+    except Exception:
+        return []
+
+
 def _split_stream_to_temp_file(
     app,
     path: str,
@@ -98,7 +114,8 @@ def _split_stream_to_temp_file(
     *,
     file_size: int | None,
 ) -> _StreamTempData:
-    offsets: list[int] = []
+    _check_load_token(app, token)
+    offsets = _new_offset_index(deps)
     preview_lines: list[str] = []
     total_lines_raw = 0
     cleaned_input_lines = 0
@@ -112,6 +129,7 @@ def _split_stream_to_temp_file(
     split_result: _SplitStreamResultLike | None = None
 
     def write_output(line: str) -> None:
+        _check_load_token(app, token)
         assert temp_file is not None
         offsets.append(temp_file.tell())
         temp_file.write(line)
@@ -145,6 +163,8 @@ def _split_stream_to_temp_file(
                 def iter_raw_lines():
                     nonlocal total_lines_raw, current_line_no, progress_last_ts, progress_last_pct
                     while True:
+                        if (total_lines_raw & 0x1FF) == 0:
+                            _check_load_token(app, token)
                         pos = f.tell()
                         ln = f.readline()
                         if not ln:
@@ -162,6 +182,7 @@ def _split_stream_to_temp_file(
                                 progress_last_ts = now
                                 progress_last_pct = pct
                         yield ln
+                _check_load_token(app, token)
 
                 split_result = deps.split_gcode_lines_stream(
                     iter_raw_lines(),
@@ -169,6 +190,7 @@ def _split_stream_to_temp_file(
                     clean_line=clean_and_track,
                     write_line=write_output,
                 )
+                _check_load_token(app, token)
             if file_size:
                 _emit_progress(app, token, 100, 100, progress_label)
         finally:
@@ -199,6 +221,7 @@ def _validate_streaming_output(
     temp_path: str,
     output_lines: int,
 ) -> object | None:
+    _check_load_token(app, token)
     validate_prompt_threshold = deps.STREAMING_VALIDATION_PROMPT_LINES
     if output_lines > validate_prompt_threshold:
         result_q = deps.queue.Queue(maxsize=1)
@@ -214,6 +237,7 @@ def _validate_streaming_output(
             allow = bool(result_q.get(timeout=deps.STREAMING_VALIDATION_PROMPT_TIMEOUT))
         except deps.queue.Empty:
             allow = False
+        _check_load_token(app, token)
         if not allow:
             app.ui_q.put(("log", "[gcode] Streaming validation skipped by user request."))
             return None
@@ -232,6 +256,8 @@ def _validate_streaming_output(
         with open(temp_path, "r", encoding="utf-8", errors="replace") as rf:
             line_no = 0
             while True:
+                if (line_no & 0x1FF) == 0:
+                    _check_load_token(app, token)
                 pos = rf.tell()
                 raw_line = rf.readline()
                 if not raw_line:
@@ -271,11 +297,12 @@ def _stream_from_disk(
     validate_streaming: bool,
     log_message: str | None = None,
 ) -> None:
-    if log_message:
-        app.ui_q.put(("log", log_message))
-    validate_streaming_enabled = bool(validate_streaming)
     temp_data = None
     try:
+        _check_load_token(app, token)
+        if log_message:
+            app.ui_q.put(("log", log_message))
+        validate_streaming_enabled = bool(validate_streaming)
         temp_data = _split_stream_to_temp_file(
             app,
             path,
@@ -283,6 +310,61 @@ def _stream_from_disk(
             deps,
             file_size=file_size,
         )
+
+        split_result = temp_data.split_result
+        if split_result.failed_index is not None:
+            _remove_temp_path(deps, temp_data.temp_path)
+            too_long = split_result.too_long if split_result.too_long else 1
+            app.ui_q.put((
+                "gcode_load_invalid",
+                token,
+                path,
+                too_long,
+                split_result.failed_index,
+                split_result.failed_len,
+                temp_data.total_lines_raw,
+                temp_data.cleaned_input_lines,
+            ))
+            return
+        if split_result.modified_count:
+            msg = _format_adjusted_lines_message(
+                split_result.modified_count,
+                split_result.split_count,
+                deps.MAX_LINE_LENGTH,
+            )
+            app.ui_q.put(("log", msg))
+        output_lines = split_result.lines_written
+        report = None
+        if validate_streaming_enabled and output_lines:
+            report = _validate_streaming_output(
+                app,
+                deps=deps,
+                token=token,
+                path=path,
+                temp_path=temp_data.temp_path,
+                output_lines=output_lines,
+            )
+        elif not validate_streaming_enabled and not validate_streaming:
+            app.ui_q.put((
+                "log",
+                "[gcode] Streaming validation disabled (App Settings > Diagnostics).",
+            ))
+        _check_load_token(app, token)
+        source = deps.FileGcodeSource(temp_data.temp_path, temp_data.offsets)
+        setattr(source, "_cleanup_path", temp_data.temp_path)
+        app.ui_q.put((
+            "gcode_loaded_stream",
+            token,
+            path,
+            source,
+            temp_data.preview_lines,
+            temp_data.lines_hash,
+            output_lines,
+            report,
+        ))
+    except _GcodeLoadCancelled:
+        _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
+        return
     except _SystemCommandError as exc:
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         app.ui_q.put((
@@ -297,64 +379,6 @@ def _stream_from_disk(
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         raise
 
-    if temp_data is None:
-        return
-    split_result = temp_data.split_result
-    if split_result is None:
-        return
-    if split_result.failed_index is not None:
-        _remove_temp_path(deps, temp_data.temp_path)
-        too_long = split_result.too_long if split_result.too_long else 1
-        app.ui_q.put((
-            "gcode_load_invalid",
-            token,
-            path,
-            too_long,
-            split_result.failed_index,
-            split_result.failed_len,
-            temp_data.total_lines_raw,
-            temp_data.cleaned_input_lines,
-        ))
-        return
-    if split_result.modified_count:
-        msg = _format_adjusted_lines_message(
-            split_result.modified_count,
-            split_result.split_count,
-            deps.MAX_LINE_LENGTH,
-        )
-        app.ui_q.put(("log", msg))
-    output_lines = split_result.lines_written
-    report = None
-    if validate_streaming_enabled and output_lines:
-        report = _validate_streaming_output(
-            app,
-            deps=deps,
-            token=token,
-            path=path,
-            temp_path=temp_data.temp_path,
-            output_lines=output_lines,
-        )
-    elif not validate_streaming_enabled and not validate_streaming:
-        app.ui_q.put((
-            "log",
-            "[gcode] Streaming validation disabled (App Settings > Diagnostics).",
-        ))
-    if token != app._gcode_load_token:
-        _remove_temp_path(deps, temp_data.temp_path)
-        return
-    source = deps.FileGcodeSource(temp_data.temp_path, temp_data.offsets)
-    setattr(source, "_cleanup_path", temp_data.temp_path)
-    app.ui_q.put((
-        "gcode_loaded_stream",
-        token,
-        path,
-        source,
-        temp_data.preview_lines,
-        temp_data.lines_hash,
-        output_lines,
-        report,
-    ))
-
 
 def _load_non_streaming_or_fallback_stream(
     app,
@@ -366,6 +390,7 @@ def _load_non_streaming_or_fallback_stream(
     streaming_line_threshold: int | None,
     validate_streaming: bool,
 ) -> None:
+    _check_load_token(app, token)
     force_streaming = False
     line_threshold_hit = None
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -376,6 +401,8 @@ def _load_non_streaming_or_fallback_stream(
         system_cmd_line = None
         system_cmd_text = None
         for line_no, ln in enumerate(f, start=1):
+            if (line_no & 0x1FF) == 0:
+                _check_load_token(app, token)
             total_lines = line_no
             cleaned = deps.clean_gcode_line(ln)
             if not cleaned:
@@ -391,6 +418,7 @@ def _load_non_streaming_or_fallback_stream(
                 break
             lines.append(cleaned)
             line_map.append(line_no)
+    _check_load_token(app, token)
     if force_streaming:
         threshold_text = (
             f"{streaming_line_threshold:,}"
@@ -420,6 +448,7 @@ def _load_non_streaming_or_fallback_stream(
             system_cmd_text,
         ))
         return
+    _check_load_token(app, token)
     result = deps.split_gcode_lines(lines, deps.MAX_LINE_LENGTH)
     if result.failed_index is not None:
         too_long, first_idx, first_len = deps._find_overlong_lines(
@@ -440,6 +469,7 @@ def _load_non_streaming_or_fallback_stream(
             len(lines),
         ))
         return
+    _check_load_token(app, token)
     if result.modified_count:
         msg = _format_adjusted_lines_message(
             result.modified_count,
@@ -448,8 +478,11 @@ def _load_non_streaming_or_fallback_stream(
         )
         app.ui_q.put(("log", msg))
     lines = result.lines
+    _check_load_token(app, token)
     report = deps.validate_gcode_lines(lines)
+    _check_load_token(app, token)
     lines_hash = deps.hash_lines(lines)
+    _check_load_token(app, token)
     app.ui_q.put(("gcode_loaded", token, path, lines, lines_hash, True, report))
 
 
@@ -516,6 +549,8 @@ def load_gcode_from_path(app, path: str, module):
                 streaming_line_threshold=streaming_line_threshold,
                 validate_streaming=validate_streaming,
             )
+        except _GcodeLoadCancelled:
+            return
         except Exception as exc:
             app.ui_q.put(("gcode_load_error", token, path, str(exc)))
 

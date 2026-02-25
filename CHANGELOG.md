@@ -4,8 +4,35 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Manual-command backpressure visibility:
+  - worker now emits `manual_queue_drop` UI events with both interval and cumulative drop counts
+  - UI event router updates status text with cumulative dropped-command totals when the manual queue is saturated
+- Integration coverage for serial-jitter disconnect behavior:
+  - added streaming workflow test that forces serial write errors mid-stream and verifies interrupt/disconnect state transitions
+
 ### Changed
-- No unreleased changes yet.
+- Backend stream/manual queue hardening:
+  - manual/immediate queue is now bounded (`MANUAL_COMMAND_QUEUE_MAXSIZE`) and enqueue is non-blocking
+  - saturated queue paths drop new manual commands explicitly instead of blocking worker locks
+- G-code loading pipeline responsiveness:
+  - streaming and non-streaming loader stages now perform token checks during scan/validation loops so superseded loads cancel quickly
+  - stale loader workers clean up temp artifacts and return without posting stale results
+- Streaming memory footprint:
+  - file offset indexes now use compact contiguous storage (`array('Q')`) in streaming sources
+- Settings robustness:
+  - load/import now apply legacy-key migration + core-value repair before validation
+  - save now writes through unique per-save temp files to avoid fixed temp-path collisions in multi-instance scenarios
+- Parser/split performance:
+  - parse path removes repeated modal lookup overhead and uses lower-cost bounds updates
+  - split path uses lighter safe-line matching and `findall`/set-subset checks in hot loops
+- Documentation refresh:
+  - README now documents manual queue drop reporting, loader cancellation behavior, settings repair behavior, and latest backend hardening notes
+  - profiling baseline document now includes current local 2026-02-25 results
+
+### Fixed
+- Disconnect cleanup on serial write exceptions:
+  - write-error handlers now trigger `_signal_disconnect` whenever a serial object is present, even when `is_open` is already false due to jitter
 
 ## [1.7.5] - 2026-02-24
 

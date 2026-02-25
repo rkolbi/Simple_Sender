@@ -183,12 +183,18 @@ def parse_gcode_lines(
         assert maxy is not None
         assert minz is not None
         assert maxz is not None
-        minx = min(minx, nx)
-        maxx = max(maxx, nx)
-        miny = min(miny, ny)
-        maxy = max(maxy, ny)
-        minz = min(minz, nz)
-        maxz = max(maxz, nz)
+        if nx < minx:
+            minx = nx
+        if nx > maxx:
+            maxx = nx
+        if ny < miny:
+            miny = ny
+        if ny > maxy:
+            maxy = ny
+        if nz < minz:
+            minz = nz
+        if nz > maxz:
+            maxz = nz
 
     for raw in lines:
         if keep_running and not keep_running():
@@ -214,34 +220,31 @@ def parse_gcode_lines(
                 except Exception:
                     pass
 
-        def has_g(code: float) -> bool:
-            return round(code, 3) in g_codes
-
-        if has_g(20):
+        if 20.0 in g_codes:
             units = 25.4
             if feed_raw is not None:
                 feed_mm = feed_raw * units
-        if has_g(21):
+        if 21.0 in g_codes:
             units = 1.0
             if feed_raw is not None:
                 feed_mm = feed_raw * units
-        if has_g(90):
+        if 90.0 in g_codes:
             absolute = True
-        if has_g(91):
+        if 91.0 in g_codes:
             absolute = False
-        if has_g(17):
+        if 17.0 in g_codes:
             plane = "G17"
-        if has_g(18):
+        if 18.0 in g_codes:
             plane = "G18"
-        if has_g(19):
+        if 19.0 in g_codes:
             plane = "G19"
-        if has_g(93):
+        if 93.0 in g_codes:
             feed_mode = "G93"
-        if has_g(94):
+        if 94.0 in g_codes:
             feed_mode = "G94"
-        if has_g(90.1):
+        if 90.1 in g_codes:
             arc_abs = True
-        if has_g(91.1):
+        if 91.1 in g_codes:
             arc_abs = False
 
         nx, ny, nz = x, y, z
@@ -282,7 +285,7 @@ def parse_gcode_lines(
             elif w == "R":
                 r_val = fval
 
-        if has_g(92):
+        if 92.0 in g_codes:
             # G92 temporarily shifts the working origin until cleared.
             if not (has_x or has_y or has_z):
                 if g92_enabled:
@@ -305,7 +308,7 @@ def parse_gcode_lines(
                     z = nz
             g92_enabled = True
             continue
-        if has_g(92.1):
+        if 92.1 in g_codes:
             if g92_enabled:
                 x += g92_offset[0]
                 y += g92_offset[1]
@@ -313,14 +316,14 @@ def parse_gcode_lines(
             g92_offset = [0.0, 0.0, 0.0]
             g92_enabled = False
             continue
-        if has_g(92.2):
+        if 92.2 in g_codes:
             if g92_enabled:
                 x += g92_offset[0]
                 y += g92_offset[1]
                 z += g92_offset[2]
             g92_enabled = False
             continue
-        if has_g(92.3):
+        if 92.3 in g_codes:
             if not g92_enabled:
                 x -= g92_offset[0]
                 y -= g92_offset[1]
@@ -329,15 +332,14 @@ def parse_gcode_lines(
             continue
 
         motion: Optional[int] = None
-        for g in g_codes:
-            if abs(g - 0) < 1e-3:
-                motion = 0
-            elif abs(g - 1) < 1e-3:
-                motion = 1
-            elif abs(g - 2) < 1e-3:
-                motion = 2
-            elif abs(g - 3) < 1e-3:
-                motion = 3
+        if 0.0 in g_codes:
+            motion = 0
+        elif 1.0 in g_codes:
+            motion = 1
+        elif 2.0 in g_codes:
+            motion = 2
+        elif 3.0 in g_codes:
+            motion = 3
         if motion is None and has_axis:
             motion = last_motion
 

@@ -425,6 +425,7 @@ def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._last_sent_index = -1
     app._last_acked_index = -1
     app._last_error_index = -1
+    app._manual_queue_drop_total = 0
     app._confirm_last_time = {}
     app._confirm_debounce_sec = 0.8
 

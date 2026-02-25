@@ -32,6 +32,7 @@ from typing import Any, cast
 import tkinter as tk
 from simple_sender.ui.controls.toolbar import (
     on_recover_button_visibility_change,
+    refresh_toolbar_action_focus,
     on_resume_button_visibility_change,
     update_job_button_mode,
     update_recover_button_visibility,
@@ -224,3 +225,6 @@ class UiEventsMixin:
 
     def _set_job_button_mode(self, mode: str):
         update_job_button_mode(self, mode)
+
+    def _refresh_toolbar_action_focus(self):
+        refresh_toolbar_action_focus(self)

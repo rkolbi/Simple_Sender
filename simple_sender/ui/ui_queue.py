@@ -190,6 +190,16 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 pass
     if app._closing:
         return
+    if hasattr(app, "_refresh_toolbar_action_focus"):
+        try:
+            app._refresh_toolbar_action_focus()
+        except Exception:
+            pass
+    if hasattr(app, "_update_quick_button_visibility"):
+        try:
+            app._update_quick_button_visibility()
+        except Exception:
+            pass
     if hasattr(app, "_sync_tool_reference_label"):
         app._sync_tool_reference_label()
     app._maybe_auto_reconnect()

@@ -217,6 +217,54 @@ def _deep_merge_defaults(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Di
     return merged
 
 
+def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply lightweight key migrations from older settings schemas."""
+    migrated = copy.deepcopy(loaded)
+
+    if "jog_step" in migrated:
+        try:
+            legacy_step = float(migrated.get("jog_step"))
+        except (TypeError, ValueError):
+            legacy_step = None
+        if legacy_step is not None:
+            migrated.setdefault("step_xy", legacy_step)
+            migrated.setdefault("step_z", legacy_step)
+
+    if "auto_reconnect" in migrated and "reconnect_on_open" not in migrated:
+        migrated["reconnect_on_open"] = bool(migrated.get("auto_reconnect"))
+
+    return migrated
+
+
+def _repair_invalid_settings(merged: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair known invalid values to defaults so load can continue safely."""
+    repaired = copy.deepcopy(merged)
+    repaired_keys: list[str] = []
+    valid_bauds = {9600, 19200, 38400, 57600, 115200, 230400}
+
+    baud = repaired.get("baud_rate")
+    if baud not in valid_bauds:
+        repaired["baud_rate"] = defaults["baud_rate"]
+        repaired_keys.append("baud_rate")
+
+    interval = repaired.get("status_poll_interval")
+    if not isinstance(interval, (int, float)) or interval <= 0:
+        repaired["status_poll_interval"] = defaults["status_poll_interval"]
+        repaired_keys.append("status_poll_interval")
+
+    mode = repaired.get("unit_mode")
+    if mode not in ("mm", "inch"):
+        repaired["unit_mode"] = defaults["unit_mode"]
+        repaired_keys.append("unit_mode")
+
+    if repaired_keys:
+        logger.warning(
+            "Repaired invalid settings value(s): %s",
+            ", ".join(sorted(set(repaired_keys))),
+        )
+    return repaired
+
+
 def get_default_settings_dir() -> str:
     """Get default directory for settings storage.
     
@@ -325,14 +373,23 @@ class Settings:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 loaded_data = json.load(f)
+            if not isinstance(loaded_data, dict):
+                raise SettingsLoadError("Settings root must be a JSON object")
             
-            # Merge with defaults (in case new settings were added)
+            # Merge defaults, migrate legacy keys, and repair known invalid values.
             defaults = self._get_defaults()
-            self.data = _deep_merge_defaults(defaults, loaded_data)
+            migrated = _migrate_legacy_settings(loaded_data)
+            merged = _deep_merge_defaults(defaults, migrated)
+            self.data = _repair_invalid_settings(merged, defaults)
+            self.validate()
             
             logger.info("Settings loaded successfully")
             return True
             
+        except SettingsValidationError as e:
+            logger.error(f"Invalid settings values: {e}")
+            raise SettingsLoadError(f"Invalid settings: {e}")
+
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in settings file: {e}")
             raise SettingsLoadError(f"Invalid JSON: {e}")
@@ -340,6 +397,9 @@ class Settings:
         except IOError as e:
             logger.error(f"Failed to read settings file: {e}")
             raise SettingsLoadError(f"Failed to read file: {e}")
+
+        except SettingsLoadError:
+            raise
             
         except Exception as e:
             logger.error(f"Unexpected error loading settings: {e}")
@@ -354,16 +414,24 @@ class Settings:
             SettingsSaveError: If save fails
         """
         filepath = Path(self.filepath)
-        temp_path = Path(str(filepath) + SETTINGS_TEMP_SUFFIX)
+        temp_path: Path | None = None
         backup_path = Path(str(filepath) + SETTINGS_BACKUP_SUFFIX)
         
         try:
             # Ensure directory exists
             filepath.parent.mkdir(parents=True, exist_ok=True)
             
-            # Write to temporary file first
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=2, sort_keys=True)
+            # Write to a unique temporary file first to avoid multi-instance collisions.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(filepath.parent),
+                prefix=f"{filepath.name}.",
+                suffix=SETTINGS_TEMP_SUFFIX,
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                json.dump(self.data, temp_file, indent=2, sort_keys=True)
             
             # Create backup of existing file
             if filepath.exists():
@@ -373,6 +441,7 @@ class Settings:
                     logger.warning(f"Failed to create backup: {e}")
             
             # Atomic rename
+            assert temp_path is not None
             temp_path.replace(filepath)
             
             logger.info("Settings saved successfully")
@@ -396,7 +465,7 @@ class Settings:
             
         finally:
             # Clean up temp file
-            if temp_path.exists():
+            if temp_path is not None and temp_path.exists():
                 try:
                     temp_path.unlink()
                 except OSError as cleanup_exc:
@@ -549,13 +618,20 @@ class Settings:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 imported_data = json.load(f)
+            if not isinstance(imported_data, dict):
+                raise SettingsLoadError("Settings root must be a JSON object")
             
-            # Merge with defaults
+            # Merge defaults, migrate legacy keys, and repair known invalid values.
             defaults = self._get_defaults()
-            self.data = _deep_merge_defaults(defaults, imported_data)
+            migrated = _migrate_legacy_settings(imported_data)
+            merged = _deep_merge_defaults(defaults, migrated)
+            self.data = _repair_invalid_settings(merged, defaults)
+            self.validate()
             
             logger.info(f"Settings imported from {filepath}")
             
+        except SettingsValidationError as e:
+            raise SettingsLoadError(f"Invalid settings: {e}")
         except json.JSONDecodeError as e:
             raise SettingsLoadError(f"Invalid JSON: {e}")
         except IOError as e:

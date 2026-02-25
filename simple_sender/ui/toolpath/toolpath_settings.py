@@ -187,6 +187,10 @@ def toggle_render_3d(app):
         source = getattr(app, "_gcode_source", None)
         if source is not None:
             app.toolpath_panel.set_gcode_lines(source, lines_hash=getattr(app, "_gcode_hash", None))
+        try:
+            app._update_quick_button_visibility()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing quick-button visibility after streaming 3D enable", exc)
         return
     current = bool(app.render3d_enabled.get())
     new_val = not current
@@ -199,9 +203,17 @@ def toggle_render_3d(app):
         source = getattr(app, "_gcode_source", None)
         if source is not None:
             app.toolpath_panel.set_gcode_lines(source, lines_hash=getattr(app, "_gcode_hash", None))
+        try:
+            app._update_quick_button_visibility()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing quick-button visibility after render toggle", exc)
         return
     if _can_use_toolpath(app):
         app.toolpath_panel.set_gcode_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
+    try:
+        app._update_quick_button_visibility()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing quick-button visibility after render toggle", exc)
 
 def toolpath_limit_value(app, raw, fallback):
     try:

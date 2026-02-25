@@ -210,9 +210,11 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
+- **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
+- **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
 - **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads use the same compaction/splitting rules; unsplittable lines are rejected if they exceed 80 bytes, and send-time checks enforce the limit. Auto-level output is post-processed to meet the 80-byte limit before it reloads.
@@ -238,6 +240,7 @@ This is a practical, end-to-end flow with rationale for key options.
 ## Console & Manual Commands
 - Manual send blocked while streaming; during alarm only $X/$H allowed.
 - Manual commands longer than GRBL's 80-byte limit are rejected; non-ASCII commands are rejected.
+- Manual command queue is bounded; when full, additional manual/jog commands are dropped and the status bar reports the cumulative dropped count.
 - Filters: ALL / ERRORS / ALARMS plus a single Pos/Status toggle; when off those reports (and their carriage returns) are never written to the console, so you only see manual commands and errors unless you turn it back on.
 - Performance mode batches console updates and suppresses per-line RX logs during streaming (alarms/errors still logged); toggle it from the App Settings Interface block.
 - Manual command errors (e.g., from the console or settings writes) update the status bar with a source label and do not flip the stream state.
@@ -779,6 +782,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 
 ## Performance Profiling
 Local-only profiling tools live in `tools/profile_performance.py` and `tools/memory_profile.py`, with baselines recorded in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
+Latest local baseline refresh is documented in `ref/perf_baselines.md` (2026-02-25).
 
 ```powershell
 # Streaming scan timings (large files)
@@ -804,6 +808,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - No $$: wait for ready/status; clear alarms; stop streaming.
 - Alarm: use $X/$H; reset + re-home if needed.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
+- Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
 - Need a support bundle: use App Settings > Diagnostics > Export session diagnostics, or export a backup bundle for full settings/macro/checklist transfer.
@@ -818,6 +823,8 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - Streaming validation for large files is configurable, and streaming loads now preserve comments/blank lines when auto-leveling rewrites lines.
 - Streaming loads now compact/split lines to enforce the 80-byte limit while keeping Resume From... available.
 - Streaming send-time checks now reject overlong or non-ASCII lines, and Resume From... defaults to the last stream error line.
+- Streaming loader workers now cancel cleanly when superseded by a newer load request.
+- Streaming offset indexing now uses compact contiguous storage to reduce memory pressure on large jobs.
 - Validation allows G90.1 but emits a GRBL 1.1h warning when it appears.
 - GRBL system commands (`$...`) are rejected inside job files to prevent unsafe startup actions mid-job.
 - Safe mode profile added for conservative jog feeds/steps; unit-aware conversion fixes safe-mode use in inch mode.
@@ -829,10 +836,12 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 - App Settings > Macros now includes a built-in Macro Manager and probe safety inputs (Probe Z start and safety margin) used by touch-plate/tool-reference macros.
 - Console Save now pre-fills a timestamped filename for touch-first workflows.
 - GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
+- Settings load/import now validates and auto-repairs invalid core values (baud/poll interval/unit mode), and save writes through unique temp files to avoid multi-instance temp-path collisions.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
 - Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
 - Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
+- Parser/split hot paths were optimized (reduced modal/bounds overhead in parse and lighter word matching in split) for lower CPU cost on large files.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
@@ -841,6 +850,8 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
 5. Static typing gates currently run mypy against 150 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-24), and local/CI hooks now enforce `--expected-count 150`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
+7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
+8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).

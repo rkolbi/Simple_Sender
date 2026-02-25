@@ -73,6 +73,8 @@ from .utils.constants import (
     BUFFER_EMIT_INTERVAL,
     TX_THROUGHPUT_WINDOW,
     TX_THROUGHPUT_EMIT_INTERVAL,
+    MANUAL_COMMAND_QUEUE_MAXSIZE,
+    MANUAL_QUEUE_DROP_NOTICE_INTERVAL,
     STATUS_POLL_DEFAULT,
     RT_RESUME,
     RT_JOG_CANCEL,
@@ -224,9 +226,12 @@ class GrblWorker(
         self._last_tx_emit_ts = 0.0
         
         # Command queue
-        self._outgoing_q: queue.Queue[str] = queue.Queue()
+        self._outgoing_q: queue.Queue[str] = queue.Queue(maxsize=MANUAL_COMMAND_QUEUE_MAXSIZE)
         self._manual_source_queue: deque[str | None] = deque()
         self._purge_jog_queue = threading.Event()
+        self._manual_queue_drop_count = 0
+        self._manual_queue_drop_total = 0
+        self._manual_queue_last_drop_notice_ts = 0.0
         
         # Thread synchronization
         self._stream_lock = threading.Lock()
@@ -356,7 +361,40 @@ class GrblWorker(
                 break
         self._manual_source_queue.clear()
         self._manual_pending_item = None
+        self._manual_queue_drop_count = 0
+        self._manual_queue_drop_total = 0
+        self._manual_queue_last_drop_notice_ts = 0.0
         self._emit_buffer_fill()
+
+    def _record_manual_queue_drop(self) -> None:
+        """Track a dropped manual command and emit a rate-limited UI notice."""
+        self._manual_queue_drop_count += 1
+        self._manual_queue_drop_total += 1
+        now = time.time()
+        if (
+            now - self._manual_queue_last_drop_notice_ts
+            < MANUAL_QUEUE_DROP_NOTICE_INTERVAL
+        ):
+            return
+        dropped = self._manual_queue_drop_count
+        total = self._manual_queue_drop_total
+        self._manual_queue_drop_count = 0
+        self._manual_queue_last_drop_notice_ts = now
+        self.ui_q.put(("manual_queue_drop", dropped, total))
+        self.ui_q.put((
+            "log",
+            f"[manual queue] Dropped {dropped} command(s); queue is full (total {total}).",
+        ))
+
+    def _enqueue_manual_command(self, command: str, source: str | None) -> bool:
+        """Queue a manual command without blocking worker locks."""
+        try:
+            self._outgoing_q.put_nowait(command)
+        except queue.Full:
+            self._record_manual_queue_drop()
+            return False
+        self._manual_source_queue.append(source)
+        return True
     
     def _reset_stream_buffer(self) -> None:
         """Reset streaming buffer state."""
@@ -434,21 +472,21 @@ class GrblWorker(
         except timeout_exc as e:
             logger.error(f"Write timeout: {e}")
             self.ui_q.put(("log", f"[write timeout] {e}"))
-            if self.is_connected():
+            if self.ser is not None:
                 self._signal_disconnect(f"Serial write timeout: {e}")
             return False
             
         except serial_exc as e:
             logger.error(f"Serial write error: {e}")
             self.ui_q.put(("log", f"[write error] {e}"))
-            if self.is_connected():
+            if self.ser is not None:
                 self._signal_disconnect(f"Serial write error: {e}")
             return False
             
         except Exception as e:
             logger.error(f"Unexpected write error: {e}")
             self.ui_q.put(("log", f"[write error] {e}"))
-            if self.is_connected():
+            if self.ser is not None:
                 self._signal_disconnect(f"Unexpected write error: {e}")
             return False
     

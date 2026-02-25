@@ -61,6 +61,11 @@ def on_gui_logging_change(app):
 
 def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
+    if hasattr(app, "_refresh_toolbar_action_focus"):
+        try:
+            app._refresh_toolbar_action_focus()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed refreshing toolbar focus after theme change", exc)
     try:
         app._scrollbar_width_default = _style_scrollbar_width(getattr(app, "style", None))
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
@@ -295,6 +300,10 @@ def on_autolevel_overlay_change(app):
         app._refresh_autolevel_overlay_button()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed refreshing Auto-Level overlay toggle button", exc)
+    try:
+        app._update_quick_button_visibility()
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed refreshing quick-button visibility after Auto-Level overlay change", exc)
 
 
 def toggle_unit_mode(app):

@@ -121,6 +121,18 @@ def _handle_manual_error_event(app: Any, msg: str, source: str | None) -> None:
         _log_suppressed("Failed showing GRBL error popup", exc)
 
 
+def _handle_manual_queue_drop_event(app: Any, dropped: int, total: int) -> None:
+    try:
+        app._manual_queue_drop_total = max(0, int(total))
+    except Exception:
+        app._manual_queue_drop_total = max(0, int(dropped))
+    _safe_status_update(
+        app,
+        f"Manual queue full: dropped {app._manual_queue_drop_total} command(s).",
+        context="Failed to update manual queue drop status",
+    )
+
+
 def _handle_alarm_event(app: Any, message: str) -> None:
     msg = annotate_grbl_alarm(str(message))
     _clear_homing_watchdog(app, "Failed clearing homing watchdog ignore after alarm")
@@ -177,6 +189,11 @@ def set_streaming_lock(app: Any, locked: bool):
         app.btn_unit_toggle.config(state=state)
     except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update unit toggle state", exc)
+    if hasattr(app, "_refresh_toolbar_action_focus"):
+        try:
+            app._refresh_toolbar_action_focus()
+        except (AttributeError, RuntimeError, TclError, TypeError, ValueError) as exc:
+            _log_suppressed("Failed refreshing toolbar action focus after streaming lock change", exc)
 
 
 def handle_event(app: Any, evt: UiEvent):
@@ -250,6 +267,13 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("log", message):
             app.streaming_controller.handle_log(message)
+            return
+        case ("manual_queue_drop", dropped, total):
+            _handle_manual_queue_drop_event(
+                app,
+                cast(int, dropped),
+                cast(int, total),
+            )
             return
         case ("log_tx", message):
             app.streaming_controller.handle_log_tx(message)

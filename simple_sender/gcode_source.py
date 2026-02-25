@@ -22,8 +22,9 @@
 
 from __future__ import annotations
 
+from array import array
 import threading
-from typing import IO, Iterator, cast, overload
+from typing import IO, Iterable, Iterator, cast, overload
 
 from simple_sender.gcode_parser import clean_gcode_line
 
@@ -31,9 +32,13 @@ from simple_sender.gcode_parser import clean_gcode_line
 class FileGcodeSource:
     """Lazy G-code line source backed by a file and precomputed offsets."""
 
-    def __init__(self, path: str, offsets: list[int], encoding: str = "utf-8"):
+    def __init__(self, path: str, offsets: Iterable[int], encoding: str = "utf-8"):
         self.path = path
-        self._offsets = list(offsets)
+        if isinstance(offsets, array) and offsets.typecode == "Q":
+            self._offsets = offsets
+        else:
+            # Compact, contiguous offsets reduce memory for large streamed jobs.
+            self._offsets = array("Q", offsets)
         self._encoding = encoding
         self._lock = threading.Lock()
         self._file: IO[str] | None = None

@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import array
 from tkinter import messagebox
 
 from simple_sender.gcode_parser import (

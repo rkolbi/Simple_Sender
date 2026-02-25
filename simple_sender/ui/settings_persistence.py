@@ -46,6 +46,7 @@ def load_settings(app) -> dict:
         loaded = app._settings_store.load()
         if not loaded:
             logger.info("No settings file found; using defaults.")
+        app._settings_store.validate()
     except SettingsLoadError as exc:
         logger.error(f"Failed to load settings: {exc}")
         app._settings_store.reset_to_defaults()

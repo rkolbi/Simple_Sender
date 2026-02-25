@@ -491,8 +491,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 kept.append((cmd, source))
             with self._stream_lock:
                 for cmd, source in kept:
-                    self._outgoing_q.put(cmd)
-                    self._manual_source_queue.append(source)
+                    self._enqueue_manual_command(cmd, source)
             if self._manual_pending_item is not None:
                 line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):

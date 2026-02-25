@@ -25,6 +25,7 @@ import os
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
+from typing import Any
 
 from simple_sender.ui.icons import (
     ICON_CONNECT,
@@ -46,6 +47,8 @@ from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_TOOLBAR_PRIMARY_STYLE = "SimpleSender.ToolbarPrimary.TButton"
+_TOOLBAR_SECONDARY_STYLE = "SimpleSender.ToolbarSecondary.TButton"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -54,6 +57,205 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _widget_exists(widget: Any) -> bool:
+    if widget is None:
+        return False
+    try:
+        return bool(widget.winfo_exists())
+    except Exception:
+        return True
+
+
+def _widget_mapped(widget: Any) -> bool:
+    if not _widget_exists(widget):
+        return False
+    try:
+        return bool(widget.winfo_ismapped())
+    except Exception:
+        return False
+
+
+def _widget_enabled(widget: Any) -> bool:
+    if not _widget_exists(widget):
+        return False
+    try:
+        state = str(widget.cget("state")).strip().lower()
+    except Exception:
+        state = str(getattr(widget, "state", "")).strip().lower()
+    return state != "disabled"
+
+
+def _first_enabled(*widgets: Any) -> list[Any]:
+    for widget in widgets:
+        if _widget_enabled(widget):
+            return [widget]
+    return []
+
+
+def _toolbar_has_job(app: Any) -> bool:
+    gview = getattr(app, "gview", None)
+    if gview is not None:
+        try:
+            if bool(getattr(gview, "lines_count", 0)):
+                return True
+        except Exception:
+            pass
+    if getattr(app, "_gcode_source", None) is not None:
+        return True
+    return bool(getattr(app, "_last_gcode_lines", None))
+
+
+def _toolbar_focus_targets(app: Any) -> tuple[list[Any], list[Any]]:
+    stream_state = str(getattr(app, "_stream_state", "") or "").lower()
+    connected = bool(getattr(app, "connected", False))
+    grbl_ready = bool(getattr(app, "_grbl_ready", False))
+    status_seen = bool(getattr(app, "_status_seen", False))
+    alarm_locked = bool(getattr(app, "_alarm_locked", False))
+    has_job = _toolbar_has_job(app)
+
+    if alarm_locked:
+        return (
+            _first_enabled(getattr(app, "btn_unlock_top", None), getattr(app, "btn_alarm_recover", None)),
+            [],
+        )
+    if stream_state == "running":
+        return (
+            _first_enabled(getattr(app, "btn_pause", None)),
+            _first_enabled(getattr(app, "btn_stop", None)),
+        )
+    if stream_state == "paused":
+        return (
+            _first_enabled(getattr(app, "btn_resume", None)),
+            _first_enabled(getattr(app, "btn_stop", None)),
+        )
+    if not connected:
+        return (_first_enabled(getattr(app, "btn_conn", None)), [])
+    if not grbl_ready or not status_seen:
+        return ([], [])
+    if not has_job:
+        return (_first_enabled(getattr(app, "btn_open", None)), [])
+    return (
+        _first_enabled(getattr(app, "btn_run", None), getattr(app, "btn_resume_from", None), getattr(app, "btn_open", None)),
+        [],
+    )
+
+
+def _ensure_toolbar_focus_styles(app: Any) -> None:
+    style_obj = getattr(app, "style", None)
+    style = style_obj if style_obj is not None else ttk.Style()
+    palette = getattr(app, "theme_palette", None) or {}
+    icon_style = str(getattr(app, "icon_button_style", "TButton"))
+    try:
+        default_bg = (
+            palette.get("button_bg")
+            or style.lookup(icon_style, "background")
+            or style.lookup("TButton", "background")
+            or "#f0f0f0"
+        )
+        default_fg = (
+            palette.get("fg")
+            or style.lookup(icon_style, "foreground")
+            or style.lookup("TButton", "foreground")
+            or "#000000"
+        )
+        default_border = palette.get("border") or default_bg
+        accent = palette.get("accent", "#0e639c")
+        accent_hover = palette.get("accent_hover", accent)
+        accent_pressed = palette.get("accent_pressed", accent)
+        warning = palette.get("warning", "#f2b200")
+        warning_hover = palette.get("warning_hover", warning)
+        warning_pressed = palette.get("warning_pressed", warning)
+        muted_fg = palette.get("muted_fg", "#808080")
+        app.toolbar_primary_button_style = _TOOLBAR_PRIMARY_STYLE
+        app.toolbar_secondary_button_style = _TOOLBAR_SECONDARY_STYLE
+        style.configure(
+            _TOOLBAR_PRIMARY_STYLE,
+            background=accent,
+            foreground="#ffffff",
+            bordercolor=accent,
+            lightcolor=accent,
+            darkcolor=accent,
+            font=getattr(app, "icon_button_font", None),
+        )
+        style.map(
+            _TOOLBAR_PRIMARY_STYLE,
+            background=[
+                ("pressed", accent_pressed),
+                ("active", accent_hover),
+                ("disabled", default_bg),
+                ("!disabled", accent),
+            ],
+            foreground=[("disabled", muted_fg), ("!disabled", "#ffffff")],
+        )
+        style.configure(
+            _TOOLBAR_SECONDARY_STYLE,
+            background=warning,
+            foreground="#1f1f1f",
+            bordercolor=warning,
+            lightcolor=warning,
+            darkcolor=warning,
+            font=getattr(app, "icon_button_font", None),
+        )
+        style.map(
+            _TOOLBAR_SECONDARY_STYLE,
+            background=[
+                ("pressed", warning_pressed),
+                ("active", warning_hover),
+                ("disabled", default_bg),
+                ("!disabled", warning),
+            ],
+            foreground=[("disabled", muted_fg), ("!disabled", "#1f1f1f")],
+        )
+        style.configure(
+            icon_style,
+            background=default_bg,
+            foreground=default_fg,
+            bordercolor=default_border,
+            lightcolor=default_bg,
+            darkcolor=default_bg,
+        )
+        style.map(
+            icon_style,
+            foreground=[("disabled", muted_fg)],
+        )
+    except Exception as exc:
+        _log_suppressed("Failed refreshing toolbar focus styles", exc)
+
+
+def _apply_toolbar_button_style(button: Any, style_name: str) -> None:
+    if not _widget_exists(button):
+        return
+    try:
+        button.config(style=style_name)
+    except Exception as exc:
+        _log_suppressed("Failed applying toolbar button style", exc)
+
+
+def refresh_toolbar_action_focus(app) -> None:
+    _ensure_toolbar_focus_styles(app)
+    default_style = str(getattr(app, "icon_button_style", "TButton"))
+    tracked_buttons = [
+        getattr(app, "btn_conn", None),
+        getattr(app, "btn_open", None),
+        getattr(app, "btn_run", None),
+        getattr(app, "btn_pause", None),
+        getattr(app, "btn_resume", None),
+        getattr(app, "btn_resume_from", None),
+        getattr(app, "btn_stop", None),
+        getattr(app, "btn_unlock_top", None),
+        getattr(app, "btn_alarm_recover", None),
+    ]
+    for btn in tracked_buttons:
+        _apply_toolbar_button_style(btn, default_style)
+    primary_targets, secondary_targets = _toolbar_focus_targets(app)
+    secondary_style = str(getattr(app, "toolbar_secondary_button_style", _TOOLBAR_SECONDARY_STYLE))
+    primary_style = str(getattr(app, "toolbar_primary_button_style", _TOOLBAR_PRIMARY_STYLE))
+    for btn in secondary_targets:
+        _apply_toolbar_button_style(btn, secondary_style)
+    for btn in primary_targets:
+        _apply_toolbar_button_style(btn, primary_style)
 
 
 def update_job_button_mode(app, mode: str) -> None:
@@ -163,6 +365,7 @@ def update_job_button_mode(app, mode: str) -> None:
         app._set_manual_controls_enabled(ready)
     except Exception as exc:
         _log_suppressed("Failed refreshing manual controls after job-button mode update", exc)
+    refresh_toolbar_action_focus(app)
 
 
 def on_resume_button_visibility_change(app):
@@ -180,14 +383,12 @@ def update_resume_button_visibility(app):
         return
     visible = bool(app.show_resume_from_button.get())
     if visible:
-        if not app.btn_resume_from.winfo_ismapped():
+        if not _widget_mapped(app.btn_resume_from):
             pack_kwargs = {"side": "left", "padx": (6, 0)}
-            before_widget = getattr(app, "btn_unlock_top", None)
-            if before_widget and before_widget.winfo_exists():
-                pack_kwargs["before"] = before_widget
             app.btn_resume_from.pack(**pack_kwargs)
     else:
         app.btn_resume_from.pack_forget()
+    refresh_toolbar_action_focus(app)
 
 
 def update_recover_button_visibility(app):
@@ -195,26 +396,52 @@ def update_recover_button_visibility(app):
         return
     visible = bool(app.show_recover_button.get())
     if visible:
-        if not app.btn_alarm_recover.winfo_ismapped():
+        if not _widget_mapped(app.btn_alarm_recover):
             pack_kwargs = {"side": "left", "padx": (6, 0)}
-            separator = getattr(app, "_recover_separator", None)
-            if separator and separator.winfo_exists():
-                pack_kwargs["before"] = separator
             app.btn_alarm_recover.pack(**pack_kwargs)
     else:
         app.btn_alarm_recover.pack_forget()
+    refresh_toolbar_action_focus(app)
 
 
 def build_toolbar(app):
-    bar = ttk.Frame(app, padding=(8, 6, 0, 6))
+    bar = ttk.Frame(app, padding=(8, 6, 8, 6))
     bar.pack(side="top", fill="x")
+    app.toolbar_bar = bar
 
-    ttk.Label(bar, text="Port:").pack(side="left")
-    app.port_combo = ttk.Combobox(bar, width=18, textvariable=app.current_port, state="readonly")
+    def _build_group(parent, title: str):
+        group = ttk.Frame(parent, padding=(0, 0, 8, 0))
+        group.pack(side="left", fill="y")
+        title_label = ttk.Label(group, text=title)
+        title_label.pack(side="top", anchor="w")
+        row = ttk.Frame(group)
+        row.pack(side="top", anchor="w", pady=(2, 0))
+        return group, row
+
+    def _add_group_separator(parent):
+        ttk.Separator(parent, orient="vertical").pack(side="left", fill="y", padx=(0, 8), pady=(0, 2))
+
+    groups = ttk.Frame(bar)
+    groups.pack(side="left", fill="x", expand=True)
+
+    _connection_group, connection_row = _build_group(groups, "Connection")
+    _add_group_separator(groups)
+    _job_group, job_row = _build_group(groups, "Job")
+    _add_group_separator(groups)
+    _run_group, run_row = _build_group(groups, "Run")
+    _add_group_separator(groups)
+    _recovery_group, recovery_row = _build_group(groups, "Recovery")
+    app._toolbar_connection_row = connection_row
+    app._toolbar_job_row = job_row
+    app._toolbar_run_row = run_row
+    app._toolbar_recovery_row = recovery_row
+
+    ttk.Label(connection_row, text="Port:").pack(side="left")
+    app.port_combo = ttk.Combobox(connection_row, width=18, textvariable=app.current_port, state="readonly")
     app.port_combo.pack(side="left", padx=(6, 4))
 
     app.btn_refresh = ttk.Button(
-        bar,
+        connection_row,
         text=icon_label(ICON_REFRESH, "Refresh"),
         style=app.icon_button_style,
         command=app.refresh_ports,
@@ -223,7 +450,7 @@ def build_toolbar(app):
     app.btn_refresh.pack(side="left", padx=(0, 10))
     apply_tooltip(app.btn_refresh, "Refresh the list of serial ports.")
     app.btn_conn = ttk.Button(
-        bar,
+        connection_row,
         text=icon_label(ICON_CONNECT, "Connect"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Connect/Disconnect", app.toggle_connect),
@@ -233,10 +460,8 @@ def build_toolbar(app):
     apply_tooltip(app.btn_conn, "Connect or disconnect from the selected serial port.")
     attach_log_gcode(app.btn_conn, "")
 
-    ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
-
     app.btn_open = ttk.Button(
-        bar,
+        job_row,
         text=icon_label(ICON_JOB_READ, "Read Job"),
         style=app.icon_button_style,
         command=app.open_gcode,
@@ -246,7 +471,7 @@ def build_toolbar(app):
     app._manual_controls.append(app.btn_open)
     app._offline_controls.add(app.btn_open)
     apply_tooltip(app.btn_open, "Load a G-code job for streaming (read-only).")
-    app.job_button_hint = ttk.Label(bar, text="")
+    app.job_button_hint = ttk.Label(job_row, text="")
     try:
         app._job_button_hint_visible = False
     except Exception as exc:
@@ -256,7 +481,7 @@ def build_toolbar(app):
     except Exception as exc:
         _log_suppressed("Failed initializing default job-button mode", exc)
     app.btn_clear = ttk.Button(
-        bar,
+        job_row,
         text=icon_label(ICON_JOB_CLEAR, "Clear Job"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Clear Job", app._clear_gcode),
@@ -267,7 +492,7 @@ def build_toolbar(app):
     app._offline_controls.add(app.btn_clear)
     apply_tooltip(app.btn_clear, "Unload the current job and reset the viewer.")
     app.btn_run = ttk.Button(
-        bar,
+        run_row,
         text=icon_label(ICON_RUN, "Run"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Run job", app.run_job),
@@ -278,7 +503,7 @@ def build_toolbar(app):
     apply_tooltip(app.btn_run, "Start streaming the loaded G-code.")
     attach_log_gcode(app.btn_run, "Cycle Start")
     app.btn_pause = ttk.Button(
-        bar,
+        run_row,
         text=icon_label(ICON_PAUSE, "Pause"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Pause job", app.pause_job),
@@ -289,7 +514,7 @@ def build_toolbar(app):
     apply_tooltip(app.btn_pause, "Feed hold the running job.")
     attach_log_gcode(app.btn_pause, "!")
     app.btn_resume = ttk.Button(
-        bar,
+        run_row,
         text=icon_label(ICON_RESUME, "Resume"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Resume job", app.resume_job),
@@ -300,7 +525,7 @@ def build_toolbar(app):
     apply_tooltip(app.btn_resume, "Resume a paused job.")
     attach_log_gcode(app.btn_resume, "~")
     app.btn_stop = ttk.Button(
-        bar,
+        run_row,
         text=icon_label(ICON_STOP, "Stop/Reset"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Stop/Reset", app.stop_job),
@@ -311,7 +536,7 @@ def build_toolbar(app):
     apply_tooltip(app.btn_stop, "Stop the job and soft reset GRBL.")
     attach_log_gcode(app.btn_stop, "Ctrl-X")
     app.btn_resume_from = ttk.Button(
-        bar,
+        run_row,
         text=icon_label(ICON_RESUME_FROM, "Resume From..."),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run("Resume from line", app._show_resume_dialog),
@@ -321,7 +546,7 @@ def build_toolbar(app):
     app.btn_resume_from.pack(side="left", padx=(6, 0))
     apply_tooltip(app.btn_resume_from, "Resume from a specific line with modal re-sync.")
     app.btn_unlock_top = ttk.Button(
-        bar,
+        recovery_row,
         text=icon_label(ICON_UNLOCK, "Unlock"),
         style=app.icon_button_style,
         command=lambda: app._confirm_and_run(
@@ -334,7 +559,7 @@ def build_toolbar(app):
     app._manual_controls.append(app.btn_unlock_top)
     apply_tooltip(app.btn_unlock_top, "Send $X to clear alarm (top-bar).")
     app.btn_alarm_recover = ttk.Button(
-        bar,
+        recovery_row,
         text=icon_label(ICON_RECOVER, "Recover"),
         style=app.icon_button_style,
         command=app._show_alarm_recovery,
@@ -387,4 +612,5 @@ def build_toolbar(app):
         app._ensure_state_label_width(app.machine_state.get())
     except Exception as exc:
         _log_suppressed("Failed enforcing machine-state label width", exc)
+    refresh_toolbar_action_focus(app)
 

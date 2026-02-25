@@ -185,6 +185,7 @@ class App(tk.Tk):
     _resume_after_disconnect: bool
     _resume_from_index: int | None
     _resume_job_name: str | None
+    _manual_queue_drop_total: int
     _script_dir: str
     _serial_available: bool
     _serial_import_error: str

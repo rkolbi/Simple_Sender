@@ -300,7 +300,14 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         Returns:
             True if connected and serial port is open
         """
-        return self.ser is not None and self.ser.is_open
+        ser = self.ser
+        if ser is None:
+            return False
+        try:
+            return bool(getattr(ser, "is_open", False))
+        except Exception as exc:
+            _log_suppressed("Failed checking serial connection state", exc)
+            return False
 
     def _emit_exception(self, context: str, exc: BaseException) -> None:
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))

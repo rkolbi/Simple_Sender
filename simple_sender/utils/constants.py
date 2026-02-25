@@ -534,6 +534,12 @@ TX_THROUGHPUT_WINDOW = 2.0
 TX_THROUGHPUT_EMIT_INTERVAL = 0.5
 """Minimum interval between throughput updates (seconds)."""
 
+MANUAL_COMMAND_QUEUE_MAXSIZE = 256
+"""Maximum queued manual/immediate commands before backpressure drops new input."""
+
+MANUAL_QUEUE_DROP_NOTICE_INTERVAL = 1.0
+"""Minimum seconds between aggregated manual-queue drop notices."""
+
 STREAM_RECONNECT_DELAY = 0.5
 """Delay before attempting reconnect (seconds)."""
 

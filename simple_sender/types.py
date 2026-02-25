@@ -133,6 +133,9 @@ class GrblWorkerState:
     _manual_source_queue: deque[str | None]
     _purge_jog_queue: threading.Event
     _abort_writes: threading.Event
+    _manual_queue_drop_count: int
+    _manual_queue_drop_total: int
+    _manual_queue_last_drop_notice_ts: float
 
     _ready: bool
     _alarm_active: bool
@@ -191,6 +194,9 @@ class GrblWorkerState:
         raise NotImplementedError
 
     def _emit_buffer_fill(self) -> None:
+        raise NotImplementedError
+
+    def _enqueue_manual_command(self, command: str, source: str | None) -> bool:
         raise NotImplementedError
 
     def _emit_exception(self, context: str, exc: BaseException) -> None:
@@ -334,6 +340,7 @@ UiEvent = (
     | tuple[Literal["gcode_load_invalid_command"], int, str, int | None, str | None]
     | tuple[Literal["gcode_load_error"], int, str, str]
     | tuple[Literal["log"], str]
+    | tuple[Literal["manual_queue_drop"], int, int]
     | tuple[Literal["log_tx"], str]
     | tuple[Literal["log_rx"], str]
     | tuple[Literal["settings_dump_done"]]

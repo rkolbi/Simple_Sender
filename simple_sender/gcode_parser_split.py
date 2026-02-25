@@ -40,6 +40,7 @@ Edge cases to be aware of:
 """
 
 from dataclasses import dataclass, field
+import re
 from typing import Callable, Iterable, List, Optional, Set
 
 from simple_sender.gcode_parser_core import (
@@ -50,6 +51,9 @@ from simple_sender.gcode_parser_core import (
     UNSUPPORTED_AXIS_WORDS,
     WORD_PAT,
 )
+
+SAFE_WORD_LINE_PAT = re.compile(r"(?:\s*[A-Z][-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*)+")
+
 
 @dataclass
 class GcodeSplitResult:
@@ -141,7 +145,7 @@ def _build_compact_line(
 
 
 def _is_safe_word_line(line: str) -> bool:
-    return not WORD_PAT.sub("", line).strip()
+    return bool(SAFE_WORD_LINE_PAT.fullmatch(line))
 
 
 def _collect_g_codes(words: list[tuple[str, str]]) -> Set[float]:
@@ -308,7 +312,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
                 )
             out_lines.append(line)
             continue
-        words = [(m.group(1), m.group(2)) for m in WORD_PAT.finditer(upper)]
+        words = WORD_PAT.findall(upper)
         if not words:
             state.can_split = False
             if line_len > max_len:
@@ -457,7 +461,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             continue
 
         motion = _resolve_motion(g_codes, has_axis, state.last_motion)
-        split_allowed = all(code in SPLIT_ALLOWED_G_CODES for code in g_codes)
+        split_allowed = g_codes.issubset(SPLIT_ALLOWED_G_CODES)
 
         if line_len <= max_len:
             out_lines.append(line)
@@ -635,7 +639,7 @@ def split_gcode_lines_stream(
                 continue
             emit(raw_text if preserve_raw else line)
             continue
-        words = [(m.group(1), m.group(2)) for m in WORD_PAT.finditer(upper)]
+        words = WORD_PAT.findall(upper)
         if not words:
             state.can_split = False
             if line_len > max_len or raw_too_long:
@@ -776,7 +780,7 @@ def split_gcode_lines_stream(
             continue
 
         motion = _resolve_motion(g_codes, has_axis, state.last_motion)
-        split_allowed = all(code in SPLIT_ALLOWED_G_CODES for code in g_codes)
+        split_allowed = g_codes.issubset(SPLIT_ALLOWED_G_CODES)
 
         if line_len <= max_len:
             if preserve_raw:

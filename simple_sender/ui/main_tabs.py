@@ -49,6 +49,10 @@ def update_tab_visibility(app, nb=None):
     app.toolpath_panel.set_visible(label == "3D View")
     app.toolpath_panel.set_top_view_visible(label == "Top View")
     try:
+        app._update_quick_button_visibility()
+    except Exception as exc:
+        logger.debug("Failed updating quick-button visibility for active tab: %s", exc, exc_info=exc)
+    try:
         if label == "App Settings":
             app._bind_app_settings_mousewheel()
             app._bind_app_settings_touch_scroll()

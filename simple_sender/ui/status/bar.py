@@ -36,6 +36,59 @@ def _bool_from_var(value: Any, default: bool = True) -> bool:
         return bool(value)
 
 
+def _tab_label(app) -> str:
+    nb = getattr(app, "notebook", None)
+    if nb is None:
+        return ""
+    try:
+        tab_id = nb.select()
+        if not tab_id:
+            return ""
+        return str(nb.tab(tab_id, "text") or "")
+    except Exception:
+        return ""
+
+
+def _has_loaded_job(app) -> bool:
+    gview = getattr(app, "gview", None)
+    if gview is not None:
+        try:
+            if bool(getattr(gview, "lines_count", 0)):
+                return True
+        except Exception:
+            pass
+    if getattr(app, "_gcode_source", None) is not None:
+        return True
+    return bool(getattr(app, "_last_gcode_lines", None))
+
+
+def _stream_busy(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    return str(getattr(app, "_stream_state", "") or "").lower() in ("running", "paused")
+
+
+def _context_quick_visibility(app) -> dict[str, bool]:
+    label = _tab_label(app).strip().lower()
+    on_toolpath_tab = label in ("3d view", "top view")
+    has_job = _has_loaded_job(app)
+    connected = bool(getattr(app, "connected", False))
+    alarm_locked = bool(getattr(app, "_alarm_locked", False))
+    busy = _stream_busy(app)
+    render_enabled = _bool_from_var(getattr(app, "render3d_enabled", None), True)
+    render_blocked = bool(getattr(app, "_render3d_blocked", False))
+    autolevel_overlay_enabled = _bool_from_var(getattr(app, "show_autolevel_overlay", None), True)
+    has_autolevel_grid = getattr(app, "_auto_level_grid", None) is not None
+
+    return {
+        "btn_toggle_tips": True,
+        "btn_toggle_keybinds": True,
+        "btn_release_checklist": connected and not busy and not alarm_locked,
+        "btn_toggle_3d": has_job and (on_toolpath_tab or (not render_enabled) or render_blocked),
+        "btn_toggle_autolevel_overlay": autolevel_overlay_enabled or (has_autolevel_grid and on_toolpath_tab),
+    }
+
+
 def build_status_bar(app, before):
     # Status bar
     status_bar = ttk.Frame(app, padding=(8, 0, 8, 6))
@@ -136,6 +189,7 @@ def build_status_bar(app, before):
     app._refresh_keybindings_toggle_text()
     app._refresh_autolevel_overlay_button()
     app._refresh_screen_lock_toggle_text()
+    app._quick_button_visibility_signature = None
     update_quick_button_visibility(app)
     app._on_error_dialogs_enabled_change()
     if getattr(app, "_state_default_bg", None) is None:
@@ -154,6 +208,17 @@ def update_quick_button_visibility(app):
         ("btn_toggle_autolevel_overlay", app.show_quick_alo_button),
         ("btn_release_checklist", app.show_quick_release_button),
     ]
+    context_map = _context_quick_visibility(app)
+    signature = tuple(
+        (
+            attr,
+            bool(_bool_from_var(var, True) and context_map.get(attr, True)),
+        )
+        for attr, var in buttons
+    )
+    if signature == getattr(app, "_quick_button_visibility_signature", None):
+        return
+    app._quick_button_visibility_signature = signature
     for attr, _ in buttons:
         btn = getattr(app, attr, None)
         if btn:
@@ -162,7 +227,7 @@ def update_quick_button_visibility(app):
         btn = getattr(app, attr, None)
         if not btn:
             continue
-        if _bool_from_var(var, True):
+        if _bool_from_var(var, True) and context_map.get(attr, True):
             btn.pack(side="right", padx=(8, 0))
 
 
