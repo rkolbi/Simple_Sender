@@ -15,6 +15,10 @@ All notable changes to this project are documented in this file.
 - Backend stream/manual queue hardening:
   - manual/immediate queue is now bounded (`MANUAL_COMMAND_QUEUE_MAXSIZE`) and enqueue is non-blocking
   - saturated queue paths drop new manual commands explicitly instead of blocking worker locks
+- Jog-release safety hardening:
+  - joystick hold polling now enforces a deadman timeout (`JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS`) and force-cancels jog if polling gaps exceed the limit
+  - joystick hold stop now schedules a short delayed feed-hold fallback (`!`) when jog-cancel may not have resolved quickly
+  - joystick button-release handling now cancels jog-bound actions (`jog_*` bindings) even when a backend release event is dropped
 - G-code loading pipeline responsiveness:
   - streaming and non-streaming loader stages now perform token checks during scan/validation loops so superseded loads cancel quickly
   - stale loader workers clean up temp artifacts and return without posting stale results
@@ -29,12 +33,17 @@ All notable changes to this project are documented in this file.
 - Documentation refresh:
   - README now documents manual queue drop reporting, loader cancellation behavior, settings repair behavior, and latest backend hardening notes
   - README now links to a release checklist section with explicit jog-release safety criteria
+  - README joystick and jogging sections now document deadman/fallback jog-stop behavior
+  - README testing baseline now reflects the latest local `pytest tests -q` result (`727 passed, 3 skipped` on 2026-02-25)
+  - release checklist template now uses current mypy target count (`150`) and version placeholders
   - release checklist now includes a hardware jog-release smoke test (UI, joystick button/axis, safety-hold release, unplug, focus-loss)
   - profiling baseline document now includes current local 2026-02-25 results
 
 ### Fixed
 - Disconnect cleanup on serial write exceptions:
   - write-error handlers now trigger `_signal_disconnect` whenever a serial object is present, even when `is_open` is already false due to jitter
+- Jog safety resilience:
+  - missed joystick release events no longer allow continued jog motion; release checks and fallback stop commands now force motion halt
 
 ## [1.7.5] - 2026-02-24
 

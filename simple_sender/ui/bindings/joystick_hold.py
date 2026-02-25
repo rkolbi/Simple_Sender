@@ -26,7 +26,9 @@ from typing import Any
 
 from simple_sender.utils.constants import (
     JOYSTICK_AXIS_THRESHOLD,
+    JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS,
     JOYSTICK_HOLD_DEFINITIONS,
+    JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS,
     JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
     JOYSTICK_HOLD_MIN_DISTANCE,
@@ -244,11 +246,57 @@ def _joystick_binding_pressed(app, binding: dict[str, Any] | None, *, release: b
     return False
 
 
+def _cancel_hold_fallback_timer(app) -> None:
+    timer_id = getattr(app, "_joystick_hold_fallback_after_id", None)
+    if timer_id is None:
+        return
+    try:
+        app.after_cancel(timer_id)
+    except Exception as exc:
+        _log_suppressed("Failed canceling joystick hold fallback timer", exc)
+    app._joystick_hold_fallback_after_id = None
+
+
+def _send_feed_hold_fallback(app) -> None:
+    state_text = str(getattr(app, "_machine_state_text", "")).strip().lower()
+    if state_text and not state_text.startswith("jog"):
+        return
+    try:
+        app.grbl.hold()
+    except Exception as exc:
+        _log_suppressed("Failed sending feed hold fallback for joystick hold stop", exc)
+    try:
+        app.grbl.cancel_pending_jogs()
+    except Exception as exc:
+        _log_suppressed("Failed clearing pending jogs during feed hold fallback", exc)
+    try:
+        app.grbl.jog_cancel()
+    except Exception as exc:
+        _log_suppressed("Failed sending jog cancel during feed hold fallback", exc)
+
+
+def _schedule_feed_hold_fallback(app) -> None:
+    _cancel_hold_fallback_timer(app)
+
+    def _run_fallback() -> None:
+        app._joystick_hold_fallback_after_id = None
+        _send_feed_hold_fallback(app)
+
+    try:
+        app._joystick_hold_fallback_after_id = app.after(
+            JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS,
+            _run_fallback,
+        )
+    except Exception as exc:
+        _log_suppressed("Failed scheduling feed hold fallback after joystick hold stop", exc)
+
+
 def start_hold(app, binding_id: str):
     if not binding_id:
         return
     if app._active_joystick_hold_binding == binding_id:
         return
+    _cancel_hold_fallback_timer(app)
     stop_hold(app)
     hold_axis = hold_vector_for_binding(app, binding_id)
     if hold_axis is None:
@@ -323,6 +371,7 @@ def send_hold_jog(app):
 def stop_hold(app, binding_id: str | None = None):
     if binding_id and app._active_joystick_hold_binding and binding_id != app._active_joystick_hold_binding:
         return
+    _cancel_hold_fallback_timer(app)
     if app._joystick_hold_after_id is not None:
         try:
             app.after_cancel(app._joystick_hold_after_id)
@@ -339,6 +388,7 @@ def stop_hold(app, binding_id: str | None = None):
             app.grbl.cancel_pending_jogs()
         except Exception as exc:
             _log_suppressed("Failed clearing pending jogs while stopping joystick hold", exc)
+        _schedule_feed_hold_fallback(app)
     app._active_joystick_hold_binding = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None
@@ -349,6 +399,17 @@ def check_release(app):
     active = getattr(app, "_active_joystick_hold_binding", None)
     if not active:
         return
+    now = time.monotonic()
+    last_ts = getattr(app, "_joystick_hold_last_ts", None)
+    if last_ts is not None:
+        try:
+            elapsed_ms = (now - float(last_ts)) * 1000.0
+            if elapsed_ms >= float(JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS):
+                stop_hold(app, active)
+                return
+        except Exception:
+            pass
+    app._joystick_hold_last_ts = now
     if not app.joystick_bindings_enabled.get():
         stop_hold(app, active)
         return

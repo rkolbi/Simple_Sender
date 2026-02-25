@@ -91,6 +91,7 @@ def _init_joystick_runtime_state(app, tk) -> None:
     app._virtual_hold_buttons = []
     app._active_joystick_hold_binding = None
     app._joystick_hold_after_id = None
+    app._joystick_hold_fallback_after_id = None
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None
     app._joystick_hold_jog_sent = False

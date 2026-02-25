@@ -222,6 +222,12 @@ JOYSTICK_HOLD_POLL_INTERVAL_MS = 20
 JOYSTICK_HOLD_MISS_LIMIT = 2
 """Number of missed polls before releasing a joystick hold."""
 
+JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS = 200
+"""Maximum elapsed time between hold-release polls before forced jog stop."""
+
+JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS = 120
+"""Delay before issuing feed-hold fallback after jog-cancel (ms)."""
+
 JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER = 3.0
 """Maximum multiple of the repeat interval used to compute hold jog distance."""
 
