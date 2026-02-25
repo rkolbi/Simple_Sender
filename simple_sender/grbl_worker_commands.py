@@ -74,6 +74,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             self._last_manual_source = str(source)
         elif not self._last_manual_source:
             self._last_manual_source = "manual"
+        command_source = self._last_manual_source
         command = command.strip()
         if not command:
             return
@@ -98,7 +99,9 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             except Exception as exc:
                 _log_suppressed("Failed configuring watchdog homing grace window", exc)
         
-        self._outgoing_q.put(command)
+        with self._stream_lock:
+            self._outgoing_q.put(command)
+            self._manual_source_queue.append(command_source)
     
     def unlock(self) -> None:
         """Send unlock command ($X) to clear alarm state."""

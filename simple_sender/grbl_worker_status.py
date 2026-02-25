@@ -291,11 +291,14 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             ack_line_text = None
             err_idx = None
             err_line = None
+            err_source = None
 
             with self._stream_lock:
                 if self._stream_line_queue:
                     queued_item = self._stream_line_queue.popleft()
                     self._stream_buf_used = max(0, self._stream_buf_used - queued_item.line_len)
+                    if line_lower.startswith("error"):
+                        err_source = getattr(queued_item, "manual_source", None)
                     
                     if queued_item.is_gcode and self._streaming:
                         self._ack_index += 1
@@ -329,7 +332,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                     self.ui_q.put(("stream_error", msg, err_idx, err_line, self._gcode_name))
                     self.ui_q.put(("log", f"[stream error] {msg}"))
                 else:
-                    self.ui_q.put(("manual_error", line, self._last_manual_source))
+                    source = err_source if err_source else self._last_manual_source
+                    self.ui_q.put(("manual_error", line, source))
         
         # Status report
         if is_status:

@@ -152,6 +152,27 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
 
+        def _cleanup_failed_connect() -> None:
+            self._stop_evt.set()
+            serial_port = self.ser
+            if serial_port is not None:
+                try:
+                    serial_port.close()
+                except Exception as cleanup_exc:
+                    _log_suppressed("Failed closing serial port during connect cleanup", cleanup_exc)
+            join_timeout = self._thread_join_timeout()
+            for thread in (self._rx_thread, self._tx_thread, self._status_thread):
+                if thread and thread.is_alive():
+                    try:
+                        thread.join(timeout=join_timeout)
+                    except Exception as cleanup_exc:
+                        _log_suppressed("Failed joining worker thread during connect cleanup", cleanup_exc)
+            self._rx_thread = None
+            self._tx_thread = None
+            self._status_thread = None
+            self.ser = None
+            self._connect_started_ts = 0.0
+
         try:
             # Open serial port
             self.ser = serial_module.Serial(
@@ -203,12 +224,10 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             logger.info(f"Connected to {port} at {baud} baud")
 
         except serial_exc as e:
-            self.ser = None
-            self._connect_started_ts = 0.0
+            _cleanup_failed_connect()
             raise SerialConnectionError(f"Failed to connect to {port}: {e}")
         except Exception as e:
-            self.ser = None
-            self._connect_started_ts = 0.0
+            _cleanup_failed_connect()
             raise SerialConnectionError(f"Unexpected error connecting to {port}: {e}")
 
     def disconnect(self) -> None:

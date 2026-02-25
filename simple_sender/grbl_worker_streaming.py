@@ -473,18 +473,26 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if self._purge_jog_queue.is_set():
             self._purge_jog_queue.clear()
             pending: list[str] = []
+            pending_sources: list[str | None] = []
             try:
-                while True:
-                    pending.append(self._outgoing_q.get_nowait())
+                with self._stream_lock:
+                    while True:
+                        pending.append(self._outgoing_q.get_nowait())
+                        pending_sources.append(
+                            self._manual_source_queue.popleft() if self._manual_source_queue else None
+                        )
             except queue.Empty:
                 pass
-            kept = []
-            for cmd in pending:
+            kept: list[tuple[str, str | None]] = []
+            for idx, cmd in enumerate(pending):
+                source = pending_sources[idx] if idx < len(pending_sources) else None
                 if isinstance(cmd, str) and cmd.lstrip().upper().startswith("$J="):
                     continue
-                kept.append(cmd)
-            for cmd in kept:
-                self._outgoing_q.put(cmd)
+                kept.append((cmd, source))
+            with self._stream_lock:
+                for cmd, source in kept:
+                    self._outgoing_q.put(cmd)
+                    self._manual_source_queue.append(source)
             if self._manual_pending_item is not None:
                 line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
@@ -533,6 +541,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         line: str,
         payload: bytes,
         line_len: int,
+        source: str | None,
     ) -> tuple[bool, bool, int]:
         usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
         if line_len > usable and self._stream_buf_used <= 0:
@@ -545,6 +554,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line=line,
                 payload=payload,
                 line_len=line_len,
+                source=source,
             )
             return False, True, usable
 
@@ -556,6 +566,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 is_gcode=False,
                 idx=None,
                 line=line,
+                manual_source=source,
             )
         )
         return False, False, usable
@@ -568,17 +579,20 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 return
             payload: bytes | None = None
             line_len: int
+            source: str | None
             if self._manual_pending_item is not None:
                 pending_item = self._manual_pending_item
                 line = pending_item.line
                 payload = pending_item.payload
                 line_len = pending_item.line_len
+                source = pending_item.source
             else:
-                try:
-                    line = self._outgoing_q.get_nowait()
-                except queue.Empty:
-                    return
-
+                with self._stream_lock:
+                    try:
+                        line = self._outgoing_q.get_nowait()
+                    except queue.Empty:
+                        return
+                    source = self._manual_source_queue.popleft() if self._manual_source_queue else None
                 if not self._line_allowed_during_alarm(line):
                     continue
 
@@ -594,6 +608,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     self._manual_pending_item = None
                     continue
                 line_len = len(payload)
+            if source:
+                self._last_manual_source = source
 
             allowed_alarm_cmd = self._line_allowed_during_alarm(line)
             if not allowed_alarm_cmd:
@@ -608,6 +624,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     line=line,
                     payload=payload,
                     line_len=line_len,
+                    source=source,
                 )
 
             if deferred:
@@ -641,6 +658,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                             line=line,
                             payload=payload,
                             line_len=line_len,
+                            source=source,
                         )
                     else:
                         self._manual_pending_item = None

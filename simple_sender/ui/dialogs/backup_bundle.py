@@ -143,6 +143,12 @@ def import_backup_bundle(app: Any) -> None:
     try:
         with zipfile.ZipFile(path, "r") as archive:
             members = archive.namelist()
+            if "manifest.json" not in members:
+                raise ValueError("Not a Simple Sender backup bundle (manifest.json missing).")
+            with archive.open("manifest.json") as manifest_src:
+                manifest = json.load(manifest_src)
+            if not isinstance(manifest, dict) or manifest.get("kind") != "simple_sender_backup_bundle":
+                raise ValueError("Unsupported backup bundle format.")
             if "settings/settings.json" in members and settings_target:
                 os.makedirs(os.path.dirname(settings_target), exist_ok=True)
                 with archive.open("settings/settings.json") as src, open(

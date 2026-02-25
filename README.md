@@ -39,7 +39,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - [Change Summary (since 1.2)](#change-summary-since-12)
 - [FAQ](#faq)
 - [Appendix A: GRBL 1.1h Commands](#appendix-a-grbl-11h-commands)
-- [Appendix B: GRBL 1.1h Settings](#appendix-b-grbl-11h-settings)
+- [Appendix B: GRBL 1.1h Settings](#appendix-b-grbl-11h-settings-selected)
 - [Appendix C: Macro Reference](#appendix-c-macro-reference)
 - [Appendix D: UI Field Appendix](#appendix-d-ui-field-appendix)
 
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 
 Development dependencies are pinned in `requirements-dev.txt` to match the current toolchain.
 
-Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the app folder.
+Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the module directory (`simple_sender/utils`).
 
 ## Launching
 ```powershell
@@ -115,7 +115,7 @@ This is a practical, end-to-end flow with rationale for key options.
   6) **Prepare the machine**
      - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
      - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in the **Checklists** tab > Safety.
+     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
      - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
      - Click **Run** (Training Wheels may prompt). Before streaming starts, a preflight safety gate checks job/controller readiness and bounds; when failures are present, operators can choose to stop or explicitly override and continue.
@@ -291,7 +291,7 @@ All directives above operate through the macro executor (`simple_sender/macro_ex
 | Command | Description | Example usage |
 | --- | --- | --- |
 | `M0`, `M00`, `PROMPT` | Show the macro prompt dialog. Customize `title=`, `msg=`/`message=`/`text=`, `buttons=`, `[btn(...)]`, `resume=`, `cancellabel=`, etc., and read `prompt_choice*` afterward. | `PROMPT message=Pause before X0 Y0? buttons=Continue|Abort` |
-| `ABSOLUTE`, `ABS` | Send `G90` so the next moves use machine coordinates. | `ABSOLUTE` |
+| `ABSOLUTE`, `ABS` | Send `G90` so the next moves use absolute coordinates in the active WCS (use `G53` for machine coordinates). | `ABSOLUTE` |
 | `RELATIVE`, `REL` | Send `G91` for incremental jog sequences. | `REL` |
 | `HOME` | Run homing, which issues the same `$H` or homing cycle as the UI buttons. | `HOME` |
 | `OPEN [timeout_s]` | Connect if disconnected and wait for connection (default 10s). Useful for macros that need GRBL before streaming commands. | `OPEN 15` |
@@ -315,7 +315,7 @@ All directives above operate through the macro executor (`simple_sender/macro_ex
 
 Each helper command forwards the equivalent GRBL real-time or `$` command, so they behave exactly as the buttons and manual console inputs do when connected to a GRBL 1.1h controller.
 
-Lines that begin with `$`, `@`, `{`, `(`, or `;`, or that match `MACRO_GPAT` (`[A-Za-z]\s*[-+]?\d+.*`), stream verbatim as raw GRBL commands or comments, so you can reuse existing G-code without modification.
+Lines that begin with `$`, `@`, `{`, or `(`, or that match `MACRO_GPAT` (`[A-Za-z]\s*[-+]?\d+.*`), stream verbatim as raw GRBL commands or comments, so you can reuse existing G-code without modification. Lines that begin with `;` are treated as comments and skipped.
 
 ### System variables
 Every macro shares access to `_macro_vars`. The following keys hold live data you can read or update in Python lines, `%msg`, or `[expression]` blocks:
@@ -407,7 +407,7 @@ for index in range(2):
     %wait
 PROMPT title=Continue buttons=Next Pass|Abort message=Run another pass?
 G0 X0 Y0
-%msg Parked after pass [prompt_choice_index + 1].
+%msg Parked after pass [prompt_index + 1].
 ```
 
 This routine combines loops, variable assignments, `%msg`, `%wait`, and a GUI prompt, and stores the pass number so later macros can inspect `park_pass`.
@@ -885,7 +885,7 @@ The sender exposes a curated subset of GRBL's real-time, system, and motion comm
 ### Common G-code commands used via UI / macros
 | Command | Syntax | Example | Notes |
 | --- | --- | --- | --- |
-| Absolute positioning | `G90` | `G90` before a `G0 X10` move | Ensures subsequent moves use machine coordinates. |
+| Absolute positioning | `G90` | `G90` before a `G0 X10` move | Ensures subsequent moves use absolute coordinates in the active work coordinate system (WCS). |
 | Relative positioning | `G91` | `G91` before `$J=` jog | Temporarily switches to incremental mode. |
 | Units | `G20` or `G21` | `G21` when working in millimeters | The unit toggle sends the proper command automatically. |
 | Zero work coords | `G92` / `G10 L20` | `G92 X0 Y0 Z0` (zero all buttons) | Sender uses G92 by default; enable persistent zeroing to switch the buttons to `G10 L20`. |

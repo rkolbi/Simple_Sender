@@ -93,6 +93,7 @@ class StreamQueueItem:
     is_gcode: bool
     idx: int | None
     line: str
+    manual_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,7 @@ class ManualPendingItem:
     line: str
     payload: bytes
     line_len: int
+    source: str | None = None
 
 
 class GrblWorkerState:
@@ -128,6 +130,7 @@ class GrblWorkerState:
     _rx_window: int
 
     _outgoing_q: queue.Queue[str]
+    _manual_source_queue: deque[str | None]
     _purge_jog_queue: threading.Event
     _abort_writes: threading.Event
 

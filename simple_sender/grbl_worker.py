@@ -225,6 +225,7 @@ class GrblWorker(
         
         # Command queue
         self._outgoing_q: queue.Queue[str] = queue.Queue()
+        self._manual_source_queue: deque[str | None] = deque()
         self._purge_jog_queue = threading.Event()
         
         # Thread synchronization
@@ -353,6 +354,7 @@ class GrblWorker(
                 self._outgoing_q.get_nowait()
             except queue.Empty:
                 break
+        self._manual_source_queue.clear()
         self._manual_pending_item = None
         self._emit_buffer_fill()
     
@@ -363,6 +365,7 @@ class GrblWorker(
             self._stream_line_queue.clear()
             self._stream_pending_item = None
             self._manual_pending_item = None
+            self._manual_source_queue.clear()
             self._resume_preamble.clear()
             self._rx_window = RX_BUFFER_SIZE
             self._send_index = 0
