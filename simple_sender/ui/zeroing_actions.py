@@ -153,4 +153,5 @@ def zero_all(app):
 def goto_zero(app):
     if not app._require_grbl_connection():
         return
-    app._send_manual("G0 X0 Y0", "zero")
+    app._send_manual("G90 G0 X0 Y0", "zero")
+    app._send_manual("G0 Z0", "zero")

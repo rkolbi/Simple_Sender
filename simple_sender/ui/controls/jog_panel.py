@@ -566,8 +566,8 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     set_kb_id(app.btn_goto_zero, "goto_zero")
     app.btn_goto_zero.pack(side="left", expand=True, fill="x", padx=(6, 0))
     app._manual_controls.append(app.btn_goto_zero)
-    apply_tooltip(app.btn_goto_zero, "Rapid move to WCS X0 Y0.")
-    attach_log_gcode(app.btn_goto_zero, "G0 X0 Y0")
+    apply_tooltip(app.btn_goto_zero, "Rapid move to WCS X0 Y0 first, then Z0 (absolute mode).")
+    attach_log_gcode(app.btn_goto_zero, "G90 G0 X0 Y0; G0 Z0")
 
     _bind_position_column_sync(app, align)
     return sep_mpos, sep_wpos, sep_jog_line
