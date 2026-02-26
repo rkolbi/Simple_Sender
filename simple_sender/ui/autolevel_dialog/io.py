@@ -27,6 +27,7 @@ import shutil
 from tkinter import filedialog, messagebox
 
 from simple_sender.autolevel.height_map import HeightMap
+from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from .helpers import update_stats_summary
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,9 @@ def save_leveled(app, status_var) -> None:
         base, ext = os.path.splitext(os.path.basename(path))
         suffix = ext if ext else ".gcode"
         default_name = f"{base}-AL{suffix}"
-    save_path = filedialog.asksaveasfilename(
+    save_path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
         title="Save leveled G-code",
         initialdir=initial_dir or None,
         initialfile=default_name,
@@ -94,7 +97,9 @@ def save_height_map(app, status_var) -> None:
     if path:
         base, _ = os.path.splitext(os.path.basename(path))
         default_name = f"{base}_height_map.json"
-    save_path = filedialog.asksaveasfilename(
+    save_path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
         title="Save height map",
         initialdir=initial_dir or None,
         initialfile=default_name,
@@ -126,7 +131,9 @@ def load_height_map(
     save_btn,
 ) -> None:
     initial_dir = app.settings.get("last_gcode_dir", "")
-    load_path = filedialog.askopenfilename(
+    load_path = run_file_dialog(
+        app,
+        filedialog.askopenfilename,
         title="Load height map",
         initialdir=initial_dir or None,
         filetypes=[("Height map", "*.json"), ("All files", "*.*")],

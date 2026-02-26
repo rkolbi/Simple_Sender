@@ -29,6 +29,7 @@ from tkinter import ttk, filedialog, messagebox
 from typing import Any, cast
 
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
+from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from .popup_utils import center_window
 
 CHECKLIST_ITEMS = [
@@ -413,7 +414,9 @@ def run_preflight_check(app) -> None:
 def export_session_diagnostics(app) -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     default_name = f"simple_sender_diagnostics_{timestamp}.txt"
-    path = filedialog.asksaveasfilename(
+    path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
         title="Export diagnostics",
         defaultextension=".txt",
         initialfile=default_name,

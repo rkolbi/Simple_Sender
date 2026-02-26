@@ -21,20 +21,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
-import tkinter.font as tkfont
 
-_FILE_DIALOG_FONTS = (
-    "TkDefaultFont",
-    "TkTextFont",
-    "TkFixedFont",
-    "TkMenuFont",
-    "TkHeadingFont",
-    "TkSmallCaptionFont",
-    "TkIconFont",
-    "TkTooltipFont",
-)
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_FILE_DIALOG_ACTIVE_ATTR = "_file_dialog_active"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -45,78 +35,44 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _coerce_scale(value, default: float = 1.4) -> float:
+def _resolve_parent(app, kwargs):
+    parent = kwargs.get("parent")
+    if parent is not None:
+        return parent
+    if app is None:
+        return None
     try:
-        scale = float(value)
+        if bool(app.winfo_exists()):
+            return app
     except Exception:
-        return default
-    if scale <= 0:
-        return default
-    return max(1.0, min(3.0, scale))
+        return None
+    return None
 
 
-def _get_named_font_sizes() -> dict[str, int]:
-    sizes: dict[str, int] = {}
-    for name in _FILE_DIALOG_FONTS:
+def _run_dialog_once(app, func, *args, **kwargs):
+    call_kwargs = dict(kwargs)
+    parent = _resolve_parent(app, call_kwargs)
+    if parent is not None and call_kwargs.get("parent") is None:
+        call_kwargs["parent"] = parent
+
+    guard_active = False
+    if app is not None:
         try:
-            sizes[name] = int(tkfont.nametofont(name).cget("size"))
+            if bool(getattr(app, _FILE_DIALOG_ACTIVE_ATTR, False)):
+                return ""
+            setattr(app, _FILE_DIALOG_ACTIVE_ATTR, True)
+            guard_active = True
         except Exception:
-            continue
-    return sizes
-
-
-def _scaled_font_size(size: int, scale: float) -> int:
-    sign = -1 if size < 0 else 1
-    value = max(1, int(round(abs(size) * scale)))
-    return sign * value
-
-
-def _apply_scaled_fonts(sizes: dict[str, int], scale: float) -> None:
-    for name, size in sizes.items():
-        try:
-            tkfont.nametofont(name).configure(size=_scaled_font_size(size, scale))
-        except Exception:
-            continue
-
-
-def _restore_fonts(sizes: dict[str, int]) -> None:
-    for name, size in sizes.items():
-        try:
-            tkfont.nametofont(name).configure(size=size)
-        except Exception:
-            continue
+            guard_active = False
+    try:
+        return func(*args, **call_kwargs)
+    finally:
+        if guard_active:
+            try:
+                setattr(app, _FILE_DIALOG_ACTIVE_ATTR, False)
+            except Exception as exc:
+                _log_suppressed("Failed clearing file-dialog active guard flag", exc)
 
 
 def run_file_dialog(app, func, *args, **kwargs):
-    enabled = False
-    try:
-        enabled = bool(app.file_manager_scaling_enabled.get())
-    except Exception:
-        enabled = False
-    if not enabled:
-        return func(*args, **kwargs)
-
-    try:
-        raw_scale = app.file_manager_scale.get()
-    except Exception:
-        raw_scale = None
-    scale = _coerce_scale(raw_scale, 1.4)
-
-    try:
-        old_scale = float(app.tk.call("tk", "scaling"))
-    except Exception:
-        old_scale = 1.0
-    sizes = _get_named_font_sizes()
-    try:
-        try:
-            app.tk.call("tk", "scaling", old_scale * scale)
-        except Exception as exc:
-            _log_suppressed("Failed applying temporary Tk scaling for file dialog", exc)
-        _apply_scaled_fonts(sizes, scale)
-        return func(*args, **kwargs)
-    finally:
-        try:
-            app.tk.call("tk", "scaling", old_scale)
-        except Exception as exc:
-            _log_suppressed("Failed restoring Tk scaling after file dialog", exc)
-        _restore_fonts(sizes)
+    return _run_dialog_once(app, func, *args, **kwargs)

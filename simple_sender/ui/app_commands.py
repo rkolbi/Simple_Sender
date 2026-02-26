@@ -29,10 +29,6 @@ from typing import Any, Callable
 
 from simple_sender.ui.dialogs.diagnostics import run_preflight_gate
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
-from simple_sender.ui.dialogs.touch_file_browser import (
-    USE_SYSTEM_FILE_PICKER,
-    browse_for_gcode_path,
-)
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.utils.constants import BAUD_DEFAULT
 
@@ -94,7 +90,7 @@ def _safe_initial_dir(path: str) -> str:
         return ""
 
 
-def _native_gcode_dialog(app, initial_dir: str) -> str:
+def choose_gcode_path(app, initial_dir: str) -> str:
     return str(
         run_file_dialog(
             app,
@@ -105,17 +101,6 @@ def _native_gcode_dialog(app, initial_dir: str) -> str:
         )
         or ""
     )
-
-
-def choose_gcode_path(app, initial_dir: str) -> str:
-    try:
-        chosen = str(browse_for_gcode_path(app, initial_dir=initial_dir) or "")
-    except Exception as exc:
-        _log_suppressed("Touch file browser failed; falling back to system picker", exc)
-        return _native_gcode_dialog(app, initial_dir)
-    if chosen == USE_SYSTEM_FILE_PICKER:
-        return _native_gcode_dialog(app, initial_dir)
-    return chosen
 
 
 def refresh_ports(app, auto_connect: bool = False):
