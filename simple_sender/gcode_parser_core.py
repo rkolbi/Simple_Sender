@@ -24,7 +24,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
@@ -387,19 +387,22 @@ def parse_gcode_lines(
                 u0, v0, u1, v1 = x, y, nx, ny
                 w0, w1 = z, nz
                 off1, off2 = i_val, j_val
-                to_xyz = lambda u, v, w: (u, v, w)
+                def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
+                    return u, v, w
             elif plane == "G18":
                 # Project onto XZ plane for arc math; Y is linear.
                 u0, v0, u1, v1 = x, z, nx, nz
                 w0, w1 = y, ny
                 off1, off2 = i_val, k_val
-                to_xyz = lambda u, v, w: (u, w, v)
+                def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
+                    return u, w, v
             else:
                 # Project onto YZ plane for arc math; X is linear.
                 u0, v0, u1, v1 = y, z, ny, nz
                 w0, w1 = x, nx
                 off1, off2 = j_val, k_val
-                to_xyz = lambda u, v, w: (w, u, v)
+                def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
+                    return w, u, v
 
             arc_len2d = math.hypot(u1 - u0, v1 - v0)
             full_circle = abs(u1 - u0) < 1e-6 and abs(v1 - v0) < 1e-6

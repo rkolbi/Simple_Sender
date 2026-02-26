@@ -122,9 +122,9 @@ class StreamingController:
 
     def _console_filter_match(self, entry: ConsoleEntryLike, for_save: bool = False) -> bool:
         if isinstance(entry, tuple):
-            s, tag = entry
+            s, _ = entry
         else:
-            s, tag = str(entry), None
+            s = str(entry)
         upper = s.upper()
         if self._console_filter == "alarms" and "ALARM" not in upper:
             return False

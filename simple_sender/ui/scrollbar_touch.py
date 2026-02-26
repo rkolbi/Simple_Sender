@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from tkinter import ttk
-from typing import Any
+from typing import Any, TypeGuard
 
 _DRAG_STATE_ATTR = "_simple_sender_touch_scrollbar_drag_state"
 _ACTIVE_SCROLLBAR: Any = None
@@ -35,6 +35,7 @@ _DRAG_WATCHDOG_INTERVAL_MS = 10
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+ScrollbarWidget = tk.Scrollbar | ttk.Scrollbar
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -45,7 +46,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _is_scrollbar_widget(widget: Any) -> bool:
+def _is_scrollbar_widget(widget: Any) -> TypeGuard[ScrollbarWidget]:
     return isinstance(widget, (tk.Scrollbar, ttk.Scrollbar))
 
 
@@ -193,7 +194,8 @@ def _on_scrollbar_touch_press(event: Any):
     span = _scrollbar_span(widget)
     pointer_frac = _pointer_fraction_from_widget_pointer(widget, orient)
     try:
-        first, _last = widget.get()
+        values = widget.get()
+        first = values[0] if isinstance(values, tuple) and values else 0.0
         first_frac = float(first)
     except Exception:
         first_frac = 0.0

@@ -20,6 +20,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import re
+
+
 def _rate_scale(old_units: str, new_units: str) -> float:
     if old_units == new_units:
         return 1.0
@@ -79,7 +82,6 @@ def validate_estimate_rate_text(text: str) -> bool:
         return float(text) >= 0.0
     except Exception:
         return False
-import re
 
 
 _RATE_RE = re.compile(r"^\d*\.?\d*$")

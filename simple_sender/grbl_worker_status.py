@@ -28,7 +28,6 @@ from typing import cast
 from simple_sender.types import GrblWorkerState
 
 from .utils.constants import (
-    EVENT_QUEUE_TIMEOUT,
     RT_STATUS,
     RX_BUFFER_SIZE,
     RX_OK_SUMMARY_INTERVAL,
@@ -288,7 +287,6 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 self._settings_dump_seen = False
             ack_index = None
             ack_line_idx = None
-            ack_line_text = None
             err_idx = None
             err_line = None
             err_source = None
@@ -304,7 +302,6 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         self._ack_index += 1
                         ack_index = self._ack_index
                         ack_line_idx = queued_item.idx
-                        ack_line_text = queued_item.line
                         if line_lower.startswith("error"):
                             err_idx = queued_item.idx
                             err_line = queued_item.line

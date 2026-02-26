@@ -66,6 +66,19 @@ def outlet_id_from_label(label: str, default: int) -> int:
     return 2 if int(default) == 2 else 1
 
 
+def _read_var_value(app, attr_name: str, default: Any) -> Any:
+    var = getattr(app, attr_name, None)
+    if var is None:
+        return default
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return default
+    try:
+        return getter()
+    except Exception:
+        return default
+
+
 def kasa_settings_snapshot(app) -> dict[str, Any]:
     if not _kasa_supported():
         return {
@@ -77,23 +90,21 @@ def kasa_settings_snapshot(app) -> dict[str, Any]:
             "light_enabled": False,
             "light_outlet": 2,
         }
-    vacuum_outlet = int(getattr(app, "vacuum_outlet", 1).get()) if hasattr(app, "vacuum_outlet") else 1
-    light_outlet = int(getattr(app, "light_outlet", 2).get()) if hasattr(app, "light_outlet") else 2
+    vacuum_outlet = int(_read_var_value(app, "vacuum_outlet", 1))
+    light_outlet = int(_read_var_value(app, "light_outlet", 2))
     if vacuum_outlet not in (1, 2):
         vacuum_outlet = 1
     if light_outlet not in (1, 2):
         light_outlet = 2
     return {
-        "kasa_enabled": bool(getattr(app, "kasa_enabled", False).get()) if hasattr(app, "kasa_enabled") else False,
+        "kasa_enabled": bool(_read_var_value(app, "kasa_enabled", False)),
         "kasa_device_identifier": (
-            str(getattr(app, "kasa_device_identifier", "").get() or "").strip()
-            if hasattr(app, "kasa_device_identifier")
-            else ""
+            str(_read_var_value(app, "kasa_device_identifier", "") or "").strip()
         ),
         "kasa_outlet_count": max(1, int(getattr(app, "_kasa_outlet_count", 2) or 2)),
-        "vacuum_enabled": bool(getattr(app, "vacuum_enabled", False).get()) if hasattr(app, "vacuum_enabled") else False,
+        "vacuum_enabled": bool(_read_var_value(app, "vacuum_enabled", False)),
         "vacuum_outlet": vacuum_outlet,
-        "light_enabled": bool(getattr(app, "light_enabled", False).get()) if hasattr(app, "light_enabled") else False,
+        "light_enabled": bool(_read_var_value(app, "light_enabled", False)),
         "light_outlet": light_outlet,
     }
 
@@ -223,12 +234,10 @@ def refresh_kasa_controls_state(app) -> None:
             _set_widget_state(getattr(app, widget_name, None), "disabled")
         return
 
-    enabled = bool(getattr(app, "kasa_enabled", False).get()) if hasattr(app, "kasa_enabled") else False
-    has_device = bool(
-        str(getattr(app, "kasa_device_identifier", "").get() or "").strip()
-    ) if hasattr(app, "kasa_device_identifier") else False
-    vacuum_enabled = bool(getattr(app, "vacuum_enabled", False).get()) if hasattr(app, "vacuum_enabled") else False
-    light_enabled = bool(getattr(app, "light_enabled", False).get()) if hasattr(app, "light_enabled") else False
+    enabled = bool(_read_var_value(app, "kasa_enabled", False))
+    has_device = bool(str(_read_var_value(app, "kasa_device_identifier", "") or "").strip())
+    vacuum_enabled = bool(_read_var_value(app, "vacuum_enabled", False))
+    light_enabled = bool(_read_var_value(app, "light_enabled", False))
 
     outlet_count = max(1, int(getattr(app, "_kasa_outlet_count", 2) or 2))
     has_dual_outlet = outlet_count >= 2

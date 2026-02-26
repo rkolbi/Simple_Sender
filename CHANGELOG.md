@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- WPos `Goto Zero` now executes a two-step absolute move sequence:
+  - sends `G90 G0 X0 Y0`
+  - then sends `G0 Z0` only after XY command dispatch, reducing clamp-strike risk on combined moves
+- Linux system file dialogs now force a usable minimum size and apply temporary Tk scaling while open so WM/Tk pickers do not collapse to unusable dimensions.
+
+### Documentation
+- README testing baseline was refreshed to the current local result (`790 passed, 2 skipped` on `python -m pytest tests -q`, validated 2026-02-26).
+- README `Goto Zero` behavior now documents the current XY-then-Z sequence.
+- README file-picker notes now document Linux system-picker sizing behavior.
+
 ## [1.8.0] - 2026-02-26
 
 ### Added
@@ -44,7 +55,7 @@ All notable changes to this project are documented in this file.
   - README now links to a release checklist section with explicit jog-release safety criteria
   - README joystick and jogging sections now document deadman/fallback jog-stop behavior
   - README now documents the new touch-friendly `Read Job` file-browser flow and system-picker fallback
-  - README testing baseline documents the `pytest tests -q` snapshot (`778 passed, 2 skipped` on 2026-02-26)
+  - README testing baseline documents the then-current `pytest tests -q` snapshot (`778 passed, 2 skipped` on 2026-02-26); later refreshed in `Unreleased`
   - release checklist template now uses current mypy target count (`150`) and version placeholders
   - release checklist now includes a hardware jog-release smoke test (UI, joystick button/axis, safety-hold release, unplug, focus-loss)
   - profiling baseline document now includes current local 2026-02-25 results

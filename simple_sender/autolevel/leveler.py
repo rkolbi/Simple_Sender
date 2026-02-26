@@ -150,7 +150,7 @@ def _level_gcode_iter(
         has_y = False
         has_z = False
         feed_specified = False
-        i_val = j_val = k_val = r_val = None
+        i_val = j_val = r_val = None
         for w, val in words:
             try:
                 raw_val = float(val)
@@ -179,7 +179,7 @@ def _level_gcode_iter(
             elif w == "J":
                 j_val = raw_val * units
             elif w == "K":
-                k_val = raw_val * units
+                pass
             elif w == "R":
                 r_val = raw_val * units
 
@@ -248,7 +248,6 @@ def _level_gcode_iter(
         if motion in (0, 1) and has_axis:
             dx = nx - x
             dy = ny - y
-            dz = nz - z
             if motion == 0 and not apply_to_rapids:
                 yield raw_line_text
             elif motion == 1 and dx == 0 and dy == 0:

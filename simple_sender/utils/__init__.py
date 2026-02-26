@@ -19,6 +19,7 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+# ruff: noqa: F403
 
 """Utility modules for Simple Sender."""
 

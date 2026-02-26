@@ -95,8 +95,8 @@ def _split_identifier(identifier: str) -> tuple[str | None, str]:
         return None, ""
     if "@" not in text:
         return None, text
-    dev_id, _, host = text.partition("@")
-    dev_id = dev_id.strip() or None
+    dev_id_raw, _, host = text.partition("@")
+    dev_id: str | None = dev_id_raw.strip() or None
     host = host.strip()
     return dev_id, host
 

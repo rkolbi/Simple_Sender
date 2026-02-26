@@ -34,7 +34,7 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 from collections import deque
-from typing import Any, Callable, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
+from typing import Any, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
 from .types import ManualPendingItem, StreamPendingItem, StreamQueueItem
 from .grbl_worker_commands import GrblWorkerCommandMixin
@@ -87,6 +87,8 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _RX_LOGGER = None
 _RX_LOGGER_LOCK = threading.Lock()
+_REEXPORTED_GRBL_ERROR_HELPERS = (annotate_grbl_alarm, annotate_grbl_error)
+_REEXPORTED_REALTIME_CONSTANTS = (RT_RESUME, RT_JOG_CANCEL)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:

@@ -20,8 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import hashlib
 import logging
+import hashlib
 import os
 import queue
 import sys
@@ -39,6 +39,7 @@ from simple_sender.gcode_parser import (
 )
 from simple_sender.gcode_validator import validate_gcode_lines
 from simple_sender.gcode_source import FileGcodeSource
+from simple_sender.utils.hashing import hash_lines
 from simple_sender.utils.constants import (
     GCODE_LOAD_PROGRESS_INTERVAL,
     GCODE_STREAMING_PREVIEW_LINES,
@@ -51,7 +52,6 @@ from simple_sender.utils.constants import (
     STREAMING_VALIDATION_PROMPT_TIMEOUT,
     STREAMING_VALIDATION_PROMPT_LINES,
 )
-from simple_sender.utils.hashing import hash_lines
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.viewer.preview_policy import configure_toolpath_preview, set_preview_streaming_state
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
@@ -59,6 +59,28 @@ from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_PIPELINE_DEPS = (
+    hashlib,
+    queue,
+    tempfile,
+    time,
+    array,
+    clean_gcode_line,
+    split_gcode_lines,
+    split_gcode_lines_stream,
+    validate_gcode_lines,
+    hash_lines,
+    GCODE_LOAD_PROGRESS_INTERVAL,
+    GCODE_STREAMING_PREVIEW_LINES,
+    GCODE_STREAMING_SIZE_THRESHOLD,
+    GCODE_STREAMING_LINE_THRESHOLD,
+    GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
+    GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
+    GCODE_VIEWER_CHUNK_SIZE_SMALL,
+    STREAMING_VALIDATION_PROMPT_TIMEOUT,
+    STREAMING_VALIDATION_PROMPT_LINES,
+    configure_toolpath_preview,
+)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:

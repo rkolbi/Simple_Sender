@@ -29,7 +29,7 @@ from simple_sender.utils.constants import (
     JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS,
     JOYSTICK_HOLD_DEFINITIONS,
     JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS,
-    JOYSTICK_HOLD_POLL_INTERVAL_MS,
+    JOYSTICK_HOLD_POLL_INTERVAL_MS as _JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
     JOYSTICK_HOLD_MIN_DISTANCE,
 )
@@ -46,6 +46,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
+JOYSTICK_HOLD_POLL_INTERVAL_MS = _JOYSTICK_HOLD_POLL_INTERVAL_MS
 JOYSTICK_HOLD_LIMIT_MARGIN_MM = 0.25
 JOYSTICK_HOLD_FALLBACK_DISTANCE_MM = 5000.0
 JOYSTICK_HOLD_AXIS_LIMIT_KEYS = {"X": "$130", "Y": "$131", "Z": "$132"}

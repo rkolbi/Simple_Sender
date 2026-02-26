@@ -20,6 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Public G-code parsing facade exports."""
+
 from simple_sender.gcode_parser_core import (
     AXIS_WORDS,
     MAX_SPLIT_SEGMENTS,
@@ -49,3 +51,32 @@ from simple_sender.gcode_parser_split import (
     _split_linear_move,
     _trim_number_str,
 )
+
+__all__ = [
+    "AXIS_WORDS",
+    "MAX_SPLIT_SEGMENTS",
+    "PAREN_COMMENT_PAT",
+    "SPLIT_ALLOWED_G_CODES",
+    "SPLIT_DECIMALS",
+    "UNSUPPORTED_AXIS_WORDS",
+    "WORD_PAT",
+    "GcodeMove",
+    "GcodeParseResult",
+    "clean_gcode_line",
+    "parse_gcode_lines",
+    "_arc_center_from_radius",
+    "_arc_sweep",
+    "GcodeSplitResult",
+    "GcodeSplitStreamResult",
+    "split_gcode_lines",
+    "split_gcode_lines_stream",
+    "_SplitState",
+    "_build_compact_line",
+    "_format_float",
+    "_format_word_from_str",
+    "_is_safe_word_line",
+    "_line_len_bytes",
+    "_split_linear_move",
+    "_trim_number_str",
+]
+

@@ -32,7 +32,6 @@ from simple_sender.ui.widgets_tooltips import ToolTip, apply_tooltip, set_tab_to
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     GRBL_NON_NUMERIC_SETTINGS,
-    GRBL_SETTING_KEYS,
     GRBL_SETTING_LIMITS,
     GRBL_SETTINGS_WRITE_DELAY,
 )

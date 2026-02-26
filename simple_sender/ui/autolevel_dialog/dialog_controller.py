@@ -867,7 +867,10 @@ class AutoLevelDialogController:
             log_fn = None
             ui_q = getattr(self.app, "ui_q", None)
             if ui_q is not None:
-                log_fn = lambda msg: ui_q.put(("log", msg))
+                def _log_fn(msg: str) -> None:
+                    ui_q.put(("log", msg))
+
+                log_fn = _log_fn
 
             result, is_temp, fallback_warning = self.deps.apply_auto_level_to_path_fn(
                 source_path=path,

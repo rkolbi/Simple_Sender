@@ -30,6 +30,14 @@ from .popup_utils import center_window
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.autolevel_dialog.dialog_controller import show_auto_level_dialog
 
+__all__ = [
+    "show_alarm_recovery",
+    "show_macro_prompt",
+    "show_spoilboard_generator_dialog",
+    "show_auto_level_dialog",
+    "show_resume_dialog",
+]
+
 
 def show_resume_dialog(app):
     if app.grbl.is_streaming():

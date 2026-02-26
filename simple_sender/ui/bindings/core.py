@@ -28,16 +28,6 @@ from types import ModuleType
 from typing import Any
 
 from . import joystick as joystick_bindings
-from .keys import (
-    event_to_binding_label,
-    key_sequence_tuple,
-    modifier_active,
-    normalize_key_chord,
-    normalize_key_label,
-    sequence_conflict,
-    sequence_conflict_pair,
-    update_modifier_state,
-)
 from .keyboard import (
     apply_keyboard_bindings,
     button_axis_name,
@@ -65,6 +55,16 @@ from .keyboard import (
     start_kb_edit,
     update_keyboard_live_status,
 )
+from .keys import (
+    event_to_binding_label,
+    key_sequence_tuple,
+    modifier_active,
+    normalize_key_chord,
+    normalize_key_label,
+    sequence_conflict,
+    sequence_conflict_pair,
+    update_modifier_state,
+)
 from simple_sender.utils.constants import (
     JOYSTICK_DISCOVERY_CONNECTED_INTERVAL_MS,
     JOYSTICK_DISCOVERY_INTERVAL_MS,
@@ -73,6 +73,40 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_REEXPORTED_BINDING_API = (
+    apply_keyboard_bindings,
+    refresh_keyboard_table,
+    start_joystick_safety_capture,
+    cancel_joystick_safety_capture,
+    clear_joystick_safety_binding,
+    on_joystick_safety_toggle,
+    create_virtual_hold_buttons,
+    collect_buttons,
+    button_label,
+    keyboard_key_for_button,
+    joystick_binding_display,
+    joystick_binding_key,
+    button_axis_name,
+    button_binding_id,
+    find_binding_conflict,
+    default_key_for_button,
+    on_kb_table_double_click,
+    on_kb_table_click,
+    start_kb_edit,
+    start_joystick_capture,
+    cancel_joystick_capture,
+    joystick_binding_from_event,
+    kb_capture_key,
+    commit_kb_edit,
+    normalize_key_label,
+    normalize_key_chord,
+    key_sequence_tuple,
+    update_modifier_state,
+    modifier_active,
+    event_to_binding_label,
+    sequence_conflict_pair,
+    sequence_conflict,
+)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -126,7 +160,6 @@ def toggle_joystick_bindings(app):
     app._update_joystick_polling_state()
 
 def on_keyboard_bindings_check(app):
-    new_val = bool(app.keyboard_bindings_enabled.get())
     app._refresh_keybindings_toggle_text()
     app._apply_keyboard_bindings()
 

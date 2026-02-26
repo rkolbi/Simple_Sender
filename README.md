@@ -103,7 +103,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read Job** to open the in-app touch-friendly file browser (large rows and buttons). Use **Use System Picker** inside that dialog if you want the OS-native file chooser. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
+   - Click **Read Job** to open the in-app touch-friendly file browser (large rows and buttons). Use **Use System Picker** inside that dialog if you want the OS-native file chooser; on Linux, the app applies temporary Tk scaling and a minimum picker size so dialogs stay readable. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
    - Check the G-code viewer highlights and the 3D view (optional) for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
@@ -214,7 +214,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. Loading strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
+- **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
@@ -706,7 +706,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 26, 2026): `778 passed, 2 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on February 26, 2026): `790 passed, 2 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -987,12 +987,10 @@ Macro UI is included below along with the rest of the interface.
 - MPos X/Y/Z readouts: live machine position from GRBL status.
 - Home: runs the homing cycle ($H) when available.
 - Units toggle: switches modal units (G20/G21); blue text indicates report units tracking via $13.
-- Hold: issues feed hold (!).
-- Resume: resumes motion (~).
 - WPos X/Y/Z readouts: live work position from GRBL status.
 - Zero X/Y/Z: zeroes each axis using G92 or G10 L20 depending on persistent zeroing.
 - Zero All: zeroes all axes in the current work coordinate system.
-- Goto Zero: rapid move to WCS X0 Y0.
+- Goto Zero: runs `G90 G0 X0 Y0` first, then `G0 Z0` so XY travel completes before Z moves.
 - Jog X+/X-/Y+/Y-: jogs by the selected XY step using the current jog feed.
 - Jog Z+/Z-: jogs by the selected Z step using the Z jog feed.
 - JOG STOP: cancels an active jog (RT 0x85) and stops pending jogs.
