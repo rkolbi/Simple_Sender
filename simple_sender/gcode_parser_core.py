@@ -128,6 +128,22 @@ def _arc_center_from_radius(
     return c2[0], c2[1], sweep2
 
 
+def _parse_words_and_collect_g_codes(
+    words: list[tuple[str, str]],
+) -> tuple[list[tuple[str, float]], Set[float]]:
+    parsed_words: list[tuple[str, float]] = []
+    g_codes: Set[float] = set()
+    for w, val in words:
+        try:
+            raw_val = float(val)
+        except ValueError:
+            continue
+        parsed_words.append((w, raw_val))
+        if w == "G":
+            g_codes.add(round(raw_val, 3))
+    return parsed_words, g_codes
+
+
 def parse_gcode_lines(
     lines: Iterable[str],
     arc_step_rad: float = math.pi / 18,
@@ -212,13 +228,7 @@ def parse_gcode_lines(
         words = WORD_PAT.findall(s)
         if not words:
             continue
-        g_codes: Set[float] = set()
-        for w, val in words:
-            if w == "G":
-                try:
-                    g_codes.add(round(float(val), 3))
-                except Exception:
-                    pass
+        parsed_words, g_codes = _parse_words_and_collect_g_codes(words)
 
         if 20.0 in g_codes:
             units = 25.4
@@ -253,11 +263,7 @@ def parse_gcode_lines(
         has_y = False
         has_z = False
         i_val = j_val = k_val = r_val = None
-        for w, val in words:
-            try:
-                raw_val = float(val)
-            except Exception:
-                continue
+        for w, raw_val in parsed_words:
             if w == "P":
                 continue
             fval = raw_val * units
@@ -455,8 +461,8 @@ def parse_gcode_lines(
                 ang = start_ang - sweep * t if cw else start_ang + sweep * t
                 u = cu + r * math.cos(ang)
                 v = cv + r * math.sin(ang)
-                w = w0 + (w1 - w0) * t
-                qx, qy, qz = to_xyz(u, v, w)
+                w_coord = w0 + (w1 - w0) * t
+                qx, qy, qz = to_xyz(u, v, w_coord)
                 append_segment((px, py, pz, qx, qy, qz, "arc"))
                 px, py, pz = qx, qy, qz
             dist = math.hypot(arc_len2d, w1 - w0)

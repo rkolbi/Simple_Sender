@@ -73,7 +73,7 @@ class FileGcodeSource:
             if self._file and not self._file.closed:
                 try:
                     self._file.close()
-                except Exception:
+                except (OSError, ValueError):
                     pass
             self._file = None
 

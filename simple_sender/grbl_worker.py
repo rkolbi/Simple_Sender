@@ -121,11 +121,11 @@ def _get_rx_logger():
         if path:
             try:
                 max_bytes = int(os.getenv("SIMPLE_SENDER_RX_LOG_MAX_BYTES", "2097152"))
-            except Exception:
+            except (TypeError, ValueError):
                 max_bytes = 2097152
             try:
                 backup_count = int(os.getenv("SIMPLE_SENDER_RX_LOG_BACKUPS", "5"))
-            except Exception:
+            except (TypeError, ValueError):
                 backup_count = 5
             try:
                 handler_path = os.path.abspath(path)
@@ -360,25 +360,26 @@ class GrblWorker(
                         raise timeout_exc("Write returned 0 bytes")
                     total += written
         except timeout_exc as e:
-            raise SerialWriteError(f"Write timeout: {e}")
+            raise SerialWriteError(f"Write timeout: {e}") from e
         except serial_exc as e:
-            raise SerialWriteError(f"Serial write error: {e}")
+            raise SerialWriteError(f"Serial write error: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected write error: {e}")
-            raise SerialWriteError(f"Unexpected error: {e}")
+            raise SerialWriteError(f"Unexpected error: {e}") from e
     
     def _clear_outgoing(self) -> None:
         """Clear the outgoing command queue."""
-        while True:
-            try:
-                self._outgoing_q.get_nowait()
-            except queue.Empty:
-                break
-        self._manual_source_queue.clear()
-        self._manual_pending_item = None
-        self._manual_queue_drop_count = 0
-        self._manual_queue_drop_total = 0
-        self._manual_queue_last_drop_notice_ts = 0.0
+        with self._stream_lock:
+            while True:
+                try:
+                    self._outgoing_q.get_nowait()
+                except queue.Empty:
+                    break
+            self._manual_source_queue.clear()
+            self._manual_pending_item = None
+            self._manual_queue_drop_count = 0
+            self._manual_queue_drop_total = 0
+            self._manual_queue_last_drop_notice_ts = 0.0
         self._emit_buffer_fill()
 
     def _record_manual_queue_drop(self) -> None:

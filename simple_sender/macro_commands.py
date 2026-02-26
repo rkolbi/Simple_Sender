@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import logging
 import queue
+import time
 import types
 from typing import Any, Callable
 from tkinter import messagebox
 
-from simple_sender.utils.constants import MACRO_GPAT, RT_STATUS
+from simple_sender.utils.constants import MACRO_GPAT, MACRO_PROMPT_TIMEOUT, RT_STATUS
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -76,6 +77,10 @@ def _handle_prompt_command(
         prompt_source,
         macro_snapshot,
     )
+    prompt_timeout_s = float(getattr(app, "_macro_prompt_timeout_s", MACRO_PROMPT_TIMEOUT))
+    if prompt_timeout_s < 0:
+        prompt_timeout_s = 0.0
+    prompt_started = time.monotonic()
     result_q: queue.Queue[str] = queue.Queue()
     ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
     while True:
@@ -85,6 +90,12 @@ def _handle_prompt_command(
         except queue.Empty:
             if getattr(app, "_closing", False):
                 choice = cancel_label
+                break
+            if prompt_timeout_s and (time.monotonic() - prompt_started) >= prompt_timeout_s:
+                choice = cancel_label
+                ui_q.put(
+                    ("log", f"[macro] Prompt timed out after {prompt_timeout_s:.1f}s; macro canceled."),
+                )
                 break
     if choice not in choices:
         choice = cancel_label

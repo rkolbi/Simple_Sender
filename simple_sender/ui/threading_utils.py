@@ -36,8 +36,9 @@ def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_D
         except Exception as exc:
             app._log_exception("UI action failed", exc)
             return None
-    result_q: queue.Queue = queue.Queue()
-    app.ui_q.put(("ui_call", func, args, kwargs, result_q))
+    result_q: queue.Queue = queue.Queue(maxsize=1)
+    cancel_token = threading.Event()
+    app.ui_q.put(("ui_call", func, args, kwargs, result_q, cancel_token))
     try:
         if timeout is None:
             while True:
@@ -46,11 +47,13 @@ def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_D
                     break
                 except queue.Empty:
                     if app._closing:
+                        cancel_token.set()
                         app.ui_q.put(("log", "[ui] Action canceled (closing)."))
                         return None
         else:
             ok, value = result_q.get(timeout=timeout)
     except queue.Empty:
+        cancel_token.set()
         app.ui_q.put(("log", "[ui] Action timed out."))
         return None
     if ok:

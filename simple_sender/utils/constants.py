@@ -170,6 +170,9 @@ STREAMING_VALIDATION_PROMPT_TIMEOUT = 120
 GCODE_LOAD_PROGRESS_INTERVAL = 0.25
 """Minimum seconds between progress updates while loading/validating G-code."""
 
+GCODE_STATS_DEBOUNCE_MS = 75
+"""Debounce window (ms) before launching background G-code stats calculation."""
+
 GCODE_STREAMING_PREVIEW_LINES = 2000
 """Preview lines shown when streaming from disk."""
 
@@ -470,6 +473,9 @@ MACRO_EXTS = ("", ".txt")
 
 MACRO_WAIT_TIMEOUT = 30.0
 """Default timeout for %wait command (seconds)."""
+
+MACRO_PROMPT_TIMEOUT = 120.0
+"""Maximum seconds to wait for a macro prompt response before canceling."""
 
 MACRO_WAIT_POLL_INTERVAL = 0.1
 """Polling interval for %wait command (seconds)."""

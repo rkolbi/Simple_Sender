@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-02-26
+
 ### Added
 - Manual-command backpressure visibility:
   - worker now emits `manual_queue_drop` UI events with both interval and cumulative drop counts
@@ -24,7 +26,7 @@ All notable changes to this project are documented in this file.
   - saturated queue paths drop new manual commands explicitly instead of blocking worker locks
 - Jog-release safety hardening:
   - joystick hold polling now enforces a deadman timeout (`JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS`) and force-cancels jog if polling gaps exceed the limit
-  - joystick hold stop now schedules a short delayed feed-hold fallback (`!`) when jog-cancel may not have resolved quickly
+  - joystick hold stop now schedules a short delayed jog-cancel retry (`0x85`) plus pending-jog clear when jog-cancel may not have resolved quickly
   - joystick button-release handling now cancels jog-bound actions (`jog_*` bindings) even when a backend release event is dropped
 - G-code loading pipeline responsiveness:
   - streaming and non-streaming loader stages now perform token checks during scan/validation loops so superseded loads cancel quickly
@@ -42,7 +44,7 @@ All notable changes to this project are documented in this file.
   - README now links to a release checklist section with explicit jog-release safety criteria
   - README joystick and jogging sections now document deadman/fallback jog-stop behavior
   - README now documents the new touch-friendly `Read Job` file-browser flow and system-picker fallback
-  - README testing baseline now reflects the latest local `pytest tests -q` result (`735 passed, 2 skipped` on 2026-02-25)
+  - README testing baseline documents the `pytest tests -q` snapshot (`778 passed, 2 skipped` on 2026-02-26)
   - release checklist template now uses current mypy target count (`150`) and version placeholders
   - release checklist now includes a hardware jog-release smoke test (UI, joystick button/axis, safety-hold release, unplug, focus-loss)
   - profiling baseline document now includes current local 2026-02-25 results

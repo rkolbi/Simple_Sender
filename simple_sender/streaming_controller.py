@@ -422,8 +422,8 @@ class StreamingController:
                 continue
             try:
                 self.app.after_cancel(val)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed canceling pending UI callback: %s", exc, exc_info=exc)
             setattr(self, attr, None)
         self._pending_marks_after_id = None
         self._pending_sent_index = None

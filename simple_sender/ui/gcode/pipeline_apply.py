@@ -102,6 +102,15 @@ def apply_loaded_gcode(
     else:
         app._gcode_hash = lines_hash if lines_hash is not None else deps.hash_lines(lines)
     app._stats_cache.clear()
+    app._stats_pending_request = None
+    stats_after_id = getattr(app, "_stats_after_id", None)
+    if stats_after_id is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(stats_after_id)
+        except Exception as exc:
+            _log_suppressed("Failed canceling pending stats debounce timer after loading G-code", exc)
+    app._stats_after_id = None
+    app._stats_token = int(getattr(app, "_stats_token", 0)) + 1
     app._live_estimate_min = None
     app._last_stats = None
     app._last_rate_source = None

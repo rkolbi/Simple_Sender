@@ -171,6 +171,22 @@ def _handle_stream_pause_reason_event(app: Any, reason: Any) -> None:
     )
 
 
+def _handle_unknown_event(app: Any, evt: Any) -> None:
+    message = f"Unhandled UI event: {evt!r}"
+    try:
+        if hasattr(app, "_log_exception"):
+            app._log_exception("Unhandled UI event", ValueError(message))
+        else:
+            _log_suppressed("Unhandled UI event (no app logger)", ValueError(message))
+    except Exception as exc:
+        _log_suppressed("Failed logging unhandled UI event", exc)
+    try:
+        if hasattr(app, "streaming_controller"):
+            app.streaming_controller.handle_log(f"[ui] {message}")
+    except Exception as exc:
+        _log_suppressed("Failed writing unhandled UI event to console", exc)
+
+
 def set_streaming_lock(app: Any, locked: bool):
     state = "disabled" if locked else "normal"
     try:
@@ -203,6 +219,16 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("ui_call", func, args, kwargs, result_q):
             handle_ui_call(app, func, args, kwargs, result_q)
+            return
+        case ("ui_call", func, args, kwargs, result_q, cancel_token):
+            handle_ui_call(
+                app,
+                func,
+                args,
+                kwargs,
+                result_q,
+                cancel_token=cancel_token,
+            )
             return
         case ("ui_post", func, args, kwargs):
             handle_ui_post(app, func, args, kwargs)
@@ -340,6 +366,9 @@ def handle_event(app: Any, evt: UiEvent):
         case ("progress", done, total):
             app.streaming_controller.handle_progress(done, total)
             return
+        case _:
+            _handle_unknown_event(app, evt)
+            return
 
 
 def handle_stream_state_event(app, evt):
@@ -352,12 +381,26 @@ def handle_stream_interrupted(app, evt):
     return _event_router_streaming.handle_stream_interrupted(app, evt)
 
 
-def handle_ui_call(app, func, args, kwargs, result_q):
+def handle_ui_call(app, func, args, kwargs, result_q, *, cancel_token=None):
+    if cancel_token is not None and cancel_token.is_set():
+        return
     try:
-        result_q.put((True, func(*args, **kwargs)))
+        value = func(*args, **kwargs)
     except Exception as exc:
         app._log_exception("UI action failed", exc)
-        result_q.put((False, exc))
+        if cancel_token is not None and cancel_token.is_set():
+            return
+        try:
+            result_q.put_nowait((False, exc))
+        except queue.Full as queue_exc:
+            _log_suppressed("UI call result queue full while reporting failure", queue_exc)
+        return
+    if cancel_token is not None and cancel_token.is_set():
+        return
+    try:
+        result_q.put_nowait((True, value))
+    except queue.Full as exc:
+        _log_suppressed("UI call result queue full while reporting success", exc)
 
 
 def handle_ui_post(app, func, args, kwargs):

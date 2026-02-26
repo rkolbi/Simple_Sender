@@ -444,7 +444,12 @@ class Toolpath3DDataMixin:
             def keep_running() -> bool:
                 return token is None or token == self._parse_token
 
-            result = parse_gcode_lines(lines, self._arc_step_rad, keep_running=keep_running)
+            result = parse_gcode_lines(
+                lines,
+                self._arc_step_rad,
+                keep_running=keep_running,
+                include_moves=False,
+            )
             if result is None:
                 return None, None
             return result.segments, result.bounds

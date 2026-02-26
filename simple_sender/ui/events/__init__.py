@@ -35,8 +35,15 @@ def handle_event(app, evt):
     return _router.handle_event(app, evt)
 
 
-def handle_ui_call(app, func, args, kwargs, result_q):
-    return _router.handle_ui_call(app, func, args, kwargs, result_q)
+def handle_ui_call(app, func, args, kwargs, result_q, cancel_token=None):
+    return _router.handle_ui_call(
+        app,
+        func,
+        args,
+        kwargs,
+        result_q,
+        cancel_token=cancel_token,
+    )
 
 
 def handle_ui_post(app, func, args, kwargs):

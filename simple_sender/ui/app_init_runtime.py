@@ -379,6 +379,13 @@ def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._last_stats = None
     app._last_rate_source = None
     app._stats_cache = {}
+    app._stats_after_id = None
+    app._stats_pending_request = None
+    app._stats_debounce_ms = 75
+    app._ui_maintenance_interval_s = 0.25
+    app._ui_maintenance_last_ts = 0.0
+    app._auto_reconnect_check_interval_s = 0.25
+    app._auto_reconnect_check_ts = 0.0
     app._live_estimate_min = None
 
     app._stream_state = None

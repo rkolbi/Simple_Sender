@@ -154,7 +154,7 @@ class GcodeMixin:
                 macro_ns = macro_vars.get("macro")
                 state = getattr(macro_ns, "state", None)
                 tool_ref = getattr(state, "TOOL_REFERENCE", None) if state is not None else None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             return
         if tool_ref == getattr(app, "_tool_reference_last", None):
             return
@@ -164,7 +164,7 @@ class GcodeMixin:
             return
         try:
             value = float(tool_ref)
-        except Exception:
+        except (TypeError, ValueError):
             text = str(tool_ref)
         else:
             text = f"{value:.4f}"

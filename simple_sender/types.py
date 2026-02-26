@@ -306,12 +306,21 @@ class MacroExecutorState:
         raise NotImplementedError
 
 UiCallResultQueue: TypeAlias = queue.Queue[tuple[bool, Any]]
+UiCallCancelToken: TypeAlias = threading.Event
 UiPromptResultQueue: TypeAlias = queue.Queue[str]
 UiValidationResultQueue: TypeAlias = queue.Queue[bool]
 
 UiEvent = (
     tuple[Literal["conn"], bool, str | None]
     | tuple[Literal["ui_call"], Callable[..., Any], tuple[Any, ...], dict[str, Any], UiCallResultQueue]
+    | tuple[
+        Literal["ui_call"],
+        Callable[..., Any],
+        tuple[Any, ...],
+        dict[str, Any],
+        UiCallResultQueue,
+        UiCallCancelToken,
+    ]
     | tuple[Literal["ui_post"], Callable[..., Any], tuple[Any, ...], dict[str, Any]]
     | tuple[Literal["macro_prompt"], str, str, list[str], str, UiPromptResultQueue]
     | tuple[Literal["gcode_load_progress"], int, int, int, str]

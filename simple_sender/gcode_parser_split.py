@@ -160,6 +160,25 @@ def _collect_g_codes(words: list[tuple[str, str]]) -> Set[float]:
     return g_codes
 
 
+def _parse_axis_words_and_collect_g_codes(
+    words: list[tuple[str, str]],
+) -> tuple[list[tuple[str, float]], Set[float]]:
+    axis_words: list[tuple[str, float]] = []
+    g_codes: Set[float] = set()
+    for w, val in words:
+        if w != "G" and w not in AXIS_WORDS:
+            continue
+        try:
+            raw_val = float(val)
+        except ValueError:
+            continue
+        if w == "G":
+            g_codes.add(round(raw_val, 3))
+            continue
+        axis_words.append((w, raw_val))
+    return axis_words, g_codes
+
+
 def _apply_modal_g_codes(state: _SplitState, g_codes: Set[float]) -> None:
     if 20.0 in g_codes:
         state.units = 25.4
@@ -326,7 +345,7 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
             out_lines.append(line)
             continue
 
-        g_codes = _collect_g_codes(words)
+        parsed_words, g_codes = _parse_axis_words_and_collect_g_codes(words)
         _apply_modal_g_codes(state, g_codes)
 
         sx, sy, sz = state.x, state.y, state.z
@@ -336,14 +355,10 @@ def split_gcode_lines(lines: Iterable[str], max_len: int = 80) -> GcodeSplitResu
         has_y = False
         has_z = False
         unsupported_axis = False
-        for w, val in words:
+        for w, raw_val in parsed_words:
             if w in UNSUPPORTED_AXIS_WORDS:
                 unsupported_axis = True
             if w not in AXIS_WORDS:
-                continue
-            try:
-                raw_val = float(val)
-            except ValueError:
                 continue
             fval = raw_val * state.units
             if w == "X":
@@ -653,7 +668,7 @@ def split_gcode_lines_stream(
             emit(raw_text if preserve_raw else line)
             continue
 
-        g_codes = _collect_g_codes(words)
+        parsed_words, g_codes = _parse_axis_words_and_collect_g_codes(words)
         _apply_modal_g_codes(state, g_codes)
 
         sx, sy, sz = state.x, state.y, state.z
@@ -663,14 +678,10 @@ def split_gcode_lines_stream(
         has_y = False
         has_z = False
         unsupported_axis = False
-        for w, val in words:
+        for w, raw_val in parsed_words:
             if w in UNSUPPORTED_AXIS_WORDS:
                 unsupported_axis = True
             if w not in AXIS_WORDS:
-                continue
-            try:
-                raw_val = float(val)
-            except ValueError:
                 continue
             fval = raw_val * state.units
             if w == "X":

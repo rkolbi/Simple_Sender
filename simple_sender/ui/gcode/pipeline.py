@@ -109,7 +109,12 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
             def keep_running():
                 return token == app._gcode_parse_token
 
-            result = parse_gcode_lines(lines, arc_step, keep_running=keep_running)
+            result = parse_gcode_lines(
+                lines,
+                arc_step,
+                keep_running=keep_running,
+                include_moves=False,
+            )
         except Exception as exc:
             app.ui_q.put(("log", f"[gcode] Parse failed: {exc}"))
 
@@ -179,6 +184,14 @@ def clear_gcode(app):
     app._last_error_index = -1
     _reset_autolevel_state(app)
     app._gcode_parse_token += 1
+    after_id = getattr(app, "_stats_after_id", None)
+    if after_id is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(after_id)
+        except Exception as exc:
+            _log_suppressed("Failed canceling pending stats debounce timer during clear", exc)
+    app._stats_after_id = None
+    app._stats_pending_request = None
     app._stats_token += 1
     app._stats_cache.clear()
     app.grbl.load_gcode([])

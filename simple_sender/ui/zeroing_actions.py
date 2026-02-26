@@ -20,8 +20,21 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
+
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 _WCS_TO_P = {
@@ -100,8 +113,8 @@ def refresh_zeroing_ui(app):
 def on_zeroing_mode_change(app):
     try:
         app.settings["zeroing_persistent"] = bool(app.zeroing_persistent.get())
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_suppressed("Failed persisting zeroing mode setting", exc)
     refresh_zeroing_ui(app)
 
 

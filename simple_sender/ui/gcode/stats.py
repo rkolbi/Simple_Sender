@@ -23,8 +23,10 @@
 import math
 import threading
 import time
+from typing import Callable
 
 from simple_sender.gcode_parser import parse_gcode_lines
+from simple_sender.utils.constants import GCODE_STATS_DEBOUNCE_MS
 
 
 def _compute_stats_from_moves(
@@ -132,10 +134,11 @@ def compute_gcode_stats(
     lines: list[str],
     rapid_rates: tuple[float, float, float] | None = None,
     accel_rates: tuple[float, float, float] | None = None,
+    keep_running: Callable[[], bool] | None = None,
 ) -> dict:
     if not lines:
         return {"bounds": None, "time_min": None, "rapid_min": None}
-    result = parse_gcode_lines(lines)
+    result = parse_gcode_lines(lines, keep_running=keep_running)
     if result is None:
         return {"bounds": None, "time_min": None, "rapid_min": None}
     return _compute_stats_from_moves(result.moves, result.bounds, rapid_rates, accel_rates)
@@ -304,13 +307,44 @@ def make_stats_cache_key(
     return (app._gcode_hash, rapid, accel)
 
 
+def _result_has_moves(parse_result) -> bool:
+    try:
+        return bool(getattr(parse_result, "moves", None))
+    except Exception:
+        return False
+
+
+def _schedule_stats_launch(app, launch) -> None:
+    delay_ms = int(getattr(app, "_stats_debounce_ms", GCODE_STATS_DEBOUNCE_MS) or GCODE_STATS_DEBOUNCE_MS)
+    _cancel_pending_stats_launch(app)
+    app._stats_after_id = app.after(max(0, delay_ms), launch)
+
+
+def _cancel_pending_stats_launch(app) -> None:
+    after_id = getattr(app, "_stats_after_id", None)
+    if after_id is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(after_id)
+        except Exception:
+            pass
+    app._stats_after_id = None
+
+
+def _clear_pending_stats_request(app, *, cancel_launch: bool) -> None:
+    app._stats_pending_request = None
+    if cancel_launch:
+        _cancel_pending_stats_launch(app)
+
+
 def update_gcode_stats(app, lines: list[str], parse_result=None):
     if getattr(app, "_gcode_streaming_mode", False):
+        _clear_pending_stats_request(app, cancel_launch=True)
         app._last_stats = None
         app._last_rate_source = None
         app.gcode_stats_var.set("Preview only (streaming mode)")
         return
     if not lines:
+        _clear_pending_stats_request(app, cancel_launch=True)
         app._last_stats = None
         app._last_rate_source = None
         app.gcode_stats_var.set("No file loaded")
@@ -320,6 +354,8 @@ def update_gcode_stats(app, lines: list[str], parse_result=None):
         cached_hash = getattr(app, "_last_parse_hash", None)
         if cached_parse is not None and cached_hash == app._gcode_hash:
             parse_result = cached_parse
+    if parse_result is not None and not _result_has_moves(parse_result):
+        parse_result = None
     app._last_stats = None
     app._last_rate_source = None
     app._stats_token += 1
@@ -328,23 +364,73 @@ def update_gcode_stats(app, lines: list[str], parse_result=None):
     accel_rates = get_accel_rates_for_estimate(app)
     cache_key = make_stats_cache_key(app, rapid_rates, accel_rates)
     if cache_key and cache_key in app._stats_cache:
+        _clear_pending_stats_request(app, cancel_launch=True)
         stats, cached_source = app._stats_cache[cache_key]
         apply_gcode_stats(app, token, stats, cached_source)
         return
     app.gcode_stats_var.set("Calculating stats...")
+    pending_lines = lines if parse_result is None else None
+    app._stats_pending_request = (
+        token,
+        pending_lines,
+        parse_result,
+        rapid_rates,
+        accel_rates,
+        rate_source,
+        cache_key,
+    )
 
-    def worker():
-        try:
-            if parse_result is None:
-                stats = compute_gcode_stats(lines, rapid_rates, accel_rates)
-            else:
-                stats = compute_gcode_stats_from_result(parse_result, rapid_rates, accel_rates)
-        except Exception as exc:
-            app.after(0, lambda: apply_gcode_stats(app, token, None, rate_source))
-            app.ui_q.put(("log", f"[stats] Estimate failed: {exc}"))
+    def launch_latest():
+        app._stats_after_id = None
+        pending = getattr(app, "_stats_pending_request", None)
+        if not pending:
             return
-        if cache_key:
-            app._stats_cache[cache_key] = (stats, rate_source)
-        app.after(0, lambda: apply_gcode_stats(app, token, stats, rate_source))
+        (
+            pending_token,
+            pending_lines,
+            pending_parse_result,
+            pending_rapid_rates,
+            pending_accel_rates,
+            pending_rate_source,
+            pending_cache_key,
+        ) = pending
+        app._stats_pending_request = None
+        if pending_token != app._stats_token:
+            return
 
-    threading.Thread(target=worker, daemon=True).start()
+        def keep_running() -> bool:
+            return bool(pending_token == getattr(app, "_stats_token", None))
+
+        def worker():
+            if not keep_running():
+                return
+            try:
+                if pending_parse_result is None:
+                    if not pending_lines:
+                        return
+                    stats = compute_gcode_stats(
+                        pending_lines,
+                        pending_rapid_rates,
+                        pending_accel_rates,
+                        keep_running=keep_running,
+                    )
+                else:
+                    stats = compute_gcode_stats_from_result(
+                        pending_parse_result,
+                        pending_rapid_rates,
+                        pending_accel_rates,
+                    )
+            except Exception as exc:
+                if keep_running():
+                    app.after(0, lambda: apply_gcode_stats(app, pending_token, None, pending_rate_source))
+                    app.ui_q.put(("log", f"[stats] Estimate failed: {exc}"))
+                return
+            if not keep_running():
+                return
+            if pending_cache_key:
+                app._stats_cache[pending_cache_key] = (stats, pending_rate_source)
+            app.after(0, lambda: apply_gcode_stats(app, pending_token, stats, pending_rate_source))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    _schedule_stats_launch(app, launch_latest)
