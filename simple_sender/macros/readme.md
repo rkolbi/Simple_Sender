@@ -37,7 +37,7 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
   - remaining lines = executed macro body
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
-- Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab and release/start-job checklist dialogs.
+- Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab (with collapsible checklist titles) and release/start-job checklist dialogs.
 
 ## Core Directives
 

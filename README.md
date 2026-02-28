@@ -176,7 +176,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
   ![](pics/appsettingstab.JPG)
   
-  **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including the Release/Start Job checklist dialogs and the status-bar Release quick button.
+  **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including collapsible checklist titles in the Checklists tab, the Release/Start Job checklist dialogs, and the status-bar Release quick button.
   
   ![-](pics/checkliststab.JPG)
   
@@ -707,7 +707,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 28, 2026): `794 passed, 2 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on February 28, 2026): `801 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -1187,7 +1187,8 @@ Macro UI is included below along with the rest of the interface.
 - Reboot: reboots the system after confirmation.
 
 ### Checklists Tab: Checklists
-- Checklist items: checkbox list loaded from checklist-*.chk files.
+- Checklist items: checkbox list loaded from `checklist-*.chk` files.
+- Checklist title toggle: click a checklist title (`[-]` / `[+]`) to collapse or expand that checklist's items.
 
 ### Auto-Level Dialog: Settings Tab
 - Profile (dropdown): chooses Small/Large/Custom preset for spacing/interpolation.

@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file.
 - WPos `Goto Zero` now executes a two-step absolute move sequence:
   - sends `G90 G0 X0 Y0`
   - then sends `G0 Z0` only after XY command dispatch, reducing clamp-strike risk on combined moves
+- Checklists tab checklist titles are now collapsible/expandable so operators can collapse completed lists and focus on the current checklist.
 - Linux system file dialogs now force a usable minimum size and apply temporary Tk scaling while open so WM/Tk pickers do not collapse to unusable dimensions.
 - Kasa controller request handling now uses bounded async timeouts (default `15s`) so stalled device calls fail fast instead of blocking the accessory worker queue indefinitely.
 - App Settings now includes top-level Search filtering and a `Basic`/`Advanced` view selector for faster settings navigation on touch and desktop workflows.
@@ -15,11 +16,12 @@ All notable changes to this project are documented in this file.
 - Disabled-control tooltip reasons now include clearer state context (connecting/disconnecting, handshake/status wait, stream running/paused, and deferred idle completion) for affected toolbar actions.
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`794 passed, 2 skipped` on `python -m pytest tests -q`, validated 2026-02-28).
+- README testing baseline was refreshed to the current local result (`801 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-02-28).
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
 - README file-picker notes now document Linux system-picker sizing behavior.
 - README Kasa section now documents bounded request timeout behavior.
 - README App Settings docs now include Search + `Basic`/`Advanced` global controls and touch command acknowledgment behavior.
+- README checklist docs now mention collapsible checklist titles in the Checklists tab.
 
 ## [1.8.0] - 2026-02-26
 

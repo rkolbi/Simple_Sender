@@ -23,6 +23,7 @@
 import os
 import tkinter as tk
 from tkinter import ttk
+from typing import Callable
 
 from simple_sender.ui.checklist_files import (
     discover_checklist_files,
@@ -43,12 +44,18 @@ def _is_descendant(widget, ancestor) -> bool:
     return False
 
 
-def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
+def _build_checklist_section(
+    app,
+    parent: ttk.Frame,
+    row: int,
+    on_layout_change: Callable[[], None] | None = None,
+) -> int:
     frame = ttk.LabelFrame(parent, text="Checklists", padding=8)
     frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     frame.grid_columnconfigure(0, weight=1)
 
     app._checklist_vars = {}
+    app._checklist_collapsed = {}
     paths = discover_checklist_files(app)
     if not paths:
         ttk.Label(
@@ -61,13 +68,48 @@ def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
 
     for idx, path in enumerate(paths):
         title = format_checklist_title(path)
-        block = ttk.LabelFrame(frame, text=title, padding=6)
+        block = ttk.LabelFrame(frame, padding=6)
         block.grid(row=idx, column=0, sticky="ew", pady=(0, 8))
         block.grid_columnconfigure(0, weight=1)
+        content = ttk.Frame(block)
+        content.grid(row=1, column=0, sticky="ew")
+        content.grid_columnconfigure(0, weight=1)
+        is_expanded = tk.BooleanVar(master=block, value=True)
+        title_btn = ttk.Button(block)
+        title_btn.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        app._checklist_collapsed[path] = False
+
+        def _update_title(
+            _button=title_btn,
+            _title=title,
+            _expanded_var=is_expanded,
+        ) -> None:
+            marker = "[-]" if bool(_expanded_var.get()) else "[+]"
+            _button.config(text=f"{marker} {_title}")
+
+        def _toggle(
+            _content=content,
+            _expanded_var=is_expanded,
+            _path=path,
+            _refresh_title=_update_title,
+        ) -> None:
+            expanded = bool(_expanded_var.get())
+            if expanded:
+                _content.grid_remove()
+            else:
+                _content.grid()
+            _expanded_var.set(not expanded)
+            app._checklist_collapsed[_path] = expanded
+            _refresh_title()
+            if callable(on_layout_change):
+                on_layout_change()
+
+        title_btn.configure(command=_toggle)
+        _update_title()
         items = load_checklist_items(path)
         if items is None:
             ttk.Label(
-                block,
+                content,
                 text=f"Unable to read {os.path.basename(path)}.",
                 wraplength=620,
                 justify="left",
@@ -75,7 +117,7 @@ def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
             continue
         if not items:
             ttk.Label(
-                block,
+                content,
                 text="Checklist file is empty.",
                 wraplength=620,
                 justify="left",
@@ -84,7 +126,7 @@ def _build_checklist_section(app, parent: ttk.Frame, row: int) -> int:
         vars_for_file = []
         for item_idx, item in enumerate(items):
             var = tk.BooleanVar(value=False)
-            check = ttk.Checkbutton(block, text=item, variable=var)
+            check = ttk.Checkbutton(content, text=item, variable=var)
             check.grid(row=item_idx, column=0, sticky="w", pady=2)
             vars_for_file.append(var)
         app._checklist_vars[path] = vars_for_file
@@ -149,5 +191,5 @@ def build_checklists_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
 
     inner.grid_columnconfigure(0, weight=1)
     row = 0
-    _build_checklist_section(app, inner, row)
+    _build_checklist_section(app, inner, row, on_layout_change=_update_scrollregion)
     return tab
