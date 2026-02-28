@@ -24,11 +24,6 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.settings.sections_advanced import build_safety_aids_section
-from simple_sender.ui.settings.sections_general import (
-    build_diagnostics_section,
-    build_safety_section,
-)
 from simple_sender.ui.checklist_files import (
     discover_checklist_files,
     format_checklist_title,
@@ -154,8 +149,5 @@ def build_checklists_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
 
     inner.grid_columnconfigure(0, weight=1)
     row = 0
-    row = _build_checklist_section(app, inner, row)
-    row = build_diagnostics_section(app, inner, row)
-    row = build_safety_section(app, inner, row)
-    build_safety_aids_section(app, inner, row)
+    _build_checklist_section(app, inner, row)
     return tab

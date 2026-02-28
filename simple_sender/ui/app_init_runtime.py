@@ -306,6 +306,7 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app.mpos_x = tk.StringVar(value="0.000")
     app.mpos_y = tk.StringVar(value="0.000")
     app.mpos_z = tk.StringVar(value="0.000")
+    app.mpos_rpm = tk.StringVar(value="0")
     app._wpos_raw = (0.0, 0.0, 0.0)
     app._mpos_raw = (0.0, 0.0, 0.0)
     app._wco_raw = None

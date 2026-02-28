@@ -510,6 +510,24 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     apply_tooltip(app.btn_jog_mpos_x_to, "Open keypad and jog X to an absolute machine coordinate.")
     apply_tooltip(app.btn_jog_mpos_y_to, "Open keypad and jog Y to an absolute machine coordinate.")
     apply_tooltip(app.btn_jog_mpos_z_to, "Open keypad and jog Z to an absolute machine coordinate.")
+    if not hasattr(app, "mpos_rpm"):
+        app.mpos_rpm = tk.StringVar(master=align, value="0")
+    app.btn_unit_toggle = app._dro_value_row(
+        align,
+        "R",
+        app.mpos_rpm,
+        grid_info={"row": 4, "column": 0, "sticky": "new", "pady": 2},
+        action_text=app._unit_toggle_label(),
+        action_cmd=app._toggle_unit_mode,
+        action_kb_id="unit_toggle",
+    )
+    app._manual_controls.append(app.btn_unit_toggle)
+    app._offline_controls.add(app.btn_unit_toggle)
+    apply_tooltip(
+        app.btn_unit_toggle,
+        "Toggle modal units (G20/G21).",
+    )
+    app._update_unit_toggle_display()
 
     app.btn_zero_x = app._dro_row(
         align,
@@ -534,29 +552,8 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     )
     app._manual_controls.extend([app.btn_zero_x, app.btn_zero_y, app.btn_zero_z])
 
-    mpos_actions_top = ttk.Frame(align)
-    mpos_actions_top.grid(row=4, column=0, sticky="new", pady=(6, 0))
-    mpos_actions_top.grid_columnconfigure(0, weight=1, uniform="mpos_buttons")
-    mpos_actions_top.grid_columnconfigure(1, weight=1, uniform="mpos_buttons")
-
-    app.btn_unit_toggle = ttk.Button(
-        mpos_actions_top,
-        text=app._unit_toggle_label(),
-        style="TButton",
-        command=app._toggle_unit_mode,
-    )
-    set_kb_id(app.btn_unit_toggle, "unit_toggle")
-    app.btn_unit_toggle.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-    app._manual_controls.append(app.btn_unit_toggle)
-    app._offline_controls.add(app.btn_unit_toggle)
-    apply_tooltip(
-        app.btn_unit_toggle,
-        "Toggle modal units (G20/G21).",
-    )
-    app._update_unit_toggle_display()
-
     btns = ttk.Frame(align)
-    btns.grid(row=4, column=2, sticky="new", pady=(6, 0))
+    btns.grid(row=4, column=2, sticky="new", pady=2)
     app.btn_zero_all = ttk.Button(btns, text="Zero All", command=app.zero_all)
     set_kb_id(app.btn_zero_all, "zero_all")
     app.btn_zero_all.pack(side="left", expand=True, fill="x")

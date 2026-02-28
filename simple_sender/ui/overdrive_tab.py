@@ -20,9 +20,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.ui.widgets_tooltips import apply_tooltip
+from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     DEFAULT_SPINDLE_RPM,
@@ -35,25 +37,90 @@ from simple_sender.utils.constants import (
 )
 
 
+def _coerce_non_negative_int(raw_value, fallback: int) -> int:
+    try:
+        value = int(round(float(raw_value)))
+    except Exception:
+        return int(fallback)
+    return max(0, int(value))
+
+
+def _spindle_control_rpm_from_settings(app) -> int:
+    settings = getattr(app, "settings", {})
+    if not isinstance(settings, dict):
+        return int(DEFAULT_SPINDLE_RPM)
+    return _coerce_non_negative_int(settings.get("spindle_control_rpm", DEFAULT_SPINDLE_RPM), DEFAULT_SPINDLE_RPM)
+
+
+def _save_spindle_control_rpm_setting(app) -> int:
+    current = _spindle_control_rpm_from_settings(app)
+    var = getattr(app, "spindle_rpm_var", None)
+    if var is None:
+        return int(current)
+    try:
+        raw = var.get()
+    except Exception:
+        raw = str(current)
+    rpm = _coerce_non_negative_int(raw, current)
+    try:
+        var.set(str(rpm))
+    except Exception:
+        pass
+    settings = getattr(app, "settings", None)
+    if not isinstance(settings, dict):
+        return int(rpm)
+    settings["spindle_control_rpm"] = int(rpm)
+    return int(rpm)
+
+
+def _current_spindle_rpm(app) -> int:
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            return _coerce_non_negative_int(macro_vars.get("curspindle", 0), 0)
+    except Exception:
+        return 0
+
+
+def _run_spindle_on(app) -> None:
+    rpm = _save_spindle_control_rpm_setting(app)
+    app._confirm_and_run("Spindle ON", lambda: app.grbl.spindle_on(rpm))
+
+
 def build_overdrive_tab(app, parent):
     container = ttk.Frame(parent)
     container.pack(fill="both", expand=True)
 
+    tools_frame = ttk.Labelframe(container, text="Tools", padding=8)
+    tools_frame.pack(fill="x", pady=(0, 10))
+
+    app.btn_spoilboard = ttk.Button(
+        tools_frame,
+        text="Spoilboard",
+        command=lambda: app._confirm_and_run("Spoilboard Generator", app._show_spoilboard_generator_dialog),
+    )
+    set_kb_id(app.btn_spoilboard, "spoilboard_generator")
+    app.btn_spoilboard.pack(side="left")
+    app._manual_controls.append(app.btn_spoilboard)
+    app._offline_controls.add(app.btn_spoilboard)
+    apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
+
     spindle_frame = ttk.Labelframe(container, text="Spindle Control", padding=8)
     spindle_frame.pack(fill="x", pady=(0, 10))
+    spindle_btn_row = ttk.Frame(spindle_frame)
+    spindle_btn_row.pack(fill="x")
     app.btn_spindle_on = ttk.Button(
-        spindle_frame,
+        spindle_btn_row,
         text="Spindle ON",
-        command=lambda: app._confirm_and_run("Spindle ON", lambda: app.grbl.spindle_on(DEFAULT_SPINDLE_RPM)),
+        command=lambda: _run_spindle_on(app),
     )
     set_kb_id(app.btn_spindle_on, "spindle_on")
     app.btn_spindle_on.pack(side="left", padx=(0, 6))
     app._manual_controls.append(app.btn_spindle_on)
-    apply_tooltip(app.btn_spindle_on, "Turn spindle on at default RPM.")
-    attach_log_gcode(app.btn_spindle_on, f"M3 S{DEFAULT_SPINDLE_RPM}")
+    apply_tooltip(app.btn_spindle_on, "Turn spindle on at the configured RPM.")
+    attach_log_gcode(app.btn_spindle_on, lambda: f"M3 S{_save_spindle_control_rpm_setting(app)}")
 
     app.btn_spindle_off = ttk.Button(
-        spindle_frame,
+        spindle_btn_row,
         text="Spindle OFF",
         command=lambda: app._confirm_and_run("Spindle OFF", app.grbl.spindle_off),
     )
@@ -63,18 +130,41 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_spindle_off, "Turn spindle off.")
     attach_log_gcode(app.btn_spindle_off, "M5")
 
-    app.btn_spoilboard = ttk.Button(
-        spindle_frame,
-        text="Spoilboard",
-        command=lambda: app._confirm_and_run(
-            "Spoilboard Generator", app._show_spoilboard_generator_dialog
-        ),
+    app.spindle_current_rpm_var = tk.StringVar(value=str(_current_spindle_rpm(app)))
+    current_row = ttk.Frame(spindle_frame)
+    current_row.pack(fill="x", pady=(8, 4))
+    ttk.Label(current_row, text="Current spindle speed:").pack(side="left")
+    ttk.Label(current_row, textvariable=app.spindle_current_rpm_var).pack(side="left", padx=(8, 2))
+    ttk.Label(current_row, text="RPM").pack(side="left")
+
+    app.spindle_rpm_var = tk.StringVar(value=str(_spindle_control_rpm_from_settings(app)))
+    rpm_row = ttk.Frame(spindle_frame)
+    rpm_row.pack(fill="x", pady=(2, 0))
+    ttk.Label(rpm_row, text="Spindle RPM:").pack(side="left")
+    app.spindle_rpm_entry = ttk.Entry(rpm_row, textvariable=app.spindle_rpm_var, width=10)
+    app.spindle_rpm_entry.pack(side="left", padx=(8, 6))
+    attach_numeric_keypad(
+        app.spindle_rpm_entry,
+        allow_decimal=False,
+        allow_negative=False,
+        allow_empty=False,
     )
-    set_kb_id(app.btn_spoilboard, "spoilboard_generator")
-    app.btn_spoilboard.pack(side="left", padx=(6, 0))
-    app._manual_controls.append(app.btn_spoilboard)
-    app._offline_controls.add(app.btn_spoilboard)
-    apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
+    app.spindle_rpm_entry.bind("<Return>", lambda _event: _save_spindle_control_rpm_setting(app))
+    app.spindle_rpm_entry.bind("<FocusOut>", lambda _event: _save_spindle_control_rpm_setting(app))
+    app.btn_spindle_rpm_apply = ttk.Button(
+        rpm_row,
+        text="Apply RPM",
+        command=lambda: _save_spindle_control_rpm_setting(app),
+    )
+    app.btn_spindle_rpm_apply.pack(side="left")
+    apply_tooltip(
+        app.spindle_rpm_entry,
+        "Set the RPM used by Spindle ON.",
+    )
+    apply_tooltip(
+        app.btn_spindle_rpm_apply,
+        "Save the Spindle ON RPM.",
+    )
 
     info_label = ttk.Label(container, textvariable=app.override_info_var, anchor="center")
     info_label.pack(fill="x", pady=(0, 4))

@@ -555,6 +555,18 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
         macro_updates["curfeed"] = fields.feed
     if fields.spindle is not None:
         macro_updates["curspindle"] = fields.spindle
+        mpos_rpm_var = getattr(app, "mpos_rpm", None)
+        if mpos_rpm_var is not None:
+            try:
+                mpos_rpm_var.set(str(int(round(float(fields.spindle)))))
+            except Exception as exc:
+                _log_suppressed("Failed updating MPos spindle-RPM display", exc)
+        spindle_rpm_var = getattr(app, "spindle_current_rpm_var", None)
+        if spindle_rpm_var is not None:
+            try:
+                spindle_rpm_var.set(str(int(round(float(fields.spindle)))))
+            except Exception as exc:
+                _log_suppressed("Failed updating spindle current-speed display", exc)
     if fields.planner is not None:
         macro_updates["planner"] = fields.planner
         try:
