@@ -34,26 +34,55 @@ def resolve_disabled_reason(widget: Any, resolve_owner: Callable[[Any, str], Any
     grbl_ready = bool(getattr(app, "_grbl_ready", False))
     status_seen = bool(getattr(app, "_status_seen", False))
     alarm_locked = bool(getattr(app, "_alarm_locked", False))
+    connecting = bool(getattr(app, "_connecting", False))
+    disconnecting = bool(getattr(app, "_disconnecting", False))
+    done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
     stream_state = getattr(app, "_stream_state", None)
     loading = bool(getattr(app, "_gcode_loading", False))
 
     def basic_reason() -> str | None:
+        if connecting:
+            return "Connecting to controller."
+        if disconnecting:
+            return "Disconnecting from controller."
         if alarm_locked:
             return "Clear the alarm to enable."
         if not connected:
             return "Connect to enable."
-        if not grbl_ready or not status_seen:
-            return "Waiting for GRBL status."
-        if stream_state in ("running", "paused"):
-            return "Disabled while streaming."
+        if not grbl_ready:
+            return "Waiting for Grbl startup handshake."
+        if not status_seen:
+            return "Waiting for first status report."
+        if done_pending_idle:
+            return "Waiting for machine to return to Idle."
+        if stream_state == "running":
+            return "Disabled while job is running."
+        if stream_state == "paused":
+            return "Disabled while job is paused."
         if loading:
             return "Waiting for G-code to load."
         return None
 
     if widget in getattr(app, "_manual_controls", []):
         return basic_reason() or "Unavailable in current state."
+    if widget is getattr(app, "btn_conn", None):
+        if stream_state in ("running", "paused") or done_pending_idle:
+            return "Stop the stream before disconnecting."
+        return basic_reason()
+    if widget is getattr(app, "btn_refresh", None):
+        if stream_state in ("running", "paused") or done_pending_idle:
+            return "Stop the stream before refreshing ports."
+        return basic_reason()
+    if widget is getattr(app, "port_combo", None):
+        if stream_state in ("running", "paused") or done_pending_idle:
+            return "Stop the stream before changing ports."
+        return basic_reason()
+    if widget is getattr(app, "btn_unit_toggle", None):
+        if stream_state in ("running", "paused") or done_pending_idle:
+            return "Unit toggle disabled while streaming."
+        return basic_reason()
     if widget is getattr(app, "btn_open", None):
-        if stream_state in ("running", "paused"):
+        if stream_state in ("running", "paused") or done_pending_idle:
             return "Stop the stream to load a new job."
         return basic_reason()
     if widget is getattr(app, "btn_run", None):

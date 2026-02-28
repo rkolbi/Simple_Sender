@@ -73,6 +73,7 @@ _APP_TYPE_CHECKING_STUBS: tuple[str, ...] = (
     "_restore_joystick_bindings_on_start",
     "_on_app_focus_out",
     "_on_close",
+    "_bind_touch_command_feedback",
     "refresh_ports",
     "_load_grbl_setting_info",
     "_create_virtual_hold_buttons",
@@ -203,6 +204,7 @@ class App(tk.Tk):
         def _restore_joystick_bindings_on_start(self) -> None: ...
         def _on_app_focus_out(self, event: Any | None = None) -> None: ...
         def _on_close(self) -> None: ...
+        def _bind_touch_command_feedback(self) -> None: ...
         def refresh_ports(self, auto_connect: bool = False) -> None: ...
         def _load_grbl_setting_info(self) -> None: ...
         def _create_virtual_hold_buttons(self) -> list[Any]: ...
@@ -232,6 +234,7 @@ class App(tk.Tk):
         # Top + main layout
         self._build_toolbar()
         self._build_main()
+        self._bind_touch_command_feedback()
         self._init_screen_lock_guard()
         self._set_manual_controls_enabled(False)
 

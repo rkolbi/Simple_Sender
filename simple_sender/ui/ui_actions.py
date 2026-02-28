@@ -93,6 +93,10 @@ _SCROLLBAR_WIDTHS = {
     "widest": 40,
 }
 _TOUCH_SCROLL_MODES = {"thumb_only", "thumb_and_swipe"}
+_TOUCH_FEEDBACK_STATUS_PREFIX = "Touch received: "
+_TOUCH_FEEDBACK_STATUS_MS = 850
+_TOUCH_FEEDBACK_PULSE_MS = 120
+_TOUCH_FEEDBACK_CANVAS_HIGHLIGHT = "#1b8bd8"
 
 def _style_scrollbar_width(style) -> int | None:
     if style is None:
@@ -300,6 +304,175 @@ def on_touch_scroll_mode_change(app, _event=None):
         )
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for touch-scroll mode change", exc)
+
+
+def _is_widget_disabled(widget) -> bool:
+    try:
+        instate = getattr(widget, "instate", None)
+        if callable(instate):
+            if bool(instate(("disabled",))):
+                return True
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        pass
+    try:
+        state = str(widget.cget("state")).strip().lower()
+        return state == "disabled"
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        return False
+
+
+def _looks_like_command_widget(widget) -> bool:
+    invoke = getattr(widget, "invoke", None)
+    if not callable(invoke):
+        return False
+    try:
+        widget_class = str(widget.winfo_class() or "")
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        widget_class = ""
+    class_lower = widget_class.lower()
+    type_name = str(type(widget).__name__)
+    if "button" in class_lower:
+        return True
+    if type_name == "StopSignButton":
+        return True
+    if widget_class in {"Button", "Checkbutton", "Radiobutton", "Menubutton"}:
+        return True
+    return bool(getattr(widget, "_command", None))
+
+
+def _resolve_command_widget(app, widget):
+    current = widget
+    while current is not None:
+        if _looks_like_command_widget(current):
+            return current
+        if current is app:
+            break
+        current = getattr(current, "master", None)
+    return None
+
+
+def _command_widget_label(widget) -> str:
+    for key in ("text", "label"):
+        try:
+            value = str(widget.cget(key) or "").strip()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            continue
+        if value:
+            return value
+    try:
+        name = str(widget.winfo_name() or "").replace("_", " ").strip()
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        name = ""
+    if name:
+        return name
+    try:
+        cls = str(widget.winfo_class() or "").strip()
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        cls = "Command"
+    return cls or "Command"
+
+
+def _pulse_command_widget(widget) -> None:
+    try:
+        state = getattr(widget, "state", None)
+        if callable(state):
+            state(["pressed"])
+            widget.after(_TOUCH_FEEDBACK_PULSE_MS, lambda: state(["!pressed"]))
+            return
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed applying pressed-state pulse for touch feedback", exc)
+    try:
+        relief = widget.cget("relief")
+        widget.config(relief="sunken")
+        widget.after(_TOUCH_FEEDBACK_PULSE_MS, lambda: widget.config(relief=relief))
+        return
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        pass
+    try:
+        highlight = widget.cget("highlightthickness")
+        highlight_bg = widget.cget("highlightbackground")
+        widget.config(highlightthickness=2, highlightbackground=_TOUCH_FEEDBACK_CANVAS_HIGHLIGHT)
+        widget.after(
+            _TOUCH_FEEDBACK_PULSE_MS,
+            lambda: widget.config(highlightthickness=highlight, highlightbackground=highlight_bg),
+        )
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        return
+
+
+def _status_text(app) -> str:
+    try:
+        return str(app.status.cget("text") or "")
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        return str(getattr(getattr(app, "status", None), "text", "") or "")
+
+
+def _set_status_text(app, text: str) -> None:
+    try:
+        app.status.config(text=text)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed setting status text for touch feedback", exc)
+
+
+def _restore_touch_feedback_status(app, expected_text: str) -> None:
+    try:
+        app._touch_feedback_after_id = None
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        pass
+    current = _status_text(app)
+    if current != expected_text:
+        return
+    baseline = str(getattr(app, "_touch_feedback_status_baseline", "") or "")
+    _set_status_text(app, baseline)
+
+
+def _show_touch_feedback_status(app, label: str) -> None:
+    status_widget = getattr(app, "status", None)
+    if status_widget is None:
+        return
+    current = _status_text(app)
+    if not current.startswith(_TOUCH_FEEDBACK_STATUS_PREFIX):
+        try:
+            app._touch_feedback_status_baseline = current
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            pass
+    message = f"{_TOUCH_FEEDBACK_STATUS_PREFIX}{label}"
+    _set_status_text(app, message)
+    after_id = getattr(app, "_touch_feedback_after_id", None)
+    if after_id is not None:
+        try:
+            app.after_cancel(after_id)
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed canceling previous touch-feedback timer", exc)
+    try:
+        app._touch_feedback_after_id = app.after(
+            _TOUCH_FEEDBACK_STATUS_MS,
+            lambda expected=message: _restore_touch_feedback_status(app, expected),
+        )
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed scheduling touch-feedback status restore timer", exc)
+
+
+def on_touch_command_feedback(app, event=None) -> None:
+    widget = getattr(event, "widget", None)
+    command_widget = _resolve_command_widget(app, widget)
+    if command_widget is None or _is_widget_disabled(command_widget):
+        return
+    label = _command_widget_label(command_widget)
+    _pulse_command_widget(command_widget)
+    _show_touch_feedback_status(app, label)
+
+
+def bind_touch_command_feedback(app) -> None:
+    if getattr(app, "_touch_command_feedback_bound", False):
+        return
+    handler = getattr(app, "_on_touch_command_feedback", None)
+    if not callable(handler):
+        return
+    bind_all = getattr(app, "bind_all", None)
+    if callable(bind_all):
+        bind_all("<ButtonRelease-1>", handler, add="+")
+        app._touch_command_feedback_bound = True
 
 
 def toggle_performance(app):

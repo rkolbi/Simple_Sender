@@ -144,7 +144,14 @@ def _toolbar_focus_targets(app: Any) -> tuple[list[Any], list[Any]]:
 
 def _ensure_toolbar_focus_styles(app: Any) -> None:
     style_obj = getattr(app, "style", None)
-    style = style_obj if style_obj is not None else ttk.Style()
+    if style_obj is not None:
+        style = style_obj
+    else:
+        try:
+            style = ttk.Style()
+        except Exception as exc:
+            _log_suppressed("Failed creating ttk.Style for toolbar focus styles", exc)
+            return
     palette = getattr(app, "theme_palette", None) or {}
     icon_style = str(getattr(app, "icon_button_style", "TButton"))
     try:

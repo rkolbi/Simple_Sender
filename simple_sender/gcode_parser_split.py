@@ -89,6 +89,8 @@ class _SplitState:
 
 
 def _line_len_bytes(line: str) -> int:
+    if line.isascii():
+        return len(line) + 1
     return len(line.encode("utf-8")) + 1
 
 

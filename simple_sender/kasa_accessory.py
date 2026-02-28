@@ -155,9 +155,18 @@ class SpindleCommandDetector:
 
 
 class PythonKasaController:
-    def __init__(self) -> None:
+    _DEFAULT_REQUEST_TIMEOUT_S = 15.0
+
+    def __init__(self, *, request_timeout_s: float = _DEFAULT_REQUEST_TIMEOUT_S) -> None:
         self._import_error: Exception | None = None
         self._kasa_discover = None
+        try:
+            timeout = float(request_timeout_s)
+        except (TypeError, ValueError):
+            timeout = self._DEFAULT_REQUEST_TIMEOUT_S
+        if timeout <= 0:
+            timeout = self._DEFAULT_REQUEST_TIMEOUT_S
+        self._request_timeout_s = timeout
         try:
             from kasa import Discover  # type: ignore
         except Exception as exc:  # pragma: no cover - exercised when dependency missing
@@ -171,27 +180,40 @@ class PythonKasaController:
             raise RuntimeError(f"python-kasa dependency unavailable: {detail}")
         return self._kasa_discover
 
-    @staticmethod
-    def _run_coro(coro):
+    def _run_coro(self, coro):
+        timeout_s = self._request_timeout_s
+
+        async def _run_with_timeout():
+            return await asyncio.wait_for(coro, timeout=timeout_s)
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(coro)
+            try:
+                return asyncio.run(_run_with_timeout())
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f"Kasa operation timed out after {timeout_s:.1f}s.") from exc
 
         result_q: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
         def _runner() -> None:
             try:
-                result_q.put((True, asyncio.run(coro)))
+                result_q.put((True, asyncio.run(_run_with_timeout())))
             except Exception as exc:  # pragma: no cover - defensive fallback
                 result_q.put((False, exc))
 
         thread = threading.Thread(target=_runner, daemon=True)
         thread.start()
-        ok, value = result_q.get()
-        thread.join(timeout=0.1)
+        try:
+            ok, value = result_q.get(timeout=timeout_s + 1.0)
+        except queue.Empty as exc:
+            raise TimeoutError(f"Kasa operation timed out after {timeout_s:.1f}s.") from exc
+        finally:
+            thread.join(timeout=0.1)
         if ok:
             return value
+        if isinstance(value, asyncio.TimeoutError):
+            raise TimeoutError(f"Kasa operation timed out after {timeout_s:.1f}s.") from value
         raise value
 
     async def _discover_devices_async(self) -> list[DeviceInfo]:

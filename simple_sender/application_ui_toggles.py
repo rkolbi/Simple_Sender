@@ -52,6 +52,8 @@ from simple_sender.ui.toggle_text import (
 from simple_sender.ui.ui_actions import (
     apply_scrollbar_width,
     apply_ui_scale,
+    bind_touch_command_feedback,
+    on_touch_command_feedback,
     on_gui_logging_change,
     on_performance_mode_change,
     on_scrollbar_width_change,
@@ -125,6 +127,12 @@ class UiTogglesMixin:
 
     def _on_touch_scroll_mode_change(self, _event=None):
         on_touch_scroll_mode_change(self, _event)
+
+    def _on_touch_command_feedback(self, event=None):
+        on_touch_command_feedback(self, event)
+
+    def _bind_touch_command_feedback(self):
+        bind_touch_command_feedback(self)
 
     def _refresh_stop_button_backgrounds(self):
         refresh_stop_button_backgrounds(self)

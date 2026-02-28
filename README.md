@@ -172,7 +172,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
   ![-](pics/grblsettingstab.JPG)
   
-  **App Settings:** Version banner plus sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight + 3D streaming refresh), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
   ![](pics/appsettingstab.JPG)
   
@@ -674,6 +674,7 @@ Use this when you want spindle-related G-code to control smart outlets, such as 
 - Linux only: this section is hidden on non-Linux platforms.
 - Trigger behavior: when the app sends `M3`/`M4`, enabled Kasa outlets turn on; when it sends `M5`, they turn off.
 - Safety: keep a physical e-stop/power cutoff available. Kasa control is convenience automation, not a safety system.
+- Reliability: Kasa device operations use bounded request timeouts (default 15s). If a device call stalls, the action fails with a logged timeout instead of blocking the accessory worker indefinitely.
 
 ### Friendly walkthrough
 The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the master toggle, discover your device on the LAN, and pick it from the dropdown. Then map **Vacuum** and **Spindle Light** to outlet numbers and use the built-in outlet test buttons to confirm each mapping before cutting. If the selected Kasa device only exposes one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.
@@ -706,7 +707,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 26, 2026): `790 passed, 2 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on February 28, 2026): `794 passed, 2 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -860,7 +861,7 @@ python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 150 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-26), and local/CI hooks now enforce `--expected-count 150`.
+5. Static typing gates currently run mypy against 150 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-28), and local/CI hooks now enforce `--expected-count 150`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -967,6 +968,7 @@ The macro panel supports `Macro-1` through `Macro-8`; the repository currently s
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
 - Numeric entries: tapping a numeric field opens a modal keypad that matches the field's input rules (digits, decimal, sign) when enabled in App Settings. Done applies, Cancel restores.
+- Touch command acknowledgment: tapping actionable controls briefly pulses the control and writes `Touch received: <control>` in the status bar so touch input is clearly confirmed.
 
 ### Top Toolbar
 - Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
@@ -1058,6 +1060,11 @@ Macro UI is included below along with the rest of the interface.
 - Save Changes: sends edited settings back to GRBL in sequence.
 - Settings table: scrollable columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
 - Edited highlight: rows with pending edits are highlighted until saved or reverted.
+
+### App Settings: Global Controls
+- Search: filters App Settings sections by category/title/keywords.
+- View mode: `Basic` shows day-to-day controls; `Advanced` reveals all sections.
+- Sticky section title: the active category remains pinned while scrolling and updates to match current filters.
 
 ### App Settings: Theme
 - UI theme (dropdown): selects the ttk theme; some themes apply fully after restart.

@@ -23,9 +23,8 @@
 import time
 import logging
 from dataclasses import dataclass
-from typing import cast
 
-from simple_sender.ui.dro import convert_units, format_dro_value
+from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 
@@ -358,6 +357,10 @@ def _parse_xyz_triplet(text: str) -> list[float] | None:
         return None
 
 
+def _unit_scale_cached(unit_mode: str) -> float:
+    return 25.4 if str(unit_mode or "").lower() == "inch" else 1.0
+
+
 def _set_var_if_changed(var, value: str) -> bool:
     try:
         current = var.get()
@@ -377,7 +380,11 @@ def _set_var_if_changed(var, value: str) -> bool:
 def _xyz_tuple_changed(previous: tuple[float, float, float] | None, current: tuple[float, float, float]) -> bool:
     if not previous or len(previous) < 3:
         return True
-    return any(abs(float(previous[idx]) - float(current[idx])) > 1e-9 for idx in range(3))
+    return (
+        abs(previous[0] - current[0]) > 1e-9
+        or abs(previous[1] - current[1]) > 1e-9
+        or abs(previous[2] - current[2]) > 1e-9
+    )
 
 
 def _flash_wpos_labels(app) -> None:
@@ -440,12 +447,16 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
 
     report_units = getattr(app, "_report_units", None) or app.unit_mode.get()
     modal_units = app.unit_mode.get()
+    report_scale = _unit_scale_cached(report_units)
+    modal_scale = _unit_scale_cached(modal_units)
+    to_mm_factor = report_scale
+    to_modal_factor = report_scale / modal_scale
 
     def to_mm(value: float) -> float:
-        return cast(float, convert_units(value, report_units, "mm"))
+        return value * to_mm_factor
 
     def to_modal(value: float) -> float:
-        return cast(float, convert_units(value, report_units, modal_units))
+        return value * to_modal_factor
 
     macro_updates: dict[str, object] = {}
     wpos_calc = None
