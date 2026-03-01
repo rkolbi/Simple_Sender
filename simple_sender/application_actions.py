@@ -58,6 +58,7 @@ from simple_sender.ui.ui_actions import (
 from simple_sender.ui.kasa_actions import (
     discover_kasa_devices,
     handle_outgoing_gcode_line,
+    handle_stream_spindle_state,
     kasa_settings_snapshot,
     log_kasa_message,
     on_kasa_command_result,
@@ -66,6 +67,10 @@ from simple_sender.ui.kasa_actions import (
     on_kasa_master_change,
     refresh_kasa_controls_state,
     refresh_kasa_outlet_list,
+    start_job_accessories,
+    stop_job_accessories,
+    toggle_kasa_light_quick,
+    toggle_kasa_vacuum_quick,
     test_kasa_outlet,
 )
 
@@ -176,5 +181,26 @@ class ActionsMixin:
     def _refresh_kasa_controls_state(self) -> None:
         refresh_kasa_controls_state(self)
 
-    def _handle_outgoing_gcode_line(self, line: str, source: str) -> None:
-        handle_outgoing_gcode_line(self, line, source)
+    def _handle_outgoing_gcode_line(
+        self,
+        line: str,
+        source: str,
+        *,
+        line_index: int | None = None,
+    ) -> None:
+        handle_outgoing_gcode_line(self, line, source, line_index=line_index)
+
+    def _handle_stream_spindle_state(self, is_on: bool) -> None:
+        handle_stream_spindle_state(self, is_on)
+
+    def _start_job_accessories(self, source: str = "job_run") -> None:
+        start_job_accessories(self, source=source)
+
+    def _stop_job_accessories(self, source: str = "job_stop") -> None:
+        stop_job_accessories(self, source=source)
+
+    def _toggle_kasa_vacuum_quick(self) -> None:
+        toggle_kasa_vacuum_quick(self)
+
+    def _toggle_kasa_light_quick(self) -> None:
+        toggle_kasa_light_quick(self)

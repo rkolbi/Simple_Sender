@@ -161,6 +161,18 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     if start_index < 0 or start_index >= total_lines:
         messagebox.showwarning("Resume", "Line number is out of range.")
         return
+    try:
+        app._kasa_last_stream_line_index = int(start_index) - 1
+    except (AttributeError, TypeError, ValueError) as exc:
+        _log_suppressed("Failed setting Kasa stream-line index before resume-from", exc)
+    accessory_router = getattr(app, "accessory_router", None)
+    if accessory_router is not None:
+        reset_debounce = getattr(accessory_router, "reset_debounce", None)
+        if callable(reset_debounce):
+            try:
+                reset_debounce()
+            except Exception as exc:
+                _log_suppressed("Failed resetting Kasa debounce state before resume-from", exc)
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._clear_pending_ui_updates()
     app.gview.clear_highlights()
@@ -175,3 +187,14 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
         app.progress_pct.set(pct)
     app.status.config(text=f"Resuming at line {start_index + 1}")
     app.grbl.start_stream_from(start_index, preamble)
+    started = False
+    try:
+        started = bool(app.grbl.is_streaming())
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL streaming state after Resume From", exc)
+    if started:
+        try:
+            if hasattr(app, "_start_job_accessories"):
+                app._start_job_accessories("job_resume")
+        except Exception as exc:
+            _log_suppressed("Failed starting Kasa job accessories on Resume From", exc)

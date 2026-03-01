@@ -244,6 +244,8 @@ def _build_ui_settings(
         "show_quick_3d_button": bool(app.show_quick_3d_button.get()),
         "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
         "show_quick_alo_button": bool(app.show_quick_alo_button.get()),
+        "show_quick_vac_button": bool(app.show_quick_vac_button.get()),
+        "show_quick_light_button": bool(app.show_quick_light_button.get()),
         "show_quick_release_button": bool(app.show_quick_release_button.get()),
         "error_dialog_interval": app._error_dialog_interval,
         "error_dialog_burst_window": app._error_dialog_burst_window,

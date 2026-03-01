@@ -579,7 +579,7 @@ def build_app_settings_tab(app, notebook):
     _add_section(
         "System",
         build_power_section,
-        mode="advanced",
+        mode="basic",
         description="Linux-only shutdown and reboot actions.",
         keywords=("shutdown", "reboot", "linux"),
     )

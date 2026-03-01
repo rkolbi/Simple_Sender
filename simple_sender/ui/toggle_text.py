@@ -91,3 +91,15 @@ def refresh_autolevel_overlay_toggle_text(app):
         if btn:
             btn.config(text=text)
             _apply_toggle_button_state(app, btn, enabled)
+
+
+def refresh_kasa_quick_toggle_text(app):
+    vac_btn = getattr(app, "btn_toggle_kasa_vacuum", None)
+    if vac_btn is not None:
+        vac_btn.config(text="Vac")
+        _apply_toggle_button_state(app, vac_btn, bool(getattr(app, "_kasa_vacuum_quick_on", False)))
+
+    light_btn = getattr(app, "btn_toggle_kasa_light", None)
+    if light_btn is not None:
+        light_btn.config(text="Light")
+        _apply_toggle_button_state(app, light_btn, bool(getattr(app, "_kasa_light_quick_on", False)))

@@ -36,6 +36,14 @@ def _log_stream_ui_issue(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc)
 
 
+def _stop_job_accessories_for_state(app, state: str) -> None:
+    try:
+        if hasattr(app, "_stop_job_accessories"):
+            app._stop_job_accessories(f"job_{state}")
+    except Exception as exc:
+        _log_stream_ui_issue("Failed stopping Kasa job accessories on stream-state transition", exc)
+
+
 def handle_stream_state_event(app, evt):
     st = evt[1]
     prev = app._stream_state
@@ -117,6 +125,7 @@ def handle_stream_state_event(app, evt):
         app._set_manual_controls_enabled(False)
         app._set_streaming_lock(True)
     elif st in ("done", "stopped"):
+        _stop_job_accessories_for_state(app, st)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -139,6 +148,7 @@ def handle_stream_state_event(app, evt):
                 set_run_resume_hook=set_run_resume_from,
             )
     elif st == "error":
+        _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
@@ -153,6 +163,7 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="disabled")
         app.status.config(text=f"Stream error: {evt[2]}")
     elif st == "alarm":
+        _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False

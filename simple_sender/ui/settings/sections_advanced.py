@@ -227,6 +227,28 @@ def _build_status_bar_button_visibility_row(app, interface_frame, row: int) -> i
         app.quick_alo_check,
         "Show or hide the Auto-Level Overlay quick button in the status bar.",
     )
+    app.quick_vac_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="Vac",
+        variable=app.show_quick_vac_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_vac_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(
+        app.quick_vac_check,
+        "Show or hide the Vacuum quick button in the status bar.",
+    )
+    app.quick_light_check = ttk.Checkbutton(
+        quick_buttons_row,
+        text="Light",
+        variable=app.show_quick_light_button,
+        command=app._on_quick_button_visibility_change,
+    )
+    app.quick_light_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(
+        app.quick_light_check,
+        "Show or hide the Spindle Light quick button in the status bar.",
+    )
     app.quick_release_check = ttk.Checkbutton(
         quick_buttons_row,
         text="Release",
@@ -289,6 +311,28 @@ def _build_status_bar_quick_toggle_row(app, interface_frame, row: int) -> int:
     apply_tooltip(
         app.btn_toggle_autolevel_overlay_settings,
         "Toggle the Auto-Level overlay in the toolpath views (same as the Auto-Level Overlay quick button).",
+    )
+    app.btn_toggle_kasa_vacuum_settings = ttk.Button(
+        toggle_btn_row,
+        text="Vac",
+        command=app._toggle_kasa_vacuum_quick,
+    )
+    set_kb_id(app.btn_toggle_kasa_vacuum_settings, "toggle_kasa_vacuum_quick_settings")
+    app.btn_toggle_kasa_vacuum_settings.pack(side="left", padx=(8, 0))
+    apply_tooltip(
+        app.btn_toggle_kasa_vacuum_settings,
+        "Toggle the mapped Kasa Vacuum outlet (same as the Vac quick button).",
+    )
+    app.btn_toggle_kasa_light_settings = ttk.Button(
+        toggle_btn_row,
+        text="Light",
+        command=app._toggle_kasa_light_quick,
+    )
+    set_kb_id(app.btn_toggle_kasa_light_settings, "toggle_kasa_light_quick_settings")
+    app.btn_toggle_kasa_light_settings.pack(side="left", padx=(8, 0))
+    apply_tooltip(
+        app.btn_toggle_kasa_light_settings,
+        "Toggle the mapped Kasa Spindle Light outlet (same as the Light quick button).",
     )
     return row + 2
 

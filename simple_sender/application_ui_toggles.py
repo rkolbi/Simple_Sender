@@ -46,6 +46,7 @@ from simple_sender.ui.theme_helpers import (
 )
 from simple_sender.ui.toggle_text import (
     refresh_autolevel_overlay_toggle_text,
+    refresh_kasa_quick_toggle_text,
     refresh_keybindings_toggle_text,
     refresh_tooltips_toggle_text,
 )
@@ -76,6 +77,9 @@ class UiTogglesMixin:
 
     def _refresh_autolevel_overlay_button(self):
         refresh_autolevel_overlay_toggle_text(self)
+
+    def _refresh_kasa_quick_toggle_text(self):
+        refresh_kasa_quick_toggle_text(self)
 
     def _refresh_screen_lock_toggle_text(self):
         refresh_screen_lock_toggle_text(self)

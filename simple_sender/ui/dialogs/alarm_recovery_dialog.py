@@ -78,13 +78,21 @@ def show_alarm_recovery(app) -> None:
         except Exception as exc:
             logger.exception("Failed to close alarm recovery dialog: %s", exc)
 
+    def _reset_with_accessories_off() -> None:
+        try:
+            if hasattr(app, "_stop_job_accessories"):
+                app._stop_job_accessories("job_reset")
+        except Exception as exc:
+            logger.exception("Failed stopping Kasa job accessories before reset: %s", exc)
+        app.grbl.reset()
+
     ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(app.grbl.unlock)).pack(
         side="left", padx=(0, 6)
     )
     ttk.Button(btn_row, text="Home ($H)", command=lambda: run_and_close(app._start_homing)).pack(
         side="left", padx=(0, 6)
     )
-    ttk.Button(btn_row, text="Reset", command=lambda: run_and_close(app.grbl.reset)).pack(
+    ttk.Button(btn_row, text="Reset", command=lambda: run_and_close(_reset_with_accessories_off)).pack(
         side="left", padx=(0, 6)
     )
     ttk.Button(btn_row, text="Close", command=dlg.destroy).pack(side="left")

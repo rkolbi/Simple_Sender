@@ -374,6 +374,7 @@ UiEvent = (
     | tuple[Literal["stream_interrupted"], bool, str | None]
     | tuple[Literal["stream_error"], str, int | None, str | None, str | None]
     | tuple[Literal["stream_pause_reason"], str]
+    | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]
     | tuple[Literal["gcode_acked"], int]
     | tuple[Literal["progress"], int, int]

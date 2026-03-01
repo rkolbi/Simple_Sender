@@ -129,6 +129,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_quick_3d_button": True,
     "show_quick_keys_button": True,
     "show_quick_alo_button": True,
+    "show_quick_vac_button": True,
+    "show_quick_light_button": True,
     "show_quick_release_button": True,
     "status_poll_interval": 0.2,
     "status_query_failure_limit": 3,
@@ -142,13 +144,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "scrollbar_width": "wide",
     "touch_scroll_mode": "thumb_and_swipe",
     "toolpath_arc_detail_deg": 9.031746031746032,
-    "toolpath_draw_percent": 82,
-    "toolpath_full_limit": 33611,
+    "toolpath_draw_percent": 70,
+    "toolpath_full_limit": 30000,
     "toolpath_full_parse_limit": 0,
-    "toolpath_interactive_limit": 4270,
+    "toolpath_interactive_limit": 3500,
     "toolpath_lightweight": False,
     "toolpath_low_power": False,
-    "toolpath_performance": 81.74603174603175,
+    "toolpath_performance": 60.0,
     "toolpath_quality": 100.0,
     "toolpath_renderer": "canvas",
     "toolpath_show_arc": True,
@@ -234,6 +236,17 @@ def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
 
     if "auto_reconnect" in migrated and "reconnect_on_open" not in migrated:
         migrated["reconnect_on_open"] = bool(migrated.get("auto_reconnect"))
+
+    # Rebalance legacy toolpath defaults so Top View keeps higher detail while
+    # 3D defaults remain responsive. Only rewrite known old-default values.
+    if migrated.get("toolpath_full_limit") == 33611:
+        migrated["toolpath_full_limit"] = 30000
+    if migrated.get("toolpath_interactive_limit") == 4270:
+        migrated["toolpath_interactive_limit"] = 3500
+    if migrated.get("toolpath_draw_percent") == 82:
+        migrated["toolpath_draw_percent"] = 70
+    if migrated.get("toolpath_performance") == 81.74603174603175:
+        migrated["toolpath_performance"] = 60.0
 
     return migrated
 

@@ -368,16 +368,16 @@ VIEW_3D_STREAMING_RENDER_INTERVAL_MAX = 2.0
 VIEW_3D_FAST_MODE_DURATION = 0.3
 """Duration to stay in fast mode after interaction (seconds)."""
 
-VIEW_3D_MAX_SEGMENTS_FULL = 40000
+VIEW_3D_MAX_SEGMENTS_FULL = 30000
 """Maximum segments to draw in full quality mode."""
 
-VIEW_3D_MAX_SEGMENTS_INTERACTIVE = 5000
+VIEW_3D_MAX_SEGMENTS_INTERACTIVE = 3500
 """Maximum segments to draw during interaction."""
 
-VIEW_3D_PREVIEW_TARGET = 1000
+VIEW_3D_PREVIEW_TARGET = 800
 """Target segment count for preview mode."""
 
-VIEW_3D_LIGHTWEIGHT_PREVIEW_TARGET = 400
+VIEW_3D_LIGHTWEIGHT_PREVIEW_TARGET = 300
 """Target segment count for lightweight preview mode."""
 
 VIEW_3D_FULL_PARSE_LIMIT = 20000
@@ -409,6 +409,12 @@ TOOLPATH_OVERLAY_TEXT_MARGIN = 12
 
 TOOLPATH_ORIGIN_CROSS_SIZE = 6
 """Crosshair size (pixels) for origin marker."""
+
+TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT = 50000
+"""Maximum segments to keep when parsing job preview data for Top View."""
+
+TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT = 35000
+"""Maximum Top View segments to draw per render pass."""
 
 TOOLPATH_GRID_MAX_POINTS = 800
 """Maximum grid points to draw for auto-level overlay."""

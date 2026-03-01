@@ -352,13 +352,15 @@ def handle_event(app: Any, evt: UiEvent):
         case ("stream_pause_reason", reason):
             _handle_stream_pause_reason_event(app, reason)
             return
-        case ("gcode_sent", idx, line):
-            app.streaming_controller.handle_gcode_sent(idx)
+        case ("spindle_state", is_on, _idx):
             try:
-                if hasattr(app, "_handle_outgoing_gcode_line"):
-                    app._handle_outgoing_gcode_line(cast(str, line), "stream")
+                if hasattr(app, "_handle_stream_spindle_state"):
+                    app._handle_stream_spindle_state(bool(cast(bool, is_on)))
             except Exception as exc:
-                _log_suppressed("Failed processing outbound streamed line for Kasa routing", exc)
+                _log_suppressed("Failed processing streamed spindle-state event for Kasa routing", exc)
+            return
+        case ("gcode_sent", idx, _line):
+            app.streaming_controller.handle_gcode_sent(idx)
             return
         case ("gcode_acked", idx):
             app.streaming_controller.handle_gcode_acked(idx)

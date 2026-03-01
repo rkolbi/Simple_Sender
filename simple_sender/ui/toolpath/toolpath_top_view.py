@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Top view toolpath panel."""
 
+import math
 import threading
 import logging
 import tkinter as tk
@@ -32,6 +33,7 @@ from simple_sender.gcode_parser import parse_gcode_lines
 from simple_sender.ui.widgets_common import _resolve_widget_bg
 from simple_sender.utils.constants import (
     TOOLPATH_CANVAS_MARGIN,
+    TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT,
     TOOLPATH_GRID_MAX_POINTS,
     TOOLPATH_GRID_POINT_RADIUS,
     TOOLPATH_ORIGIN_CROSS_SIZE,
@@ -77,6 +79,7 @@ class TopViewPanel(ttk.Frame):
         self._position_item: Any | None = None
         self._overlay_grid: ProbeGrid | None = None
         self._status_message: str | None = None
+        self._render_segment_limit = TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT
         self._scene_revision = 0
         self._last_render_signature: tuple[int, int, int] | None = None
 
@@ -136,8 +139,9 @@ class TopViewPanel(ttk.Frame):
         *,
         lines_hash: str | None = None,
     ) -> None:
+        segment_list = self._normalize_segments(segments)
         if lines_hash is not None and lines_hash == self._last_lines_hash:
-            self.segments = list(segments) if segments else []
+            self.segments = segment_list
             self.bounds = bounds
             self._status_message = None
             self._invalidate_scene()
@@ -145,11 +149,21 @@ class TopViewPanel(ttk.Frame):
             return
         self._parse_token += 1
         self._last_lines_hash = lines_hash
-        self.segments = list(segments) if segments else []
+        self.segments = segment_list
         self.bounds = bounds
         self._status_message = None
         self._invalidate_scene()
         self._schedule_render()
+
+    @staticmethod
+    def _normalize_segments(
+        segments: Sequence[tuple[float, float, float, float, float, float, str]] | None,
+    ) -> list[tuple[float, float, float, float, float, float, str]]:
+        if not segments:
+            return []
+        if isinstance(segments, list):
+            return segments
+        return list(segments)
 
     def _apply_parse_result(self, token: int, result: Any) -> None:
         if token != self._parse_token or result is None:
@@ -268,6 +282,12 @@ class TopViewPanel(ttk.Frame):
             "height": h,
         }
 
+        render_segments = self.segments
+        total_segments = len(render_segments)
+        if self._render_segment_limit > 0 and total_segments > self._render_segment_limit:
+            stride = max(2, math.ceil(total_segments / self._render_segment_limit))
+            render_segments = render_segments[::stride]
+
         runs: dict[str, list[list[float]]] = {}
         cur_color = None
         cur_pts: list[float] = []
@@ -282,7 +302,7 @@ class TopViewPanel(ttk.Frame):
             last_end = None
 
         eps = 1e-6
-        for x1, y1, _, x2, y2, _, color in self.segments:
+        for x1, y1, _, x2, y2, _, color in render_segments:
             px1, py1 = to_canvas(x1, y1)
             px2, py2 = to_canvas(x2, y2)
             continuous = (
@@ -352,7 +372,12 @@ class TopViewPanel(ttk.Frame):
             self.canvas.create_line(ox - cross, oy, ox + cross, oy, fill="#ffffff")
             self.canvas.create_line(ox, oy - cross, ox, oy + cross, fill="#ffffff")
 
-        overlay = [f"Segments: {len(self.segments):,}", "View: Top"]
+        drawn_segments = len(render_segments)
+        if drawn_segments == total_segments:
+            segment_text = f"Segments: {total_segments:,}"
+        else:
+            segment_text = f"Segments: {drawn_segments:,}/{total_segments:,}"
+        overlay = [segment_text, "View: Top"]
         if self._overlay_grid:
             overlay.insert(
                 0,

@@ -161,6 +161,10 @@ def _init_kasa_runtime_state(app, tk) -> None:
     app._kasa_outlet_count = 2
     app._kasa_outlet_updating = False
     app._kasa_last_valid_outlets = (vacuum_outlet, light_outlet)
+    app._kasa_last_stream_line_index = -1
+    app._kasa_job_active_outlets = set()
+    app._kasa_vacuum_quick_on = False
+    app._kasa_light_quick_on = False
 
 
 def _clamp_float_setting(setting, key: str, fallback: float) -> float:

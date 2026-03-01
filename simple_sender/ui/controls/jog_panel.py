@@ -554,17 +554,17 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
 
     btns = ttk.Frame(align)
     btns.grid(row=4, column=2, sticky="new", pady=2)
-    app.btn_zero_all = ttk.Button(btns, text="Zero All", command=app.zero_all)
-    set_kb_id(app.btn_zero_all, "zero_all")
-    app.btn_zero_all.pack(side="left", expand=True, fill="x")
-    app._manual_controls.append(app.btn_zero_all)
-    app._refresh_zeroing_ui()
     app.btn_goto_zero = ttk.Button(btns, text="Goto Zero", command=app.goto_zero)
     set_kb_id(app.btn_goto_zero, "goto_zero")
-    app.btn_goto_zero.pack(side="left", expand=True, fill="x", padx=(6, 0))
+    app.btn_goto_zero.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_goto_zero)
     apply_tooltip(app.btn_goto_zero, "Rapid move to WCS X0 Y0 first, then Z0 (absolute mode).")
     attach_log_gcode(app.btn_goto_zero, "G90 G0 X0 Y0; G0 Z0")
+    app.btn_zero_all = ttk.Button(btns, text="Zero All", command=app.zero_all)
+    set_kb_id(app.btn_zero_all, "zero_all")
+    app.btn_zero_all.pack(side="left", expand=True, fill="x", padx=(6, 0))
+    app._manual_controls.append(app.btn_zero_all)
+    app._refresh_zeroing_ui()
 
     _bind_position_column_sync(app, align)
     return sep_mpos, sep_wpos, sep_jog_line

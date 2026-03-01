@@ -48,6 +48,11 @@ def all_stop_action(app):
         _log_suppressed("Failed stopping joystick hold before ALL STOP action", exc)
     if not app._require_grbl_connection():
         return
+    try:
+        if hasattr(app, "_stop_job_accessories"):
+            app._stop_job_accessories("job_all_stop")
+    except Exception as exc:
+        _log_suppressed("Failed stopping Kasa job accessories during ALL STOP", exc)
     mode = app.all_stop_mode.get()
     if mode == "reset":
         app.grbl.reset()

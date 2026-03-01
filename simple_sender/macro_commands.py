@@ -181,6 +181,11 @@ def _handle_named_macro_command(
         grbl.unlock()
         return True
     if cmd == "RESET":
+        try:
+            if hasattr(app, "_stop_job_accessories"):
+                app._stop_job_accessories("job_reset")
+        except Exception:
+            pass
         grbl.reset()
         return True
     if cmd in ("PAUSE", "FEEDHOLD"):
@@ -190,10 +195,41 @@ def _handle_named_macro_command(
         grbl.resume()
         return True
     if cmd == "STOP":
+        try:
+            if hasattr(app, "_stop_job_accessories"):
+                app._stop_job_accessories("job_stop")
+        except Exception:
+            pass
         grbl.stop_stream()
         return True
     if cmd == "RUN":
+        try:
+            app._kasa_last_stream_line_index = -1
+        except Exception:
+            pass
+        accessory_router = getattr(app, "accessory_router", None)
+        if accessory_router is not None:
+            reset_debounce = getattr(accessory_router, "reset_debounce", None)
+            if callable(reset_debounce):
+                try:
+                    reset_debounce()
+                except Exception:
+                    pass
+        try:
+            grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
+        except Exception:
+            pass
         grbl.start_stream()
+        try:
+            started = bool(grbl.is_streaming())
+        except Exception:
+            started = False
+        if started:
+            try:
+                if hasattr(app, "_start_job_accessories"):
+                    app._start_job_accessories("job_run")
+            except Exception:
+                pass
         return True
     if cmd in ("STATE_RETURN", "STATE-RETURN"):
         return macro_restore_state()

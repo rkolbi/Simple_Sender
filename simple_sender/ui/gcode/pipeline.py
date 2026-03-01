@@ -51,6 +51,7 @@ from simple_sender.utils.constants import (
     MAX_LINE_LENGTH,
     STREAMING_VALIDATION_PROMPT_TIMEOUT,
     STREAMING_VALIDATION_PROMPT_LINES,
+    TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT,
 )
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.viewer.preview_policy import configure_toolpath_preview, set_preview_streaming_state
@@ -81,6 +82,16 @@ _PIPELINE_DEPS = (
     STREAMING_VALIDATION_PROMPT_LINES,
     configure_toolpath_preview,
 )
+
+
+def _preview_parse_segment_limit(app) -> int | None:
+    try:
+        limit = int(TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT)
+    except Exception:
+        limit = 0
+    if limit <= 0:
+        return None
+    return max(2000, limit)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -125,6 +136,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
     app._gcode_parse_token += 1
     token = app._gcode_parse_token
     arc_step = app.toolpath_panel.get_arc_step_rad(len(lines))
+    parse_limit = _preview_parse_segment_limit(app)
 
     def worker():
         try:
@@ -135,6 +147,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
                 lines,
                 arc_step,
                 keep_running=keep_running,
+                max_segments=parse_limit,
                 include_moves=False,
             )
         except Exception as exc:
@@ -172,6 +185,20 @@ def clear_gcode(app):
     if app.grbl.is_streaming():
         messagebox.showwarning("Busy", "Stop the stream before clearing the G-code file.")
         return
+    app._gcode_load_token += 1
+    app._gcode_loading = False
+    try:
+        app._finish_gcode_loading()
+    except Exception as exc:
+        _log_suppressed("Failed finishing G-code loading popup while clearing", exc)
+    try:
+        app._clear_pending_ui_updates()
+    except Exception as exc:
+        _log_suppressed("Failed clearing pending UI updates while clearing G-code", exc)
+    try:
+        app.grbl._clear_outgoing()
+    except Exception as exc:
+        _log_suppressed("Failed clearing pending GRBL outgoing queue while clearing G-code", exc)
     existing_source = getattr(app, "_gcode_source", None)
     if existing_source is not None:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
@@ -194,6 +221,11 @@ def clear_gcode(app):
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None
+    app._stream_state = "loaded"
+    app._stream_start_ts = None
+    app._stream_pause_total = 0.0
+    app._stream_paused_at = None
+    app._stream_done_pending_idle = False
     app._last_gcode_lines = []
     app._last_gcode_path = None
     app._gcode_hash = None
@@ -204,6 +236,7 @@ def clear_gcode(app):
     app._last_stats = None
     app._last_rate_source = None
     app._last_error_index = -1
+    app._manual_queue_drop_total = 0
     _reset_autolevel_state(app)
     app._gcode_parse_token += 1
     after_id = getattr(app, "_stats_after_id", None)
@@ -220,8 +253,32 @@ def clear_gcode(app):
     app.gview.set_lines([])
     app.gcode_stats_var.set("No file loaded")
     app.progress_pct.set(0)
+    try:
+        app.buffer_fill.set("Buffer: 0%")
+        app.buffer_fill_pct.set(0)
+    except Exception as exc:
+        _log_suppressed("Failed resetting buffer-fill UI state after clearing G-code", exc)
+    try:
+        app.throughput_var.set("TX: 0 B/s")
+    except Exception as exc:
+        _log_suppressed("Failed resetting throughput UI state after clearing G-code", exc)
     app.status.config(text="G-code cleared")
     disable_job_controls(app)
+    try:
+        ready = bool(
+            app.connected
+            and app._grbl_ready
+            and app._status_seen
+            and not app._alarm_locked
+        )
+        app._set_manual_controls_enabled(ready)
+        app._set_streaming_lock(False)
+    except Exception as exc:
+        _log_suppressed("Failed restoring control-state lock after clearing G-code", exc)
+    try:
+        app._refresh_toolbar_action_focus()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing toolbar focus after clearing G-code", exc)
     app.toolpath_panel.clear()
     app._job_started_at = None
     app._job_completion_notified = False

@@ -64,6 +64,7 @@ class UiEventQueue:
         "stream_error",
         "stream_interrupted",
         "stream_pause_reason",
+        "spindle_state",
         "stream_state",
         "ui_call",
         "ui_post",

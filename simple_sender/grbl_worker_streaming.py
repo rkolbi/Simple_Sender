@@ -34,6 +34,7 @@ from simple_sender.types import (
     StreamPendingItem,
     StreamQueueItem,
 )
+from simple_sender.kasa_accessory import SpindleCommandDetector
 
 from .utils.constants import EVENT_QUEUE_TIMEOUT, MAX_LINE_LENGTH, RX_BUFFER_SAFETY
 from .utils.exceptions import SerialWriteError
@@ -321,8 +322,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     def _validate_stream_item_locked(
         self,
         item: StreamPendingItem,
-    ) -> tuple[StreamPendingItem, bytes, int] | None:
-        line = self._sanitize_stream_line(item.line)
+    ) -> tuple[StreamPendingItem, bytes, int, bool | None] | None:
+        raw_line = item.line
+        spindle_state = self._detect_spindle_state(raw_line)
+        line = self._sanitize_stream_line(raw_line)
         item = StreamPendingItem(line=line, is_gcode=item.is_gcode, idx=item.idx)
         if item.is_gcode and item.idx is not None and self._pause_after_idx is None:
             reason = self._pause_reason_for_line(line)
@@ -356,7 +359,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._stream_pending_item = item
             return None
 
-        return item, payload, line_len
+        return item, payload, line_len, spindle_state
+
+    @staticmethod
+    def _detect_spindle_state(line: str) -> bool | None:
+        try:
+            return SpindleCommandDetector.detect_state_change(line)
+        except Exception:
+            return None
 
     def _reserve_stream_item_locked(
         self,
@@ -417,7 +427,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 validated = self._validate_stream_item_locked(item)
                 if validated is None:
                     break
-                item, payload, line_len = validated
+                item, payload, line_len, spindle_state = validated
                 queue_item = self._reserve_stream_item_locked(item, line_len)
 
             if self._stream_send_invalidated(stream_token):
@@ -451,6 +461,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._record_tx_line()
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
+            if spindle_state is not None:
+                self.ui_q.put(("spindle_state", bool(spindle_state), queue_item.idx))
             if queue_item.is_gcode:
                 self.ui_q.put(("gcode_sent", queue_item.idx, queue_item.line))
 

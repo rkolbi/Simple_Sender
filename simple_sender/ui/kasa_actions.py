@@ -109,6 +109,146 @@ def kasa_settings_snapshot(app) -> dict[str, Any]:
     }
 
 
+def _kasa_quick_ready(app) -> bool:
+    settings = kasa_settings_snapshot(app)
+    if not bool(settings.get("kasa_enabled", False)):
+        return False
+    return bool(str(settings.get("kasa_device_identifier", "") or "").strip())
+
+
+def _refresh_kasa_quick_ui(app) -> None:
+    try:
+        if hasattr(app, "_refresh_kasa_quick_toggle_text"):
+            app._refresh_kasa_quick_toggle_text()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing Kasa quick-toggle text", exc)
+    try:
+        if hasattr(app, "_update_quick_button_visibility"):
+            app._update_quick_button_visibility()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing Kasa quick-button visibility", exc)
+
+
+def _set_kasa_quick_state(app, *, vacuum: bool | None = None, light: bool | None = None) -> None:
+    if vacuum is not None:
+        try:
+            app._kasa_vacuum_quick_on = bool(vacuum)
+        except Exception as exc:
+            _log_suppressed("Failed updating Kasa vacuum quick-toggle state", exc)
+    if light is not None:
+        try:
+            app._kasa_light_quick_on = bool(light)
+        except Exception as exc:
+            _log_suppressed("Failed updating Kasa light quick-toggle state", exc)
+    _refresh_kasa_quick_ui(app)
+
+
+def _sync_kasa_quick_state_from_result(app, result: OutletCommandResult) -> None:
+    source = str(getattr(result, "source", "") or "").strip().lower()
+    if source == "quick_vac":
+        _set_kasa_quick_state(
+            app,
+            vacuum=bool(result.on) if bool(result.success) else (not bool(result.on)),
+        )
+        return
+    if source == "quick_light":
+        _set_kasa_quick_state(
+            app,
+            light=bool(result.on) if bool(result.success) else (not bool(result.on)),
+        )
+        return
+    if not bool(result.success):
+        return
+    settings = kasa_settings_snapshot(app)
+    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
+    light_enabled = bool(settings.get("light_enabled", False))
+    try:
+        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
+    except Exception:
+        outlet_count = 2
+    if outlet_count < 2:
+        light_enabled = False
+    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
+    light_outlet = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
+    updated = False
+    if vacuum_enabled and int(result.outlet_id) == vacuum_outlet:
+        _set_kasa_quick_state(app, vacuum=bool(result.on))
+        updated = True
+    if light_enabled and int(result.outlet_id) == light_outlet:
+        _set_kasa_quick_state(app, light=bool(result.on))
+        updated = True
+    if not updated:
+        _refresh_kasa_quick_ui(app)
+
+
+def _quick_toggle_request(app, *, channel: str) -> None:
+    if not _kasa_supported():
+        refresh_kasa_controls_state(app)
+        _set_kasa_quick_state(app, vacuum=False, light=False)
+        return
+    settings = kasa_settings_snapshot(app)
+    if not bool(settings.get("kasa_enabled", False)):
+        _set_kasa_quick_state(app, vacuum=False, light=False)
+        return
+    if not str(settings.get("kasa_device_identifier", "") or "").strip():
+        log_kasa_message(app, "No Kasa device selected for quick toggle.")
+        _refresh_kasa_quick_ui(app)
+        return
+    try:
+        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
+    except Exception:
+        outlet_count = 2
+    if channel == "vacuum":
+        enabled = bool(settings.get("vacuum_enabled", False))
+        if not enabled:
+            log_kasa_message(app, "Vacuum quick toggle ignored (Vacuum mapping disabled).")
+            _set_kasa_quick_state(app, vacuum=False)
+            return
+        outlet_id = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
+        target_state = not bool(getattr(app, "_kasa_vacuum_quick_on", False))
+        source = "quick_vac"
+    else:
+        enabled = bool(settings.get("light_enabled", False)) and outlet_count >= 2
+        if not enabled:
+            log_kasa_message(app, "Light quick toggle ignored (Spindle Light mapping disabled).")
+            _set_kasa_quick_state(app, light=False)
+            return
+        outlet_id = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
+        target_state = not bool(getattr(app, "_kasa_light_quick_on", False))
+        source = "quick_light"
+    if int(outlet_id) > outlet_count:
+        log_kasa_message(app, f"Quick toggle ignored: outlet {outlet_id} is unavailable.")
+        _refresh_kasa_quick_ui(app)
+        return
+    try:
+        accepted = bool(
+            app.accessory_router.request_outlet_state(
+                int(outlet_id),
+                bool(target_state),
+                source=source,
+            )
+        )
+    except Exception as exc:
+        _log_suppressed("Failed issuing Kasa quick-toggle command", exc)
+        return
+    if not accepted:
+        log_kasa_message(app, f"Quick toggle command skipped for outlet {outlet_id}.")
+        _refresh_kasa_quick_ui(app)
+        return
+    if channel == "vacuum":
+        _set_kasa_quick_state(app, vacuum=bool(target_state))
+    else:
+        _set_kasa_quick_state(app, light=bool(target_state))
+
+
+def toggle_kasa_vacuum_quick(app) -> None:
+    _quick_toggle_request(app, channel="vacuum")
+
+
+def toggle_kasa_light_quick(app) -> None:
+    _quick_toggle_request(app, channel="light")
+
+
 def log_kasa_message(app, message: str) -> None:
     text = str(message or "").strip()
     if not text:
@@ -195,6 +335,7 @@ def _set_outlet_status(app, result: OutletCommandResult) -> None:
 def on_kasa_command_result(app, result: OutletCommandResult) -> None:
     def _apply() -> None:
         _set_outlet_status(app, result)
+        _sync_kasa_quick_state_from_result(app, result)
         if not result.success:
             detail = f" outlet={result.outlet_id} command={'ON' if result.on else 'OFF'} source={result.source}"
             if result.error:
@@ -341,9 +482,21 @@ def validate_kasa_outlet_mapping(app, *, changed: str | None = None) -> bool:
 
 def on_kasa_mapping_change(app, changed: str | None = None) -> None:
     validate_kasa_outlet_mapping(app, changed=changed)
+    snapshot = kasa_settings_snapshot(app)
+    if not bool(snapshot.get("vacuum_enabled", False)):
+        try:
+            app._kasa_vacuum_quick_on = False
+        except Exception as exc:
+            _log_suppressed("Failed clearing Kasa vacuum quick state after mapping change", exc)
+    if not bool(snapshot.get("light_enabled", False)):
+        try:
+            app._kasa_light_quick_on = False
+        except Exception as exc:
+            _log_suppressed("Failed clearing Kasa light quick state after mapping change", exc)
     if hasattr(app, "accessory_router"):
         app.accessory_router.reset_debounce()
     refresh_kasa_controls_state(app)
+    _refresh_kasa_quick_ui(app)
 
 
 def on_kasa_master_change(app) -> None:
@@ -368,6 +521,7 @@ def on_kasa_master_change(app) -> None:
                 app.kasa_device_identifier.set("")
             except Exception as exc:
                 _log_suppressed("Failed clearing Kasa device identifier on non-Linux platform", exc)
+        _set_kasa_quick_state(app, vacuum=False, light=False)
         refresh_kasa_controls_state(app)
         return
     if hasattr(app, "accessory_router"):
@@ -375,7 +529,9 @@ def on_kasa_master_change(app) -> None:
     if not bool(app.kasa_enabled.get()):
         if hasattr(app, "kasa_validation_var"):
             app.kasa_validation_var.set("")
+        _set_kasa_quick_state(app, vacuum=False, light=False)
     refresh_kasa_controls_state(app)
+    _refresh_kasa_quick_ui(app)
 
 
 def on_kasa_device_selected(app, _event=None) -> None:
@@ -385,6 +541,7 @@ def on_kasa_device_selected(app, _event=None) -> None:
                 app.kasa_device_identifier.set("")
             except Exception as exc:
                 _log_suppressed("Failed clearing Kasa device selection on non-Linux platform", exc)
+        _set_kasa_quick_state(app, vacuum=False, light=False)
         refresh_kasa_controls_state(app)
         return
     option = str(app.kasa_device_choice.get() or "").strip()
@@ -394,7 +551,10 @@ def on_kasa_device_selected(app, _event=None) -> None:
     app.kasa_device_identifier.set(identifier)
     if hasattr(app, "accessory_router"):
         app.accessory_router.reset_debounce()
+    if not identifier:
+        _set_kasa_quick_state(app, vacuum=False, light=False)
     refresh_kasa_controls_state(app)
+    _refresh_kasa_quick_ui(app)
     if identifier:
         refresh_kasa_outlet_list(app)
 
@@ -433,9 +593,11 @@ def _handle_outlet_list_success(app, outlets: list[OutletInfo]) -> None:
         if hasattr(app, "kasa_validation_var"):
             app.kasa_validation_var.set(msg)
         log_kasa_message(app, msg)
+        _set_kasa_quick_state(app, light=False)
     else:
         validate_kasa_outlet_mapping(app)
     refresh_kasa_controls_state(app)
+    _refresh_kasa_quick_ui(app)
 
 
 def _post_ui(app, func, *args) -> None:
@@ -493,24 +655,170 @@ def test_kasa_outlet(app, outlet_id: int, on: bool) -> None:
         log_kasa_message(app, f"Test command skipped for outlet {outlet_id}.")
 
 
-def handle_outgoing_gcode_line(app, line: str, source: str) -> None:
+def _resolve_stream_detection_line(app, fallback_line: str, line_index: int | None) -> str:
+    if line_index is None:
+        return fallback_line
+    try:
+        idx = int(line_index)
+    except (TypeError, ValueError):
+        return fallback_line
+    if idx < 0:
+        return fallback_line
+    source = getattr(app, "_gcode_source", None)
+    if source is not None:
+        try:
+            candidate = str(source[idx] or "")
+        except Exception as exc:
+            _log_suppressed("Failed reading streamed G-code line from source for Kasa dry-run routing", exc)
+        else:
+            if candidate.strip():
+                return candidate
+    lines = getattr(app, "_last_gcode_lines", None)
+    if lines is None:
+        return fallback_line
+    try:
+        candidate = str(lines[idx] or "")
+    except Exception as exc:
+        _log_suppressed("Failed reading cached G-code line for Kasa dry-run routing", exc)
+        return fallback_line
+    if candidate.strip():
+        return candidate
+    return fallback_line
+
+
+def _iter_stream_detection_lines(app, fallback_line: str, line_index: int | None):
+    if line_index is None:
+        yield str(fallback_line or "")
+        return
+    try:
+        idx = int(line_index)
+    except (TypeError, ValueError):
+        yield str(fallback_line or "")
+        return
+    if idx < 0:
+        yield str(fallback_line or "")
+        return
+    try:
+        last_idx = int(getattr(app, "_kasa_last_stream_line_index", -1))
+    except (TypeError, ValueError):
+        last_idx = -1
+    if idx <= last_idx:
+        start_idx = idx
+    else:
+        start_idx = max(0, last_idx + 1)
+    for current_idx in range(start_idx, idx + 1):
+        fallback = str(fallback_line or "") if current_idx == idx else ""
+        yield _resolve_stream_detection_line(app, fallback, current_idx)
+    try:
+        app._kasa_last_stream_line_index = idx
+    except Exception as exc:
+        _log_suppressed("Failed caching last streamed index for Kasa spindle detection", exc)
+
+
+def handle_outgoing_gcode_line(
+    app,
+    line: str,
+    source: str,
+    *,
+    line_index: int | None = None,
+) -> None:
     if not _kasa_supported():
         return
     if not hasattr(app, "accessory_router") or not hasattr(app, "spindle_command_detector"):
         return
     if not bool(app.kasa_enabled.get()):
         return
-    state = app.spindle_command_detector.detect_state_change(str(line or ""))
-    if state is None:
+    source_name = str(source or "").strip().lower()
+    if source_name == "stream":
+        for detection_line in _iter_stream_detection_lines(app, str(line or ""), line_index):
+            state = app.spindle_command_detector.detect_state_change(detection_line)
+            if state is not None:
+                app.accessory_router.on_spindle_state_change(state)
         return
-    _ = source
-    app.accessory_router.on_spindle_state_change(state)
+    detection_line = str(line or "")
+    state = app.spindle_command_detector.detect_state_change(detection_line)
+    if state is not None:
+        app.accessory_router.on_spindle_state_change(state)
+
+
+def _selected_job_outlets(app) -> list[int]:
+    settings = kasa_settings_snapshot(app)
+    if not bool(settings.get("kasa_enabled", False)):
+        return []
+    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
+    if not device_identifier:
+        return []
+    try:
+        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
+    except Exception:
+        outlet_count = 2
+    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
+    light_enabled = bool(settings.get("light_enabled", False)) and outlet_count >= 2
+    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
+    light_outlet = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
+    valid, message = validate_outlet_mapping(
+        vacuum_enabled=vacuum_enabled,
+        vacuum_outlet=vacuum_outlet,
+        light_enabled=light_enabled,
+        light_outlet=light_outlet,
+    )
+    if not valid:
+        log_kasa_message(app, str(message or "Invalid Kasa outlet mapping."))
+        return []
+    outlets: list[int] = []
+    if vacuum_enabled and vacuum_outlet <= outlet_count:
+        outlets.append(vacuum_outlet)
+    if light_enabled and light_outlet <= outlet_count and light_outlet not in outlets:
+        outlets.append(light_outlet)
+    return outlets
+
+
+def _set_job_outlet_state(app, outlet_id: int, on: bool, *, source: str) -> None:
+    try:
+        app.accessory_router.request_outlet_state(int(outlet_id), bool(on), source=str(source or "job"))
+    except Exception as exc:
+        _log_suppressed("Failed sending Kasa job-lifecycle outlet command", exc)
+
+
+def start_job_accessories(app, *, source: str = "job_run") -> None:
+    if not _kasa_supported():
+        return
+    if not hasattr(app, "accessory_router"):
+        return
+    outlets = _selected_job_outlets(app)
+    active_outlets: set[int] = set()
+    for outlet_id in outlets:
+        _set_job_outlet_state(app, outlet_id, True, source=source)
+        active_outlets.add(int(outlet_id))
+    app._kasa_job_active_outlets = active_outlets
+
+
+def stop_job_accessories(app, *, source: str = "job_stop") -> None:
+    if not _kasa_supported():
+        return
+    if not hasattr(app, "accessory_router"):
+        return
+    tracked = getattr(app, "_kasa_job_active_outlets", None)
+    if isinstance(tracked, set) and tracked:
+        outlet_ids = sorted(int(outlet) for outlet in tracked)
+    else:
+        outlet_ids = _selected_job_outlets(app)
+    for outlet_id in outlet_ids:
+        _set_job_outlet_state(app, outlet_id, False, source=source)
+    app._kasa_job_active_outlets = set()
+
+
+def handle_stream_spindle_state(app, is_on: bool) -> None:
+    # Spindle events are intentionally ignored; Kasa automation follows job lifecycle.
+    _ = app
+    _ = is_on
 
 
 __all__ = [
     "OUTLET_LABELS",
     "discover_kasa_devices",
     "handle_outgoing_gcode_line",
+    "handle_stream_spindle_state",
     "kasa_settings_snapshot",
     "log_kasa_message",
     "on_kasa_command_result",
@@ -519,6 +827,10 @@ __all__ = [
     "on_kasa_master_change",
     "refresh_kasa_controls_state",
     "refresh_kasa_outlet_list",
+    "start_job_accessories",
+    "stop_job_accessories",
+    "toggle_kasa_light_quick",
+    "toggle_kasa_vacuum_quick",
     "test_kasa_outlet",
     "validate_kasa_outlet_mapping",
 ]

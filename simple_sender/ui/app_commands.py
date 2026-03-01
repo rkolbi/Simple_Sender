@@ -307,11 +307,34 @@ def run_job(app):
         return
     if not run_preflight_gate(app):
         return
+    try:
+        app._kasa_last_stream_line_index = -1
+    except Exception as exc:
+        _log_suppressed("Failed resetting Kasa stream-line index before run", exc)
+    accessory_router = getattr(app, "accessory_router", None)
+    if accessory_router is not None:
+        reset_debounce = getattr(accessory_router, "reset_debounce", None)
+        if callable(reset_debounce):
+            try:
+                reset_debounce()
+            except Exception as exc:
+                _log_suppressed("Failed resetting Kasa debounce state before run", exc)
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._reset_gcode_view_for_run()
-    app._job_started_at = datetime.now()
-    app._job_completion_notified = False
     app.grbl.start_stream()
+    started = False
+    try:
+        started = bool(app.grbl.is_streaming())
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL streaming state after Run", exc)
+    if started:
+        app._job_started_at = datetime.now()
+        app._job_completion_notified = False
+        try:
+            if hasattr(app, "_start_job_accessories"):
+                app._start_job_accessories("job_run")
+        except Exception as exc:
+            _log_suppressed("Failed starting Kasa job accessories on Run", exc)
 
 
 def pause_job(app):
@@ -329,4 +352,9 @@ def resume_job(app):
 def stop_job(app):
     if not app._require_grbl_connection():
         return
+    try:
+        if hasattr(app, "_stop_job_accessories"):
+            app._stop_job_accessories("job_stop")
+    except Exception as exc:
+        _log_suppressed("Failed stopping Kasa job accessories on Stop/Reset", exc)
     app.grbl.stop_stream()
