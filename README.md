@@ -707,7 +707,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on February 28, 2026): `801 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on March 1, 2026): `809 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -768,7 +768,7 @@ pre-commit run --all-files
 Release history and validated baselines are tracked in `CHANGELOG.md`.
 
 ## Release Checklist
-- Release checklist template: `ref/release_checklist_v1.7.0.md`.
+- Release checklist template: `ref/release_checklist.md`.
 - Run the **Hardware jog-release smoke check** section in that file before live CNC use.
 - Pass criteria for jog safety: releasing any jog button/axis input must stop motion immediately.
 

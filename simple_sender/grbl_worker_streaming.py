@@ -374,6 +374,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             is_gcode=item.is_gcode,
             idx=idx,
             line=item.line,
+            queued_ts=time.time(),
         )
         self._stream_buf_used += line_len
         self._stream_line_queue.append(queue_item)
@@ -447,6 +448,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
 
             if not queue_item.is_gcode and self._resume_preamble:
                 self._resume_preamble.popleft()
+            self._record_tx_line()
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
             if queue_item.is_gcode:
@@ -566,6 +568,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 idx=None,
                 line=line,
                 manual_source=source,
+                queued_ts=time.time(),
             )
         )
         return False, False, usable
@@ -665,6 +668,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 break
 
             self.ui_q.put(("log_tx", line))
+            self._record_tx_line()
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
 

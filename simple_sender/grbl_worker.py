@@ -89,6 +89,9 @@ _RX_LOGGER = None
 _RX_LOGGER_LOCK = threading.Lock()
 _REEXPORTED_GRBL_ERROR_HELPERS = (annotate_grbl_alarm, annotate_grbl_error)
 _REEXPORTED_REALTIME_CONSTANTS = (RT_RESUME, RT_JOG_CANCEL)
+TX_LINE_RATE_WINDOW_S = 5.0
+QUEUE_DEPTH_SNAPSHOT_MAX = 64
+QUEUE_DEPTH_SNAPSHOT_INTERVAL_S = 0.2
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -238,6 +241,15 @@ class GrblWorker(
         # Throughput tracking
         self._tx_bytes_window: deque[Tuple[float, int]] = deque()
         self._last_tx_emit_ts = 0.0
+        self._tx_line_ts_window: deque[float] = deque()
+        self._tx_lines_per_sec = 0.0
+        self._ok_latency_ms_last = 0.0
+        self._ok_latency_ms_avg = 0.0
+        self._ok_latency_sample_count = 0
+        self._queue_depth_snapshots: deque[tuple[float, int, int, int]] = deque(
+            maxlen=QUEUE_DEPTH_SNAPSHOT_MAX
+        )
+        self._last_queue_depth_snapshot_ts = 0.0
         
         # Command queue
         self._outgoing_q: queue.Queue[str] = queue.Queue(maxsize=MANUAL_COMMAND_QUEUE_MAXSIZE)
@@ -430,6 +442,116 @@ class GrblWorker(
             self._pause_after_reason = None
             self._tx_bytes_window.clear()
             self._last_tx_emit_ts = 0.0
+            self._tx_line_ts_window.clear()
+            self._tx_lines_per_sec = 0.0
+
+    def _record_tx_line(self) -> None:
+        now = time.time()
+        self._tx_line_ts_window.append(now)
+        cutoff = now - TX_LINE_RATE_WINDOW_S
+        while self._tx_line_ts_window and self._tx_line_ts_window[0] < cutoff:
+            self._tx_line_ts_window.popleft()
+        if not self._tx_line_ts_window:
+            self._tx_lines_per_sec = 0.0
+            return
+        oldest = self._tx_line_ts_window[0]
+        span = max(0.25, now - oldest)
+        self._tx_lines_per_sec = float(len(self._tx_line_ts_window)) / span
+
+    def _record_ack_latency(self, latency_ms: float) -> None:
+        if latency_ms < 0:
+            return
+        self._ok_latency_ms_last = float(latency_ms)
+        self._ok_latency_sample_count += 1
+        count = self._ok_latency_sample_count
+        if count <= 1:
+            self._ok_latency_ms_avg = float(latency_ms)
+            return
+        self._ok_latency_ms_avg = (
+            (self._ok_latency_ms_avg * (count - 1)) + float(latency_ms)
+        ) / count
+
+    def _record_queue_depth_snapshot(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        if (now - self._last_queue_depth_snapshot_ts) < QUEUE_DEPTH_SNAPSHOT_INTERVAL_S:
+            return
+        self._last_queue_depth_snapshot_ts = now
+        def _safe_len(value: Any) -> int:
+            try:
+                return max(0, int(len(value)))
+            except Exception:
+                pass
+            items = getattr(value, "items", None)
+            if items is not None:
+                try:
+                    return max(0, int(len(items)))
+                except Exception:
+                    pass
+            try:
+                return 1 if bool(value) else 0
+            except Exception:
+                return 0
+        with self._stream_lock:
+            stream_depth = _safe_len(self._stream_line_queue)
+            if self._stream_pending_item is not None:
+                stream_depth += 1
+            if self._manual_pending_item is not None:
+                stream_depth += 1
+        try:
+            manual_depth = int(self._outgoing_q.qsize())
+        except Exception:
+            manual_depth = 0
+        try:
+            ui_depth = int(self.ui_q.qsize())
+        except Exception:
+            ui_depth = 0
+        self._queue_depth_snapshots.append((now, stream_depth, manual_depth, ui_depth))
+
+    def get_runtime_metrics(self) -> dict[str, Any]:
+        now = time.time()
+        # Keep line-rate fresh if queried between send events.
+        if self._tx_line_ts_window:
+            cutoff = now - TX_LINE_RATE_WINDOW_S
+            while self._tx_line_ts_window and self._tx_line_ts_window[0] < cutoff:
+                self._tx_line_ts_window.popleft()
+            if self._tx_line_ts_window:
+                span = max(0.25, now - self._tx_line_ts_window[0])
+                self._tx_lines_per_sec = float(len(self._tx_line_ts_window)) / span
+            else:
+                self._tx_lines_per_sec = 0.0
+        self._record_queue_depth_snapshot(now=now)
+        snapshots = list(self._queue_depth_snapshots)
+        queue_depth_last = {
+            "stream": 0,
+            "manual": 0,
+            "ui": 0,
+            "timestamp": "",
+        }
+        if snapshots:
+            ts, stream_depth, manual_depth, ui_depth = snapshots[-1]
+            queue_depth_last = {
+                "stream": int(stream_depth),
+                "manual": int(manual_depth),
+                "ui": int(ui_depth),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)),
+            }
+        queue_depth_samples = [
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)),
+                "stream": int(stream_depth),
+                "manual": int(manual_depth),
+                "ui": int(ui_depth),
+            }
+            for ts, stream_depth, manual_depth, ui_depth in snapshots[-20:]
+        ]
+        return {
+            "tx_lines_per_sec": float(self._tx_lines_per_sec),
+            "ok_latency_ms_last": float(self._ok_latency_ms_last),
+            "ok_latency_ms_avg": float(self._ok_latency_ms_avg),
+            "ok_latency_samples": int(self._ok_latency_sample_count),
+            "queue_depth_last": queue_depth_last,
+            "queue_depth_samples": queue_depth_samples,
+        }
     
     def _encode_line_payload(self, line: str) -> bytes:
         """Encode line for serial transmission.
@@ -529,6 +651,7 @@ class GrblWorker(
         self._last_buffer_emit = payload
         self._last_buffer_emit_ts = now
         self.ui_q.put(("buffer_fill", pct, used, window))
+        self._record_queue_depth_snapshot(now=now)
     
     def _record_tx_bytes(self, count: int) -> None:
         """Record transmitted bytes for throughput calculation.

@@ -52,6 +52,7 @@ RUN_CHECKLIST_ITEMS = [
 ]
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+PREFLIGHT_DECISION_HISTORY_LIMIT = 100
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -60,6 +61,62 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _safe_job_hash(app: Any) -> str:
+    raw_hash = (
+        getattr(app, "_gcode_hash", None)
+        or getattr(app, "_last_parse_hash", None)
+        or ""
+    )
+    return str(raw_hash).strip()
+
+
+def _runtime_metrics(app: Any) -> dict[str, Any]:
+    grbl = getattr(app, "grbl", None)
+    getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
+    if not callable(getter):
+        return {}
+    try:
+        raw = getter()
+    except Exception as exc:
+        _log_suppressed("Failed collecting runtime telemetry metrics", exc)
+        return {}
+    return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+
+
+def _record_preflight_decision(
+    app: Any,
+    *,
+    decision: str,
+    failures: list[str],
+    warnings: list[str],
+) -> None:
+    job_path = str(getattr(app, "_last_gcode_path", "") or "")
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "decision": str(decision),
+        "job_path": job_path,
+        "job_name": os.path.basename(job_path) if job_path else "",
+        "job_hash": _safe_job_hash(app),
+        "stream_state": str(getattr(app, "_stream_state", "") or ""),
+        "streaming_mode": bool(getattr(app, "_gcode_streaming_mode", False)),
+        "failure_count": int(len(failures)),
+        "warning_count": int(len(warnings)),
+        "failures": list(failures),
+        "warnings": list(warnings),
+    }
+    try:
+        history = getattr(app, "_preflight_run_decisions", None)
+        if not isinstance(history, list):
+            history = []
+            setattr(app, "_preflight_run_decisions", history)
+        history.append(record)
+        overflow = len(history) - PREFLIGHT_DECISION_HISTORY_LIMIT
+        if overflow > 0:
+            del history[:overflow]
+    except Exception as exc:
+        _log_suppressed("Failed recording preflight run decision", exc)
 
 
 def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
@@ -359,10 +416,18 @@ def run_preflight_gate(app: Any) -> bool:
             + "Choose Yes to override the preflight gate and start the job.",
         ))
         if proceed:
+            _record_preflight_decision(
+                app,
+                decision="override",
+                failures=failures,
+                warnings=warnings,
+            )
             try:
                 app.ui_q.put(("log", "[preflight] Override accepted; starting despite gate failures."))
                 for item in failures:
                     app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
+                for item in warnings:
+                    app.ui_q.put(("log", f"[preflight] warning: {item}"))
             except Exception as exc:
                 _log_suppressed("Failed writing preflight override details to UI log queue", exc)
             try:
@@ -370,6 +435,20 @@ def run_preflight_gate(app: Any) -> bool:
             except Exception as exc:
                 _log_suppressed("Failed updating status text after preflight override", exc)
             return True
+        _record_preflight_decision(
+            app,
+            decision="blocked",
+            failures=failures,
+            warnings=warnings,
+        )
+        try:
+            app.ui_q.put(("log", "[preflight] Override declined; run canceled."))
+            for item in failures:
+                app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
+            for item in warnings:
+                app.ui_q.put(("log", f"[preflight] warning: {item}"))
+        except Exception as exc:
+            _log_suppressed("Failed writing preflight blocked decision details to UI log queue", exc)
         try:
             app.status.config(text="Run blocked: preflight gate failed")
         except Exception as exc:
@@ -447,6 +526,69 @@ def export_session_diagnostics(app) -> None:
     if report_summary:
         lines.append("Validation summary:")
         lines.extend(f"- {item}" for item in report_summary)
+        lines.append("")
+    metrics = _runtime_metrics(app)
+    if metrics:
+        lines.append("Runtime telemetry:")
+        tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
+        ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
+        ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
+        ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
+        lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
+        lines.append(
+            f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
+        )
+        queue_last = metrics.get("queue_depth_last", {})
+        if isinstance(queue_last, dict):
+            lines.append(
+                "- Queue depth last: "
+                f"stream={int(queue_last.get('stream', 0) or 0)}, "
+                f"manual={int(queue_last.get('manual', 0) or 0)}, "
+                f"ui={int(queue_last.get('ui', 0) or 0)} "
+                f"@ {str(queue_last.get('timestamp', '') or 'n/a')}"
+            )
+        queue_samples = metrics.get("queue_depth_samples", [])
+        if isinstance(queue_samples, list) and queue_samples:
+            lines.append("- Queue depth samples:")
+            for sample in queue_samples[-20:]:
+                if not isinstance(sample, dict):
+                    continue
+                lines.append(
+                    "  "
+                    f"{str(sample.get('timestamp', '') or 'n/a')} "
+                    f"stream={int(sample.get('stream', 0) or 0)} "
+                    f"manual={int(sample.get('manual', 0) or 0)} "
+                    f"ui={int(sample.get('ui', 0) or 0)}"
+                )
+        lines.append("")
+    decisions = getattr(app, "_preflight_run_decisions", None)
+    if isinstance(decisions, list) and decisions:
+        lines.append("Preflight run decisions:")
+        for entry in decisions[-50:]:
+            if not isinstance(entry, dict):
+                continue
+            stamp = str(entry.get("timestamp", "") or "")
+            decision = str(entry.get("decision", "") or "")
+            job_name = str(entry.get("job_name", "") or "")
+            job_hash = str(entry.get("job_hash", "") or "")
+            failure_count = int(entry.get("failure_count", 0) or 0)
+            warning_count = int(entry.get("warning_count", 0) or 0)
+            summary = (
+                f"- {stamp} | decision={decision or 'unknown'}"
+                f" | job={job_name or '<unknown>'}"
+                f" | hash={job_hash or 'n/a'}"
+                f" | failures={failure_count}"
+                f" | warnings={warning_count}"
+            )
+            lines.append(summary)
+            failures = entry.get("failures", [])
+            if isinstance(failures, list):
+                for item in failures:
+                    lines.append(f"  FAIL: {item}")
+            warnings = entry.get("warnings", [])
+            if isinstance(warnings, list):
+                for item in warnings:
+                    lines.append(f"  WARN: {item}")
         lines.append("")
     last_status = getattr(app, "_last_status_raw", "")
     if last_status:

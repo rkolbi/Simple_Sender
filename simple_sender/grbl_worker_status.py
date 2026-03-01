@@ -295,6 +295,9 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 if self._stream_line_queue:
                     queued_item = self._stream_line_queue.popleft()
                     self._stream_buf_used = max(0, self._stream_buf_used - queued_item.line_len)
+                    queued_ts = float(getattr(queued_item, "queued_ts", 0.0) or 0.0)
+                    if queued_ts > 0:
+                        self._record_ack_latency(max(0.0, (now - queued_ts) * 1000.0))
                     if line_lower.startswith("error"):
                         err_source = getattr(queued_item, "manual_source", None)
                     

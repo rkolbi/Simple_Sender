@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Changed
+- `run_tests.bat` now mirrors CI release gates by adding import stability (`import simple_sender.ui.settings`) and compileall syntax checks before tests.
 - WPos `Goto Zero` now executes a two-step absolute move sequence:
   - sends `G90 G0 X0 Y0`
   - then sends `G0 Z0` only after XY command dispatch, reducing clamp-strike risk on combined moves
@@ -16,12 +17,13 @@ All notable changes to this project are documented in this file.
 - Disabled-control tooltip reasons now include clearer state context (connecting/disconnecting, handshake/status wait, stream running/paused, and deferred idle completion) for affected toolbar actions.
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`801 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-02-28).
+- README testing baseline was refreshed to the current local result (`809 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-03-01).
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
 - README file-picker notes now document Linux system-picker sizing behavior.
 - README Kasa section now documents bounded request timeout behavior.
 - README App Settings docs now include Search + `Basic`/`Advanced` global controls and touch command acknowledgment behavior.
 - README checklist docs now mention collapsible checklist titles in the Checklists tab.
+- Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
 
 ## [1.8.0] - 2026-02-26
 

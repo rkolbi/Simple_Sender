@@ -94,6 +94,7 @@ class StreamQueueItem:
     idx: int | None
     line: str
     manual_source: str | None = None
+    queued_ts: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +169,10 @@ class GrblWorkerState:
 
     _gcode: Sequence[str]
     _gcode_name: str | None
+    _tx_lines_per_sec: float
+    _ok_latency_ms_last: float
+    _ok_latency_ms_avg: float
+    _ok_latency_sample_count: int
 
     def is_connected(self) -> bool:
         raise NotImplementedError
@@ -221,6 +226,12 @@ class GrblWorkerState:
         raise NotImplementedError
 
     def _record_tx_bytes(self, count: int) -> None:
+        raise NotImplementedError
+
+    def _record_tx_line(self) -> None:
+        raise NotImplementedError
+
+    def _record_ack_latency(self, latency_ms: float) -> None:
         raise NotImplementedError
 
     def _encode_line_payload(self, line: str) -> bytes:
