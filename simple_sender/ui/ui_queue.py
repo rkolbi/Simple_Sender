@@ -52,6 +52,12 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _stream_ui_busy(app: AppProtocol) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    return str(getattr(app, "_stream_state", "") or "").strip().lower() in {"running", "paused"}
+
+
 class UiEventQueue:
     _LOW_PRIORITY_KINDS = {"log_rx", "log_tx"}
     _HIGH_PRIORITY_LOG_KINDS = {"log", "log_rx"}
@@ -361,71 +367,79 @@ def drain_ui_queue(app: AppProtocol) -> None:
         except Exception:
             pending = 0
         queue_busy = (processed > 0) or (pending > 0)
-        maintenance_interval_key = (
-            "_ui_maintenance_interval_s"
-            if queue_busy
-            else "_ui_maintenance_idle_interval_s"
-        )
-        maintenance_interval_default = UI_QUEUE_MAINTENANCE_INTERVAL_S
-        if not queue_busy:
-            maintenance_interval_default = float(
-                getattr(app, "_ui_maintenance_interval_s", UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S)
+        stream_busy = _stream_ui_busy(app)
+        if not stream_busy:
+            maintenance_interval_key = (
+                "_ui_maintenance_interval_s"
+                if queue_busy
+                else "_ui_maintenance_idle_interval_s"
             )
-        maintenance_interval = max(
-            0.0,
-            float(getattr(app, maintenance_interval_key, maintenance_interval_default)),
-        )
-        last_maintenance = float(getattr(app, "_ui_maintenance_last_ts", 0.0) or 0.0)
-        should_run_maintenance = processed > 0 or (now - last_maintenance) >= maintenance_interval
-        if should_run_maintenance:
-            setattr(app, "_ui_maintenance_last_ts", now)
-            if hasattr(app, "_refresh_toolbar_action_focus"):
-                try:
-                    app._refresh_toolbar_action_focus()
-                except Exception as exc:
-                    _log_suppressed("Failed refreshing toolbar action focus", exc)
-            if hasattr(app, "_update_quick_button_visibility"):
-                try:
-                    app._update_quick_button_visibility()
-                except Exception as exc:
-                    _log_suppressed("Failed updating quick-button visibility", exc)
-            if hasattr(app, "_sync_tool_reference_label"):
-                try:
-                    app._sync_tool_reference_label()
-                except Exception as exc:
-                    app._log_exception("UI tool-reference sync error", exc)
-        reconnect_interval_key = (
-            "_auto_reconnect_check_interval_s"
-            if queue_busy
-            else "_auto_reconnect_check_idle_interval_s"
-        )
-        reconnect_interval_default = UI_QUEUE_RECONNECT_CHECK_INTERVAL_S
-        if not queue_busy:
-            reconnect_interval_default = float(
-                getattr(
-                    app,
-                    "_auto_reconnect_check_interval_s",
-                    UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
+            maintenance_interval_default = UI_QUEUE_MAINTENANCE_INTERVAL_S
+            if not queue_busy:
+                maintenance_interval_default = float(
+                    getattr(app, "_ui_maintenance_interval_s", UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S)
                 )
+            maintenance_interval = max(
+                0.0,
+                float(getattr(app, maintenance_interval_key, maintenance_interval_default)),
             )
-        reconnect_interval = max(
-            0.0,
-            float(
-                getattr(
-                    app,
-                    reconnect_interval_key,
-                    reconnect_interval_default,
+            last_maintenance = float(getattr(app, "_ui_maintenance_last_ts", 0.0) or 0.0)
+            should_run_maintenance = (
+                last_maintenance <= 0.0
+                or (now - last_maintenance) >= maintenance_interval
+            )
+            if should_run_maintenance:
+                setattr(app, "_ui_maintenance_last_ts", now)
+                if hasattr(app, "_refresh_toolbar_action_focus"):
+                    try:
+                        app._refresh_toolbar_action_focus()
+                    except Exception as exc:
+                        _log_suppressed("Failed refreshing toolbar action focus", exc)
+                if hasattr(app, "_update_quick_button_visibility"):
+                    try:
+                        app._update_quick_button_visibility()
+                    except Exception as exc:
+                        _log_suppressed("Failed updating quick-button visibility", exc)
+                if hasattr(app, "_sync_tool_reference_label"):
+                    try:
+                        app._sync_tool_reference_label()
+                    except Exception as exc:
+                        app._log_exception("UI tool-reference sync error", exc)
+            reconnect_interval_key = (
+                "_auto_reconnect_check_interval_s"
+                if queue_busy
+                else "_auto_reconnect_check_idle_interval_s"
+            )
+            reconnect_interval_default = UI_QUEUE_RECONNECT_CHECK_INTERVAL_S
+            if not queue_busy:
+                reconnect_interval_default = float(
+                    getattr(
+                        app,
+                        "_auto_reconnect_check_interval_s",
+                        UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
+                    )
                 )
-            ),
-        )
-        last_reconnect_check = float(getattr(app, "_auto_reconnect_check_ts", 0.0) or 0.0)
-        should_check_reconnect = processed > 0 or (now - last_reconnect_check) >= reconnect_interval
-        if should_check_reconnect:
-            setattr(app, "_auto_reconnect_check_ts", now)
-            try:
-                app._maybe_auto_reconnect()
-            except Exception as exc:
-                app._log_exception("UI auto-reconnect check error", exc)
+            reconnect_interval = max(
+                0.0,
+                float(
+                    getattr(
+                        app,
+                        reconnect_interval_key,
+                        reconnect_interval_default,
+                    )
+                ),
+            )
+            last_reconnect_check = float(getattr(app, "_auto_reconnect_check_ts", 0.0) or 0.0)
+            should_check_reconnect = (
+                last_reconnect_check <= 0.0
+                or (now - last_reconnect_check) >= reconnect_interval
+            )
+            if should_check_reconnect:
+                setattr(app, "_auto_reconnect_check_ts", now)
+                try:
+                    app._maybe_auto_reconnect()
+                except Exception as exc:
+                    app._log_exception("UI auto-reconnect check error", exc)
     finally:
         try:
             elapsed_ms = max(0.0, (time.perf_counter() - drain_start) * 1000.0)
@@ -447,6 +461,11 @@ def drain_ui_queue(app: AppProtocol) -> None:
         if app._closing:
             return
         next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+        if processed > 0 or pending > 0:
+            try:
+                setattr(app, "_ui_queue_idle_streak", 0)
+            except Exception:
+                pass
         if pending > 0:
             if pending >= 500:
                 next_delay_ms = 1
@@ -458,10 +477,33 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
         elif processed <= 0:
             try:
-                next_delay_ms = int(
+                idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1
+                setattr(app, "_ui_queue_idle_streak", idle_streak)
+                idle_base_ms = int(
                     max(
                         UI_QUEUE_DRAIN_INTERVAL_MS,
                         getattr(app, "_ui_queue_idle_interval_ms", UI_QUEUE_DRAIN_INTERVAL_MS),
+                    )
+                )
+                idle_max_ms = int(
+                    max(
+                        idle_base_ms,
+                        getattr(app, "_ui_queue_idle_max_interval_ms", idle_base_ms),
+                    )
+                )
+                idle_backoff_step_ms = int(
+                    max(
+                        1,
+                        getattr(app, "_ui_queue_idle_backoff_step_ms", UI_QUEUE_DRAIN_INTERVAL_MS),
+                    )
+                )
+                backoff_candidate_ms = UI_QUEUE_DRAIN_INTERVAL_MS + (
+                    idle_streak * idle_backoff_step_ms
+                )
+                next_delay_ms = int(
+                    min(
+                        idle_max_ms,
+                        max(idle_base_ms, backoff_candidate_ms),
                     )
                 )
             except Exception:

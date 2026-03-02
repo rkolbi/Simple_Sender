@@ -32,6 +32,8 @@ from . import joystick_hold
 from simple_sender.utils.constants import (
     JOYSTICK_CAPTURE_TIMEOUT_MS,
     JOYSTICK_LISTENING_TEXT,
+    JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS,
+    JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS,
     JOYSTICK_POLL_INTERVAL_MS,
 )
 
@@ -45,6 +47,14 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _stream_busy(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    return state in {"running", "paused"}
+
 
 def _save_bindings(app) -> None:
     saver = getattr(app, "_save_settings", None)
@@ -105,16 +115,22 @@ def poll_joystick_events(
     joystick_safety_ready: Callable[[Any], bool],
 ) -> None:
     app._joystick_poll_id = None
+    device_change = False
+    events = []
     py = app._get_pygame_module()
     if py is None or not app._ensure_joystick_backend():
         if getattr(app, "_active_joystick_hold_binding", None):
             app._stop_joystick_hold()
+        app._joystick_poll_idle_streak = 0
+        return
+    if _stream_busy(app) and not app._joystick_capture_state:
+        if getattr(app, "_active_joystick_hold_binding", None):
+            app._stop_joystick_hold()
+        app._joystick_poll_idle_streak = 0
         return
     try:
         py.event.pump()
         raw_events = list(py.event.get())
-        events = []
-        device_change = False
         device_added_evt = False
         device_removed_evt = False
         device_added = getattr(py, "JOYDEVICEADDED", None)
@@ -162,11 +178,28 @@ def poll_joystick_events(
         logger.exception("Joystick polling failed: %s", exc)
         if getattr(app, "_active_joystick_hold_binding", None):
             app._stop_joystick_hold()
+        app._joystick_poll_idle_streak = 0
     finally:
-        if app.joystick_bindings_enabled.get() or app._joystick_capture_state:
-            interval = JOYSTICK_POLL_INTERVAL_MS
+        can_poll = bool(app.joystick_bindings_enabled.get() or app._joystick_capture_state)
+        if can_poll and (_stream_busy(app) and not app._joystick_capture_state):
+            app._joystick_poll_idle_streak = 0
+            return
+        if can_poll:
+            base_interval = max(1, int(JOYSTICK_POLL_INTERVAL_MS))
+            idle_step = max(1, int(JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS))
+            idle_max = max(base_interval, int(JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS))
+            interval = base_interval
             if getattr(app, "_active_joystick_hold_binding", None):
                 interval = joystick_hold.JOYSTICK_HOLD_POLL_INTERVAL_MS
+                app._joystick_poll_idle_streak = 0
+            elif app._joystick_capture_state:
+                app._joystick_poll_idle_streak = 0
+            elif events or device_change:
+                app._joystick_poll_idle_streak = 0
+            else:
+                idle_streak = int(getattr(app, "_joystick_poll_idle_streak", 0) or 0) + 1
+                app._joystick_poll_idle_streak = idle_streak
+                interval = min(idle_max, base_interval + (idle_streak * idle_step))
             app._joystick_poll_id = app.after(interval, app._poll_joystick_events)
 
 

@@ -177,6 +177,13 @@ def refresh_joystick_toggle_text(app):
     app.btn_toggle_joystick_bindings.config(text=text, state="normal")
     app._refresh_joystick_test_info()
 
+
+def _stream_busy_for_joystick_polling(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    return state in {"running", "paused"}
+
 def update_joystick_polling_state(app):
     app._refresh_joystick_toggle_text()
     if not app.joystick_bindings_enabled.get():
@@ -186,6 +193,13 @@ def update_joystick_polling_state(app):
         app._joystick_safety_active = False
         if hasattr(app, "joystick_live_status"):
             app.joystick_live_status.set("Joystick state: disabled.")
+        return
+    if _stream_busy_for_joystick_polling(app) and not app._joystick_capture_state:
+        app._stop_joystick_polling()
+        app._stop_joystick_hold()
+        app._joystick_safety_active = False
+        if hasattr(app, "joystick_live_status"):
+            app.joystick_live_status.set("Joystick state: paused while streaming.")
         return
     if not app._ensure_joystick_backend():
         messagebox.showwarning(
@@ -408,6 +422,7 @@ def maybe_refresh_joystick_devices(
 def start_joystick_polling(app):
     if app._joystick_poll_id is not None:
         return
+    app._joystick_poll_idle_streak = 0
     app._poll_joystick_events()
 
 def stop_joystick_polling(app):
@@ -417,6 +432,7 @@ def stop_joystick_polling(app):
         except tk.TclError as exc:
             _log_suppressed("Failed canceling joystick poll timer", exc)
         app._joystick_poll_id = None
+    app._joystick_poll_idle_streak = 0
 
 def ensure_joystick_polling_running(app):
     if app._joystick_poll_id is None:

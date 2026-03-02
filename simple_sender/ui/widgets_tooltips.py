@@ -247,8 +247,18 @@ class _NotebookTabTooltips:
         except (AttributeError, tk.TclError):
             notebook.bind("<Motion>", self._on_motion, add="+")
             notebook.bind("<ButtonPress>", self._on_leave, add="+")
+        notebook.bind("<Enter>", self._on_enter, add="+")
+        notebook.bind("<Leave>", self._on_leave, add="+")
         notebook.bind("<<NotebookTabChanged>>", self._on_leave, add="+")
-        self._schedule_poll()
+
+    def _stream_busy(self) -> bool:
+        owner = _resolve_owner(self.notebook, "_stream_state")
+        if owner is None:
+            return False
+        if bool(getattr(owner, "_stream_done_pending_idle", False)):
+            return True
+        state = str(getattr(owner, "_stream_state", "") or "").strip().lower()
+        return state in {"running", "paused"}
 
     def set_tab_tooltip(self, tab, text: str) -> None:
         if not text:
@@ -431,6 +441,7 @@ class _NotebookTabTooltips:
 
     def _on_leave(self, _event=None) -> None:
         self._hide_tip()
+        self._cancel_poll()
 
     def _process_hover(self, x_root: int | None = None, y_root: int | None = None) -> None:
         if x_root is None or y_root is None:
@@ -466,10 +477,35 @@ class _NotebookTabTooltips:
         except tk.TclError:
             self._after_id = None
 
+    def _on_enter(self, event) -> None:
+        if self._stream_busy():
+            self._hide_tip()
+            self._cancel_poll()
+            return
+        x_root = getattr(event, "x_root", None)
+        y_root = getattr(event, "y_root", None)
+        self._process_hover(x_root, y_root)
+        self._schedule_poll(delay_ms=self._poll_interval_idle_ms)
+
     def _on_motion(self, event) -> None:
-        self._process_hover(getattr(event, "x_root", None), getattr(event, "y_root", None))
+        if self._stream_busy():
+            self._hide_tip()
+            self._cancel_poll()
+            return
+        x_root = getattr(event, "x_root", None)
+        y_root = getattr(event, "y_root", None)
+        self._process_hover(x_root, y_root)
+        active = bool(self._tip is not None or self._active_tab is not None or self._pending_tab is not None)
+        if active or self._pointer_over_notebook(x_root, y_root):
+            next_delay = self._poll_interval_active_ms if active else self._poll_interval_idle_ms
+            self._schedule_poll(delay_ms=next_delay)
+            return
+        self._cancel_poll()
 
     def _schedule_poll(self, delay_ms: int | None = None) -> None:
+        if self._stream_busy():
+            self._cancel_poll()
+            return
         if self._poll_after_id is not None:
             return
         if delay_ms is None:
@@ -479,6 +515,16 @@ class _NotebookTabTooltips:
         except tk.TclError:
             self._poll_after_id = None
 
+    def _cancel_poll(self) -> None:
+        poll_after_id = self._poll_after_id
+        if poll_after_id is None:
+            return
+        try:
+            self.notebook.after_cancel(poll_after_id)
+        except tk.TclError as exc:
+            _log_suppressed("Failed cancelling notebook tooltip poll timer", exc)
+        self._poll_after_id = None
+
     def _poll(self) -> None:
         self._poll_after_id = None
         try:
@@ -486,8 +532,21 @@ class _NotebookTabTooltips:
                 return
         except tk.TclError:
             return
+        if self._stream_busy():
+            self._hide_tip()
+            return
         self._process_hover()
+        pointer_inside = False
+        try:
+            pointer_inside = self._pointer_over_notebook(
+                self.notebook.winfo_pointerx(),
+                self.notebook.winfo_pointery(),
+            )
+        except tk.TclError:
+            pointer_inside = False
         active = bool(self._tip is not None or self._active_tab is not None or self._pending_tab is not None)
+        if (not active) and (not pointer_inside):
+            return
         next_delay = self._poll_interval_active_ms if active else self._poll_interval_idle_ms
         self._schedule_poll(delay_ms=next_delay)
 

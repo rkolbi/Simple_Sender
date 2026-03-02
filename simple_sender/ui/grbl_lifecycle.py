@@ -21,16 +21,24 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+import queue
+import threading
 import time
 import logging
 from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_controls import disable_job_controls
-from simple_sender.utils.constants import STATUS_POLL_DEFAULT
+from simple_sender.utils.constants import (
+    STATUS_POLL_DEFAULT,
+    STATUS_POLL_IDLE,
+    STATUS_POLL_RUNNING,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_AUTO_RECONNECT_PORT_SCAN_MIN_INTERVAL_S = 1.0
+_AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S = 8.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -39,6 +47,147 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _signal_thread_event(obj, attr_name: str) -> None:
+    evt = getattr(obj, attr_name, None)
+    if isinstance(evt, threading.Event):
+        try:
+            evt.set()
+        except Exception as exc:
+            _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
+
+
+def _normalize_status_state(app) -> str:
+    return str(getattr(app, "_machine_state_text", "") or "").strip().lower()
+
+
+def _stream_running_or_paused(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    return stream_state in {"running", "paused"}
+
+
+def _status_poll_should_use_running_profile(app) -> bool:
+    if bool(getattr(app, "connected", False)) and not bool(getattr(app, "_grbl_ready", False)):
+        return True
+    if _stream_running_or_paused(app):
+        return True
+    state = _normalize_status_state(app)
+    if state.startswith("home"):
+        return True
+    if state.startswith("run"):
+        return True
+    if state.startswith("hold"):
+        return True
+    if state.startswith("jog"):
+        return True
+    return False
+
+
+def _ensure_auto_reconnect_scan_queue(app):
+    result_q = getattr(app, "_auto_reconnect_port_scan_result_q", None)
+    if result_q is None:
+        result_q = queue.Queue(maxsize=1)
+        setattr(app, "_auto_reconnect_port_scan_result_q", result_q)
+    return result_q
+
+
+def _drain_auto_reconnect_port_scan_results(app) -> None:
+    result_q = getattr(app, "_auto_reconnect_port_scan_result_q", None)
+    latest = None
+    if result_q is not None:
+        while True:
+            try:
+                latest = result_q.get_nowait()
+            except queue.Empty:
+                break
+            except Exception as exc:
+                _log_suppressed("Failed reading auto-reconnect port-scan queue", exc)
+                break
+    scan_thread = getattr(app, "_auto_reconnect_port_scan_thread", None)
+    if scan_thread is not None and not scan_thread.is_alive():
+        setattr(app, "_auto_reconnect_port_scan_inflight", False)
+    if latest is None:
+        return
+    try:
+        stamp, ports = latest
+    except Exception:
+        stamp = time.time()
+        ports = latest if isinstance(latest, (list, tuple, set)) else ()
+    normalized_ports = tuple(
+        str(port).strip()
+        for port in ports
+        if str(port).strip()
+    )
+    setattr(app, "_auto_reconnect_ports_cache", normalized_ports)
+    try:
+        setattr(app, "_auto_reconnect_ports_cache_ts", float(stamp))
+    except Exception:
+        setattr(app, "_auto_reconnect_ports_cache_ts", time.time())
+    setattr(app, "_auto_reconnect_port_scan_inflight", False)
+
+
+def _auto_reconnect_cache_age_s(app, now: float) -> float:
+    try:
+        cache_ts = float(getattr(app, "_auto_reconnect_ports_cache_ts", 0.0) or 0.0)
+    except Exception:
+        cache_ts = 0.0
+    if cache_ts <= 0:
+        return float("inf")
+    return max(0.0, now - cache_ts)
+
+
+def _auto_reconnect_scan_interval_s(app) -> float:
+    try:
+        value = float(getattr(app, "_auto_reconnect_port_scan_min_interval_s", 0.0) or 0.0)
+    except Exception:
+        value = 0.0
+    if value <= 0:
+        value = _AUTO_RECONNECT_PORT_SCAN_MIN_INTERVAL_S
+    return max(0.1, value)
+
+
+def _start_auto_reconnect_port_scan(app, now: float) -> bool:
+    _drain_auto_reconnect_port_scan_results(app)
+    if bool(getattr(app, "_auto_reconnect_port_scan_inflight", False)):
+        return False
+    cache_age_s = _auto_reconnect_cache_age_s(app, now)
+    if cache_age_s < _auto_reconnect_scan_interval_s(app):
+        return False
+
+    result_q = _ensure_auto_reconnect_scan_queue(app)
+    setattr(app, "_auto_reconnect_port_scan_inflight", True)
+
+    def worker() -> None:
+        if bool(getattr(app, "_closing", False)):
+            setattr(app, "_auto_reconnect_port_scan_inflight", False)
+            return
+        try:
+            ports = tuple(app.grbl.list_ports())
+        except Exception as exc:
+            ports = ()
+            _log_suppressed("Auto-reconnect port scan failed", exc)
+        payload = (time.time(), ports)
+        try:
+            while True:
+                result_q.get_nowait()
+        except queue.Empty:
+            pass
+        except Exception as exc:
+            _log_suppressed("Failed draining stale auto-reconnect scan results", exc)
+        try:
+            result_q.put_nowait(payload)
+        except Exception as exc:
+            _log_suppressed("Failed publishing auto-reconnect scan result", exc)
+        finally:
+            setattr(app, "_auto_reconnect_port_scan_inflight", False)
+
+    scan_thread = threading.Thread(target=worker, name="auto-reconnect-port-scan", daemon=True)
+    setattr(app, "_auto_reconnect_port_scan_thread", scan_thread)
+    scan_thread.start()
+    return True
 
 
 def _pi_profile_enabled(app) -> bool:
@@ -71,6 +220,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._auto_reconnect_delay = 3.0
         app._auto_reconnect_next_ts = 0.0
         app._auto_reconnect_blocked = False
+        app._auto_reconnect_port_scan_inflight = False
         app._report_units = None
         try:
             app._update_unit_toggle_display()
@@ -181,6 +331,8 @@ def handle_connection_event(app, is_on: bool, port):
             app._auto_reconnect_next_ts = 0.0
         app._user_disconnect = False
         app.throughput_var.set("TX: 0 B/s")
+    _signal_thread_event(app, "_connection_state_event")
+    _signal_thread_event(app, "_status_update_event")
     apply_status_poll_profile(app)
 
 
@@ -254,14 +406,35 @@ def maybe_auto_reconnect(app):
     now = time.time()
     if now < app._auto_reconnect_next_ts:
         return
-    ports = app.grbl.list_ports()
-    if app._auto_reconnect_last_port not in ports:
+    _drain_auto_reconnect_port_scan_results(app)
+    cached_ports = tuple(getattr(app, "_auto_reconnect_ports_cache", ()) or ())
+    cache_age = _auto_reconnect_cache_age_s(app, now)
+    if cache_age == float("inf"):
+        _start_auto_reconnect_port_scan(app, now)
+        app._auto_reconnect_next_ts = now + min(1.0, app._auto_reconnect_delay)
+        return
+    try:
+        max_cache_age = float(
+            getattr(app, "_auto_reconnect_port_scan_cache_max_age_s", _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S)
+            or _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S
+        )
+    except Exception:
+        max_cache_age = _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S
+    if max_cache_age <= 0:
+        max_cache_age = _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S
+    if cache_age >= max_cache_age:
+        _start_auto_reconnect_port_scan(app, now)
+    if app._auto_reconnect_last_port not in cached_ports:
+        scan_started = _start_auto_reconnect_port_scan(app, now)
         # If we've exceeded retries, allow a cool-down retry later.
         if app._auto_reconnect_retry >= app._auto_reconnect_max_retry:
             app._auto_reconnect_next_ts = now + max(30.0, app._auto_reconnect_delay)
             app._auto_reconnect_pending = True
         else:
-            app._auto_reconnect_next_ts = now + app._auto_reconnect_delay
+            if scan_started or bool(getattr(app, "_auto_reconnect_port_scan_inflight", False)):
+                app._auto_reconnect_next_ts = now + min(1.0, app._auto_reconnect_delay)
+            else:
+                app._auto_reconnect_next_ts = now + app._auto_reconnect_delay
         return
     app._auto_reconnect_last_attempt = now
     app.current_port.set(app._auto_reconnect_last_port)
@@ -292,7 +465,9 @@ def effective_status_poll_interval(app) -> float:
         base = STATUS_POLL_DEFAULT
     if base <= 0:
         base = STATUS_POLL_DEFAULT
-    return base
+    if _status_poll_should_use_running_profile(app):
+        return min(base, float(STATUS_POLL_RUNNING))
+    return max(base, float(STATUS_POLL_IDLE))
 
 
 def apply_status_poll_profile(app):

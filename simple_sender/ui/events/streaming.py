@@ -44,6 +44,19 @@ def _stop_job_accessories_for_state(app, state: str) -> None:
         _log_stream_ui_issue("Failed stopping Kasa job accessories on stream-state transition", exc)
 
 
+def _refresh_stream_busy_ui(app) -> None:
+    if hasattr(app, "_update_quick_button_visibility"):
+        try:
+            app._update_quick_button_visibility()
+        except Exception as exc:
+            _log_stream_ui_issue("Failed refreshing quick-button visibility after stream-state transition", exc)
+    if hasattr(app, "_refresh_toolbar_action_focus"):
+        try:
+            app._refresh_toolbar_action_focus()
+        except Exception as exc:
+            _log_stream_ui_issue("Failed refreshing toolbar action focus after stream-state transition", exc)
+
+
 def handle_stream_state_event(app, evt):
     st = evt[1]
     perf_monitor = getattr(app, "_perf_monitor", None)
@@ -183,6 +196,12 @@ def handle_stream_state_event(app, evt):
         app._set_streaming_lock(False)
     stream_busy = st in ("running", "paused") or bool(getattr(app, "_stream_done_pending_idle", False))
     apply_stream_busy_state(app, stream_busy, log_hook=_log_stream_ui_issue)
+    _refresh_stream_busy_ui(app)
+    if hasattr(app, "_update_joystick_polling_state"):
+        try:
+            app._update_joystick_polling_state()
+        except Exception as exc:
+            _log_stream_ui_issue("Failed updating joystick polling state after stream-state transition", exc)
     app._apply_status_poll_profile()
 
 

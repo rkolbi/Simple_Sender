@@ -839,9 +839,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     wake_event.clear()
                     if signaled:
                         continue
-                    # Yield even on timeout so callers monkeypatching sleep can
-                    # still drive completion without spinning the loop.
-                    time.sleep(0.0)
+                    # Yield briefly even on timeout so callers monkeypatching sleep
+                    # can still drive completion without a zero-sleep spin.
+                    time.sleep(0.005)
                     continue
                 except Exception:
                     pass

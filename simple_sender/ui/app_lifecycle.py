@@ -91,6 +91,13 @@ def tk_report_callback_exception(app, exc, val, tb):
 
 def on_close(app):
     app._closing = True
+    for event_name in ("_connection_state_event", "_status_update_event", "_modal_update_event"):
+        evt = getattr(app, event_name, None)
+        try:
+            if evt is not None and hasattr(evt, "set"):
+                evt.set()
+        except Exception as exc:
+            _log_suppressed(f"Failed signaling {event_name} during shutdown", exc)
     try:
         close_grbl_code_popup(app)
     except Exception as exc:

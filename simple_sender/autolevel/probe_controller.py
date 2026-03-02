@@ -22,6 +22,8 @@
 
 from dataclasses import dataclass
 import logging
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -55,6 +57,7 @@ class ProbeController:
         self._last_report: ProbeReport | None = None
         self._callbacks: list[Callable[[ProbeReport], None]] = []
         self._seq: int = 0
+        self._report_event = threading.Event()
 
     def last_report(self) -> ProbeReport | None:
         return self._last_report
@@ -64,6 +67,7 @@ class ProbeController:
 
     def clear(self) -> None:
         self._last_report = None
+        self._report_event.clear()
         try:
             with self.app.macro_executor.macro_vars() as macro_vars:
                 macro_vars["PRB"] = None
@@ -86,6 +90,7 @@ class ProbeController:
             return
         self._last_report = report
         self._seq += 1
+        self._report_event.set()
         try:
             with self.app.macro_executor.macro_vars() as macro_vars:
                 macro_vars["prbx"] = report.x
@@ -99,6 +104,29 @@ class ProbeController:
                 callback(report)
             except Exception as exc:
                 _log_suppressed("Probe callback raised while handling PRB report", exc)
+
+    def wait_for_report_change(
+        self,
+        seq: int,
+        timeout_s: float,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> ProbeReport | None:
+        start = time.monotonic()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            if self._seq != seq:
+                return self._last_report
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
+                return None
+            wait_s = 1.0
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            signaled = self._report_event.wait(wait_s)
+            if signaled:
+                self._report_event.clear()
 
     def _parse_probe_report(self, raw: str) -> ProbeReport | None:
         line = raw.strip()

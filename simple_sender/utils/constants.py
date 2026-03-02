@@ -267,6 +267,12 @@ STOP_SIGN_CUT_RATIO = 0.29289321881345254
 JOYSTICK_POLL_INTERVAL_MS = 50
 """Joystick polling interval (ms)."""
 
+JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS = 200
+"""Maximum joystick polling interval (ms) when inputs are idle."""
+
+JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS = 10
+"""Per-tick joystick poll backoff step (ms) while idle."""
+
 JOYSTICK_DISCOVERY_INTERVAL_MS = 1000
 """Joystick discovery interval when disconnected (ms)."""
 
@@ -335,6 +341,8 @@ def _is_raspberry_pi() -> bool:
 
 if _is_raspberry_pi():
     JOYSTICK_POLL_INTERVAL_MS = 20
+    JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS = 160
+    JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS = 8
     JOYSTICK_HOLD_REPEAT_MS = 30
     JOYSTICK_HOLD_POLL_INTERVAL_MS = 10
     JOYSTICK_HOLD_MISS_LIMIT = 5

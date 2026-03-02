@@ -22,6 +22,7 @@
 
 import time
 import logging
+import threading
 from collections import deque
 from dataclasses import dataclass
 
@@ -40,6 +41,15 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _signal_thread_event(obj, attr_name: str) -> None:
+    evt = getattr(obj, attr_name, None)
+    if isinstance(evt, threading.Event):
+        try:
+            evt.set()
+        except Exception as exc:
+            _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
 
 
 def _stream_active_or_finishing(app) -> bool:
@@ -140,6 +150,7 @@ def _parse_modal_units(app, raw: str) -> None:
             for key, value in modal_state.items():
                 macro_vars[key] = value
             macro_vars["_modal_seq"] = int(macro_vars.get("_modal_seq", 0) or 0) + 1
+        _signal_thread_event(app, "_modal_update_event")
 
 
 def _parse_report_units_setting(app, raw: str) -> None:
@@ -299,6 +310,7 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
     with app.macro_executor.macro_vars() as macro_vars:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
+    _signal_thread_event(app, "_status_update_event")
     return True
 
 
@@ -650,6 +662,7 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
 
 
 def handle_status_event(app, raw: str):
+    _signal_thread_event(app, "_status_update_event")
     app._last_status_raw = raw
     app._last_status_ts = time.time()
     history = getattr(app, "_status_history", None)

@@ -36,8 +36,12 @@ _logged_suppressed: set[tuple[str, str]] = set()
 PI_PROFILE_STATUS_POLL_INTERVAL = 0.35
 PI_PROFILE_STREAMING_LINE_THRESHOLD = 100_000
 PI_PROFILE_STREAMING_RENDER_INTERVAL = 0.5
-PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = 180
-PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = 125
+PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = 320
+PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = 250
+PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS = 1000
+PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_DEFAULT_MS = 700
+PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_MS = 80
+PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_DEFAULT_MS = 50
 PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S = 1.5
 PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S = 1.5
 PI_PROFILE_PROMPT_SHOWN_KEY = "pi_profile_prompt_shown"
@@ -130,6 +134,9 @@ def apply_pi_profile(
     if not enabled:
         try:
             app._ui_queue_idle_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS
+            app._ui_queue_idle_max_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_DEFAULT_MS
+            app._ui_queue_idle_backoff_step_ms = PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_DEFAULT_MS
+            app._ui_queue_idle_streak = 0
         except Exception as exc:
             _log_suppressed("Failed restoring default UI queue idle interval for Pi profile", exc)
         try:
@@ -147,6 +154,9 @@ def apply_pi_profile(
     _invoke_handler(app, "_on_performance_mode_change")
     try:
         app._ui_queue_idle_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS
+        app._ui_queue_idle_max_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS
+        app._ui_queue_idle_backoff_step_ms = PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_MS
+        app._ui_queue_idle_streak = 0
     except Exception as exc:
         _log_suppressed("Failed applying UI queue idle interval for Pi profile", exc)
     try:

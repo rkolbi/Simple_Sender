@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable
 
@@ -41,6 +42,28 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _wait_for_event_or_sleep(
+    app,
+    event_attr: str,
+    wait_s: float,
+    *,
+    fallback_s: float,
+) -> None:
+    wait_s = max(0.0, float(wait_s))
+    if wait_s <= 0:
+        return
+    evt = getattr(app, event_attr, None)
+    if isinstance(evt, threading.Event):
+        try:
+            signaled = bool(evt.wait(wait_s))
+            if signaled:
+                evt.clear()
+            return
+        except Exception as exc:
+            _log_suppressed(f"Failed waiting on thread event {event_attr}", exc)
+    time.sleep(max(0.0, min(wait_s, fallback_s)))
+
+
 def macro_wait_for_idle(
     *,
     app,
@@ -50,7 +73,7 @@ def macro_wait_for_idle(
 ) -> None:
     if not grbl.is_connected():
         return
-    start = time.time()
+    start = time.monotonic()
     seen_busy = False
     while True:
         if not grbl.is_connected():
@@ -62,58 +85,99 @@ def macro_wait_for_idle(
         if not grbl.is_streaming():
             if not is_idle:
                 seen_busy = True
-            elif is_idle and (seen_busy or (time.time() - start) > 0.2):
+            elif is_idle and (seen_busy or (time.monotonic() - start) > 0.2):
                 return
-        if timeout_s and (time.time() - start) > timeout_s:
+        elapsed = max(0.0, time.monotonic() - start)
+        if timeout_s and elapsed > timeout_s:
             ui_q.put(("log", "[macro] %wait timeout"))
             return
-        time.sleep(0.1)
+        wait_s = 0.5
+        if timeout_s:
+            wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+        _wait_for_event_or_sleep(
+            app,
+            "_status_update_event",
+            wait_s,
+            fallback_s=0.1,
+        )
 
 
 def macro_wait_for_status(
     *,
+    app,
     grbl,
     ui_q,
     macro_vars: dict[str, Any],
     macro_vars_lock,
     timeout_s: float = 1.0,
 ) -> bool:
-    start = time.time()
+    start = time.monotonic()
     with macro_vars_lock:
         seq = int(macro_vars.get("_status_seq", 0) or 0)
+    status_evt = getattr(app, "_status_update_event", None)
+    if isinstance(status_evt, threading.Event):
+        try:
+            status_evt.clear()
+        except Exception as exc:
+            _log_suppressed("Failed clearing status-update event before waiting", exc)
     grbl.send_realtime(RT_STATUS)
     while True:
         with macro_vars_lock:
             now_seq = int(macro_vars.get("_status_seq", 0) or 0)
         if now_seq != seq:
             return True
-        if timeout_s and (time.time() - start) > timeout_s:
+        elapsed = max(0.0, time.monotonic() - start)
+        if timeout_s and elapsed > timeout_s:
             ui_q.put(("log", "[macro] %update timeout"))
             return False
-        time.sleep(0.05)
+        wait_s = 0.5
+        if timeout_s:
+            wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+        _wait_for_event_or_sleep(
+            app,
+            "_status_update_event",
+            wait_s,
+            fallback_s=0.05,
+        )
 
 
 def macro_wait_for_modal(
     *,
+    app,
     ui_q,
     macro_vars: dict[str, Any],
     macro_vars_lock,
     seq: int | None = None,
     timeout_s: float = 1.0,
 ) -> bool:
-    start = time.time()
+    start = time.monotonic()
     if seq is None:
         with macro_vars_lock:
             seq = int(macro_vars.get("_modal_seq", 0) or 0)
+    modal_evt = getattr(app, "_modal_update_event", None)
+    if isinstance(modal_evt, threading.Event):
+        try:
+            modal_evt.clear()
+        except Exception as exc:
+            _log_suppressed("Failed clearing modal-update event before waiting", exc)
     while True:
         with macro_vars_lock:
             now_seq = int(macro_vars.get("_modal_seq", 0) or 0)
         if now_seq != seq:
             return True
-        if timeout_s and (time.time() - start) > timeout_s:
+        elapsed = max(0.0, time.monotonic() - start)
+        if timeout_s and elapsed > timeout_s:
             ui_q.put(("log", "[macro] $G modal update timeout"))
             return False
-        time.sleep(0.05)
+        wait_s = 0.5
+        if timeout_s:
+            wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+        _wait_for_event_or_sleep(
+            app,
+            "_modal_update_event",
+            wait_s,
+            fallback_s=0.05,
+        )
 
 
 def snapshot_macro_state(

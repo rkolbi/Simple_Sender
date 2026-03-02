@@ -24,6 +24,7 @@
 """
 
 # Standard library imports
+import threading
 import time
 
 from simple_sender.macro_state import (
@@ -49,6 +50,7 @@ class MacroStateMixin(MacroExecutorState):
 
     def _macro_wait_for_status(self, timeout_s: float = 1.0) -> bool:
         return macro_wait_for_status(
+            app=self.app,
             grbl=self.grbl,
             ui_q=self.ui_q,
             macro_vars=self._macro_vars,
@@ -58,6 +60,7 @@ class MacroStateMixin(MacroExecutorState):
 
     def _macro_wait_for_modal(self, seq: int | None = None, timeout_s: float = 1.0) -> bool:
         return macro_wait_for_modal(
+            app=self.app,
             ui_q=self.ui_q,
             macro_vars=self._macro_vars,
             macro_vars_lock=self._macro_vars_lock,
@@ -114,12 +117,30 @@ class MacroStateMixin(MacroExecutorState):
         return default
 
     def _wait_for_connection_state(self, target: bool, timeout_s: float = 10.0) -> bool:
-        start = time.time()
+        start = time.monotonic()
+        conn_evt = getattr(self.app, "_connection_state_event", None)
+        if isinstance(conn_evt, threading.Event):
+            try:
+                conn_evt.clear()
+            except Exception:
+                pass
         while True:
             if getattr(self.app, "_closing", False):
                 return False
             if bool(getattr(self.app, "connected", False)) is target:
                 return True
-            if timeout_s and (time.time() - start) > timeout_s:
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
                 return False
-            time.sleep(0.1)
+            wait_s = 0.5
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            if isinstance(conn_evt, threading.Event):
+                try:
+                    signaled = bool(conn_evt.wait(wait_s))
+                    if signaled:
+                        conn_evt.clear()
+                    continue
+                except Exception:
+                    pass
+            time.sleep(max(0.0, min(wait_s, 0.1)))

@@ -73,17 +73,48 @@ def _safe_job_hash(app: Any) -> str:
     return str(raw_hash).strip()
 
 
+def _format_mb(value_bytes: Any) -> str:
+    try:
+        if value_bytes is None:
+            return "n/a"
+        return f"{(float(value_bytes) / (1024.0 * 1024.0)):.2f} MB"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def _runtime_metrics(app: Any) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
     grbl = getattr(app, "grbl", None)
     getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
-    if not callable(getter):
-        return {}
+    if callable(getter):
+        try:
+            raw = getter()
+        except Exception as exc:
+            _log_suppressed("Failed collecting runtime telemetry metrics", exc)
+            raw = {}
+        if isinstance(raw, dict):
+            metrics.update(cast(dict[str, Any], raw))
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is None:
+        metrics["perf_available"] = False
+        return metrics
+    snapshot_getter = getattr(perf_monitor, "runtime_snapshot", None)
+    if not callable(snapshot_getter):
+        metrics["perf_available"] = False
+        return metrics
     try:
-        raw = getter()
+        snapshot = snapshot_getter()
     except Exception as exc:
-        _log_suppressed("Failed collecting runtime telemetry metrics", exc)
-        return {}
-    return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+        _log_suppressed("Failed collecting performance-monitor runtime snapshot", exc)
+        metrics["perf_available"] = False
+        return metrics
+    if not isinstance(snapshot, dict):
+        metrics["perf_available"] = False
+        return metrics
+    metrics["perf_available"] = bool(snapshot.get("available", True))
+    for key, value in snapshot.items():
+        metrics[f"perf_{key}"] = value
+    return metrics
 
 
 def _format_runtime_metrics(
@@ -95,50 +126,104 @@ def _format_runtime_metrics(
     if not metrics:
         return []
     lines: list[str] = []
-    tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
-    ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
-    ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
-    ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
-    lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
-    lines.append(
-        f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
-    )
-    tx_loop_cycles = int(metrics.get("tx_loop_cycles", 0) or 0)
-    tx_loop_idle_cycles = int(metrics.get("tx_loop_idle_cycles", 0) or 0)
-    tx_loop_active_cycles = int(metrics.get("tx_loop_active_cycles", 0) or 0)
-    tx_loop_idle_wait_total_s = float(metrics.get("tx_loop_idle_wait_total_s", 0.0) or 0.0)
-    tx_loop_idle_ratio = float(metrics.get("tx_loop_idle_ratio", 0.0) or 0.0)
-    lines.append(
-        "- TX loop: "
-        f"cycles={tx_loop_cycles}, "
-        f"active={tx_loop_active_cycles}, "
-        f"idle={tx_loop_idle_cycles}, "
-        f"idle_ratio={tx_loop_idle_ratio:.3f}, "
-        f"idle_wait_s={tx_loop_idle_wait_total_s:.2f}"
-    )
-    queue_last = metrics.get("queue_depth_last", {})
-    if isinstance(queue_last, dict):
-        lines.append(
-            "- Queue depth last: "
-            f"stream={int(queue_last.get('stream', 0) or 0)}, "
-            f"manual={int(queue_last.get('manual', 0) or 0)}, "
-            f"ui={int(queue_last.get('ui', 0) or 0)} "
-            f"@ {str(queue_last.get('timestamp', '') or 'n/a')}"
+    has_worker_metrics = any(
+        key in metrics
+        for key in (
+            "tx_lines_per_sec",
+            "tx_loop_cycles",
+            "queue_depth_last",
         )
-    if include_samples:
-        queue_samples = metrics.get("queue_depth_samples", [])
-        if isinstance(queue_samples, list) and queue_samples:
-            lines.append("- Queue depth samples:")
-            for sample in queue_samples[-sample_limit:]:
-                if not isinstance(sample, dict):
-                    continue
-                lines.append(
-                    "  "
-                    f"{str(sample.get('timestamp', '') or 'n/a')} "
-                    f"stream={int(sample.get('stream', 0) or 0)} "
-                    f"manual={int(sample.get('manual', 0) or 0)} "
-                    f"ui={int(sample.get('ui', 0) or 0)}"
-                )
+    )
+    if has_worker_metrics:
+        tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
+        ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
+        ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
+        ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
+        lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
+        lines.append(
+            f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
+        )
+        tx_loop_cycles = int(metrics.get("tx_loop_cycles", 0) or 0)
+        tx_loop_idle_cycles = int(metrics.get("tx_loop_idle_cycles", 0) or 0)
+        tx_loop_active_cycles = int(metrics.get("tx_loop_active_cycles", 0) or 0)
+        tx_loop_idle_wait_total_s = float(metrics.get("tx_loop_idle_wait_total_s", 0.0) or 0.0)
+        tx_loop_idle_ratio = float(metrics.get("tx_loop_idle_ratio", 0.0) or 0.0)
+        lines.append(
+            "- TX loop: "
+            f"cycles={tx_loop_cycles}, "
+            f"active={tx_loop_active_cycles}, "
+            f"idle={tx_loop_idle_cycles}, "
+            f"idle_ratio={tx_loop_idle_ratio:.3f}, "
+            f"idle_wait_s={tx_loop_idle_wait_total_s:.2f}"
+        )
+        queue_last = metrics.get("queue_depth_last", {})
+        if isinstance(queue_last, dict):
+            lines.append(
+                "- Queue depth last: "
+                f"stream={int(queue_last.get('stream', 0) or 0)}, "
+                f"manual={int(queue_last.get('manual', 0) or 0)}, "
+                f"ui={int(queue_last.get('ui', 0) or 0)} "
+                f"@ {str(queue_last.get('timestamp', '') or 'n/a')}"
+            )
+        if include_samples:
+            queue_samples = metrics.get("queue_depth_samples", [])
+            if isinstance(queue_samples, list) and queue_samples:
+                lines.append("- Queue depth samples:")
+                for sample in queue_samples[-sample_limit:]:
+                    if not isinstance(sample, dict):
+                        continue
+                    lines.append(
+                        "  "
+                        f"{str(sample.get('timestamp', '') or 'n/a')} "
+                        f"stream={int(sample.get('stream', 0) or 0)} "
+                        f"manual={int(sample.get('manual', 0) or 0)} "
+                        f"ui={int(sample.get('ui', 0) or 0)}"
+                    )
+    else:
+        lines.append("- Worker runtime telemetry unavailable.")
+
+    perf_available = bool(metrics.get("perf_available", False))
+    if not perf_available:
+        lines.append("- Perf monitor disabled (enable runtime performance profiling for CPU/RSS telemetry).")
+        return lines
+
+    idle_cpu_avg = metrics.get("perf_idle_cpu_avg")
+    idle_cpu_p95 = metrics.get("perf_idle_cpu_p95")
+    stream_cpu_avg = metrics.get("perf_stream_cpu_avg")
+    stream_cpu_p95 = metrics.get("perf_stream_cpu_p95")
+    if idle_cpu_avg is None or idle_cpu_p95 is None:
+        lines.append("- Idle CPU avg/p95: n/a")
+    else:
+        lines.append(f"- Idle CPU avg/p95: {float(idle_cpu_avg):.2f}% / {float(idle_cpu_p95):.2f}%")
+    if stream_cpu_avg is None or stream_cpu_p95 is None:
+        lines.append("- Streaming CPU avg/p95: n/a")
+    else:
+        lines.append(
+            f"- Streaming CPU avg/p95: {float(stream_cpu_avg):.2f}% / {float(stream_cpu_p95):.2f}%"
+        )
+    lines.append(f"- RSS start/current/peak: {_format_mb(metrics.get('perf_rss_start_bytes'))} / "
+                 f"{_format_mb(metrics.get('perf_rss_current_bytes'))} / "
+                 f"{_format_mb(metrics.get('perf_rss_peak_bytes'))}")
+    steady_after = metrics.get("perf_steady_state_after_s")
+    steady_label = f"{int(float(steady_after))}s" if steady_after is not None else "steady-state"
+    lines.append(
+        f"- RSS {steady_label}: {_format_mb(metrics.get('perf_rss_steady_state_bytes'))}"
+    )
+    uptime_s = metrics.get("perf_uptime_s")
+    startup_s = metrics.get("perf_startup_time_s")
+    if uptime_s is not None:
+        lines.append(f"- Perf monitor uptime: {float(uptime_s):.1f}s")
+    if startup_s is not None:
+        lines.append(f"- Startup time: {float(startup_s):.3f}s")
+    max_drain_ms = metrics.get("perf_ui_queue_drain_max_ms")
+    stall_count = metrics.get("perf_ui_queue_drain_stall_count")
+    stall_budget = metrics.get("perf_ui_queue_drain_stall_budget_ms")
+    if max_drain_ms is not None and stall_count is not None:
+        budget_text = f"{float(stall_budget):.1f}" if stall_budget is not None else "n/a"
+        lines.append(
+            "- UI queue drain max/stalls: "
+            f"{float(max_drain_ms):.2f} ms / {int(stall_count)} (budget {budget_text} ms)"
+        )
     return lines
 
 

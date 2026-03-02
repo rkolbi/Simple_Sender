@@ -238,16 +238,36 @@ class AutoLevelProbeRunner:
         return True
 
     def _wait_for_probe_report(self, timeout_s: float) -> ProbeReport | None:
-        start = time.time()
+        controller = getattr(self.app, "probe_controller", None)
+        if controller is not None and hasattr(controller, "wait_for_report_change"):
+            seq = 0
+            try:
+                seq = int(controller.sequence())
+            except Exception:
+                seq = 0
+            try:
+                report = controller.wait_for_report_change(
+                    seq,
+                    timeout_s,
+                    cancel_event=self._cancel,
+                )
+            except Exception:
+                report = None
+            if report is not None:
+                return cast(ProbeReport, report)
+            return None
+        start = time.monotonic()
         while True:
             if self._cancel.is_set():
                 return None
             report = self.app.probe_controller.last_report()
             if report is not None:
                 return cast(ProbeReport, report)
-            if timeout_s and (time.time() - start) > timeout_s:
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
                 return None
-            time.sleep(0.02)
+            wait_s = 0.2 if not timeout_s else min(0.2, max(0.0, timeout_s - elapsed))
+            self._wait_for_status_signal(wait_s)
 
     def _send_and_wait(self, command: str, timeout_s: float) -> bool:
         if self._cancel.is_set():
@@ -262,7 +282,7 @@ class AutoLevelProbeRunner:
         return self._wait_for_idle(timeout_s)
 
     def _wait_for_idle(self, timeout_s: float) -> bool:
-        start = time.time()
+        start = time.monotonic()
         seen_busy = False
         while True:
             if self._cancel.is_set():
@@ -271,11 +291,30 @@ class AutoLevelProbeRunner:
             is_idle = state.startswith("idle")
             if not is_idle:
                 seen_busy = True
-            elif is_idle and (seen_busy or (time.time() - start) > 0.2):
+            elif is_idle and (seen_busy or (time.monotonic() - start) > 0.2):
                 return True
-            if timeout_s and (time.time() - start) > timeout_s:
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
                 return False
-            time.sleep(0.05)
+            wait_s = 0.5
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            self._wait_for_status_signal(wait_s)
+
+    def _wait_for_status_signal(self, wait_s: float) -> None:
+        wait_s = max(0.0, float(wait_s))
+        if wait_s <= 0:
+            return
+        status_evt = getattr(self.app, "_status_update_event", None)
+        if isinstance(status_evt, threading.Event):
+            try:
+                signaled = bool(status_evt.wait(wait_s))
+                if signaled:
+                    status_evt.clear()
+                return
+            except Exception:
+                pass
+        time.sleep(max(0.0, min(wait_s, 0.05)))
 
     def _log(self, message: str) -> None:
         try:

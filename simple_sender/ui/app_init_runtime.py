@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import threading
 from collections import deque
 from typing import Any, cast
 
@@ -82,6 +83,7 @@ def _init_joystick_runtime_state(app, tk) -> None:
     app._joystick_device_count = 0
     app._joystick_last_discovery = 0.0
     app._joystick_last_live_status = 0.0
+    app._joystick_poll_idle_streak = 0
     app._joystick_names = cast(dict[int, str], {})
     app._joystick_instances = cast(dict[int, Any], {})
     app._joystick_button_poll_state = cast(dict[tuple[int, int], bool], {})
@@ -117,6 +119,9 @@ def _init_connection_runtime_state(app) -> None:
     app._disconnecting = False
     app._connect_thread = None
     app._disconnect_thread = None
+    app._connection_state_event = threading.Event()
+    app._status_update_event = threading.Event()
+    app._modal_update_event = threading.Event()
 
 
 def _init_kasa_runtime_state(app, tk) -> None:
@@ -466,9 +471,19 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._auto_reconnect_max_retry = 5
     app._auto_reconnect_next_ts = 0.0
     app._auto_reconnect_blocked = False
+    app._auto_reconnect_ports_cache = ()
+    app._auto_reconnect_ports_cache_ts = 0.0
+    app._auto_reconnect_port_scan_inflight = False
+    app._auto_reconnect_port_scan_thread = None
+    app._auto_reconnect_port_scan_result_q = None
+    app._auto_reconnect_port_scan_min_interval_s = 1.0
+    app._auto_reconnect_port_scan_cache_max_age_s = 8.0
     app._user_disconnect = False
     app._ui_throttle_ms = 100
-    app._ui_queue_idle_interval_ms = 125
+    app._ui_queue_idle_interval_ms = 250
+    app._ui_queue_idle_max_interval_ms = 700
+    app._ui_queue_idle_backoff_step_ms = 50
+    app._ui_queue_idle_streak = 0
     app._ui_queue_drain_event_limit = 100
     app._ui_queue_drain_time_budget_ms = 8.0
     app._ui_queue_drain_stall_budget_ms = 16.0
