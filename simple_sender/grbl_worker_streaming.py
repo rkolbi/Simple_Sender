@@ -26,6 +26,7 @@ import re
 import threading
 import time
 from collections import deque
+from functools import lru_cache
 from typing import Sequence, cast
 
 from simple_sender.types import (
@@ -36,11 +37,17 @@ from simple_sender.types import (
 )
 from simple_sender.kasa_accessory import SpindleCommandDetector
 
-from .utils.constants import EVENT_QUEUE_TIMEOUT, MAX_LINE_LENGTH, RX_BUFFER_SAFETY
+from .utils.constants import (
+    EVENT_QUEUE_TIMEOUT,
+    GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD,
+    MAX_LINE_LENGTH,
+    RX_BUFFER_SAFETY,
+)
 from .utils.exceptions import SerialWriteError
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
 def _stream_patterns():
     from . import grbl_worker as grbl_worker_mod
 
@@ -59,6 +66,24 @@ def _annotate_stream_error(raw_error: str) -> str:
 
 
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    def _signal_tx_activity(self) -> None:
+        evt = getattr(self, "_tx_activity_evt", None)
+        if evt is None:
+            return
+        try:
+            evt.set()
+        except Exception:
+            return
+
+    def _tx_idle_wait_s(self) -> float:
+        try:
+            value = float(getattr(self, "_tx_loop_idle_wait_s", 0.2))
+        except Exception:
+            value = 0.2
+        if value < EVENT_QUEUE_TIMEOUT:
+            return float(EVENT_QUEUE_TIMEOUT)
+        return value
+
     def is_streaming(self) -> bool:
         """Check if currently streaming G-code.
         
@@ -74,6 +99,46 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     # ========================================================================
     # COMMAND EXECUTION
     # ========================================================================
+
+    def _clear_gcode_send_cache(self) -> None:
+        self._gcode_payload_cache = None
+        self._gcode_pause_reason_cache = None
+        self._gcode_spindle_state_cache = None
+
+    @staticmethod
+    def _normalize_stream_line(raw_line: str) -> str:
+        if not raw_line:
+            return ""
+        if raw_line[0].isspace() or raw_line[-1].isspace():
+            return raw_line.strip()
+        return raw_line
+
+    def _prepare_in_memory_gcode_send_cache(self, lines: Sequence[str]) -> None:
+        self._clear_gcode_send_cache()
+        if not isinstance(lines, list | tuple):
+            return
+        line_count = len(lines)
+        if line_count <= 0 or line_count > int(GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD):
+            return
+        payload_cache: list[bytes | None] = [None] * line_count
+        pause_cache: list[str | None] = [None] * line_count
+        spindle_cache: list[bool | None] = [None] * line_count
+        for idx, raw_line in enumerate(lines):
+            line = self._normalize_stream_line(raw_line)
+            payload_cache[idx] = self._build_line_payload(line)
+            pause_cache[idx] = self._pause_reason_for_line(line)
+            spindle_cache[idx] = self._detect_spindle_state(line)
+        self._gcode_payload_cache = payload_cache
+        self._gcode_pause_reason_cache = pause_cache
+        self._gcode_spindle_state_cache = spindle_cache
+
+    def prime_gcode_send_cache(self, lines: Sequence[str]) -> None:
+        """Prime fast-send metadata from an in-memory line list.
+
+        This is used when the active stream source is file-backed but the UI
+        already has a full in-memory line list for non-preview jobs.
+        """
+        self._prepare_in_memory_gcode_send_cache(lines)
     
     def load_gcode(self, lines: Sequence[str], *, name: str | None = None) -> None:
         """Load G-code for streaming.
@@ -83,6 +148,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             name: Optional job name for error reporting
         """
         self._gcode = lines
+        self._prepare_in_memory_gcode_send_cache(lines)
         self._gcode_name = name
         self._streaming = False
         self._paused = False
@@ -110,6 +176,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._abort_writes.clear()
         self._reset_stream_buffer()
         self._emit_buffer_fill()
+        self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("stream_state", "running", None))
@@ -153,6 +220,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._resume_preamble = deque(cleaned)
         
         self._emit_buffer_fill()
+        self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("progress", start_index, len(self._gcode)))
@@ -173,6 +241,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self.ui_q.put(("log", f"[resume failed] {exc}"))
                 return
             self._paused = False
+            self._signal_tx_activity()
             self.ui_q.put(("stream_state", "running", None))
             logger.info("Stream resumed")
 
@@ -186,6 +255,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 logger.error(f"Pause failed: {exc}")
                 self.ui_q.put(("log", f"[pause failed] {exc}"))
         self._paused = True
+        self._signal_tx_activity()
         self.ui_q.put(("stream_state", "paused", None))
         if reason:
             self.ui_q.put(("stream_pause_reason", reason))
@@ -278,8 +348,13 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         
         try:
             while not stop_evt.is_set():
+                self._tx_loop_cycles += 1
                 if not self.is_connected():
-                    time.sleep(0.05)
+                    idle_wait = self._tx_idle_wait_s()
+                    self._tx_loop_idle_cycles += 1
+                    self._tx_loop_idle_wait_total_s += idle_wait
+                    if stop_evt.wait(idle_wait):
+                        break
                     continue
                 
                 # Handle streaming
@@ -289,8 +364,40 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 # Handle manual commands with buffer pacing
                 self._process_manual_queue()
 
-                if stop_evt.wait(EVENT_QUEUE_TIMEOUT):
+                idle_wait = EVENT_QUEUE_TIMEOUT
+                with self._stream_lock:
+                    has_stream_work = bool(
+                        self._streaming
+                        and not self._paused
+                        and (
+                            self._stream_pending_item is not None
+                            or self._resume_preamble
+                            or self._send_index < len(self._gcode)
+                        )
+                    )
+                    has_manual_work = bool(
+                        self._manual_pending_item is not None
+                        or not self._outgoing_q.empty()
+                        or self._purge_jog_queue.is_set()
+                    )
+                if not has_stream_work and not has_manual_work:
+                    idle_wait = self._tx_idle_wait_s()
+                    self._tx_loop_idle_cycles += 1
+                    self._tx_loop_idle_wait_total_s += idle_wait
+                    evt = getattr(self, "_tx_activity_evt", None)
+                    if evt is not None:
+                        try:
+                            evt.clear()
+                        except Exception:
+                            pass
+                else:
+                    self._tx_loop_active_cycles += 1
+                if stop_evt.wait(idle_wait):
                     break
+                if idle_wait > EVENT_QUEUE_TIMEOUT:
+                    evt = getattr(self, "_tx_activity_evt", None)
+                    if evt is not None and evt.is_set():
+                        continue
         
         except Exception as e:
             logger.error(f"TX thread error: {e}", exc_info=True)
@@ -313,8 +420,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return StreamPendingItem(line=self._resume_preamble[0], is_gcode=False, idx=None)
         if self._send_index >= len(self._gcode):
             return None
+        line = self._normalize_stream_line(self._gcode[self._send_index])
         return StreamPendingItem(
-            line=self._gcode[self._send_index].strip(),
+            line=line,
             is_gcode=True,
             idx=self._send_index,
         )
@@ -324,16 +432,40 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         item: StreamPendingItem,
     ) -> tuple[StreamPendingItem, bytes, int, bool | None] | None:
         raw_line = item.line
-        spindle_state = self._detect_spindle_state(raw_line)
+        use_cached_payload = False
+        use_cached_pause_reason = False
+        use_cached_spindle_state = False
+        cached_payload: bytes | None = None
+        cached_pause_reason: str | None = None
+        cached_spindle_state: bool | None = None
+        if item.is_gcode and item.idx is not None and not self._dry_run_sanitize:
+            idx = item.idx
+            payload_cache = getattr(self, "_gcode_payload_cache", None)
+            if payload_cache is not None and 0 <= idx < len(payload_cache):
+                cached_payload = payload_cache[idx]
+                use_cached_payload = True
+            pause_cache = getattr(self, "_gcode_pause_reason_cache", None)
+            if pause_cache is not None and 0 <= idx < len(pause_cache):
+                cached_pause_reason = pause_cache[idx]
+                use_cached_pause_reason = True
+            spindle_cache = getattr(self, "_gcode_spindle_state_cache", None)
+            if spindle_cache is not None and 0 <= idx < len(spindle_cache):
+                cached_spindle_state = spindle_cache[idx]
+                use_cached_spindle_state = True
+        spindle_state = (
+            cached_spindle_state if use_cached_spindle_state else self._detect_spindle_state(raw_line)
+        )
         line = self._sanitize_stream_line(raw_line)
         item = StreamPendingItem(line=line, is_gcode=item.is_gcode, idx=item.idx)
         if item.is_gcode and item.idx is not None and self._pause_after_idx is None:
-            reason = self._pause_reason_for_line(line)
+            reason = (
+                cached_pause_reason if use_cached_pause_reason else self._pause_reason_for_line(line)
+            )
             if reason:
                 self._pause_after_idx = item.idx
                 self._pause_after_reason = reason
 
-        payload = self._build_line_payload(line)
+        payload = cached_payload if use_cached_payload else self._build_line_payload(line)
         if payload is None:
             msg = self._format_stream_error("Non-ASCII characters in line", item.idx, line)
             self._pause_stream(reason="invalid characters")
@@ -364,7 +496,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     @staticmethod
     def _detect_spindle_state(line: str) -> bool | None:
         try:
-            return SpindleCommandDetector.detect_state_change(line)
+            return cast(bool | None, SpindleCommandDetector.detect_state_change(line))
         except Exception:
             return None
 
@@ -510,6 +642,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
                     self._manual_pending_item = None
+            self._signal_tx_activity()
 
     def _manual_loop_blocked(self) -> bool:
         if self._streaming or self._paused:
@@ -683,16 +816,34 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._record_tx_line()
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
+            self._signal_tx_activity()
 
     def wait_for_manual_completion(self, timeout_s: float = 30.0) -> bool:
         """Block until manual/immediate commands finish."""
         start = time.time()
+        wake_event = getattr(self, "_tx_activity_evt", None)
         while True:
             with self._stream_lock:
-                pending = bool(self._stream_line_queue) or self._manual_pending_item is not None or bool(self._resume_preamble)
+                pending = (
+                    bool(self._stream_line_queue)
+                    or self._manual_pending_item is not None
+                    or bool(self._resume_preamble)
+                )
             if not pending:
                 return True
             if timeout_s and (time.time() - start) > timeout_s:
                 return False
-            time.sleep(0.01)
+            if wake_event is not None:
+                try:
+                    signaled = bool(wake_event.wait(0.05))
+                    wake_event.clear()
+                    if signaled:
+                        continue
+                    # Yield even on timeout so callers monkeypatching sleep can
+                    # still drive completion without spinning the loop.
+                    time.sleep(0.0)
+                    continue
+                except Exception:
+                    pass
+            time.sleep(0.05)
     

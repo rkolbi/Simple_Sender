@@ -194,6 +194,20 @@ def _build_ui_settings(
             )
         ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
+        "pi_profile_enabled": bool(
+            app.pi_profile_enabled.get()
+            if hasattr(app, "pi_profile_enabled")
+            else app.settings.get(
+                "pi_profile_enabled",
+                DEFAULT_SETTINGS.get("pi_profile_enabled", False),
+            )
+        ),
+        "pi_profile_prompt_shown": bool(
+            app.settings.get(
+                "pi_profile_prompt_shown",
+                DEFAULT_SETTINGS.get("pi_profile_prompt_shown", False),
+            )
+        ),
         "error_dialogs_enabled": bool(app.error_dialogs_enabled.get()),
         "grbl_popup_enabled": bool(
             app.grbl_popup_enabled.get()
@@ -206,6 +220,30 @@ def _build_ui_settings(
         "grbl_popup_auto_dismiss_sec": grbl_popup_auto_dismiss_value,
         "grbl_popup_dedupe_sec": grbl_popup_dedupe_value,
         "performance_mode": bool(app.performance_mode.get()),
+        "performance_profile_enabled": bool(
+            app.performance_profile_enabled.get()
+            if hasattr(app, "performance_profile_enabled")
+            else app.settings.get(
+                "performance_profile_enabled",
+                DEFAULT_SETTINGS.get("performance_profile_enabled", False),
+            )
+        ),
+        "performance_leak_watch_enabled": bool(
+            app.performance_leak_watch_enabled.get()
+            if hasattr(app, "performance_leak_watch_enabled")
+            else app.settings.get(
+                "performance_leak_watch_enabled",
+                DEFAULT_SETTINGS.get("performance_leak_watch_enabled", False),
+            )
+        ),
+        "performance_profile_log_path": str(
+            app.performance_profile_log_path.get()
+            if hasattr(app, "performance_profile_log_path")
+            else app.settings.get(
+                "performance_profile_log_path",
+                DEFAULT_SETTINGS.get("performance_profile_log_path", ""),
+            )
+        ).strip(),
         "render3d_enabled": bool(app.render3d_enabled.get()),
         "theme": app.selected_theme.get(),
         "ui_scale": (

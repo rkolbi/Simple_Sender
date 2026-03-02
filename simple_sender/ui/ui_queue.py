@@ -27,14 +27,19 @@ import time
 from collections import OrderedDict, deque
 
 from simple_sender.utils.constants import (
+    UI_QUEUE_DRAIN_EVENT_LIMIT,
+    UI_QUEUE_DRAIN_STALL_BUDGET_MS,
+    UI_QUEUE_DRAIN_TIME_BUDGET_MS,
     UI_EVENT_QUEUE_MAXSIZE,
     UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL,
+    UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S,
+    UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
+    UI_QUEUE_MAINTENANCE_INTERVAL_S,
+    UI_QUEUE_RECONNECT_CHECK_INTERVAL_S,
 )
 from simple_sender.types import AppProtocol, UiEvent
 
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
-UI_QUEUE_MAINTENANCE_INTERVAL_S = 0.25
-UI_QUEUE_RECONNECT_CHECK_INTERVAL_S = 0.25
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -302,8 +307,23 @@ class UiEventQueue:
 
 def drain_ui_queue(app: AppProtocol) -> None:
     processed = 0
+    pending = 0
+    drain_start = time.perf_counter()
     try:
-        for _ in range(100):
+        event_limit = max(1, int(getattr(app, "_ui_queue_drain_event_limit", UI_QUEUE_DRAIN_EVENT_LIMIT)))
+    except Exception:
+        event_limit = int(UI_QUEUE_DRAIN_EVENT_LIMIT)
+    try:
+        time_budget_ms = float(
+            getattr(app, "_ui_queue_drain_time_budget_ms", UI_QUEUE_DRAIN_TIME_BUDGET_MS)
+        )
+    except Exception:
+        time_budget_ms = float(UI_QUEUE_DRAIN_TIME_BUDGET_MS)
+    if time_budget_ms <= 0:
+        time_budget_ms = float(UI_QUEUE_DRAIN_TIME_BUDGET_MS)
+    time_budget_s = time_budget_ms / 1000.0
+    try:
+        for _ in range(event_limit):
             try:
                 evt = app.ui_q.get_nowait()
             except queue.Empty:
@@ -313,6 +333,8 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 app._handle_evt(evt)
             except Exception as exc:
                 app._log_exception("UI event error", exc)
+            if (time.perf_counter() - drain_start) >= time_budget_s:
+                break
         if hasattr(app.ui_q, "pop_drop_summary"):
             try:
                 summary = app.ui_q.pop_drop_summary()
@@ -333,9 +355,25 @@ def drain_ui_queue(app: AppProtocol) -> None:
         if app._closing:
             return
         now = time.monotonic()
+        pending = 0
+        try:
+            pending = int(app.ui_q.qsize())
+        except Exception:
+            pending = 0
+        queue_busy = (processed > 0) or (pending > 0)
+        maintenance_interval_key = (
+            "_ui_maintenance_interval_s"
+            if queue_busy
+            else "_ui_maintenance_idle_interval_s"
+        )
+        maintenance_interval_default = UI_QUEUE_MAINTENANCE_INTERVAL_S
+        if not queue_busy:
+            maintenance_interval_default = float(
+                getattr(app, "_ui_maintenance_interval_s", UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S)
+            )
         maintenance_interval = max(
             0.0,
-            float(getattr(app, "_ui_maintenance_interval_s", UI_QUEUE_MAINTENANCE_INTERVAL_S)),
+            float(getattr(app, maintenance_interval_key, maintenance_interval_default)),
         )
         last_maintenance = float(getattr(app, "_ui_maintenance_last_ts", 0.0) or 0.0)
         should_run_maintenance = processed > 0 or (now - last_maintenance) >= maintenance_interval
@@ -356,13 +394,27 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     app._sync_tool_reference_label()
                 except Exception as exc:
                     app._log_exception("UI tool-reference sync error", exc)
+        reconnect_interval_key = (
+            "_auto_reconnect_check_interval_s"
+            if queue_busy
+            else "_auto_reconnect_check_idle_interval_s"
+        )
+        reconnect_interval_default = UI_QUEUE_RECONNECT_CHECK_INTERVAL_S
+        if not queue_busy:
+            reconnect_interval_default = float(
+                getattr(
+                    app,
+                    "_auto_reconnect_check_interval_s",
+                    UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
+                )
+            )
         reconnect_interval = max(
             0.0,
             float(
                 getattr(
                     app,
-                    "_auto_reconnect_check_interval_s",
-                    UI_QUEUE_RECONNECT_CHECK_INTERVAL_S,
+                    reconnect_interval_key,
+                    reconnect_interval_default,
                 )
             ),
         )
@@ -375,10 +427,47 @@ def drain_ui_queue(app: AppProtocol) -> None:
             except Exception as exc:
                 app._log_exception("UI auto-reconnect check error", exc)
     finally:
+        try:
+            elapsed_ms = max(0.0, (time.perf_counter() - drain_start) * 1000.0)
+            app._ui_queue_drain_ticks = int(getattr(app, "_ui_queue_drain_ticks", 0)) + 1
+            app._ui_queue_drain_events = int(getattr(app, "_ui_queue_drain_events", 0)) + int(processed)
+            app._ui_queue_drain_max_ms = max(
+                float(getattr(app, "_ui_queue_drain_max_ms", 0.0)),
+                elapsed_ms,
+            )
+            stall_budget_ms = float(
+                getattr(app, "_ui_queue_drain_stall_budget_ms", UI_QUEUE_DRAIN_STALL_BUDGET_MS)
+            )
+            if elapsed_ms > stall_budget_ms:
+                app._ui_queue_drain_stall_count = int(
+                    getattr(app, "_ui_queue_drain_stall_count", 0)
+                ) + 1
+        except Exception:
+            pass
         if app._closing:
             return
+        next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+        if pending > 0:
+            if pending >= 500:
+                next_delay_ms = 1
+            elif pending >= 200:
+                next_delay_ms = 5
+            elif pending >= 50:
+                next_delay_ms = 15
+            else:
+                next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+        elif processed <= 0:
+            try:
+                next_delay_ms = int(
+                    max(
+                        UI_QUEUE_DRAIN_INTERVAL_MS,
+                        getattr(app, "_ui_queue_idle_interval_ms", UI_QUEUE_DRAIN_INTERVAL_MS),
+                    )
+                )
+            except Exception:
+                next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
         try:
-            app.after(UI_QUEUE_DRAIN_INTERVAL_MS, app._drain_ui_queue)
+            app.after(next_delay_ms, app._drain_ui_queue)
         except Exception as exc:
             try:
                 app._log_exception("UI queue reschedule error", exc)

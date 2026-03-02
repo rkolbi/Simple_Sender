@@ -46,6 +46,12 @@ def _stop_job_accessories_for_state(app, state: str) -> None:
 
 def handle_stream_state_event(app, evt):
     st = evt[1]
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is not None:
+        try:
+            perf_monitor.note_stream_state(str(st))
+        except Exception as exc:
+            _log_stream_ui_issue("Failed forwarding stream-state transition to performance monitor", exc)
     prev = app._stream_state
     now = time.time()
     app._stream_state = st

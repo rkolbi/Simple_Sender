@@ -19,11 +19,15 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+import time
+
+
 def main() -> None:
+    startup_started_at = time.perf_counter()
     from simple_sender.utils.logging_config import setup_logging
     setup_logging()
     from simple_sender.application import App
-    App().mainloop()
+    App(startup_started_at=startup_started_at).mainloop()
 
 
 if __name__ == "__main__":

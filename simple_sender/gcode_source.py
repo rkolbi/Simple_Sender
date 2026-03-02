@@ -32,7 +32,14 @@ from simple_sender.gcode_parser import clean_gcode_line
 class FileGcodeSource:
     """Lazy G-code line source backed by a file and precomputed offsets."""
 
-    def __init__(self, path: str, offsets: Iterable[int], encoding: str = "utf-8"):
+    def __init__(
+        self,
+        path: str,
+        offsets: Iterable[int],
+        encoding: str = "utf-8",
+        *,
+        already_clean: bool = False,
+    ):
         self.path = path
         if isinstance(offsets, array) and offsets.typecode == "Q":
             self._offsets = offsets
@@ -40,6 +47,7 @@ class FileGcodeSource:
             # Compact, contiguous offsets reduce memory for large streamed jobs.
             self._offsets = array("Q", offsets)
         self._encoding = encoding
+        self._already_clean = bool(already_clean)
         self._lock = threading.Lock()
         self._file: IO[str] | None = None
 
@@ -91,6 +99,11 @@ class FileGcodeSource:
     def _read_line_at(self, idx: int) -> str:
         with self._lock:
             f = self._open()
-            f.seek(self._offsets[idx])
+            target_offset = self._offsets[idx]
+            # Streaming sends lines in sequence, so skip seek when already at target.
+            if f.tell() != target_offset:
+                f.seek(target_offset)
             raw = f.readline()
+        if self._already_clean:
+            return cast(str, raw.rstrip("\r\n"))
         return cast(str, clean_gcode_line(raw))

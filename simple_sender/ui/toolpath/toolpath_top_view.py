@@ -33,6 +33,8 @@ from simple_sender.gcode_parser import parse_gcode_lines
 from simple_sender.ui.widgets_common import _resolve_widget_bg
 from simple_sender.utils.constants import (
     TOOLPATH_CANVAS_MARGIN,
+    TOOLPATH_TOP_VIEW_PROGRESSIVE_CHUNK_SIZE,
+    TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD,
     TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT,
     TOOLPATH_GRID_MAX_POINTS,
     TOOLPATH_GRID_POINT_RADIUS,
@@ -82,8 +84,12 @@ class TopViewPanel(ttk.Frame):
         self._render_segment_limit = TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT
         self._scene_revision = 0
         self._last_render_signature: tuple[int, int, int] | None = None
+        self._progressive_render_after_id: str | int | None = None
+        self._progressive_render_token = 0
+        self._progressive_overlay_item: Any | None = None
 
     def _invalidate_scene(self) -> None:
+        self._cancel_progressive_render()
         self._scene_revision += 1
 
     def set_lines(
@@ -233,6 +239,139 @@ class TopViewPanel(ttk.Frame):
         self._render_pending = True
         self.after_idle(self._render)
 
+    def _cancel_progressive_render(self) -> None:
+        after_id = self._progressive_render_after_id
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception as exc:
+                _log_suppressed("Failed canceling pending progressive Top View render callback", exc)
+        self._progressive_render_after_id = None
+        self._progressive_render_token += 1
+
+    def _draw_top_view_overlay(
+        self,
+        *,
+        total_segments: int,
+        drawn_segments: int,
+        progressive: bool,
+    ) -> None:
+        if progressive:
+            segment_text = f"Segments: {drawn_segments:,}/{total_segments:,} (drawing...)"
+        elif drawn_segments == total_segments:
+            segment_text = f"Segments: {total_segments:,}"
+        else:
+            segment_text = f"Segments: {drawn_segments:,}/{total_segments:,}"
+        overlay = [segment_text, "View: Top"]
+        if self._overlay_grid:
+            overlay.insert(
+                0,
+                f"Auto-level: {len(self._overlay_grid.xs)}x{len(self._overlay_grid.ys)} "
+                f"({self._overlay_grid.point_count()} pts)",
+            )
+        if self._job_name:
+            overlay.insert(0, f"Job: {self._job_name}")
+        overlay_text = "\n".join(overlay)
+        if self._progressive_overlay_item is None:
+            self._progressive_overlay_item = self.canvas.create_text(
+                TOOLPATH_OVERLAY_TEXT_MARGIN,
+                TOOLPATH_OVERLAY_TEXT_MARGIN,
+                text=overlay_text,
+                fill="#ffffff",
+                anchor="nw",
+                justify="left",
+            )
+            return
+        try:
+            self.canvas.itemconfigure(self._progressive_overlay_item, text=overlay_text)
+        except tk.TclError as exc:
+            _log_suppressed("Failed updating Top View overlay text item", exc)
+            self._progressive_overlay_item = None
+
+    def _render_progressive_chunk(self, token: int, state: dict[str, Any]) -> None:
+        if token != self._progressive_render_token:
+            return
+        if not self.winfo_exists() or not self._visible:
+            self._progressive_render_after_id = None
+            return
+        self._progressive_render_after_id = None
+        render_segments = state["render_segments"]
+        total_segments = int(state["total_segments"])
+        stride = int(state["stride"])
+        to_canvas = state["to_canvas"]
+        next_idx = int(state["next_idx"])
+        chunk_size = int(state["chunk_size"])
+        cur_color = state["cur_color"]
+        cur_pts = state["cur_pts"]
+        last_end = state["last_end"]
+        drawn_segments = int(state["drawn_segments"])
+        eps = 1e-6
+        runs: dict[str, list[list[float]]] = {}
+
+        def flush_run() -> None:
+            nonlocal cur_color, cur_pts, last_end
+            if cur_color and len(cur_pts) >= 4:
+                runs.setdefault(cur_color, []).append(cur_pts)
+            cur_color = None
+            cur_pts = []
+            last_end = None
+
+        processed = 0
+        while next_idx < total_segments and processed < chunk_size:
+            x1, y1, _, x2, y2, _, color = render_segments[next_idx]
+            px1, py1 = to_canvas(x1, y1)
+            px2, py2 = to_canvas(x2, y2)
+            continuous = (
+                cur_color == color
+                and last_end is not None
+                and abs(px1 - last_end[0]) <= eps
+                and abs(py1 - last_end[1]) <= eps
+            )
+            if not continuous:
+                flush_run()
+                cur_color = color
+                cur_pts = [px1, py1, px2, py2]
+            else:
+                cur_pts.extend([px2, py2])
+            last_end = (px2, py2)
+            next_idx += stride
+            drawn_segments += 1
+            processed += 1
+
+        for color, polylines in runs.items():
+            color_hex = self._colors.get(color, "#2c6dd2")
+            for pts in polylines:
+                self.canvas.create_line(*pts, fill=color_hex)
+
+        done = next_idx >= total_segments
+        if done:
+            if cur_color and len(cur_pts) >= 4:
+                color_hex = self._colors.get(cur_color, "#2c6dd2")
+                self.canvas.create_line(*cur_pts, fill=color_hex)
+            self._draw_top_view_overlay(
+                total_segments=total_segments,
+                drawn_segments=drawn_segments,
+                progressive=False,
+            )
+            self._update_position_marker()
+            return
+
+        state["next_idx"] = next_idx
+        state["cur_color"] = cur_color
+        state["cur_pts"] = cur_pts
+        state["last_end"] = last_end
+        state["drawn_segments"] = drawn_segments
+        self._draw_top_view_overlay(
+            total_segments=total_segments,
+            drawn_segments=drawn_segments,
+            progressive=True,
+        )
+        self._update_position_marker()
+        self._progressive_render_after_id = self.after(
+            1,
+            lambda tok=token, st=state: self._render_progressive_chunk(tok, st),
+        )
+
     def _render(self) -> None:
         self._render_pending = False
         if not self.winfo_exists():
@@ -245,9 +384,11 @@ class TopViewPanel(ttk.Frame):
         if signature == self._last_render_signature:
             self._update_position_marker()
             return
+        self._cancel_progressive_render()
         self.canvas.delete("all")
         self._position_item = None
         self._render_params = None
+        self._progressive_overlay_item = None
         self._last_render_signature = signature
         if not self.segments:
             msg = self._status_message or "No G-code loaded"
@@ -284,46 +425,9 @@ class TopViewPanel(ttk.Frame):
 
         render_segments = self.segments
         total_segments = len(render_segments)
+        stride = 1
         if self._render_segment_limit > 0 and total_segments > self._render_segment_limit:
             stride = max(2, math.ceil(total_segments / self._render_segment_limit))
-            render_segments = render_segments[::stride]
-
-        runs: dict[str, list[list[float]]] = {}
-        cur_color = None
-        cur_pts: list[float] = []
-        last_end = None
-
-        def flush_run() -> None:
-            nonlocal cur_color, cur_pts, last_end
-            if cur_color and len(cur_pts) >= 4:
-                runs.setdefault(cur_color, []).append(cur_pts)
-            cur_color = None
-            cur_pts = []
-            last_end = None
-
-        eps = 1e-6
-        for x1, y1, _, x2, y2, _, color in render_segments:
-            px1, py1 = to_canvas(x1, y1)
-            px2, py2 = to_canvas(x2, y2)
-            continuous = (
-                cur_color == color
-                and last_end is not None
-                and abs(px1 - last_end[0]) <= eps
-                and abs(py1 - last_end[1]) <= eps
-            )
-            if not continuous:
-                flush_run()
-                cur_color = color
-                cur_pts = [px1, py1, px2, py2]
-            else:
-                cur_pts.extend([px2, py2])
-            last_end = (px2, py2)
-        flush_run()
-
-        for color, polylines in runs.items():
-            color_hex = self._colors.get(color, "#2c6dd2")
-            for pts in polylines:
-                self.canvas.create_line(*pts, fill=color_hex)
 
         x0, y0 = to_canvas(minx, miny)
         x1, y1 = to_canvas(maxx, maxy)
@@ -372,29 +476,74 @@ class TopViewPanel(ttk.Frame):
             self.canvas.create_line(ox - cross, oy, ox + cross, oy, fill="#ffffff")
             self.canvas.create_line(ox, oy - cross, ox, oy + cross, fill="#ffffff")
 
-        drawn_segments = len(render_segments)
-        if drawn_segments == total_segments:
-            segment_text = f"Segments: {total_segments:,}"
-        else:
-            segment_text = f"Segments: {drawn_segments:,}/{total_segments:,}"
-        overlay = [segment_text, "View: Top"]
-        if self._overlay_grid:
-            overlay.insert(
-                0,
-                f"Auto-level: {len(self._overlay_grid.xs)}x{len(self._overlay_grid.ys)} "
-                f"({self._overlay_grid.point_count()} pts)",
+        drawn_segments = len(range(0, total_segments, stride))
+        progressive_threshold = max(1, int(TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD))
+        if drawn_segments >= progressive_threshold:
+            chunk_size = max(100, int(TOOLPATH_TOP_VIEW_PROGRESSIVE_CHUNK_SIZE))
+            self._draw_top_view_overlay(
+                total_segments=total_segments,
+                drawn_segments=0,
+                progressive=True,
             )
-        if self._job_name:
-            overlay.insert(0, f"Job: {self._job_name}")
-        self.canvas.create_text(
-            TOOLPATH_OVERLAY_TEXT_MARGIN,
-            TOOLPATH_OVERLAY_TEXT_MARGIN,
-            text="\n".join(overlay),
-            fill="#ffffff",
-            anchor="nw",
-            justify="left",
-        )
+            token = self._progressive_render_token
+            state: dict[str, Any] = {
+                "render_segments": render_segments,
+                "total_segments": total_segments,
+                "stride": stride,
+                "next_idx": 0,
+                "chunk_size": chunk_size,
+                "cur_color": None,
+                "cur_pts": [],
+                "last_end": None,
+                "drawn_segments": 0,
+                "to_canvas": to_canvas,
+            }
+            self._render_progressive_chunk(token, state)
+            return
 
+        runs: dict[str, list[list[float]]] = {}
+        cur_color = None
+        cur_pts: list[float] = []
+        last_end = None
+
+        def flush_run() -> None:
+            nonlocal cur_color, cur_pts, last_end
+            if cur_color and len(cur_pts) >= 4:
+                runs.setdefault(cur_color, []).append(cur_pts)
+            cur_color = None
+            cur_pts = []
+            last_end = None
+
+        eps = 1e-6
+        for idx in range(0, total_segments, stride):
+            x1, y1, _, x2, y2, _, color = render_segments[idx]
+            px1, py1 = to_canvas(x1, y1)
+            px2, py2 = to_canvas(x2, y2)
+            continuous = (
+                cur_color == color
+                and last_end is not None
+                and abs(px1 - last_end[0]) <= eps
+                and abs(py1 - last_end[1]) <= eps
+            )
+            if not continuous:
+                flush_run()
+                cur_color = color
+                cur_pts = [px1, py1, px2, py2]
+            else:
+                cur_pts.extend([px2, py2])
+            last_end = (px2, py2)
+        flush_run()
+
+        for color, polylines in runs.items():
+            color_hex = self._colors.get(color, "#2c6dd2")
+            for pts in polylines:
+                self.canvas.create_line(*pts, fill=color_hex)
+
+        self._draw_top_view_overlay(
+            total_segments=total_segments,
+            drawn_segments=drawn_segments,
+            progressive=False,
+        )
         self._update_position_marker()
 
     def _update_position_marker(self) -> None:
@@ -419,5 +568,9 @@ class TopViewPanel(ttk.Frame):
             )
         else:
             self.canvas.coords(self._position_item, cx - r, cy - r, cx + r, cy + r)
+        try:
+            self.canvas.tag_raise(self._position_item)
+        except tk.TclError as exc:
+            _log_suppressed("Failed raising Top View position marker above toolpath lines", exc)
 
 

@@ -26,7 +26,10 @@ import time
 from typing import Callable
 
 from simple_sender.gcode_parser import parse_gcode_lines
-from simple_sender.utils.constants import GCODE_STATS_DEBOUNCE_MS
+from simple_sender.utils.constants import (
+    GCODE_STATS_CACHE_MAX_ENTRIES,
+    GCODE_STATS_DEBOUNCE_MS,
+)
 
 
 def _compute_stats_from_moves(
@@ -308,6 +311,9 @@ def make_stats_cache_key(
 
 
 def _result_has_moves(parse_result) -> bool:
+    includes_moves = getattr(parse_result, "_includes_moves", None)
+    if includes_moves is not None:
+        return bool(includes_moves)
     try:
         return bool(getattr(parse_result, "moves", None))
     except Exception:
@@ -428,7 +434,15 @@ def update_gcode_stats(app, lines: list[str], parse_result=None):
             if not keep_running():
                 return
             if pending_cache_key:
-                app._stats_cache[pending_cache_key] = (stats, pending_rate_source)
+                cache = app._stats_cache
+                cache[pending_cache_key] = (stats, pending_rate_source)
+                max_entries = max(1, int(GCODE_STATS_CACHE_MAX_ENTRIES))
+                while len(cache) > max_entries:
+                    try:
+                        oldest_key = next(iter(cache))
+                    except StopIteration:
+                        break
+                    cache.pop(oldest_key, None)
             app.after(0, lambda: apply_gcode_stats(app, pending_token, stats, pending_rate_source))
 
         threading.Thread(target=worker, daemon=True).start()

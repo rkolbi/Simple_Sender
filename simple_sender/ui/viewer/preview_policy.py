@@ -40,12 +40,13 @@ def configure_toolpath_preview(
     path: str,
     lines: list[str],
     streaming_source: Any | None,
+    preview_only: bool = False,
 ) -> None:
-    enabled = bool(app.render3d_enabled.get()) and streaming_source is None
+    enabled = bool(app.render3d_enabled.get()) and not preview_only
     app.toolpath_panel.set_enabled(enabled)
     app.toolpath_panel.clear()
     app.toolpath_panel.set_job_name(os.path.basename(path))
-    if streaming_source is not None:
+    if preview_only and streaming_source is not None:
         try:
             total_lines = app._gcode_total_lines or len(streaming_source)
         except Exception:

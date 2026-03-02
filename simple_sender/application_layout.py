@@ -32,6 +32,7 @@ from simple_sender.ui.dialogs.backup_bundle import (
 from simple_sender.ui.dialogs.diagnostics import (
     export_session_diagnostics,
     open_release_checklist,
+    open_runtime_telemetry,
     open_run_checklist,
     run_preflight_check,
 )
@@ -60,6 +61,9 @@ class LayoutMixin:
 
     def _export_session_diagnostics(self):
         export_session_diagnostics(self)
+
+    def _open_runtime_telemetry(self):
+        open_runtime_telemetry(self)
 
     def _export_backup_bundle(self):
         export_backup_bundle(self)

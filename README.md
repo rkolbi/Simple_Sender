@@ -1,5 +1,5 @@
 ﻿# Simple Sender - Full Manual
-![Release: 1.8.0](https://img.shields.io/badge/release-1.8.0-blue)
+![Release: 2.0.0](https://img.shields.io/badge/release-2.0.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Please run a few dry-run validations before real cuts.
@@ -214,11 +214,12 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. For normal (non-streaming) loads, lines are validated for GRBL's 80-byte limit (including newline) and may be compacted or split in-memory; the file on disk is never modified. For streaming (large) loads triggered by file size or line count (tunable in App Settings > Diagnostics), the same compaction/splitting rules are applied and the sender streams from a processed temp file so Resume From... still works.
+- **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines; chunked loading for large files. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**. All file-based loads normalize through the same disk-backed path (`FileGcodeSource` + temp offsets), with the same 80-byte compaction/splitting safety rules, so Resume From... and reconnect restore behavior stay consistent.
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
-- **Top View / 3D for large files:** Streaming loads build a Top View preview from the full file with a capped segment count to keep the UI responsive. The 3D view is disabled by default in streaming mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
-- **Line length safety:** For non-streaming loads, the loader first compacts lines (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Streaming loads use the same compaction/splitting rules; unsplittable lines are rejected if they exceed 80 bytes, and send-time checks enforce the limit. Auto-level output is post-processed to meet the 80-byte limit before it reloads.
+- **Preview-only mode for large files:** Very large jobs can switch to preview-only mode (based on file size and cleaned-line threshold) so UI/state memory stays bounded while streaming still uses the normalized disk-backed source.
+- **Top View / 3D for large files:** Large-job preview builds Top View data with capped segment counts to keep the UI responsive. The 3D view is disabled by default in preview-only mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
+- **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line.
@@ -707,7 +708,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on March 1, 2026): `809 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on March 2, 2026): `859 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -794,8 +795,8 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
 
 ## Performance Profiling
-Local-only profiling tools live in `tools/profile_performance.py` and `tools/memory_profile.py`, with baselines recorded in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
-Latest local baseline refresh is documented in `ref/perf_baselines.md` (2026-02-25).
+Local-only profiling tools live in `tools/profile_performance.py`, `tools/memory_profile.py`, and `tools/perf_microbench.py`, with baselines recorded in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
+Latest local baseline refresh is documented in `ref/perf_baselines.md` (2026-03-02).
 
 ```powershell
 # Streaming scan timings (large files)
@@ -810,10 +811,36 @@ python tools/profile_performance.py --mode split --sizes 1000,10000,100000
 # Streaming split timings (preserve raw comments)
 python tools/profile_performance.py --mode split-stream --sizes 1000,10000,100000 --preserve-raw
 
+# Unified disk-backed loader timings (Revision 2.0.0 path)
+python tools/profile_performance.py --mode unified-load --sizes 1000,10000,100000 --source-scan
+
 # Memory baselines
 python tools/memory_profile.py --mode streaming --sizes 1000,10000,100000 --validate-streaming
 python tools/memory_profile.py --mode full --sizes 1000,10000 --arc-every 20
+
+# Runtime hooks + UI/queue microbench
+python tools/perf_microbench.py
 ```
+
+### Runtime Profiling Hooks (Pi/Low-Power)
+- App Settings > Diagnostics:
+  - `Enable runtime performance profiling (restart required)`
+  - `Enable leak-watch snapshots (higher overhead)`
+  - `Performance report log path` (optional file append target)
+- Environment overrides:
+  - `SIMPLE_SENDER_PERF_PROFILE=1`
+  - `SIMPLE_SENDER_LEAK_WATCH=1`
+  - `SIMPLE_SENDER_PERF_LOG_PATH=<path>`
+  - `SIMPLE_SENDER_PERF_SAMPLE_INTERVAL_S=<seconds>`
+  - `SIMPLE_SENDER_PERF_STEADY_STATE_SEC=<seconds>` (default `1800`)
+  - `SIMPLE_SENDER_PERF_IDLE_SNAPSHOT_SEC=<seconds>` (default `600`)
+- On app exit, the runtime monitor prints a one-shot performance report (and optionally writes it to the configured log path) with:
+  - startup time
+  - idle CPU avg/p95
+  - streaming CPU avg/p95
+  - RSS start/current/peak/steady-state
+  - UI queue drain metrics and budget pass/fail summary
+  - optional tracemalloc growth deltas when leak-watch is enabled
 
 ## Troubleshooting
 - No ports: install driver, try another cable/port.
@@ -1167,8 +1194,11 @@ Macro UI is included below along with the rest of the interface.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip.
 - Validate streaming (large) G-code files: enables validation pass for large files.
-- Streaming line threshold: cleaned line count that forces streaming mode (0 disables).
-- Recommendation: keep streaming validation enabled if you rely on warnings; raise the threshold if you want more files to load in full mode.
+- Preview-only threshold (lines): cleaned line count that switches large jobs to preview-only mode (set `0` to disable line-count-based preview-only switching).
+- Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit.
+- Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
+- Performance report log path: optional destination file to append exit reports.
+- Recommendation: keep streaming validation enabled if you rely on warnings; raise preview-only threshold only if you need more large jobs to stay in full in-memory preview mode.
 
 ### App Settings: Safety
 - All Stop behavior (dropdown): selects ALL STOP mode (soft reset vs stop+reset).

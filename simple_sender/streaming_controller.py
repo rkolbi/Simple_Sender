@@ -27,6 +27,8 @@ import tkinter as tk
 from collections import deque
 
 from simple_sender.utils.constants import MAX_CONSOLE_LINES
+from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
+from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
 from simple_sender.types import AppProtocol, GcodeViewLike
 from simple_sender.ui.stream_completion import should_defer_completion
 
@@ -49,6 +51,7 @@ class StreamingController:
         self.buffer_fill_pct: tk.IntVar | None = None
         self.throughput_var: tk.StringVar | None = None
         self._console_lines: deque[ConsoleEntry] = deque(maxlen=MAX_CONSOLE_LINES)
+        self._console_bytes = 0
         self._console_filter: str | None = None
         self._pending_console_entries: list[ConsoleEntry] = []
         self._pending_console_trim: int = 0
@@ -161,8 +164,13 @@ class StreamingController:
         entry: ConsoleEntry = (s, tag)
         if self._should_skip_console_entry_for_toggles(entry):
             return
+        entry_bytes = len(s.encode("utf-8", errors="ignore")) + 1
         dropped = 1 if len(self._console_lines) >= MAX_CONSOLE_LINES else 0
+        if dropped and self._console_lines:
+            self._console_bytes = max(0, self._console_bytes - self._entry_bytes(self._console_lines[0]))
         self._console_lines.append(entry)
+        self._console_bytes += entry_bytes
+        byte_trimmed = self._trim_console_bytes_if_needed()
         if dropped:
             if self._console_filter is not None:
                 if bool(self.app.performance_mode.get()):
@@ -174,10 +182,26 @@ class StreamingController:
                 self._pending_console_trim += dropped
             else:
                 self._trim_console_widget(dropped)
+        if byte_trimmed > 0:
+            if self._console_filter is not None:
+                if bool(self.app.performance_mode.get()):
+                    self._queue_console_render()
+                    return
+                self._render_console()
+                return
+            if bool(self.app.performance_mode.get()):
+                self._pending_console_trim += byte_trimmed
+            else:
+                self._trim_console_widget(byte_trimmed)
         if not self._console_filter_match(entry):
             return
         if bool(self.app.performance_mode.get()):
             self._pending_console_entries.append(entry)
+            if len(self._pending_console_entries) > int(CONSOLE_PENDING_BATCH_MAX):
+                # Bound pending memory growth during heavy logging bursts.
+                self._pending_console_entries = []
+                self._pending_console_trim = 0
+                self._console_render_pending = True
             self._schedule_console_flush()
             return
         self._append_to_console(entry)
@@ -219,11 +243,7 @@ class StreamingController:
         if self._pending_console_trim > 0:
             self._trim_console_widget_unlocked(self._pending_console_trim)
             self._pending_console_trim = 0
-        for line, tag in self._pending_console_entries:
-            if tag:
-                self.console.insert("end", line + "\n", (tag,))
-            else:
-                self.console.insert("end", line + "\n")
+        self._insert_entries_unlocked(self._pending_console_entries)
         self._pending_console_entries = []
         self.console.see("end")
         self.console.config(state="disabled")
@@ -233,14 +253,41 @@ class StreamingController:
             return
         self.console.config(state="normal")
         self.console.delete("1.0", "end")
-        for line, tag in self._console_lines:
-            if self._console_filter_match((line, tag)):
-                if tag:
-                    self.console.insert("end", line + "\n", (tag,))
-                else:
-                    self.console.insert("end", line + "\n")
+        filtered_entries: list[ConsoleEntry] = [
+            (line, tag)
+            for line, tag in self._console_lines
+            if self._console_filter_match((line, tag))
+        ]
+        self._insert_entries_unlocked(filtered_entries)
         self.console.see("end")
         self.console.config(state="disabled")
+
+    def _insert_entries_unlocked(self, entries: list[ConsoleEntry]) -> None:
+        """Insert console entries in tag-runs to reduce Tk insert call volume."""
+        if not self.console or not entries:
+            return
+        run_tag: str | None = None
+        run_lines: list[str] = []
+
+        def flush_run() -> None:
+            nonlocal run_tag, run_lines
+            if not run_lines:
+                run_tag = None
+                return
+            text = "\n".join(run_lines) + "\n"
+            if run_tag:
+                self.console.insert("end", text, (run_tag,))
+            else:
+                self.console.insert("end", text)
+            run_tag = None
+            run_lines = []
+
+        for line, tag in entries:
+            if run_lines and tag != run_tag:
+                flush_run()
+            run_tag = tag
+            run_lines.append(line)
+        flush_run()
 
     def _trim_console_widget(self, count: int) -> None:
         if count <= 0 or not self.console:
@@ -271,6 +318,7 @@ class StreamingController:
     def clear_console(self) -> None:
         """Clear all console content and pending entries."""
         self._console_lines.clear()
+        self._console_bytes = 0
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
@@ -433,6 +481,22 @@ class StreamingController:
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
+
+    @staticmethod
+    def _entry_bytes(entry: ConsoleEntry) -> int:
+        line, _tag = entry
+        return len(line.encode("utf-8", errors="ignore")) + 1
+
+    def _trim_console_bytes_if_needed(self) -> int:
+        budget = int(CONSOLE_MAX_BUFFER_BYTES)
+        if budget <= 0:
+            return 0
+        removed = 0
+        while self._console_lines and self._console_bytes > budget:
+            oldest = self._console_lines.popleft()
+            self._console_bytes = max(0, self._console_bytes - self._entry_bytes(oldest))
+            removed += 1
+        return removed
 
     def handle_log_rx(self, raw: str) -> None:
         """Log a line received from GRBL."""

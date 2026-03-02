@@ -39,7 +39,7 @@ from simple_sender.autolevel.leveler import (
 )
 from simple_sender.gcode_parser import clean_gcode_line, split_gcode_lines, split_gcode_lines_stream
 from simple_sender.gcode_parser_split import GcodeSplitResult, GcodeSplitStreamResult
-from simple_sender.utils.constants import MAX_LINE_LENGTH
+from simple_sender.utils.constants import MAX_LINE_LENGTH, TEMP_FILE_BUFFER_SIZE
 
 from .calculations import _format_overlong_error, _log_split_result
 
@@ -224,7 +224,13 @@ def _level_and_write_auto_level_output(
             )
             temp_path = temp_file.name
             temp_file.close()
-            with open(temp_path, "w", encoding="utf-8", newline="") as outfile:
+            with open(
+                temp_path,
+                "w",
+                encoding="utf-8",
+                newline="",
+                buffering=TEMP_FILE_BUFFER_SIZE,
+            ) as outfile:
                 def write_line(line: str) -> None:
                     outfile.write(line.rstrip("\n"))
                     outfile.write("\n")

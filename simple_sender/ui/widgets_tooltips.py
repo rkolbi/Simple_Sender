@@ -26,7 +26,12 @@ from tkinter import ttk
 from typing import Any, Callable, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
-from simple_sender.utils.constants import TOOLTIP_DELAY_MS, TOOLTIP_TIMEOUT_DEFAULT
+from simple_sender.utils.constants import (
+    NOTEBOOK_TOOLTIP_POLL_INTERVAL_ACTIVE_MS,
+    NOTEBOOK_TOOLTIP_POLL_INTERVAL_IDLE_MS,
+    TOOLTIP_DELAY_MS,
+    TOOLTIP_TIMEOUT_DEFAULT,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -226,7 +231,11 @@ class _NotebookTabTooltips:
         self._pending_text: str = ""
         self._pending_xy: tuple[int | None, int | None] = (None, None)
         self._poll_after_id: Any | None = None
-        self._poll_interval_ms = 120
+        self._poll_interval_active_ms = max(50, int(NOTEBOOK_TOOLTIP_POLL_INTERVAL_ACTIVE_MS))
+        self._poll_interval_idle_ms = max(
+            self._poll_interval_active_ms,
+            int(NOTEBOOK_TOOLTIP_POLL_INTERVAL_IDLE_MS),
+        )
         self._root = None
         try:
             self._root = notebook.winfo_toplevel()
@@ -276,12 +285,6 @@ class _NotebookTabTooltips:
             except tk.TclError as exc:
                 _log_suppressed("Failed cancelling pending notebook tooltip show timer", exc)
             self._after_id = None
-        if self._poll_after_id is not None:
-            try:
-                self.notebook.after_cancel(self._poll_after_id)
-            except tk.TclError as exc:
-                _log_suppressed("Failed cancelling notebook tooltip poll timer", exc)
-            self._poll_after_id = None
 
     def _schedule_timeout(self) -> None:
         if self._timeout_after_id is not None:
@@ -466,11 +469,13 @@ class _NotebookTabTooltips:
     def _on_motion(self, event) -> None:
         self._process_hover(getattr(event, "x_root", None), getattr(event, "y_root", None))
 
-    def _schedule_poll(self) -> None:
+    def _schedule_poll(self, delay_ms: int | None = None) -> None:
         if self._poll_after_id is not None:
             return
+        if delay_ms is None:
+            delay_ms = self._poll_interval_idle_ms
         try:
-            self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
+            self._poll_after_id = self.notebook.after(int(delay_ms), self._poll)
         except tk.TclError:
             self._poll_after_id = None
 
@@ -482,10 +487,9 @@ class _NotebookTabTooltips:
         except tk.TclError:
             return
         self._process_hover()
-        try:
-            self._poll_after_id = self.notebook.after(self._poll_interval_ms, self._poll)
-        except tk.TclError:
-            self._poll_after_id = None
+        active = bool(self._tip is not None or self._active_tab is not None or self._pending_tab is not None)
+        next_delay = self._poll_interval_active_ms if active else self._poll_interval_idle_ms
+        self._schedule_poll(delay_ms=next_delay)
 
 
 def apply_tooltip(widget, text: str):

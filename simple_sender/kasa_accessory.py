@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
+from simple_sender.utils.constants import KASA_TASK_QUEUE_MAXSIZE
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ class PythonKasaController:
 
     def __init__(self, *, request_timeout_s: float = _DEFAULT_REQUEST_TIMEOUT_S) -> None:
         self._import_error: Exception | None = None
+        self._import_attempted = False
         self._kasa_discover = None
         try:
             timeout = float(request_timeout_s)
@@ -167,14 +169,21 @@ class PythonKasaController:
         if timeout <= 0:
             timeout = self._DEFAULT_REQUEST_TIMEOUT_S
         self._request_timeout_s = timeout
+
+    def _ensure_imported(self) -> None:
+        if self._import_attempted:
+            return
+        self._import_attempted = True
         try:
             from kasa import Discover  # type: ignore
         except Exception as exc:  # pragma: no cover - exercised when dependency missing
             self._import_error = exc
+            self._kasa_discover = None
         else:
             self._kasa_discover = Discover
 
     def _require_kasa(self) -> Any:
+        self._ensure_imported()
         if self._kasa_discover is None:
             detail = str(self._import_error) if self._import_error is not None else "not installed"
             raise RuntimeError(f"python-kasa dependency unavailable: {detail}")
@@ -385,7 +394,7 @@ class AccessoryRouter:
         self._settings_provider = settings_provider
         self._log = log
         self._command_result_callback = command_result_callback
-        self._task_q: queue.Queue[_WorkerTask | None] = queue.Queue()
+        self._task_q: queue.Queue[_WorkerTask | None] = queue.Queue(maxsize=KASA_TASK_QUEUE_MAXSIZE)
         self._stop_evt = threading.Event()
         self._state_lock = threading.Lock()
         self._last_spindle_state: bool | None = None
@@ -453,14 +462,18 @@ class AccessoryRouter:
         on_success: Callable[[Any], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
-        self._task_q.put(
-            _WorkerTask(
-                func=func,
-                on_success=on_success,
-                on_error=on_error,
-                description=description,
-            )
+        task = _WorkerTask(
+            func=func,
+            on_success=on_success,
+            on_error=on_error,
+            description=description,
         )
+        try:
+            self._task_q.put_nowait(task)
+        except queue.Full:
+            self._log_warning(
+                f"Kasa task queue full; dropping task '{description}'."
+            )
 
     def _invoke_callback(self, callback: Callable[..., None], *args: Any) -> None:
         try:

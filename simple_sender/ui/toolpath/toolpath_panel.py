@@ -26,7 +26,6 @@ from tkinter import ttk
 from typing import Any, Iterable, Optional
 
 from simple_sender.autolevel.grid import ProbeGrid
-from .toolpath_3d import Toolpath3D
 from .toolpath_top_view import TopViewPanel
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 from simple_sender.utils.constants import (
@@ -51,6 +50,37 @@ class ToolpathPanel:
         self._pending_top_overlay: ProbeGrid | None = None
         self._pending_view_overlay: ProbeGrid | None = None
 
+    def _build_3d_view(self) -> None:
+        if self.view is not None or self.tab is None:
+            return
+        from .toolpath_3d import Toolpath3D
+
+        self.view = Toolpath3D(
+            self.tab,
+            on_save_view=self.app._save_3d_view,
+            on_load_view=self.app._load_3d_view,
+            perf_callback=self._toolpath_perf_logger,
+        )
+        self.view.pack(fill="both", expand=True)
+        self._configure_view()
+        self.view.set_streaming_mode(self._streaming)
+        self.app._load_3d_view(show_status=False)
+        if self._pending_parsed is not None:
+            lines, result, lines_hash = self._pending_parsed
+            self._pending_parsed = None
+            self._pending_gcode_lines = None
+            self._pending_gcode_hash = None
+            self.view.apply_parsed_gcode(lines, result.segments, result.bounds, lines_hash=lines_hash)
+        if self._pending_gcode_lines is not None and getattr(self.view, "_visible", True):
+            lines = self._pending_gcode_lines
+            lines_hash = self._pending_gcode_hash
+            self._pending_gcode_lines = None
+            self._pending_gcode_hash = None
+            self.view.set_gcode_async(lines, lines_hash=lines_hash)
+        if self._pending_view_overlay is not None:
+            self.view.set_autolevel_grid(self._pending_view_overlay)
+            self._pending_view_overlay = None
+
     def build_tab(self, notebook: ttk.Notebook):
         top_tab = ttk.Frame(notebook, padding=6)
         notebook.add(top_tab, text="Top View")
@@ -65,31 +95,6 @@ class ToolpathPanel:
         notebook.add(tab, text="3D View")
         set_tab_tooltip(notebook, tab, "Interactive 3D toolpath preview and render controls.")
         self.tab = tab
-        self.view = Toolpath3D(
-            tab,
-            on_save_view=self.app._save_3d_view,
-            on_load_view=self.app._load_3d_view,
-            perf_callback=self._toolpath_perf_logger,
-        )
-        self.view.pack(fill="both", expand=True)
-        self._configure_view()
-        self.view.set_streaming_mode(self._streaming)
-        self.app._load_3d_view(show_status=False)
-        if self._pending_parsed is not None and self.view:
-            lines, result, lines_hash = self._pending_parsed
-            self._pending_parsed = None
-            self._pending_gcode_lines = None
-            self._pending_gcode_hash = None
-            self.view.apply_parsed_gcode(lines, result.segments, result.bounds, lines_hash=lines_hash)
-        if self._pending_gcode_lines is not None and self.view and getattr(self.view, "_visible", True):
-            lines = self._pending_gcode_lines
-            lines_hash = self._pending_gcode_hash
-            self._pending_gcode_lines = None
-            self._pending_gcode_hash = None
-            self.view.set_gcode_async(lines, lines_hash=lines_hash)
-        if self._pending_view_overlay is not None and self.view:
-            self.view.set_autolevel_grid(self._pending_view_overlay)
-            self._pending_view_overlay = None
         if self._pending_top_parsed is not None and self.top_view:
             result, lines_hash = self._pending_top_parsed
             self._pending_top_parsed = None
@@ -211,6 +216,8 @@ class ToolpathPanel:
             self.top_view.set_job_name(name)
 
     def set_visible(self, visible: bool):
+        if visible and self.view is None:
+            self._build_3d_view()
         if self.view:
             self.view.set_visible(visible)
         # Keep the top view hidden only when its tab is not selected.

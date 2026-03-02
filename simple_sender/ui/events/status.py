@@ -22,6 +22,7 @@
 
 import time
 import logging
+from collections import deque
 from dataclasses import dataclass
 
 from simple_sender.ui.dro import format_dro_value
@@ -30,6 +31,7 @@ from .stream_state_ui import apply_stream_busy_state, restore_controls_after_str
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_WPOS_FLASH_MIN_INTERVAL_S = 0.25
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -388,6 +390,11 @@ def _xyz_tuple_changed(previous: tuple[float, float, float] | None, current: tup
 
 
 def _flash_wpos_labels(app) -> None:
+    now = time.monotonic()
+    last_flash = float(getattr(app, "_wpos_flash_last_ts", 0.0) or 0.0)
+    if (now - last_flash) < _WPOS_FLASH_MIN_INTERVAL_S:
+        return
+    app._wpos_flash_last_ts = now
     labels = getattr(app, "_wpos_value_labels", None)
     if not labels:
         return
@@ -646,12 +653,13 @@ def handle_status_event(app, raw: str):
     app._last_status_raw = raw
     app._last_status_ts = time.time()
     history = getattr(app, "_status_history", None)
-    if not isinstance(history, list):
-        history = []
+    if not isinstance(history, deque):
+        seed: list[tuple[float, str]] = []
+        if isinstance(history, list):
+            seed = history[-200:]
+        history = deque(seed, maxlen=200)
         app._status_history = history
     history.append((app._last_status_ts, raw))
-    if len(history) > 200:
-        del history[:-200]
     fields = _parse_status_fields(raw)
     app._status_seen = True
     app._last_status_pins = fields.pins

@@ -28,11 +28,25 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from simple_sender.utils.constants import ALL_STOP_CHOICES
+from simple_sender.ui.pi_profile import (
+    PI_PROFILE_STATUS_POLL_INTERVAL as _PI_PROFILE_STATUS_POLL_INTERVAL,
+    PI_PROFILE_STREAMING_LINE_THRESHOLD as _PI_PROFILE_STREAMING_LINE_THRESHOLD,
+    PI_PROFILE_STREAMING_RENDER_INTERVAL as _PI_PROFILE_STREAMING_RENDER_INTERVAL,
+    PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS as _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS,
+    PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS as _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS,
+    apply_pi_profile,
+)
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+
+PI_PROFILE_STATUS_POLL_INTERVAL = _PI_PROFILE_STATUS_POLL_INTERVAL
+PI_PROFILE_STREAMING_LINE_THRESHOLD = _PI_PROFILE_STREAMING_LINE_THRESHOLD
+PI_PROFILE_STREAMING_RENDER_INTERVAL = _PI_PROFILE_STREAMING_RENDER_INTERVAL
+PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS
+PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -73,11 +87,24 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_export_diagnostics,
         "Save recent console/status history and settings to a text file.",
     )
-    ttk.Label(diagnostics_frame, text="Backup bundle").grid(
+    ttk.Label(diagnostics_frame, text="Runtime telemetry").grid(
         row=2, column=0, sticky="w", padx=(0, 10), pady=4
     )
+    app.btn_runtime_telemetry = ttk.Button(
+        diagnostics_frame,
+        text="Open viewer",
+        command=app._open_runtime_telemetry,
+    )
+    app.btn_runtime_telemetry.grid(row=2, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_runtime_telemetry,
+        "Open a live runtime telemetry window for queue depth and TX-loop counters.",
+    )
+    ttk.Label(diagnostics_frame, text="Backup bundle").grid(
+        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     backup_row = ttk.Frame(diagnostics_frame)
-    backup_row.grid(row=2, column=1, sticky="w", pady=4)
+    backup_row.grid(row=3, column=1, sticky="w", pady=4)
     app.btn_export_backup_bundle = ttk.Button(
         backup_row,
         text="Export bundle",
@@ -103,24 +130,63 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Validate streaming (large) G-code files",
         variable=app.validate_streaming_gcode,
     )
-    app.validate_streaming_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.validate_streaming_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.validate_streaming_check,
         "Validate large files while loading; adds an extra scan but improves preflight checks.",
     )
-    ttk.Label(diagnostics_frame, text="Streaming line threshold").grid(
-        row=4, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+    ttk.Label(diagnostics_frame, text="Preview-only threshold (lines)").grid(
+        row=5, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
         diagnostics_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
-    app.streaming_line_threshold_entry.grid(row=4, column=1, sticky="w", pady=(6, 0))
+    app.streaming_line_threshold_entry.grid(row=5, column=1, sticky="w", pady=(6, 0))
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
-        "Cleaned line count that forces streaming mode (set to 0 to disable).",
+        "Cleaned line count that switches large jobs to preview-only mode (set to 0 to disable).",
+    )
+    if not hasattr(app, "performance_profile_enabled"):
+        app.performance_profile_enabled = tk.BooleanVar(master=parent, value=False)
+    if not hasattr(app, "performance_leak_watch_enabled"):
+        app.performance_leak_watch_enabled = tk.BooleanVar(master=parent, value=False)
+    if not hasattr(app, "performance_profile_log_path"):
+        app.performance_profile_log_path = tk.StringVar(master=parent, value="")
+    app.performance_profile_check = ttk.Checkbutton(
+        diagnostics_frame,
+        text="Enable runtime performance profiling (restart required)",
+        variable=app.performance_profile_enabled,
+    )
+    app.performance_profile_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    apply_tooltip(
+        app.performance_profile_check,
+        "Capture startup/CPU/RSS metrics and print a budget report on app exit.",
+    )
+    app.performance_leak_watch_check = ttk.Checkbutton(
+        diagnostics_frame,
+        text="Enable leak-watch snapshots (higher overhead)",
+        variable=app.performance_leak_watch_enabled,
+    )
+    app.performance_leak_watch_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.performance_leak_watch_check,
+        "Take tracemalloc snapshots at key milestones and include growth deltas in the exit report.",
+    )
+    ttk.Label(diagnostics_frame, text="Performance report log path").grid(
+        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+    )
+    app.performance_profile_log_path_entry = ttk.Entry(
+        diagnostics_frame,
+        textvariable=app.performance_profile_log_path,
+        width=36,
+    )
+    app.performance_profile_log_path_entry.grid(row=8, column=1, sticky="ew", pady=(6, 0))
+    apply_tooltip(
+        app.performance_profile_log_path_entry,
+        "Optional file path to append the performance report on exit.",
     )
     return row + 1
 
@@ -657,6 +723,14 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         except (OSError, ValueError) as exc:
             _log_status(f"[system] {label} failed: {exc}")
 
+    def _apply_pi_profile_toggle() -> None:
+        enabled = False
+        try:
+            enabled = bool(app.pi_profile_enabled.get())
+        except (AttributeError, tk.TclError, TypeError, ValueError, RuntimeError):
+            enabled = False
+        apply_pi_profile(app, enabled=enabled, save_settings=True, emit_status=True)
+
     btn_row = ttk.Frame(power_frame)
     btn_row.grid(row=0, column=0, sticky="w")
     app.btn_shutdown = ttk.Button(
@@ -671,6 +745,22 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         command=lambda: _run_power_action("reboot", "Reboot"),
     )
     app.btn_reboot.pack(side="left", padx=(8, 0))
+    if not hasattr(app, "pi_profile_enabled"):
+        app.pi_profile_enabled = tk.BooleanVar(master=parent, value=False)
+    app.pi_profile_check = ttk.Checkbutton(
+        btn_row,
+        text="Pi profile",
+        variable=app.pi_profile_enabled,
+        command=_apply_pi_profile_toggle,
+    )
+    app.pi_profile_check.pack(side="left", padx=(16, 0))
     apply_tooltip(app.btn_shutdown, "Power off the system (Linux only).")
     apply_tooltip(app.btn_reboot, "Reboot the system (Linux only).")
+    apply_tooltip(
+        app.pi_profile_check,
+        (
+            "Apply Raspberry Pi optimized settings for lower CPU/memory usage. "
+            "Disabling keeps current values."
+        ),
+    )
     return row + 1

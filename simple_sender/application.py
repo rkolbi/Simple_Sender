@@ -54,7 +54,12 @@ from simple_sender.ui.dialogs.popup_utils import (
     patch_messagebox,
     set_default_parent,
 )
+from simple_sender.ui.pi_profile import (
+    apply_pi_profile_from_state,
+    offer_pi_profile_if_recommended,
+)
 from simple_sender.ui.toolpath.toolpath_settings import init_toolpath_settings
+from simple_sender.utils.perf_monitor import create_app_performance_monitor
 
 if TYPE_CHECKING:
     from simple_sender.macro_executor import MacroExecutor
@@ -210,7 +215,7 @@ class App(tk.Tk):
         def _create_virtual_hold_buttons(self) -> list[Any]: ...
         def _apply_keyboard_bindings(self) -> None: ...
 
-    def __init__(self):
+    def __init__(self, *, startup_started_at: float | None = None):
         super().__init__()
         self._script_dir = _SCRIPT_DIR
         self._serial_available = SERIAL_AVAILABLE
@@ -228,6 +233,11 @@ class App(tk.Tk):
         self._apply_ui_scale(self.settings.get("ui_scale", 1.5))
         init_toolpath_settings(self)
         init_runtime_state(self, default_jog_feed_xy, default_jog_feed_z, _MACRO_SEARCH_DIRS)
+        self._perf_monitor = create_app_performance_monitor(
+            self,
+            startup_started_at=startup_started_at,
+        )
+        apply_pi_profile_from_state(self, save_settings=False, emit_status=False)
         set_default_parent(self)
         patch_messagebox()
 
@@ -259,6 +269,13 @@ class App(tk.Tk):
         self.streaming_controller.bind_button_logging()
         self._virtual_hold_buttons = self._create_virtual_hold_buttons()
         self._apply_keyboard_bindings()
+        self.after(1200, lambda: offer_pi_profile_if_recommended(self))
+        perf_monitor = getattr(self, "_perf_monitor", None)
+        if perf_monitor is not None:
+            try:
+                perf_monitor.mark_app_ready()
+            except Exception as exc:
+                _log_suppressed("Failed marking application startup readiness in performance monitor", exc)
 
 
 _install_app_mixin_methods(App, _APP_MIXINS)

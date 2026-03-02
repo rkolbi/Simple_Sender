@@ -127,4 +127,10 @@ def on_close(app):
             py.quit()
         except Exception as exc:
             _log_suppressed("Failed quitting pygame during shutdown", exc)
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is not None:
+        try:
+            perf_monitor.emit_exit_report()
+        except Exception as exc:
+            _log_suppressed("Failed emitting performance report during shutdown", exc)
     app.destroy()

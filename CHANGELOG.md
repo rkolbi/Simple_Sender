@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Changed
+- Revision 2.0.0 loader architecture kickoff:
+  - all file-based G-code loads now normalize through one disk-backed path (`FileGcodeSource` + temp-file offsets)
+  - preview-only behavior is now controlled by an explicit flag, decoupled from "source is file-backed", so non-preview jobs keep full stats/toolpath features
+  - load events now carry `preview_only` state to preserve existing UI gating semantics while enabling unified job source handling
+  - `FileGcodeSource` now supports an `already_clean` fast-path for normalized temp sources, removing redundant per-line cleaning overhead in streaming reads
+  - non-preview file-backed jobs now explicitly re-prime GRBL worker in-memory send caches from the in-memory line list, preserving high-throughput stream behavior after the unified loader shift
+  - reconnect path now re-primes send caches for non-preview file-backed jobs when a source is restored
 - `run_tests.bat` now mirrors CI release gates by adding import stability (`import simple_sender.ui.settings`) and compileall syntax checks before tests.
 - WPos `Goto Zero` now executes a two-step absolute move sequence:
   - sends `G90 G0 X0 Y0`
@@ -17,12 +24,18 @@ All notable changes to this project are documented in this file.
 - Disabled-control tooltip reasons now include clearer state context (connecting/disconnecting, handshake/status wait, stream running/paused, and deferred idle completion) for affected toolbar actions.
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`809 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-03-01).
+- README testing baseline was refreshed to the current local result (`859 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-03-02).
+- README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
+- `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
 - README file-picker notes now document Linux system-picker sizing behavior.
 - README Kasa section now documents bounded request timeout behavior.
 - README App Settings docs now include Search + `Basic`/`Advanced` global controls and touch command acknowledgment behavior.
 - README checklist docs now mention collapsible checklist titles in the Checklists tab.
+- README Jobs/Streaming docs now reflect the unified disk-backed load path and preview-only threshold semantics.
+- README Diagnostics docs now include runtime performance profiling/leak-watch settings and the exit performance report fields.
+- README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
+- `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
 
 ## [1.8.0] - 2026-02-26

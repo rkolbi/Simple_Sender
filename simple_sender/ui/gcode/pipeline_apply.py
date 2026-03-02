@@ -36,6 +36,64 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) -> bool:
+    var = getattr(app, attr_name, None)
+    if var is not None:
+        try:
+            return bool(var.get())
+        except Exception:
+            pass
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get(key, default))
+        except Exception:
+            return bool(default)
+    return bool(default)
+
+
+def _pi_profile_enabled(app) -> bool:
+    return _read_bool_setting(
+        app,
+        attr_name="pi_profile_enabled",
+        key="pi_profile_enabled",
+        default=False,
+    )
+
+
+def _should_prime_file_backed_send_cache(app) -> bool:
+    # File-backed jobs already stream from disk; on low-power profiles we skip
+    # in-memory priming to avoid duplicate payload caches.
+    return not _pi_profile_enabled(app)
+
+
+def _viewer_virtualization_policy(app, line_count: int, deps) -> tuple[bool, int]:
+    try:
+        default_threshold = int(getattr(deps, "GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT"))
+    except Exception:
+        default_threshold = 120_000
+    try:
+        low_power_threshold = int(getattr(deps, "GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER"))
+    except Exception:
+        low_power_threshold = 40_000
+    try:
+        default_window = int(getattr(deps, "GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT"))
+    except Exception:
+        default_window = 2000
+    try:
+        low_power_window = int(getattr(deps, "GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER"))
+    except Exception:
+        low_power_window = 800
+
+    if _pi_profile_enabled(app):
+        threshold = max(1000, int(low_power_threshold))
+        window = max(200, int(low_power_window))
+    else:
+        threshold = max(1000, int(default_threshold))
+        window = max(200, int(default_window))
+    return line_count >= threshold, window
+
+
 def apply_loaded_gcode(
     app,
     path: str,
@@ -45,6 +103,7 @@ def apply_loaded_gcode(
     validated: bool = False,
     streaming_source: FileGcodeSource | None = None,
     total_lines: int | None = None,
+    preview_only: bool = False,
     module,
 ):
     deps = module
@@ -92,7 +151,7 @@ def apply_loaded_gcode(
             app.streaming_controller.log(msg)
         lines = result.lines
         lines_hash = deps.hash_lines(lines)
-    if app._gcode_validation_report is None and streaming_source is None:
+    if app._gcode_validation_report is None and streaming_source is None and not validated:
         app._gcode_validation_report = deps.validate_gcode_lines(lines)
     app._clear_pending_ui_updates()
     app._last_gcode_lines = lines
@@ -127,7 +186,7 @@ def apply_loaded_gcode(
             except OSError as exc:
                 _log_suppressed("Failed removing existing G-code source cleanup path", exc)
     app._gcode_source = streaming_source
-    deps.set_preview_streaming_state(app, streaming_source is not None)
+    deps.set_preview_streaming_state(app, preview_only)
     try:
         app._set_job_button_mode("auto_level" if (lines or streaming_source is not None) else "read_job")
     except Exception as exc:
@@ -135,6 +194,13 @@ def apply_loaded_gcode(
     app._gcode_total_lines = total_lines if total_lines is not None else len(lines)
     if streaming_source is not None:
         app.grbl.load_gcode(streaming_source, name=deps.os.path.basename(path))
+        if not preview_only and lines and _should_prime_file_backed_send_cache(app):
+            prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
+            if callable(prime_cache):
+                try:
+                    prime_cache(lines)
+                except Exception as exc:
+                    _log_suppressed("Failed priming in-memory G-code send cache for file-backed job", exc)
     else:
         app.grbl.load_gcode(lines, name=deps.os.path.basename(path))
     app._last_sent_index = -1
@@ -160,8 +226,14 @@ def apply_loaded_gcode(
             app._auto_level_leveled_path = restore.get("leveled_path")
             app._auto_level_leveled_temp = bool(restore.get("leveled_temp", False))
             app._auto_level_leveled_name = restore.get("leveled_name")
-    deps.configure_toolpath_preview(app, path, lines, streaming_source)
-    if streaming_source is not None:
+    deps.configure_toolpath_preview(
+        app,
+        path,
+        lines,
+        streaming_source,
+        preview_only,
+    )
+    if preview_only:
         app.gcode_stats_var.set("Preview only (streaming mode)")
     elif lines:
         app.gcode_stats_var.set("Calculating stats...")
@@ -173,7 +245,7 @@ def apply_loaded_gcode(
         if app._gcode_total_lines is not None
         else len(lines)
     )
-    mode_label = " (streaming)" if streaming_source is not None else ""
+    mode_label = " (preview-only)" if preview_only else ""
     app.status.config(
         text=f"Loaded: {deps.os.path.basename(path)}  ({total_label} lines){mode_label}"
     )
@@ -203,6 +275,29 @@ def apply_loaded_gcode(
         app.gview.set_lines([])
         app._set_gcode_loading_progress(0, 0, name)
         on_done()
+        return
+
+    use_virtualized_viewer, virtual_window = _viewer_virtualization_policy(app, len(lines), deps)
+    if use_virtualized_viewer and hasattr(app.gview, "set_lines_virtualized"):
+        try:
+            message = (
+                f"[gcode] Virtualized G-code viewer enabled for {len(lines):,} lines "
+                f"(window {virtual_window:,})."
+            )
+            logger_fn = getattr(getattr(app, "streaming_controller", None), "log", None)
+            if callable(logger_fn):
+                logger_fn(message)
+            else:
+                app.ui_q.put(("log", message))
+        except Exception as exc:
+            _log_suppressed("Failed reporting virtualized G-code viewer mode", exc)
+        app._set_gcode_loading_progress(0, len(lines), name)
+        app.gview.set_lines_virtualized(
+            lines,
+            window_size=virtual_window,
+            on_done=on_done,
+            on_progress=on_progress,
+        )
         return
 
     chunk_size = (

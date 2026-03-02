@@ -34,9 +34,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from simple_sender.gcode_parser import clean_gcode_line, parse_gcode_lines, split_gcode_lines
-from simple_sender.gcode_validator import validate_gcode_lines
-from simple_sender.utils.constants import GCODE_STREAMING_PREVIEW_LINES, MAX_LINE_LENGTH
+from simple_sender.gcode_parser import clean_gcode_line, parse_gcode_lines, split_gcode_lines  # noqa: E402
+from simple_sender.gcode_validator import validate_gcode_lines  # noqa: E402
+from simple_sender.utils.constants import GCODE_STREAMING_PREVIEW_LINES, MAX_LINE_LENGTH  # noqa: E402
 
 
 def _generate_gcode(path: Path, lines: int, arc_every: int) -> None:

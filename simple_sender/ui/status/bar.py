@@ -113,10 +113,11 @@ def _kasa_quick_button_state(app) -> dict[str, tuple[bool, str | None]]:
             "btn_toggle_kasa_light": (False, reason),
         }
 
-    vac_state = (
+    vac_state: tuple[bool, str | None] = (
         bool(vacuum_enabled),
         None if vacuum_enabled else "Enable Vacuum mapping in App Settings.",
     )
+    light_state: tuple[bool, str | None]
     if outlet_count < 2:
         light_state = (False, "Selected Kasa device has one outlet.")
     else:

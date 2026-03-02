@@ -35,6 +35,7 @@ from collections import deque
 from simple_sender.utils.constants import (
     MAX_CONSOLE_LINES,
     CONSOLE_BATCH_DELAY_MS,
+    CONSOLE_PENDING_BATCH_MAX,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ class Console(ttk.Frame):
         self.grid_columnconfigure(0, weight=1)
         
         # State
-        self._log_buffer: deque[str] = deque()
+        self._log_buffer: deque[str] = deque(maxlen=CONSOLE_PENDING_BATCH_MAX)
         self._flush_scheduled = False
         self._auto_scroll = True
         self._line_count = 0

@@ -73,6 +73,7 @@ from .utils.constants import (
     BUFFER_EMIT_INTERVAL,
     TX_THROUGHPUT_WINDOW,
     TX_THROUGHPUT_EMIT_INTERVAL,
+    TX_LOOP_IDLE_WAIT_S,
     MANUAL_COMMAND_QUEUE_MAXSIZE,
     MANUAL_QUEUE_DROP_NOTICE_INTERVAL,
     STATUS_POLL_DEFAULT,
@@ -219,6 +220,9 @@ class GrblWorker(
         
         # Streaming state
         self._gcode: Sequence[str] = []
+        self._gcode_payload_cache: Sequence[bytes | None] | None = None
+        self._gcode_pause_reason_cache: Sequence[str | None] | None = None
+        self._gcode_spindle_state_cache: Sequence[bool | None] | None = None
         self._streaming = False
         self._paused = False
         self._send_index = 0  # next index to send
@@ -246,6 +250,10 @@ class GrblWorker(
         self._ok_latency_ms_last = 0.0
         self._ok_latency_ms_avg = 0.0
         self._ok_latency_sample_count = 0
+        self._tx_loop_cycles = 0
+        self._tx_loop_idle_cycles = 0
+        self._tx_loop_active_cycles = 0
+        self._tx_loop_idle_wait_total_s = 0.0
         self._queue_depth_snapshots: deque[tuple[float, int, int, int]] = deque(
             maxlen=QUEUE_DEPTH_SNAPSHOT_MAX
         )
@@ -263,6 +271,7 @@ class GrblWorker(
         self._stream_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._status_interval_lock = threading.Lock()
+        self._tx_activity_evt = threading.Event()
         
         # State flags
         self._status_poll_interval = STATUS_POLL_DEFAULT
@@ -281,6 +290,7 @@ class GrblWorker(
         self._homing_watchdog_enabled = True
         self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
         self._connect_started_ts = 0.0
+        self._tx_loop_idle_wait_s = float(TX_LOOP_IDLE_WAIT_S)
 
     def _serial_module(self):
         return serial
@@ -424,6 +434,10 @@ class GrblWorker(
             self._record_manual_queue_drop()
             return False
         self._manual_source_queue.append(source)
+        try:
+            self._tx_activity_evt.set()
+        except Exception as exc:
+            _log_suppressed("Failed signaling TX activity after enqueueing manual command", exc)
         return True
     
     def _reset_stream_buffer(self) -> None:
@@ -544,11 +558,22 @@ class GrblWorker(
             }
             for ts, stream_depth, manual_depth, ui_depth in snapshots[-20:]
         ]
+        tx_loop_cycles = max(0, int(self._tx_loop_cycles))
+        tx_loop_idle_cycles = max(0, int(self._tx_loop_idle_cycles))
+        tx_loop_active_cycles = max(0, int(self._tx_loop_active_cycles))
+        tx_loop_idle_ratio = 0.0
+        if tx_loop_cycles > 0:
+            tx_loop_idle_ratio = float(tx_loop_idle_cycles) / float(tx_loop_cycles)
         return {
             "tx_lines_per_sec": float(self._tx_lines_per_sec),
             "ok_latency_ms_last": float(self._ok_latency_ms_last),
             "ok_latency_ms_avg": float(self._ok_latency_ms_avg),
             "ok_latency_samples": int(self._ok_latency_sample_count),
+            "tx_loop_cycles": tx_loop_cycles,
+            "tx_loop_idle_cycles": tx_loop_idle_cycles,
+            "tx_loop_active_cycles": tx_loop_active_cycles,
+            "tx_loop_idle_wait_total_s": float(self._tx_loop_idle_wait_total_s),
+            "tx_loop_idle_ratio": tx_loop_idle_ratio,
             "queue_depth_last": queue_depth_last,
             "queue_depth_samples": queue_depth_samples,
         }

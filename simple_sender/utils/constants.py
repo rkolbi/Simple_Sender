@@ -116,6 +116,12 @@ MAX_CONSOLE_LINES = 5000
 CONSOLE_BATCH_DELAY_MS = 50
 """Milliseconds to wait before flushing batched console updates."""
 
+CONSOLE_PENDING_BATCH_MAX = 2000
+"""Maximum pending console entries buffered before forcing a full re-render."""
+
+CONSOLE_MAX_BUFFER_BYTES = 1_500_000
+"""Maximum estimated bytes retained by in-memory console history."""
+
 LINE_NUMBER_OFFSET = 1
 """Text widget line numbers are 1-indexed."""
 
@@ -130,6 +136,27 @@ UI_EVENT_QUEUE_MAXSIZE = 3000
 
 UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL = 1.0
 """Minimum seconds between UI drop summary log entries."""
+
+UI_QUEUE_DRAIN_EVENT_LIMIT = 100
+"""Maximum number of UI events drained per UI-queue tick."""
+
+UI_QUEUE_DRAIN_TIME_BUDGET_MS = 8.0
+"""Soft time budget (ms) for each UI-queue drain tick."""
+
+UI_QUEUE_DRAIN_STALL_BUDGET_MS = 16.0
+"""Threshold (ms) above which a UI-queue drain tick is considered a stall."""
+
+UI_QUEUE_MAINTENANCE_INTERVAL_S = 0.25
+"""Maintenance cadence while UI events are actively flowing."""
+
+UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S = 1.0
+"""Maintenance cadence while the UI queue is idle."""
+
+UI_QUEUE_RECONNECT_CHECK_INTERVAL_S = 0.25
+"""Auto-reconnect check cadence while UI events are actively flowing."""
+
+UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S = 1.0
+"""Auto-reconnect check cadence while the UI queue is idle."""
 
 GRBL_SETTINGS_WRITE_DELAY = 0.05
 """Delay between sending GRBL settings updates (seconds)."""
@@ -149,6 +176,36 @@ GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE = 300
 GCODE_VIEWER_CHUNK_LOAD_THRESHOLD = 2000
 """Line count threshold for using the larger loader chunk size."""
 
+GCODE_VIEWER_INSERT_TIME_BUDGET_MS = 8.0
+"""Soft per-tick time budget (ms) for chunked G-code viewer insertion."""
+
+GCODE_VIEWER_INSERT_MAX_CHUNKS_PER_TICK = 8
+"""Maximum chunks inserted per Tk tick while loading the G-code viewer."""
+
+GCODE_VIEWER_INSERT_DELAY_MS = 2
+"""Delay (ms) before scheduling the next chunked G-code viewer insert tick."""
+
+GCODE_VIEWER_PROGRESS_EMIT_INTERVAL_MS = 80
+"""Minimum interval (ms) between chunked G-code viewer progress callbacks."""
+
+GCODE_VIEWER_LINE_CAP_DEFAULT = 120_000
+"""Maximum number of lines rendered in the G-code text viewer."""
+
+GCODE_VIEWER_LINE_CAP_LOW_POWER = 40_000
+"""Lower G-code viewer line cap for low-power profiles."""
+
+GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT = GCODE_VIEWER_LINE_CAP_DEFAULT
+"""Line-count threshold for enabling virtualized G-code text rendering."""
+
+GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER = GCODE_VIEWER_LINE_CAP_LOW_POWER
+"""Lower virtualization threshold for low-power profiles."""
+
+GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT = 2000
+"""Number of lines rendered per virtualized G-code viewer window."""
+
+GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER = 800
+"""Virtualized viewer window size for low-power profiles."""
+
 GCODE_VIEWER_SMALL_FILE_THRESHOLD = 1000
 """Line count threshold for small files."""
 
@@ -161,6 +218,9 @@ GCODE_STREAMING_SIZE_THRESHOLD = 50 * 1024 * 1024
 GCODE_STREAMING_LINE_THRESHOLD = 250_000
 """Cleaned line count above which streaming mode is used."""
 
+GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD = 50_000
+"""Maximum line count for precomputing in-memory streaming send caches."""
+
 STREAMING_VALIDATION_PROMPT_LINES = 500_000
 """Cleaned line count above which streaming validation prompts for confirmation."""
 
@@ -170,8 +230,14 @@ STREAMING_VALIDATION_PROMPT_TIMEOUT = 120
 GCODE_LOAD_PROGRESS_INTERVAL = 0.25
 """Minimum seconds between progress updates while loading/validating G-code."""
 
+TEMP_FILE_BUFFER_SIZE = 64 * 1024
+"""Buffered write size for temp G-code/autolevel files."""
+
 GCODE_STATS_DEBOUNCE_MS = 75
 """Debounce window (ms) before launching background G-code stats calculation."""
+
+GCODE_STATS_CACHE_MAX_ENTRIES = 16
+"""Maximum cached G-code stats entries kept in memory."""
 
 GCODE_STREAMING_PREVIEW_LINES = 2000
 """Preview lines shown when streaming from disk."""
@@ -187,6 +253,12 @@ TOOLTIP_DELAY_MS = 1000
 
 TOOLTIP_TIMEOUT_DEFAULT = 10.0
 """Default tooltip display duration (seconds)."""
+
+NOTEBOOK_TOOLTIP_POLL_INTERVAL_ACTIVE_MS = 120
+"""Notebook-tab tooltip poll interval while a tooltip is active/pending."""
+
+NOTEBOOK_TOOLTIP_POLL_INTERVAL_IDLE_MS = 450
+"""Notebook-tab tooltip poll interval while idle."""
 
 STOP_SIGN_CUT_RATIO = 0.29289321881345254
 """Cut ratio for the stop-sign octagon geometry."""
@@ -416,6 +488,12 @@ TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT = 50000
 TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT = 35000
 """Maximum Top View segments to draw per render pass."""
 
+TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD = 6000
+"""Drawn segment count above which Top View renders progressively in chunks."""
+
+TOOLPATH_TOP_VIEW_PROGRESSIVE_CHUNK_SIZE = 1200
+"""Segments drawn per progressive Top View render chunk."""
+
 TOOLPATH_GRID_MAX_POINTS = 800
 """Maximum grid points to draw for auto-level overlay."""
 
@@ -601,8 +679,14 @@ SERIAL_WRITE_TIMEOUT = 0.5
 EVENT_QUEUE_TIMEOUT = 0.01
 """Timeout for queue operations (seconds)."""
 
+TX_LOOP_IDLE_WAIT_S = 0.2
+"""Idle wait for the TX loop when no stream/manual work is pending (seconds)."""
+
 UI_POLL_INTERVAL = 0.01
 """Main UI event loop polling interval (seconds)."""
+
+KASA_TASK_QUEUE_MAXSIZE = 256
+"""Maximum queued Kasa background tasks before new tasks are dropped."""
 
 # ============================================================================
 # GRBL SETTINGS DESCRIPTIONS

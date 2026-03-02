@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from collections import deque
 from typing import Any, cast
 
 
@@ -229,7 +230,7 @@ def _init_worker_and_runtime_controllers(
     if ui_event_queue_cls is not None:
         app.ui_q = ui_event_queue_cls(maxsize=ui_event_queue_maxsize)
     else:
-        app.ui_q = queue_module.Queue()
+        app.ui_q = queue_module.Queue(maxsize=ui_event_queue_maxsize)
 
     app.status_poll_interval = tk.DoubleVar(
         value=app.settings.get(
@@ -319,6 +320,7 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app._wpos_value_labels = {}
     app._wpos_label_default_fg = {}
     app._wpos_flash_after_ids = {}
+    app._wpos_flash_last_ts = 0.0
 
 
 def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: dict) -> None:
@@ -369,7 +371,16 @@ def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: d
     app._gcode_load_popup_bar = None
 
 
-def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
+def _init_stream_and_override_state(
+    app,
+    *,
+    tk,
+    default_settings: dict,
+    ui_maintenance_interval_s: float,
+    ui_maintenance_idle_interval_s: float,
+    auto_reconnect_check_interval_s: float,
+    auto_reconnect_check_idle_interval_s: float,
+) -> None:
     app._rapid_rates = None
     app._rapid_rates_source = None
     app.fallback_rapid_rate = tk.StringVar(
@@ -387,9 +398,11 @@ def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._stats_after_id = None
     app._stats_pending_request = None
     app._stats_debounce_ms = 75
-    app._ui_maintenance_interval_s = 0.25
+    app._ui_maintenance_interval_s = ui_maintenance_interval_s
+    app._ui_maintenance_idle_interval_s = ui_maintenance_idle_interval_s
     app._ui_maintenance_last_ts = 0.0
-    app._auto_reconnect_check_interval_s = 0.25
+    app._auto_reconnect_check_interval_s = auto_reconnect_check_interval_s
+    app._auto_reconnect_check_idle_interval_s = auto_reconnect_check_idle_interval_s
     app._auto_reconnect_check_ts = 0.0
     app._live_estimate_min = None
 
@@ -411,6 +424,7 @@ def _init_stream_and_override_state(app, *, tk, default_settings: dict) -> None:
     app._pending_settings_refresh = False
     app._connected_port = None
     app._status_seen = False
+    app._status_history = deque(maxlen=200)
 
     app.progress_pct = tk.IntVar(value=0)
     app.buffer_fill = tk.StringVar(value="Buffer: 0%")
@@ -454,6 +468,14 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._auto_reconnect_blocked = False
     app._user_disconnect = False
     app._ui_throttle_ms = 100
+    app._ui_queue_idle_interval_ms = 125
+    app._ui_queue_drain_event_limit = 100
+    app._ui_queue_drain_time_budget_ms = 8.0
+    app._ui_queue_drain_stall_budget_ms = 16.0
+    app._ui_queue_drain_ticks = 0
+    app._ui_queue_drain_events = 0
+    app._ui_queue_drain_max_ms = 0.0
+    app._ui_queue_drain_stall_count = 0
     app._state_flash_after_id = None
     app._state_flash_color = None
     app._state_flash_on = False
@@ -474,6 +496,16 @@ def init_runtime_state(
     default_settings = deps.DEFAULT_SETTINGS
     status_poll_default = deps.STATUS_POLL_DEFAULT
     ui_event_queue_maxsize = deps.UI_EVENT_QUEUE_MAXSIZE
+    ui_maintenance_interval_s = float(getattr(deps, "UI_QUEUE_MAINTENANCE_INTERVAL_S", 0.25))
+    ui_maintenance_idle_interval_s = float(
+        getattr(deps, "UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S", 1.0)
+    )
+    auto_reconnect_check_interval_s = float(
+        getattr(deps, "UI_QUEUE_RECONNECT_CHECK_INTERVAL_S", 0.25)
+    )
+    auto_reconnect_check_idle_interval_s = float(
+        getattr(deps, "UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S", 1.0)
+    )
 
     def setting(key: str, fallback):
         return app.settings.get(key, default_settings.get(key, fallback))
@@ -510,5 +542,13 @@ def init_runtime_state(
         tk=tk,
         default_settings=default_settings,
     )
-    _init_stream_and_override_state(app, tk=tk, default_settings=default_settings)
+    _init_stream_and_override_state(
+        app,
+        tk=tk,
+        default_settings=default_settings,
+        ui_maintenance_interval_s=ui_maintenance_interval_s,
+        ui_maintenance_idle_interval_s=ui_maintenance_idle_interval_s,
+        auto_reconnect_check_interval_s=auto_reconnect_check_interval_s,
+        auto_reconnect_check_idle_interval_s=auto_reconnect_check_idle_interval_s,
+    )
     _init_reconnect_and_ui_state(app, default_settings=default_settings)

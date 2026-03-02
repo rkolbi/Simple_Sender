@@ -53,6 +53,7 @@ RUN_CHECKLIST_ITEMS = [
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 PREFLIGHT_DECISION_HISTORY_LIMIT = 100
+RUNTIME_TELEMETRY_REFRESH_MS = 1000
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -83,6 +84,152 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         _log_suppressed("Failed collecting runtime telemetry metrics", exc)
         return {}
     return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+
+
+def _format_runtime_metrics(
+    metrics: dict[str, Any],
+    *,
+    include_samples: bool,
+    sample_limit: int = 20,
+) -> list[str]:
+    if not metrics:
+        return []
+    lines: list[str] = []
+    tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
+    ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
+    ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
+    ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
+    lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
+    lines.append(
+        f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
+    )
+    tx_loop_cycles = int(metrics.get("tx_loop_cycles", 0) or 0)
+    tx_loop_idle_cycles = int(metrics.get("tx_loop_idle_cycles", 0) or 0)
+    tx_loop_active_cycles = int(metrics.get("tx_loop_active_cycles", 0) or 0)
+    tx_loop_idle_wait_total_s = float(metrics.get("tx_loop_idle_wait_total_s", 0.0) or 0.0)
+    tx_loop_idle_ratio = float(metrics.get("tx_loop_idle_ratio", 0.0) or 0.0)
+    lines.append(
+        "- TX loop: "
+        f"cycles={tx_loop_cycles}, "
+        f"active={tx_loop_active_cycles}, "
+        f"idle={tx_loop_idle_cycles}, "
+        f"idle_ratio={tx_loop_idle_ratio:.3f}, "
+        f"idle_wait_s={tx_loop_idle_wait_total_s:.2f}"
+    )
+    queue_last = metrics.get("queue_depth_last", {})
+    if isinstance(queue_last, dict):
+        lines.append(
+            "- Queue depth last: "
+            f"stream={int(queue_last.get('stream', 0) or 0)}, "
+            f"manual={int(queue_last.get('manual', 0) or 0)}, "
+            f"ui={int(queue_last.get('ui', 0) or 0)} "
+            f"@ {str(queue_last.get('timestamp', '') or 'n/a')}"
+        )
+    if include_samples:
+        queue_samples = metrics.get("queue_depth_samples", [])
+        if isinstance(queue_samples, list) and queue_samples:
+            lines.append("- Queue depth samples:")
+            for sample in queue_samples[-sample_limit:]:
+                if not isinstance(sample, dict):
+                    continue
+                lines.append(
+                    "  "
+                    f"{str(sample.get('timestamp', '') or 'n/a')} "
+                    f"stream={int(sample.get('stream', 0) or 0)} "
+                    f"manual={int(sample.get('manual', 0) or 0)} "
+                    f"ui={int(sample.get('ui', 0) or 0)}"
+                )
+    return lines
+
+
+def open_runtime_telemetry(app) -> None:
+    existing = getattr(app, "_runtime_telemetry_window", None)
+    if existing is not None:
+        try:
+            if existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception as exc:
+            _log_suppressed("Failed restoring existing runtime telemetry window", exc)
+    win = tk.Toplevel(app)
+    app._runtime_telemetry_window = win
+    app._runtime_telemetry_after_id = None
+    win.title("Runtime telemetry")
+    win.minsize(600, 360)
+    win.transient(app)
+    container = ttk.Frame(win, padding=12)
+    container.pack(fill="both", expand=True)
+    ttk.Label(container, text="Runtime telemetry", font=("TkDefaultFont", 12, "bold")).pack(
+        anchor="w"
+    )
+    ttk.Label(
+        container,
+        text="Live worker/queue counters. Refreshes every second while this window is open.",
+        wraplength=560,
+        justify="left",
+    ).pack(anchor="w", pady=(4, 10))
+    text = tk.Text(container, wrap="none", height=14, font=("TkFixedFont", 10))
+    text.pack(fill="both", expand=True)
+    text.configure(state="disabled")
+    last_rendered = {"text": None}
+    btn_row = ttk.Frame(container)
+    btn_row.pack(fill="x", pady=(10, 0))
+
+    def _render() -> None:
+        metrics = _runtime_metrics(app)
+        if metrics:
+            lines = _format_runtime_metrics(metrics, include_samples=True, sample_limit=12)
+            body = "\n".join(lines) if lines else "Runtime telemetry unavailable."
+        else:
+            body = "Runtime telemetry unavailable."
+        if body == last_rendered["text"]:
+            return
+        last_rendered["text"] = body
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        text.insert("end", body)
+        text.configure(state="disabled")
+
+    def _schedule_refresh() -> None:
+        if getattr(app, "_runtime_telemetry_window", None) is not win:
+            return
+        try:
+            if not win.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            app._runtime_telemetry_after_id = win.after(
+                RUNTIME_TELEMETRY_REFRESH_MS,
+                _on_refresh_timer,
+            )
+        except Exception as exc:
+            _log_suppressed("Failed scheduling runtime telemetry refresh", exc)
+
+    def _on_refresh_timer() -> None:
+        if getattr(app, "_runtime_telemetry_window", None) is not win:
+            return
+        _render()
+        _schedule_refresh()
+
+    def _on_close() -> None:
+        after_id = getattr(app, "_runtime_telemetry_after_id", None)
+        if after_id is not None:
+            try:
+                win.after_cancel(after_id)
+            except Exception:
+                pass
+        app._runtime_telemetry_after_id = None
+        app._runtime_telemetry_window = None
+        win.destroy()
+
+    ttk.Button(btn_row, text="Refresh now", command=_render).pack(side="left")
+    ttk.Button(btn_row, text="Close", command=_on_close).pack(side="right")
+    win.protocol("WM_DELETE_WINDOW", _on_close)
+    _render()
+    _schedule_refresh()
+    center_window(win, app)
 
 
 def _record_preflight_decision(
@@ -530,36 +677,7 @@ def export_session_diagnostics(app) -> None:
     metrics = _runtime_metrics(app)
     if metrics:
         lines.append("Runtime telemetry:")
-        tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
-        ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
-        ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
-        ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
-        lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
-        lines.append(
-            f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
-        )
-        queue_last = metrics.get("queue_depth_last", {})
-        if isinstance(queue_last, dict):
-            lines.append(
-                "- Queue depth last: "
-                f"stream={int(queue_last.get('stream', 0) or 0)}, "
-                f"manual={int(queue_last.get('manual', 0) or 0)}, "
-                f"ui={int(queue_last.get('ui', 0) or 0)} "
-                f"@ {str(queue_last.get('timestamp', '') or 'n/a')}"
-            )
-        queue_samples = metrics.get("queue_depth_samples", [])
-        if isinstance(queue_samples, list) and queue_samples:
-            lines.append("- Queue depth samples:")
-            for sample in queue_samples[-20:]:
-                if not isinstance(sample, dict):
-                    continue
-                lines.append(
-                    "  "
-                    f"{str(sample.get('timestamp', '') or 'n/a')} "
-                    f"stream={int(sample.get('stream', 0) or 0)} "
-                    f"manual={int(sample.get('manual', 0) or 0)} "
-                    f"ui={int(sample.get('ui', 0) or 0)}"
-                )
+        lines.extend(_format_runtime_metrics(metrics, include_samples=True, sample_limit=20))
         lines.append("")
     decisions = getattr(app, "_preflight_run_decisions", None)
     if isinstance(decisions, list) and decisions:
@@ -596,9 +714,10 @@ def export_session_diagnostics(app) -> None:
         lines.append(last_status.strip())
         lines.append("")
     history = getattr(app, "_status_history", [])
-    if history:
+    history_entries = list(history) if history else []
+    if history_entries:
         lines.append("Recent status history:")
-        for ts, raw in history[-50:]:
+        for ts, raw in history_entries[-50:]:
             stamp = datetime.fromtimestamp(ts).isoformat(timespec="seconds")
             lines.append(f"{stamp} {raw.strip()}")
         lines.append("")

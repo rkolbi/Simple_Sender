@@ -28,8 +28,9 @@ chunked loading for large files, and highlighting for sent/acked/current lines.
 
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Optional, Callable, Tuple
+from typing import Callable, List, Optional, Tuple
 import logging
+import time
 
 from ...utils.constants import (
     LINE_NUMBER_OFFSET,
@@ -38,6 +39,10 @@ from ...utils.constants import (
     GCODE_VIEWER_CHUNK_SIZE_LARGE,
     GCODE_VIEWER_SMALL_FILE_THRESHOLD,
     GCODE_VIEWER_LARGE_FILE_THRESHOLD,
+    GCODE_VIEWER_INSERT_TIME_BUDGET_MS,
+    GCODE_VIEWER_INSERT_MAX_CHUNKS_PER_TICK,
+    GCODE_VIEWER_INSERT_DELAY_MS,
+    GCODE_VIEWER_PROGRESS_EMIT_INTERVAL_MS,
     COLOR_GCODE_SENT,
     COLOR_GCODE_ACKED,
     COLOR_GCODE_CURRENT,
@@ -121,6 +126,24 @@ class GcodeViewer(ttk.Frame):
         self._insert_chunk_size = GCODE_VIEWER_CHUNK_SIZE_SMALL
         self._insert_done_cb: Optional[Callable] = None
         self._insert_progress_cb: Optional[Callable[[int, int], None]] = None
+        self._insert_progress_last_ts = 0.0
+        self._insert_progress_interval_s = max(
+            0.0,
+            float(GCODE_VIEWER_PROGRESS_EMIT_INTERVAL_MS) / 1000.0,
+        )
+        self._insert_time_budget_s = max(
+            0.001,
+            float(GCODE_VIEWER_INSERT_TIME_BUDGET_MS) / 1000.0,
+        )
+        self._insert_max_chunks_per_tick = max(1, int(GCODE_VIEWER_INSERT_MAX_CHUNKS_PER_TICK))
+        self._insert_delay_ms = max(1, int(GCODE_VIEWER_INSERT_DELAY_MS))
+
+        # Virtualized rendering state for very large jobs.
+        self._virtual_enabled = False
+        self._virtual_lines: List[str] = []
+        self._virtual_window_size = 0
+        self._virtual_window_start = 0
+        self._virtual_window_end = 0
     
     def set_lines(self, lines: List[str]) -> None:
         """Load G-code lines with adaptive chunk size.
@@ -162,6 +185,43 @@ class GcodeViewer(ttk.Frame):
             on_done=on_done,
             on_progress=on_progress
         )
+
+    def set_lines_virtualized(
+        self,
+        lines: List[str],
+        *,
+        window_size: int,
+        on_done: Optional[Callable] = None,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> None:
+        """Load lines into a virtualized windowed viewer for extreme jobs."""
+        self._cancel_chunk_insert()
+
+        self.lines_count = len(lines)
+        self._sent_upto = -1
+        self._acked_upto = -1
+        self._current_idx = -1
+        self._virtual_enabled = True
+        self._virtual_lines = lines
+        self._virtual_window_size = max(200, int(window_size))
+        self._virtual_window_start = 0
+        self._virtual_window_end = 0
+
+        if callable(on_progress):
+            on_progress(0, self.lines_count)
+        self._render_virtual_window_for_index(0, force=True)
+        self.clear_highlights()
+        if self.lines_count:
+            self.highlight_current(0)
+        if callable(on_progress):
+            on_progress(self.lines_count, self.lines_count)
+        if callable(on_done):
+            on_done()
+        logger.info(
+            "Loaded %d lines of G-code (virtualized window=%d)",
+            self.lines_count,
+            self._virtual_window_size,
+        )
     
     def clear(self) -> None:
         """Clear all G-code and reset state."""
@@ -170,6 +230,10 @@ class GcodeViewer(ttk.Frame):
         self._sent_upto = -1
         self._acked_upto = -1
         self._current_idx = -1
+        self._virtual_enabled = False
+        self._virtual_lines = []
+        self._virtual_window_start = 0
+        self._virtual_window_end = 0
         self.text.config(state="normal")
         self.text.delete("1.0", "end")
         self.text.config(state="disabled")
@@ -198,13 +262,24 @@ class GcodeViewer(ttk.Frame):
         if idx <= self._sent_upto:
             return
         
-        start_line = self._sent_upto + 1 + LINE_NUMBER_OFFSET
+        old_sent_upto = self._sent_upto
+        self._sent_upto = idx
+        if self._virtual_enabled:
+            start_idx = max(old_sent_upto + 1, self._acked_upto + 1)
+            range_positions = self._global_range_to_widget_range(start_idx, idx)
+            if range_positions is None:
+                return
+            self.text.config(state="normal")
+            self.text.tag_add("sent", range_positions[0], range_positions[1])
+            self.text.config(state="disabled")
+            return
+
+        start_line = old_sent_upto + 1 + LINE_NUMBER_OFFSET
         end_line = idx + LINE_NUMBER_OFFSET
 
         self.text.config(state="normal")
         self.text.tag_add("sent", f"{start_line}.0", f"{end_line + 1}.0")
         self.text.config(state="disabled")
-        self._sent_upto = idx
     
     def mark_acked_upto(self, idx: int) -> None:
         """Mark lines as acknowledged up to specified index.
@@ -221,17 +296,27 @@ class GcodeViewer(ttk.Frame):
         if idx <= self._acked_upto:
             return
         
-        start_line = self._acked_upto + 1 + LINE_NUMBER_OFFSET
+        old_acked_upto = self._acked_upto
+        self._acked_upto = idx
+        if self._sent_upto < idx:
+            self._sent_upto = idx
+        if self._virtual_enabled:
+            range_positions = self._global_range_to_widget_range(old_acked_upto + 1, idx)
+            if range_positions is None:
+                return
+            self.text.config(state="normal")
+            self.text.tag_remove("sent", range_positions[0], range_positions[1])
+            self.text.tag_add("acked", range_positions[0], range_positions[1])
+            self.text.config(state="disabled")
+            return
+
+        start_line = old_acked_upto + 1 + LINE_NUMBER_OFFSET
         end_line = idx + LINE_NUMBER_OFFSET
 
         self.text.config(state="normal")
         self.text.tag_remove("sent", f"{start_line}.0", f"{end_line + 1}.0")
         self.text.tag_add("acked", f"{start_line}.0", f"{end_line + 1}.0")
         self.text.config(state="disabled")
-        
-        self._acked_upto = idx
-        if self._sent_upto < idx:
-            self._sent_upto = idx
     
     def mark_sent(self, idx: int) -> None:
         """Mark single line as sent.
@@ -260,21 +345,29 @@ class GcodeViewer(ttk.Frame):
         """
         if idx == self._current_idx:
             return
+        if self._virtual_enabled and 0 <= idx < self.lines_count:
+            if idx < self._virtual_window_start or idx >= self._virtual_window_end:
+                self._render_virtual_window_for_index(idx)
         
         self.text.config(state="normal")
         
         # Remove previous highlight
         if 0 <= self._current_idx < self.lines_count:
-            start, end = self._line_range(self._current_idx)
-            self.text.tag_remove("current", start, end)
+            prev_range = self._line_range(self._current_idx)
+            if prev_range is not None:
+                self.text.tag_remove("current", prev_range[0], prev_range[1])
         
         # Add new highlight
         if 0 <= idx < self.lines_count:
-            start, end = self._line_range(idx)
-            self.text.tag_add("current", start, end)
-            if self.text.dlineinfo(start) is None:
-                self.text.see(start)
-            self._current_idx = idx
+            current_range = self._line_range(idx)
+            if current_range is not None:
+                start, end = current_range
+                self.text.tag_add("current", start, end)
+                if self.text.dlineinfo(start) is None:
+                    self.text.see(start)
+                self._current_idx = idx
+            else:
+                self._current_idx = -1
         else:
             self._current_idx = -1
         
@@ -284,7 +377,7 @@ class GcodeViewer(ttk.Frame):
     # INTERNAL METHODS
     # ========================================================================
     
-    def _line_range(self, idx: int) -> Tuple[str, str]:
+    def _line_range(self, idx: int) -> Tuple[str, str] | None:
         """Get text widget range for line index.
         
         Args:
@@ -293,7 +386,12 @@ class GcodeViewer(ttk.Frame):
         Returns:
             Tuple of (start_pos, end_pos) in text widget notation
         """
-        line_no = idx + LINE_NUMBER_OFFSET
+        if self._virtual_enabled:
+            if idx < self._virtual_window_start or idx >= self._virtual_window_end:
+                return None
+            line_no = (idx - self._virtual_window_start) + LINE_NUMBER_OFFSET
+        else:
+            line_no = idx + LINE_NUMBER_OFFSET
         start = f"{line_no}.0"
         end = f"{line_no + 1}.0"
         return start, end
@@ -335,6 +433,11 @@ class GcodeViewer(ttk.Frame):
         self._insert_chunk_size = max(20, int(chunk_size))
         self._insert_done_cb = on_done
         self._insert_progress_cb = on_progress
+        self._insert_progress_last_ts = 0.0
+        self._virtual_enabled = False
+        self._virtual_lines = []
+        self._virtual_window_start = 0
+        self._virtual_window_end = 0
         
         # Reset state
         self._sent_upto = -1
@@ -347,6 +450,7 @@ class GcodeViewer(ttk.Frame):
         # Report initial progress
         if callable(on_progress):
             on_progress(0, self.lines_count)
+            self._insert_progress_last_ts = time.perf_counter()
         
         # Start insertion
         self._insert_next_chunk()
@@ -356,27 +460,30 @@ class GcodeViewer(ttk.Frame):
         if not self._insert_lines:
             self.text.config(state="disabled")
             return
-        
-        start = self._insert_index
-        end = min(start + self._insert_chunk_size, len(self._insert_lines))
-        chunk = self._insert_lines[start:end]
-        
-        if chunk:
-            # Format lines with line numbers
-            base = start + 1
-            lines_out = [f"{base + i:5d}  {ln}" for i, ln in enumerate(chunk)]
-            self.text.insert("end", "\n".join(lines_out) + "\n")
-        
-        self._insert_index = end
-        
-        # Report progress
-        if callable(self._insert_progress_cb):
-            self._insert_progress_cb(self._insert_index, len(self._insert_lines))
-        
+
+        total = len(self._insert_lines)
+        tick_start = time.perf_counter()
+        inserted_chunks = 0
+        while self._insert_index < total and inserted_chunks < self._insert_max_chunks_per_tick:
+            start = self._insert_index
+            end = min(start + self._insert_chunk_size, total)
+            chunk = self._insert_lines[start:end]
+            if chunk:
+                # Format lines with line numbers in one text insert call per chunk.
+                base = start + 1
+                lines_out = [f"{base + i:5d}  {ln}" for i, ln in enumerate(chunk)]
+                self.text.insert("end", "\n".join(lines_out) + "\n")
+            self._insert_index = end
+            inserted_chunks += 1
+            self._emit_insert_progress(force=False)
+            if (time.perf_counter() - tick_start) >= self._insert_time_budget_s:
+                break
+
         # Check if done
-        if self._insert_index >= len(self._insert_lines):
+        if self._insert_index >= total:
             self.text.config(state="disabled")
             self._insert_after_id = None
+            self._emit_insert_progress(force=True)
             
             # Clear highlights and show first line
             self.clear_highlights()
@@ -394,4 +501,84 @@ class GcodeViewer(ttk.Frame):
             return
         
         # Schedule next chunk
-        self._insert_after_id = self.after(1, self._insert_next_chunk)
+        self._insert_after_id = self.after(self._insert_delay_ms, self._insert_next_chunk)
+
+    def _emit_insert_progress(self, *, force: bool) -> None:
+        callback = self._insert_progress_cb
+        if not callable(callback):
+            return
+        if force:
+            callback(self._insert_index, len(self._insert_lines))
+            return
+        now = time.perf_counter()
+        if (now - self._insert_progress_last_ts) < self._insert_progress_interval_s:
+            return
+        self._insert_progress_last_ts = now
+        callback(self._insert_index, len(self._insert_lines))
+
+    def _global_range_to_widget_range(self, start_idx: int, end_idx: int) -> Tuple[str, str] | None:
+        if end_idx < start_idx:
+            return None
+        if self._virtual_enabled:
+            vis_start = max(start_idx, self._virtual_window_start)
+            vis_end = min(end_idx, self._virtual_window_end - 1)
+            if vis_end < vis_start:
+                return None
+            start_line = (vis_start - self._virtual_window_start) + LINE_NUMBER_OFFSET
+            end_line = (vis_end - self._virtual_window_start) + LINE_NUMBER_OFFSET + 1
+            return f"{start_line}.0", f"{end_line}.0"
+        start_line = start_idx + LINE_NUMBER_OFFSET
+        end_line = end_idx + LINE_NUMBER_OFFSET + 1
+        return f"{start_line}.0", f"{end_line}.0"
+
+    def _render_virtual_window_for_index(self, idx: int, *, force: bool = False) -> None:
+        if not self._virtual_enabled:
+            return
+        total = self.lines_count
+        if total <= 0:
+            self.text.config(state="normal")
+            self.text.delete("1.0", "end")
+            self.text.config(state="disabled")
+            self._virtual_window_start = 0
+            self._virtual_window_end = 0
+            return
+        window_size = min(total, max(200, int(self._virtual_window_size or 200)))
+        center = min(max(0, int(idx)), total - 1)
+        start = max(0, center - (window_size // 2))
+        if start + window_size > total:
+            start = max(0, total - window_size)
+        end = min(total, start + window_size)
+        if not force and start == self._virtual_window_start and end == self._virtual_window_end:
+            return
+        chunk = self._virtual_lines[start:end]
+        base = start + 1
+        lines_out = [f"{base + i:5d}  {ln}" for i, ln in enumerate(chunk)]
+
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        if lines_out:
+            self.text.insert("end", "\n".join(lines_out) + "\n")
+        self._virtual_window_start = start
+        self._virtual_window_end = end
+        self._apply_virtual_visible_tags()
+        self.text.config(state="disabled")
+
+    def _apply_virtual_visible_tags(self) -> None:
+        if not self._virtual_enabled:
+            return
+        self.text.tag_remove("sent", "1.0", "end")
+        self.text.tag_remove("acked", "1.0", "end")
+        self.text.tag_remove("current", "1.0", "end")
+
+        if self._acked_upto >= 0:
+            acked_range = self._global_range_to_widget_range(self._virtual_window_start, self._acked_upto)
+            if acked_range is not None:
+                self.text.tag_add("acked", acked_range[0], acked_range[1])
+        if self._sent_upto > self._acked_upto:
+            sent_range = self._global_range_to_widget_range(self._acked_upto + 1, self._sent_upto)
+            if sent_range is not None:
+                self.text.tag_add("sent", sent_range[0], sent_range[1])
+        if 0 <= self._current_idx < self.lines_count:
+            current_range = self._line_range(self._current_idx)
+            if current_range is not None:
+                self.text.tag_add("current", current_range[0], current_range[1])

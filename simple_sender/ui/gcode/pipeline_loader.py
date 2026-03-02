@@ -60,10 +60,48 @@ class _StreamTempData:
     temp_path: str
     offsets: Sequence[int]
     preview_lines: list[str]
+    all_lines: list[str] | None
+    line_capture_limit_hit: bool
     lines_hash: str | None
     split_result: _SplitStreamResultLike
     total_lines_raw: int
     cleaned_input_lines: int
+
+
+def _should_run_full_validation(
+    app,
+    deps,
+    *,
+    token: int,
+    path: str,
+    line_count: int,
+    validation_enabled: bool,
+) -> bool:
+    _check_load_token(app, token)
+    threshold = int(deps.STREAMING_VALIDATION_PROMPT_LINES)
+    if line_count <= threshold:
+        return validation_enabled
+    if not validation_enabled:
+        app.ui_q.put(("log", "[gcode] Full validation skipped for large file (fast-load mode)."))
+        return False
+
+    result_q = deps.queue.Queue(maxsize=1)
+    app.ui_q.put((
+        "streaming_validation_prompt",
+        token,
+        deps.os.path.basename(path),
+        line_count,
+        threshold,
+        result_q,
+    ))
+    try:
+        allow = bool(result_q.get(timeout=deps.STREAMING_VALIDATION_PROMPT_TIMEOUT))
+    except deps.queue.Empty:
+        allow = False
+    _check_load_token(app, token)
+    if not allow:
+        app.ui_q.put(("log", "[gcode] Full validation skipped for large file by user request."))
+    return allow
 
 
 def _close_temp_file(temp_file: IO[str] | None) -> None:
@@ -113,10 +151,14 @@ def _split_stream_to_temp_file(
     deps,
     *,
     file_size: int | None,
+    capture_full_lines: bool,
+    full_lines_limit: int | None,
 ) -> _StreamTempData:
     _check_load_token(app, token)
     offsets = _new_offset_index(deps)
     preview_lines: list[str] = []
+    all_lines: list[str] | None = [] if capture_full_lines else None
+    line_capture_limit_hit = False
     total_lines_raw = 0
     cleaned_input_lines = 0
     current_line_no = 0
@@ -129,6 +171,7 @@ def _split_stream_to_temp_file(
     split_result: _SplitStreamResultLike | None = None
 
     def write_output(line: str) -> None:
+        nonlocal all_lines, line_capture_limit_hit
         _check_load_token(app, token)
         assert temp_file is not None
         offsets.append(temp_file.tell())
@@ -136,6 +179,12 @@ def _split_stream_to_temp_file(
         temp_file.write("\n")
         if len(preview_lines) < deps.GCODE_STREAMING_PREVIEW_LINES:
             preview_lines.append(line)
+        if all_lines is not None:
+            if full_lines_limit is not None and len(all_lines) >= full_lines_limit:
+                all_lines = None
+                line_capture_limit_hit = True
+            else:
+                all_lines.append(line)
         hasher.update(line.encode("utf-8"))
         hasher.update(b"\n")
 
@@ -150,13 +199,31 @@ def _split_stream_to_temp_file(
 
     try:
         try:
+            temp_dir = None
+            temp_dir_getter = getattr(deps, "get_preferred_temp_dir", None)
+            if callable(temp_dir_getter):
+                try:
+                    temp_dir = str(temp_dir_getter())
+                except Exception:
+                    temp_dir = None
+            try:
+                temp_buffer_size = int(getattr(deps, "TEMP_FILE_BUFFER_SIZE", 0) or 0)
+            except Exception:
+                temp_buffer_size = 0
+            temp_kwargs = {
+                "mode": "w",
+                "encoding": "utf-8",
+                "newline": "",
+                "delete": False,
+                "prefix": "simple_sender_stream_",
+                "suffix": ".gcode",
+            }
+            if temp_dir:
+                temp_kwargs["dir"] = temp_dir
+            if temp_buffer_size > 0:
+                temp_kwargs["buffering"] = temp_buffer_size
             temp_file = deps.tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="",
-                delete=False,
-                prefix="simple_sender_stream_",
-                suffix=".gcode",
+                **temp_kwargs,
             )
             temp_path = temp_file.name
             with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
@@ -165,22 +232,20 @@ def _split_stream_to_temp_file(
                     while True:
                         if (total_lines_raw & 0x1FF) == 0:
                             _check_load_token(app, token)
-                        pos = f.tell()
                         ln = f.readline()
                         if not ln:
                             break
                         total_lines_raw += 1
                         current_line_no = total_lines_raw
-                        if file_size:
+                        if file_size and (total_lines_raw & 0x7F) == 0:
                             now = deps.time.perf_counter()
-                            pct = min(100, int(pos * 100 / file_size))
-                            if (
-                                pct != progress_last_pct
-                                and now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL
-                            ):
-                                _emit_progress(app, token, pct, 100, progress_label)
+                            if now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL:
+                                pos = f.tell()
+                                pct = min(100, int(pos * 100 / file_size))
+                                if pct != progress_last_pct:
+                                    _emit_progress(app, token, pct, 100, progress_label)
+                                    progress_last_pct = pct
                                 progress_last_ts = now
-                                progress_last_pct = pct
                         yield ln
                 _check_load_token(app, token)
 
@@ -205,6 +270,8 @@ def _split_stream_to_temp_file(
         temp_path=temp_path,
         offsets=offsets,
         preview_lines=preview_lines,
+        all_lines=all_lines,
+        line_capture_limit_hit=line_capture_limit_hit,
         lines_hash=hasher.hexdigest() if offsets else None,
         split_result=split_result,
         total_lines_raw=total_lines_raw,
@@ -222,25 +289,6 @@ def _validate_streaming_output(
     output_lines: int,
 ) -> object | None:
     _check_load_token(app, token)
-    validate_prompt_threshold = deps.STREAMING_VALIDATION_PROMPT_LINES
-    if output_lines > validate_prompt_threshold:
-        result_q = deps.queue.Queue(maxsize=1)
-        app.ui_q.put((
-            "streaming_validation_prompt",
-            token,
-            deps.os.path.basename(path),
-            output_lines,
-            validate_prompt_threshold,
-            result_q,
-        ))
-        try:
-            allow = bool(result_q.get(timeout=deps.STREAMING_VALIDATION_PROMPT_TIMEOUT))
-        except deps.queue.Empty:
-            allow = False
-        _check_load_token(app, token)
-        if not allow:
-            app.ui_q.put(("log", "[gcode] Streaming validation skipped by user request."))
-            return None
 
     progress_label = f"Validating {deps.os.path.basename(path)}"
     progress_last_ts = 0.0
@@ -258,26 +306,25 @@ def _validate_streaming_output(
             while True:
                 if (line_no & 0x1FF) == 0:
                     _check_load_token(app, token)
-                pos = rf.tell()
                 raw_line = rf.readline()
                 if not raw_line:
                     break
                 line_no += 1
                 yield raw_line.rstrip("\r\n")
-                now = deps.time.perf_counter()
-                if temp_size:
-                    pct = min(100, int(pos * 100 / temp_size))
-                elif output_lines:
-                    pct = min(100, int(line_no * 100 / output_lines))
-                else:
-                    pct = 100
-                if (
-                    pct != progress_last_pct
-                    and now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL
-                ):
-                    _emit_progress(app, token, pct, 100, progress_label)
-                    progress_last_ts = now
-                    progress_last_pct = pct
+                if (line_no & 0x7F) == 0:
+                    now = deps.time.perf_counter()
+                    if now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL:
+                        if temp_size:
+                            pos = rf.tell()
+                            pct = min(100, int(pos * 100 / temp_size))
+                        elif output_lines:
+                            pct = min(100, int(line_no * 100 / output_lines))
+                        else:
+                            pct = 100
+                        if pct != progress_last_pct:
+                            _emit_progress(app, token, pct, 100, progress_label)
+                            progress_last_pct = pct
+                        progress_last_ts = now
         _emit_progress(app, token, 100, 100, progress_label)
 
     try:
@@ -295,6 +342,8 @@ def _stream_from_disk(
     *,
     file_size: int | None,
     validate_streaming: bool,
+    preview_only: bool,
+    streaming_line_threshold: int | None,
     log_message: str | None = None,
 ) -> None:
     temp_data = None
@@ -309,6 +358,12 @@ def _stream_from_disk(
             token,
             deps,
             file_size=file_size,
+            capture_full_lines=not preview_only,
+            full_lines_limit=(
+                streaming_line_threshold
+                if (not preview_only and streaming_line_threshold is not None)
+                else None
+            ),
         )
 
         split_result = temp_data.split_result
@@ -334,8 +389,32 @@ def _stream_from_disk(
             )
             app.ui_q.put(("log", msg))
         output_lines = split_result.lines_written
+        if not preview_only and temp_data.line_capture_limit_hit:
+            preview_only = True
+            threshold_text = (
+                f"{streaming_line_threshold:,}"
+                if streaming_line_threshold is not None
+                else "?"
+            )
+            app.ui_q.put((
+                "log",
+                f"[gcode] Large file detected ({output_lines:,} cleaned lines > {threshold_text}); "
+                "using preview-only mode.",
+            ))
+        if not preview_only and temp_data.all_lines is None:
+            preview_only = True
         report = None
-        if validate_streaming_enabled and output_lines:
+        should_validate = False
+        if output_lines:
+            should_validate = _should_run_full_validation(
+                app,
+                deps,
+                token=token,
+                path=path,
+                line_count=output_lines,
+                validation_enabled=validate_streaming_enabled,
+            )
+        if should_validate:
             report = _validate_streaming_output(
                 app,
                 deps=deps,
@@ -344,23 +423,29 @@ def _stream_from_disk(
                 temp_path=temp_data.temp_path,
                 output_lines=output_lines,
             )
-        elif not validate_streaming_enabled and not validate_streaming:
+        elif not validate_streaming_enabled:
             app.ui_q.put((
                 "log",
                 "[gcode] Streaming validation disabled (App Settings > Diagnostics).",
             ))
         _check_load_token(app, token)
-        source = deps.FileGcodeSource(temp_data.temp_path, temp_data.offsets)
+        lines_for_app = temp_data.preview_lines if preview_only else (temp_data.all_lines or [])
+        source = deps.FileGcodeSource(
+            temp_data.temp_path,
+            temp_data.offsets,
+            already_clean=True,
+        )
         setattr(source, "_cleanup_path", temp_data.temp_path)
         app.ui_q.put((
             "gcode_loaded_stream",
             token,
             path,
             source,
-            temp_data.preview_lines,
+            lines_for_app,
             temp_data.lines_hash,
             output_lines,
             report,
+            preview_only,
         ))
     except _GcodeLoadCancelled:
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
@@ -378,112 +463,6 @@ def _stream_from_disk(
     except Exception:
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         raise
-
-
-def _load_non_streaming_or_fallback_stream(
-    app,
-    path: str,
-    token: int,
-    deps,
-    *,
-    file_size: int | None,
-    streaming_line_threshold: int | None,
-    validate_streaming: bool,
-) -> None:
-    _check_load_token(app, token)
-    force_streaming = False
-    line_threshold_hit = None
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = []
-        line_map = []
-        total_lines = 0
-        cleaned_lines = 0
-        system_cmd_line = None
-        system_cmd_text = None
-        for line_no, ln in enumerate(f, start=1):
-            if (line_no & 0x1FF) == 0:
-                _check_load_token(app, token)
-            total_lines = line_no
-            cleaned = deps.clean_gcode_line(ln)
-            if not cleaned:
-                continue
-            if cleaned.startswith("$"):
-                system_cmd_line = line_no
-                system_cmd_text = cleaned
-                break
-            cleaned_lines += 1
-            if streaming_line_threshold and cleaned_lines > streaming_line_threshold:
-                force_streaming = True
-                line_threshold_hit = cleaned_lines
-                break
-            lines.append(cleaned)
-            line_map.append(line_no)
-    _check_load_token(app, token)
-    if force_streaming:
-        threshold_text = (
-            f"{streaming_line_threshold:,}"
-            if streaming_line_threshold is not None
-            else "?"
-        )
-        hit_text = f"{line_threshold_hit:,}" if line_threshold_hit is not None else "?"
-        _stream_from_disk(
-            app,
-            path,
-            token,
-            deps,
-            file_size=file_size,
-            validate_streaming=validate_streaming,
-            log_message=(
-                f"[gcode] Large file detected ({hit_text} cleaned lines >= {threshold_text}); "
-                "using streaming mode."
-            ),
-        )
-        return
-    if system_cmd_line is not None:
-        app.ui_q.put((
-            "gcode_load_invalid_command",
-            token,
-            path,
-            system_cmd_line,
-            system_cmd_text,
-        ))
-        return
-    _check_load_token(app, token)
-    result = deps.split_gcode_lines(lines, deps.MAX_LINE_LENGTH)
-    if result.failed_index is not None:
-        too_long, first_idx, first_len = deps._find_overlong_lines(
-            lines,
-            fallback_index=result.failed_index,
-            fallback_len=result.failed_len,
-        )
-        if first_idx is not None and 0 <= first_idx < len(line_map):
-            first_idx = line_map[first_idx] - 1
-        app.ui_q.put((
-            "gcode_load_invalid",
-            token,
-            path,
-            too_long,
-            first_idx,
-            first_len,
-            total_lines,
-            len(lines),
-        ))
-        return
-    _check_load_token(app, token)
-    if result.modified_count:
-        msg = _format_adjusted_lines_message(
-            result.modified_count,
-            result.split_count,
-            deps.MAX_LINE_LENGTH,
-        )
-        app.ui_q.put(("log", msg))
-    lines = result.lines
-    _check_load_token(app, token)
-    report = deps.validate_gcode_lines(lines)
-    _check_load_token(app, token)
-    lines_hash = deps.hash_lines(lines)
-    _check_load_token(app, token)
-    app.ui_q.put(("gcode_loaded", token, path, lines, lines_hash, True, report))
 
 
 def load_gcode_from_path(app, path: str, module):
@@ -504,13 +483,13 @@ def load_gcode_from_path(app, path: str, module):
     app._set_gcode_loading_indeterminate(f"Reading {deps.os.path.basename(path)}")
     app.gview.set_lines_chunked([])
 
-    use_streaming = False
     file_size = None
+    preview_only = False
     try:
         file_size = deps.os.path.getsize(path)
-        use_streaming = file_size >= deps.GCODE_STREAMING_SIZE_THRESHOLD
+        preview_only = file_size >= deps.GCODE_STREAMING_SIZE_THRESHOLD
     except OSError:
-        use_streaming = False
+        preview_only = False
     try:
         validate_streaming = bool(app.validate_streaming_gcode.get())
     except (AttributeError, TypeError, ValueError):
@@ -524,30 +503,24 @@ def load_gcode_from_path(app, path: str, module):
 
     def worker():
         try:
-            if use_streaming:
+            log_message = None
+            if preview_only:
                 size_text = _format_mb(file_size)
                 threshold_text = _format_mb(deps.GCODE_STREAMING_SIZE_THRESHOLD)
-                _stream_from_disk(
-                    app,
-                    path,
-                    token,
-                    deps,
-                    file_size=file_size,
-                    validate_streaming=validate_streaming,
-                    log_message=(
-                        f"[gcode] Large file detected ({size_text} >= {threshold_text}); "
-                        "using streaming mode."
-                    ),
+                log_message = (
+                    f"[gcode] Large file detected ({size_text} >= {threshold_text}); "
+                    "using preview-only mode."
                 )
-                return
-            _load_non_streaming_or_fallback_stream(
+            _stream_from_disk(
                 app,
                 path,
                 token,
                 deps,
                 file_size=file_size,
-                streaming_line_threshold=streaming_line_threshold,
                 validate_streaming=validate_streaming,
+                preview_only=preview_only,
+                streaming_line_threshold=streaming_line_threshold,
+                log_message=log_message,
             )
         except _GcodeLoadCancelled:
             return

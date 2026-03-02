@@ -81,7 +81,7 @@ def _handle_prompt_command(
     if prompt_timeout_s < 0:
         prompt_timeout_s = 0.0
     prompt_started = time.monotonic()
-    result_q: queue.Queue[str] = queue.Queue()
+    result_q: queue.Queue[str] = queue.Queue(maxsize=1)
     ui_q.put(("macro_prompt", title, message, choices, cancel_label, result_q))
     while True:
         try:

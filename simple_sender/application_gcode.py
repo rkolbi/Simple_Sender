@@ -103,6 +103,7 @@ class GcodeMixin:
         validated: bool = False,
         streaming_source=None,
         total_lines: int | None = None,
+        preview_only: bool = False,
     ):
         apply_loaded_gcode(
             self,
@@ -112,6 +113,7 @@ class GcodeMixin:
             validated=validated,
             streaming_source=streaming_source,
             total_lines=total_lines,
+            preview_only=preview_only,
         )
 
     def _clear_gcode(self):

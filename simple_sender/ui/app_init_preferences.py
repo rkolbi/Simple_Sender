@@ -60,6 +60,7 @@ def _init_behavior_preferences(
         value=setting("numeric_keypad_enabled", True)
     )
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
+    app.pi_profile_enabled = tk.BooleanVar(value=setting("pi_profile_enabled", False))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
     app.grbl_popup_enabled = tk.BooleanVar(value=setting("grbl_popup_enabled", True))
     app.grbl_popup_auto_dismiss_sec = tk.DoubleVar(
@@ -94,6 +95,15 @@ def _init_behavior_preferences(
         )
     )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
+    app.performance_profile_enabled = tk.BooleanVar(
+        value=setting("performance_profile_enabled", False)
+    )
+    app.performance_leak_watch_enabled = tk.BooleanVar(
+        value=setting("performance_leak_watch_enabled", False)
+    )
+    app.performance_profile_log_path = tk.StringVar(
+        value=str(setting("performance_profile_log_path", "") or "").strip()
+    )
     app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
     app._render3d_blocked = False
     app.all_stop_mode = tk.StringVar(value=setting("all_stop_mode", "stop_reset"))

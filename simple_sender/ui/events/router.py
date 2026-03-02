@@ -450,7 +450,7 @@ def handle_streaming_validation_prompt(
             _log_suppressed("Streaming validation prompt result queue was full for stale token", exc)
         return
     msg = (
-        f"Validate streaming G-code for '{name}'?\n\n"
+        f"Validate G-code for '{name}'?\n\n"
         f"Detected {cleaned_lines:,} non-empty lines (prompt at {threshold:,}).\n"
         "Validation adds another full scan and can take a while on huge files."
     )
@@ -476,6 +476,12 @@ def handle_gcode_loaded(app, evt):
     report = evt[6] if len(evt) > 6 else None
     app._gcode_validation_report = report
     app._apply_loaded_gcode(path, lines, lines_hash=lines_hash, validated=validated)
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is not None:
+        try:
+            perf_monitor.note_file_loaded()
+        except Exception as exc:
+            _log_suppressed("Failed forwarding file-loaded milestone to performance monitor", exc)
 
 
 def handle_gcode_loaded_stream(app, evt):
@@ -499,6 +505,7 @@ def handle_gcode_loaded_stream(app, evt):
     lines_hash = evt[5] if len(evt) > 5 else None
     total_lines = evt[6] if len(evt) > 6 else None
     report = evt[7] if len(evt) > 7 else None
+    preview_only = bool(evt[8]) if len(evt) > 8 else True
     app._gcode_validation_report = report
     app._apply_loaded_gcode(
         path,
@@ -507,7 +514,14 @@ def handle_gcode_loaded_stream(app, evt):
         validated=True,
         streaming_source=source,
         total_lines=total_lines,
+        preview_only=preview_only,
     )
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is not None:
+        try:
+            perf_monitor.note_file_loaded()
+        except Exception as exc:
+            _log_suppressed("Failed forwarding streamed-file milestone to performance monitor", exc)
 
 
 def handle_gcode_load_invalid(

@@ -44,6 +44,7 @@ from simple_sender.utils.constants import (
     AUTOLEVEL_SPACING_MIN,
     AUTOLEVEL_START_STATE_POLL_MS,
 )
+from simple_sender.utils.temp_paths import get_preferred_temp_dir
 
 from .calculations import (
     _any_avoidance_enabled,
@@ -810,10 +811,12 @@ class AutoLevelDialogController:
     def _make_temp_path(self, source_path: str) -> str:
         base, ext = os.path.splitext(os.path.basename(source_path))
         ext = ext if ext else ".gcode"
+        temp_dir = get_preferred_temp_dir()
         temp = tempfile.NamedTemporaryFile(
             prefix=f"{base}_leveled_",
             suffix=ext,
             delete=False,
+            dir=temp_dir,
         )
         temp_path = temp.name
         temp.close()

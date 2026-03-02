@@ -41,6 +41,22 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _pi_profile_enabled(app) -> bool:
+    var = getattr(app, "pi_profile_enabled", None)
+    if var is not None:
+        try:
+            return bool(var.get())
+        except Exception:
+            pass
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get("pi_profile_enabled", False))
+        except Exception:
+            return False
+    return False
+
+
 def handle_connection_event(app, is_on: bool, port):
     app.connected = bool(is_on)
     app._connecting = False
@@ -92,6 +108,17 @@ def handle_connection_event(app, is_on: bool, port):
             if getattr(app, "_gcode_source", None) is not None:
                 name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
                 app.grbl.load_gcode(app._gcode_source, name=name or None)
+                if (
+                    not _pi_profile_enabled(app)
+                    and not getattr(app, "_gcode_streaming_mode", False)
+                    and app._last_gcode_lines
+                ):
+                    prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
+                    if callable(prime_cache):
+                        try:
+                            prime_cache(app._last_gcode_lines)
+                        except Exception as exc:
+                            _log_suppressed("Failed priming in-memory send cache after reconnect", exc)
             elif app._last_gcode_lines:
                 name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
                 app.grbl.load_gcode(app._last_gcode_lines, name=name or None)

@@ -107,10 +107,6 @@ def init_toolpath_settings(app):
     except Exception:
         saved_arc = app._toolpath_arc_detail_default
     saved_arc = max(app._toolpath_arc_detail_min, min(saved_arc, app._toolpath_arc_detail_max))
-    app.toolpath_full_limit = tk.StringVar(value=str(saved_full))
-    app.toolpath_interactive_limit = tk.StringVar(value=str(saved_interactive))
-    app.toolpath_arc_detail = tk.DoubleVar(value=saved_arc)
-    app.toolpath_lightweight = tk.BooleanVar(value=app.settings.get("toolpath_lightweight", False))
     try:
         streaming_interval = float(
             app.settings.get(

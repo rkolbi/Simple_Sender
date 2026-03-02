@@ -168,11 +168,18 @@ class GrblWorkerState:
     _ok_log_count: int
 
     _gcode: Sequence[str]
+    _gcode_payload_cache: Sequence[bytes | None] | None
+    _gcode_pause_reason_cache: Sequence[str | None] | None
+    _gcode_spindle_state_cache: Sequence[bool | None] | None
     _gcode_name: str | None
     _tx_lines_per_sec: float
     _ok_latency_ms_last: float
     _ok_latency_ms_avg: float
     _ok_latency_sample_count: int
+    _tx_loop_cycles: int
+    _tx_loop_idle_cycles: int
+    _tx_loop_active_cycles: int
+    _tx_loop_idle_wait_total_s: float
 
     def is_connected(self) -> bool:
         raise NotImplementedError
@@ -337,7 +344,17 @@ UiEvent = (
     | tuple[Literal["gcode_load_progress"], int, int, int, str]
     | tuple[Literal["streaming_validation_prompt"], int, str, int, int, UiValidationResultQueue]
     | tuple[Literal["gcode_loaded"], int, str, list[str], str | None, bool, Any | None]
-    | tuple[Literal["gcode_loaded_stream"], int, str, Any, list[str], str | None, int | None, Any | None]
+    | tuple[
+        Literal["gcode_loaded_stream"],
+        int,
+        str,
+        Any,
+        list[str],
+        str | None,
+        int | None,
+        Any | None,
+        bool,
+    ]
     | tuple[
         Literal["gcode_load_invalid"],
         int,

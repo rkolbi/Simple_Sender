@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import array
 from tkinter import messagebox
 
@@ -48,11 +49,18 @@ from simple_sender.utils.constants import (
     GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
     GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
     GCODE_VIEWER_CHUNK_SIZE_SMALL,
+    GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD,
+    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT,
+    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER,
+    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT,
+    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER,
+    TEMP_FILE_BUFFER_SIZE,
     MAX_LINE_LENGTH,
     STREAMING_VALIDATION_PROMPT_TIMEOUT,
     STREAMING_VALIDATION_PROMPT_LINES,
     TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT,
 )
+from simple_sender.utils.temp_paths import get_preferred_temp_dir
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.viewer.preview_policy import configure_toolpath_preview, set_preview_streaming_state
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
@@ -78,8 +86,15 @@ _PIPELINE_DEPS = (
     GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
     GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
     GCODE_VIEWER_CHUNK_SIZE_SMALL,
+    GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD,
+    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT,
+    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER,
+    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT,
+    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER,
+    TEMP_FILE_BUFFER_SIZE,
     STREAMING_VALIDATION_PROMPT_TIMEOUT,
     STREAMING_VALIDATION_PROMPT_LINES,
+    get_preferred_temp_dir,
     configure_toolpath_preview,
 )
 
@@ -94,12 +109,65 @@ def _preview_parse_segment_limit(app) -> int | None:
     return max(2000, limit)
 
 
+def _lightweight_cached_parse_result(result):
+    try:
+        cached = type(result)(
+            segments=result.segments,
+            bounds=result.bounds,
+            moves=[],
+        )
+    except Exception:
+        cached = types.SimpleNamespace(
+            segments=result.segments,
+            bounds=result.bounds,
+            moves=[],
+        )
+    try:
+        setattr(cached, "_includes_moves", False)
+    except Exception:
+        pass
+    return cached
+
+
 def _log_suppressed(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)
     if key in _logged_suppressed:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _snapshot_macro_state(app) -> dict[str, object] | None:
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_ns = macro_vars.get("macro")
+            state_ns = getattr(macro_ns, "state", None)
+            if not isinstance(state_ns, types.SimpleNamespace):
+                return None
+            return dict(vars(state_ns))
+    except Exception as exc:
+        _log_suppressed("Failed snapshotting macro.state before clearing G-code", exc)
+        return None
+
+
+def _restore_macro_state(app, snapshot: dict[str, object] | None) -> None:
+    if snapshot is None:
+        return
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_ns = macro_vars.get("macro")
+            if not isinstance(macro_ns, types.SimpleNamespace):
+                macro_ns = types.SimpleNamespace()
+                macro_vars["macro"] = macro_ns
+            state_ns = getattr(macro_ns, "state", None)
+            if not isinstance(state_ns, types.SimpleNamespace):
+                state_ns = types.SimpleNamespace()
+                setattr(macro_ns, "state", state_ns)
+            state_data = vars(state_ns)
+            state_data.clear()
+            state_data.update(snapshot)
+    except Exception as exc:
+        _log_suppressed("Failed restoring macro.state after clearing G-code", exc)
 
 
 def load_gcode_from_path(app, path: str):
@@ -115,6 +183,7 @@ def apply_loaded_gcode(
     validated: bool = False,
     streaming_source: FileGcodeSource | None = None,
     total_lines: int | None = None,
+    preview_only: bool = False,
 ):
     _apply_loaded_gcode(
         app,
@@ -124,6 +193,7 @@ def apply_loaded_gcode(
         validated=validated,
         streaming_source=streaming_source,
         total_lines=total_lines,
+        preview_only=preview_only,
         module=sys.modules[__name__],
     )
 
@@ -148,7 +218,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
                 arc_step,
                 keep_running=keep_running,
                 max_segments=parse_limit,
-                include_moves=False,
+                include_moves=True,
             )
         except Exception as exc:
             app.ui_q.put(("log", f"[gcode] Parse failed: {exc}"))
@@ -171,7 +241,15 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
         def apply_result():
             if token != app._gcode_parse_token:
                 return
-            app._last_parse_result = result
+            cached_result = result
+            # Avoid retaining large move lists in long-lived cache.
+            if len(lines) > int(GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD):
+                cached_result = _lightweight_cached_parse_result(result)
+            try:
+                setattr(result, "_includes_moves", True)
+            except Exception as exc:
+                _log_suppressed("Failed tagging parse result with include-moves marker", exc)
+            app._last_parse_result = cached_result
             app._last_parse_hash = lines_hash
             app.toolpath_panel.apply_parse_result(lines, result, lines_hash=lines_hash)
             app._update_gcode_stats(lines, parse_result=result)
@@ -185,6 +263,7 @@ def clear_gcode(app):
     if app.grbl.is_streaming():
         messagebox.showwarning("Busy", "Stop the stream before clearing the G-code file.")
         return
+    macro_state_snapshot = _snapshot_macro_state(app)
     app._gcode_load_token += 1
     app._gcode_loading = False
     try:
@@ -279,6 +358,7 @@ def clear_gcode(app):
         app._refresh_toolbar_action_focus()
     except Exception as exc:
         _log_suppressed("Failed refreshing toolbar focus after clearing G-code", exc)
+    _restore_macro_state(app, macro_state_snapshot)
     app.toolpath_panel.clear()
     app._job_started_at = None
     app._job_completion_notified = False
