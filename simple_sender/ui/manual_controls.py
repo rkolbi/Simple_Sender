@@ -49,32 +49,50 @@ def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
     return "normal"
 
 
+def _widget_state(widget) -> str | None:
+    try:
+        return str(widget.cget("state")).strip().lower()
+    except tk.TclError:
+        return None
+
+
+def _set_widget_state_if_needed(widget, state: str) -> None:
+    current = _widget_state(widget)
+    if current == state:
+        return
+    widget.config(state=state)
+
+
 def set_manual_controls_enabled(app, enabled: bool):
+    was_enabled = bool(getattr(app, "_manual_controls_last_enabled", False))
     if getattr(app, "_alarm_locked", False):
         for w in app._manual_controls:
             try:
                 if w is getattr(app, "btn_all_stop", None):
                     continue
                 if w is getattr(app, "btn_home_mpos", None):
-                    w.config(state="normal")
+                    _set_widget_state_if_needed(w, "normal")
                     continue
                 if w is getattr(app, "btn_unlock_mpos", None):
-                    w.config(state="normal")
+                    _set_widget_state_if_needed(w, "normal")
                     continue
                 if w is getattr(app, "btn_unlock_top", None):
-                    w.config(state="normal")
+                    _set_widget_state_if_needed(w, "normal")
                     continue
-                w.config(state="disabled")
+                _set_widget_state_if_needed(w, "disabled")
             except tk.TclError as exc:
                 _log_suppressed("Failed disabling manual control while alarm lock active", exc)
+        app._manual_controls_last_enabled = False
         return
     connected = bool(getattr(app, "connected", False))
     for w in app._manual_controls:
         try:
-            w.config(state=_manual_control_state(app, w, enabled, connected))
+            _set_widget_state_if_needed(w, _manual_control_state(app, w, enabled, connected))
         except tk.TclError as exc:
             _log_suppressed("Failed setting manual control state", exc)
-    if enabled and connected:
+    now_enabled = bool(enabled and connected)
+    app._manual_controls_last_enabled = now_enabled
+    if now_enabled and (not was_enabled):
         app._set_unit_mode(app.unit_mode.get())
         app._set_step_xy(app.step_xy.get())
         app._set_step_z(app.step_z.get())

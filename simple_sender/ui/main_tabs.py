@@ -46,6 +46,11 @@ def update_tab_visibility(app, nb=None):
     except Exception as exc:
         logger.exception("Failed to update tab visibility: %s", exc)
         return
+    try:
+        app._active_tab_label = str(label)
+        app._app_settings_tab_active = (label == "App Settings")
+    except Exception:
+        pass
     app.toolpath_panel.set_visible(label == "3D View")
     app.toolpath_panel.set_top_view_visible(label == "Top View")
     try:
@@ -56,6 +61,12 @@ def update_tab_visibility(app, nb=None):
         if label == "App Settings":
             app._bind_app_settings_mousewheel()
             app._bind_app_settings_touch_scroll()
+            refresh_sticky = getattr(app, "_refresh_app_settings_sticky_header", None)
+            if callable(refresh_sticky):
+                refresh_sticky(force=False)
+            resume_lazy_build = getattr(app, "_resume_app_settings_lazy_build", None)
+            if callable(resume_lazy_build):
+                resume_lazy_build()
         else:
             app._unbind_app_settings_mousewheel()
             app._unbind_app_settings_touch_scroll()

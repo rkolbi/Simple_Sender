@@ -147,8 +147,18 @@ def _context_quick_visibility(app) -> dict[str, bool]:
     connected = bool(getattr(app, "connected", False))
     alarm_locked = bool(getattr(app, "_alarm_locked", False))
     busy = _stream_busy(app)
+    force_override = False
+    checker = getattr(app, "_is_force_3d_override_enabled", None)
+    if callable(checker):
+        try:
+            force_override = bool(checker())
+        except Exception:
+            force_override = False
     render_enabled = _bool_from_var(getattr(app, "render3d_enabled", None), True)
     render_blocked = bool(getattr(app, "_render3d_blocked", False))
+    if force_override:
+        render_enabled = True
+        render_blocked = False
     autolevel_overlay_enabled = _bool_from_var(getattr(app, "show_autolevel_overlay", None), True)
     has_autolevel_grid = getattr(app, "_auto_level_grid", None) is not None
     linux_supported = bool(sys.platform.startswith("linux"))

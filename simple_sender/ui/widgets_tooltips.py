@@ -415,8 +415,9 @@ class _NotebookTabTooltips:
             idx = int(self.notebook.index(f"@{rx},{ry}"))
             if 0 <= idx < len(tabs):
                 return tabs[idx]
-        except (tk.TclError, TypeError, ValueError) as exc:
-            _log_suppressed("Failed resolving notebook tab id from pointer coordinates", exc)
+        except (tk.TclError, TypeError, ValueError):
+            # Pointer can be between tabs; this is expected and non-actionable.
+            return None
         return None
 
     def _hide_tip(self) -> None:
@@ -584,16 +585,26 @@ def set_tab_tooltip(notebook, tab, text: str):
 
 
 def _widget_state(widget) -> str:
+    state_getter = getattr(widget, "state", None)
+    if callable(state_getter):
+        try:
+            state = state_getter()
+            if isinstance(state, (list, tuple, set)):
+                return "disabled" if "disabled" in state else "normal"
+        except (AttributeError, tk.TclError):
+            pass
+        except Exception as exc:
+            _log_suppressed("Failed reading widget state via state()", exc)
+    cget = getattr(widget, "cget", None)
+    if not callable(cget):
+        return "normal"
     try:
-        return str(widget.cget("state")).lower()
-    except (AttributeError, tk.TclError) as exc:
+        return str(cget("state")).lower()
+    except tk.TclError:
+        # Many widgets do not expose a "state" option; treat as enabled.
+        return "normal"
+    except Exception as exc:
         _log_suppressed("Failed reading widget state via cget", exc)
-    try:
-        state = widget.state()
-        if isinstance(state, (list, tuple, set)):
-            return "disabled" if "disabled" in state else "normal"
-    except (AttributeError, tk.TclError) as exc:
-        _log_suppressed("Failed reading widget state via state()", exc)
     return "normal"
 
 

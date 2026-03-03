@@ -58,6 +58,16 @@ def _can_use_toolpath(app) -> bool:
     return bool(app._last_gcode_lines) and not getattr(app, "_gcode_streaming_mode", False)
 
 
+def is_force_3d_override_enabled(app) -> bool:
+    override_var = getattr(app, "force_3d_session_override", None)
+    if override_var is None:
+        return False
+    try:
+        return bool(override_var.get())
+    except Exception:
+        return bool(override_var)
+
+
 def _stream_ui_busy(app) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return True
@@ -210,6 +220,30 @@ def toggle_render_3d(app):
         app._update_quick_button_visibility()
     except Exception as exc:
         _log_suppressed("Failed refreshing quick-button visibility after render toggle", exc)
+
+
+def apply_force_3d_session_override(app, _event=None):
+    force_enabled = is_force_3d_override_enabled(app)
+    if force_enabled:
+        app.toolpath_panel.set_enabled(True)
+        source = getattr(app, "_gcode_source", None)
+        if source is not None:
+            app.toolpath_panel.set_gcode_lines(source, lines_hash=getattr(app, "_gcode_hash", None))
+        elif _can_use_toolpath(app):
+            app.toolpath_panel.set_gcode_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
+    else:
+        streaming_mode = bool(getattr(app, "_gcode_streaming_mode", False))
+        blocked = bool(getattr(app, "_render3d_blocked", False))
+        app.toolpath_panel.set_enabled(bool(app.render3d_enabled.get()) and not (streaming_mode and blocked))
+    try:
+        app._refresh_render_3d_toggle_text()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing 3D toggle text after session override change", exc)
+    try:
+        app._update_quick_button_visibility()
+    except Exception as exc:
+        _log_suppressed("Failed refreshing quick-button visibility after session override change", exc)
+
 
 def toolpath_limit_value(app, raw, fallback):
     try:

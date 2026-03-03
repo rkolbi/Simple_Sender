@@ -27,7 +27,7 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from simple_sender.utils.constants import ALL_STOP_CHOICES
+from simple_sender.utils.constants import ALL_STOP_CHOICES, GCODE_ULTRA_LARGE_SIZE_THRESHOLD
 from simple_sender.ui.pi_profile import (
     PI_PROFILE_STATUS_POLL_INTERVAL as _PI_PROFILE_STATUS_POLL_INTERVAL,
     PI_PROFILE_STREAMING_LINE_THRESHOLD as _PI_PROFILE_STREAMING_LINE_THRESHOLD,
@@ -87,24 +87,63 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_export_diagnostics,
         "Save recent console/status history and settings to a text file.",
     )
-    ttk.Label(diagnostics_frame, text="Runtime telemetry").grid(
+    ttk.Label(diagnostics_frame, text="Export diagnostics bundle").grid(
         row=2, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.btn_export_diagnostics_bundle = ttk.Button(
+        diagnostics_frame,
+        text="Save ZIP",
+        command=app._export_diagnostics_bundle,
+    )
+    app.btn_export_diagnostics_bundle.grid(row=2, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_export_diagnostics_bundle,
+        "Create one ZIP with session diagnostics, performance report, and logs.",
+    )
+    ttk.Label(diagnostics_frame, text="Runtime telemetry").grid(
+        row=3, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_runtime_telemetry = ttk.Button(
         diagnostics_frame,
         text="Open viewer",
         command=app._open_runtime_telemetry,
     )
-    app.btn_runtime_telemetry.grid(row=2, column=1, sticky="w", pady=4)
+    app.btn_runtime_telemetry.grid(row=3, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_runtime_telemetry,
         "Open a live runtime telemetry window for queue depth and TX-loop counters.",
     )
+    ttk.Label(diagnostics_frame, text="Save final performance report").grid(
+        row=4, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.btn_save_performance_report = ttk.Button(
+        diagnostics_frame,
+        text="Save to Logs",
+        command=app._save_performance_report_to_logs,
+    )
+    app.btn_save_performance_report.grid(row=4, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_save_performance_report,
+        "Write a timestamped performance report into the app Logs folder.",
+    )
+    ttk.Label(diagnostics_frame, text="Apply perf-test preset").grid(
+        row=5, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.btn_apply_perf_test_preset = ttk.Button(
+        diagnostics_frame,
+        text="Apply preset",
+        command=app._apply_performance_test_preset,
+    )
+    app.btn_apply_perf_test_preset.grid(row=5, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_apply_perf_test_preset,
+        "Enable profiling, disable leak watch, and apply low-overhead runtime settings (restart required).",
+    )
     ttk.Label(diagnostics_frame, text="Backup bundle").grid(
-        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+        row=6, column=0, sticky="w", padx=(0, 10), pady=4
     )
     backup_row = ttk.Frame(diagnostics_frame)
-    backup_row.grid(row=3, column=1, sticky="w", pady=4)
+    backup_row.grid(row=6, column=1, sticky="w", pady=4)
     app.btn_export_backup_bundle = ttk.Button(
         backup_row,
         text="Export bundle",
@@ -130,24 +169,78 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Validate streaming (large) G-code files",
         variable=app.validate_streaming_gcode,
     )
-    app.validate_streaming_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.validate_streaming_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
     apply_tooltip(
         app.validate_streaming_check,
         "Validate large files while loading; adds an extra scan but improves preflight checks.",
     )
     ttk.Label(diagnostics_frame, text="Preview-only threshold (lines)").grid(
-        row=5, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
         diagnostics_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
-    app.streaming_line_threshold_entry.grid(row=5, column=1, sticky="w", pady=(6, 0))
+    app.streaming_line_threshold_entry.grid(row=8, column=1, sticky="w", pady=(6, 0))
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
         "Cleaned line count that switches large jobs to preview-only mode (set to 0 to disable).",
+    )
+    if not hasattr(app, "ultra_large_size_threshold_mb"):
+        app.ultra_large_size_threshold_mb = tk.IntVar(
+            master=parent,
+            value=max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
+        )
+    ttk.Label(diagnostics_frame, text="Ultra-large threshold (MB)").grid(
+        row=9, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+    )
+    app.ultra_large_size_threshold_mb_entry = ttk.Entry(
+        diagnostics_frame,
+        textvariable=app.ultra_large_size_threshold_mb,
+        width=10,
+    )
+    app.ultra_large_size_threshold_mb_entry.grid(row=9, column=1, sticky="w", pady=(6, 0))
+    attach_numeric_keypad(app.ultra_large_size_threshold_mb_entry, allow_decimal=False)
+    apply_tooltip(
+        app.ultra_large_size_threshold_mb_entry,
+        "File size at or above this value forces ultra-large safeguards (preview-only + fast-load). Set to 0 to disable.",
+    )
+    if not hasattr(app, "ultra_large_size_threshold_info_var"):
+        app.ultra_large_size_threshold_info_var = tk.StringVar(master=parent, value="")
+
+    def _update_ultra_large_threshold_info(*_args) -> None:
+        try:
+            threshold_mb = int(app.ultra_large_size_threshold_mb.get())
+        except Exception:
+            threshold_mb = 0
+        if threshold_mb <= 0:
+            app.ultra_large_size_threshold_info_var.set(
+                "Current trigger: disabled (0 MB)"
+            )
+            return
+        threshold_bytes = int(threshold_mb) * 1024 * 1024
+        threshold_gib = threshold_bytes / float(1024 ** 3)
+        app.ultra_large_size_threshold_info_var.set(
+            f"Current trigger: {threshold_mb:,} MB ({threshold_gib:.2f} GiB, {threshold_bytes:,} bytes)"
+        )
+
+    _update_ultra_large_threshold_info()
+    app.ultra_large_size_threshold_info_trace = app.ultra_large_size_threshold_mb.trace_add(
+        "write",
+        _update_ultra_large_threshold_info,
+    )
+    app.ultra_large_size_threshold_info_label = ttk.Label(
+        diagnostics_frame,
+        textvariable=app.ultra_large_size_threshold_info_var,
+    )
+    app.ultra_large_size_threshold_info_label.grid(
+        row=10, column=1, sticky="w", pady=(2, 0)
+    )
+    apply_tooltip(
+        app.ultra_large_size_threshold_info_label,
+        "Computed ultra-large trigger derived from the MB threshold above.",
     )
     if not hasattr(app, "performance_profile_enabled"):
         app.performance_profile_enabled = tk.BooleanVar(master=parent, value=False)
@@ -160,7 +253,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable runtime performance profiling (restart required)",
         variable=app.performance_profile_enabled,
     )
-    app.performance_profile_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    app.performance_profile_check.grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
     apply_tooltip(
         app.performance_profile_check,
         "Capture startup/CPU/RSS metrics and print a budget report on app exit.",
@@ -170,20 +263,20 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable leak-watch snapshots (higher overhead)",
         variable=app.performance_leak_watch_enabled,
     )
-    app.performance_leak_watch_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    app.performance_leak_watch_check.grid(row=12, column=0, columnspan=2, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.performance_leak_watch_check,
         "Take tracemalloc snapshots at key milestones and include growth deltas in the exit report.",
     )
     ttk.Label(diagnostics_frame, text="Performance report log path").grid(
-        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=13, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.performance_profile_log_path_entry = ttk.Entry(
         diagnostics_frame,
         textvariable=app.performance_profile_log_path,
         width=36,
     )
-    app.performance_profile_log_path_entry.grid(row=8, column=1, sticky="ew", pady=(6, 0))
+    app.performance_profile_log_path_entry.grid(row=13, column=1, sticky="ew", pady=(6, 0))
     apply_tooltip(
         app.performance_profile_log_path_entry,
         "Optional file path to append the performance report on exit.",

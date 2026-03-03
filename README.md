@@ -58,7 +58,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Overdrive tab: spindle control, Spoilboard Generator, and feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Run preflight safety gate checks readiness/bounds/validation before streaming, with explicit operator override.
-- Diagnostics include session report export plus backup bundle import/export (settings, macros, checklists).
+- Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
 - Macros: left-click to run, right-click to preview, with in-app Macro Manager for edit/duplicate/reorder.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
@@ -184,7 +184,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
   ![-](pics/2dviewtab.JPG)
   
-  **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker.
+  **3D View:** Rapid/Feed/Arc toggles, 3D Performance slider (quality vs speed), rotate/pan/zoom, save/load/reset view controls, and the full toolpath render that mirrors the Top View job marker. The tab is hidden when 3D render is disabled.
   
   ![-](pics/3dviewtab.JPG)
   
@@ -206,7 +206,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
-- **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics export captures recent status/console history, and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
+- **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
@@ -218,7 +218,8 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Preview-only mode for large files:** Very large jobs can switch to preview-only mode (based on file size and cleaned-line threshold) so UI/state memory stays bounded while streaming still uses the normalized disk-backed source.
-- **Top View / 3D for large files:** Large-job preview builds Top View data with capped segment counts to keep the UI responsive. The 3D view is disabled by default in preview-only mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render.
+- **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force preview-only + fast-load mode (full validation disabled for that load) and require temp-workspace disk headroom (`3x` file size + `256 MB`) before loading starts.
+- **Top View / 3D for large files:** Large-job preview builds Top View data with capped segment counts to keep the UI responsive. The 3D view is disabled by default in preview-only mode; the 3D Render (3DR) toggle prompts before enabling a full 3D render. App Settings also includes a session-only override to force 3D tab/render for the current run (not persisted).
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
@@ -691,7 +692,7 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
-- The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload and **Export Logs...** to save a zip bundle for support.
+- The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
 
 ## Testing
 Dev dependencies (tests + type checking):
@@ -708,7 +709,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on March 2, 2026): `859 passed, 3 skipped` on `python -m pytest tests -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on March 3, 2026): `942 passed, 3 skipped` on `python -m pytest -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -837,9 +838,10 @@ python tools/perf_microbench.py
 - On app exit, the runtime monitor prints a one-shot performance report (and optionally writes it to the configured log path) with:
   - startup time
   - idle CPU avg/p95
+  - quiet-idle CPU avg/p95 (when enough quiet-idle samples are captured)
   - streaming CPU avg/p95
   - RSS start/current/peak/steady-state
-  - UI queue drain metrics and budget pass/fail summary
+  - UI queue drain metrics (including slowest runtime event kind/ms) and budget pass/fail summary
   - optional tracemalloc growth deltas when leak-watch is enabled
 
 ## Troubleshooting
@@ -851,7 +853,7 @@ python tools/perf_microbench.py
 - Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
 - 3D slow: toggle 3D render off.
-- Need a support bundle: use App Settings > Diagnostics > Export session diagnostics, or export a backup bundle for full settings/macro/checklist transfer.
+- Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle (Save ZIP). For plain text only, use Export session diagnostics (Save report). Backup bundle export/import is for settings/macro/checklist transfer.
 
 ## Change Summary (since 1.2)
 - Auto-leveling: added RMS roughness + outlier stats in the height map summary.
@@ -1166,6 +1168,7 @@ Macro UI is included below along with the rest of the interface.
 ### App Settings: Viewer
 - Current line highlight (dropdown): selects `Machine (status/planner)`, `Processing (acked)`, or `Sent (queued)`.
 - 3D view streaming refresh (sec): minimum interval between 3D redraws while streaming (0.05 - 2.0).
+- Session override: force 3D tab + render (not saved): temporarily forces 3D tab visibility and render enablement for the current app session only; it resets on restart.
 - Recommendation: increase the refresh interval if the 3D view stutters during streaming.
 
 ### App Settings: Interface
@@ -1175,7 +1178,7 @@ Macro UI is included below along with the rest of the interface.
 - Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
-- View Logs...: opens the log viewer with source/level filters and export.
+- View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
 - Status bar quick buttons (Tips, 3D Render, Keys, Auto-Level Overlay, Release): toggles each status-bar quick button.
 - Status bar quick toggles (Tips, 3D Render, Keys, Auto-Level Overlay): immediate action buttons to flip the corresponding feature.
@@ -1192,13 +1195,17 @@ Macro UI is included below along with the rest of the interface.
 - Preflight check (Run check): scans the loaded job for bounds/validation warnings.
 - Run preflight gate: Run now enforces the same checks and shows an operator override prompt on blocking failures.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
+- Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
+- Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip.
 - Validate streaming (large) G-code files: enables validation pass for large files.
 - Preview-only threshold (lines): cleaned line count that switches large jobs to preview-only mode (set `0` to disable line-count-based preview-only switching).
+- Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (preview-only + skip full validation); set `0` to disable.
+- Ultra-large threshold info: shows the computed trigger in GiB/bytes for the current MB value.
 - Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit.
 - Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
 - Performance report log path: optional destination file to append exit reports.
-- Recommendation: keep streaming validation enabled if you rely on warnings; raise preview-only threshold only if you need more large jobs to stay in full in-memory preview mode.
+- Recommendation: keep streaming validation enabled for normal large jobs if you rely on warnings; ultra-large jobs (`>=200 MB`) auto-skip that pass to protect responsiveness/stability on Pi-class hardware.
 
 ### App Settings: Safety
 - All Stop behavior (dropdown): selects ALL STOP mode (soft reset vs stop+reset).

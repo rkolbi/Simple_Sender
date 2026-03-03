@@ -33,8 +33,8 @@ from simple_sender.utils.platform_detect import detect_raspberry_pi
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
-PI_PROFILE_STATUS_POLL_INTERVAL = 0.35
-PI_PROFILE_STREAMING_LINE_THRESHOLD = 100_000
+PI_PROFILE_STATUS_POLL_INTERVAL = 1.25
+PI_PROFILE_STREAMING_LINE_THRESHOLD = 20_000
 PI_PROFILE_STREAMING_RENDER_INTERVAL = 0.5
 PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = 320
 PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = 250
@@ -42,8 +42,12 @@ PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS = 1000
 PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_DEFAULT_MS = 700
 PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_MS = 80
 PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_DEFAULT_MS = 50
-PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S = 1.5
-PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S = 1.5
+PI_PROFILE_JOYSTICK_POLL_INTERVAL_MS = 30
+PI_PROFILE_JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS = 320
+PI_PROFILE_JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS = 16
+PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S = 3.0
+PI_PROFILE_UI_MAINTENANCE_QUIET_IDLE_INTERVAL_S = 5.0
+PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S = 3.0
 PI_PROFILE_PROMPT_SHOWN_KEY = "pi_profile_prompt_shown"
 
 
@@ -140,7 +144,19 @@ def apply_pi_profile(
         except Exception as exc:
             _log_suppressed("Failed restoring default UI queue idle interval for Pi profile", exc)
         try:
+            app._joystick_poll_interval_ms = int(getattr(app, "_joystick_poll_interval_default_ms", 50))
+            app._joystick_poll_idle_max_interval_ms = int(
+                getattr(app, "_joystick_poll_idle_max_interval_default_ms", 200)
+            )
+            app._joystick_poll_idle_backoff_step_ms = int(
+                getattr(app, "_joystick_poll_idle_backoff_step_default_ms", 10)
+            )
+            app._joystick_poll_idle_streak = 0
+        except Exception as exc:
+            _log_suppressed("Failed restoring default joystick polling intervals for Pi profile", exc)
+        try:
             app._ui_maintenance_idle_interval_s = 1.0
+            app._ui_maintenance_quiet_idle_interval_s = 3.0
             app._auto_reconnect_check_idle_interval_s = 1.0
         except Exception as exc:
             _log_suppressed("Failed restoring default idle maintenance/reconnect intervals for Pi profile", exc)
@@ -160,7 +176,15 @@ def apply_pi_profile(
     except Exception as exc:
         _log_suppressed("Failed applying UI queue idle interval for Pi profile", exc)
     try:
+        app._joystick_poll_interval_ms = PI_PROFILE_JOYSTICK_POLL_INTERVAL_MS
+        app._joystick_poll_idle_max_interval_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS
+        app._joystick_poll_idle_backoff_step_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS
+        app._joystick_poll_idle_streak = 0
+    except Exception as exc:
+        _log_suppressed("Failed applying joystick polling intervals for Pi profile", exc)
+    try:
         app._ui_maintenance_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S
+        app._ui_maintenance_quiet_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_QUIET_IDLE_INTERVAL_S
         app._auto_reconnect_check_idle_interval_s = PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S
     except Exception as exc:
         _log_suppressed("Failed applying idle maintenance/reconnect intervals for Pi profile", exc)

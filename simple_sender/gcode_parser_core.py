@@ -150,6 +150,8 @@ def parse_gcode_lines(
     keep_running: Optional[Callable[[], bool]] = None,
     max_segments: int | None = None,
     include_moves: bool = True,
+    move_callback: Optional[Callable[[GcodeMove], None]] = None,
+    include_segments: bool = True,
 ) -> Optional[GcodeParseResult]:
     """Parse G-code into toolpath segments, bounds, and move summaries."""
     arc_step_rad = max(1e-6, arc_step_rad)
@@ -173,6 +175,8 @@ def parse_gcode_lines(
     def append_segment(segment: tuple[float, float, float, float, float, float, str]) -> None:
         nonlocal segment_stride, segment_total, segments
         segment_total += 1
+        if not include_segments:
+            return
         if max_segments is None or segment_total % segment_stride == 0:
             segments.append(segment)
             if max_segments is not None and len(segments) > max_segments:
@@ -357,21 +361,23 @@ def parse_gcode_lines(
             dist = math.sqrt(dx * dx + dy * dy + dz * dz)
             color = "rapid" if motion == 0 else "feed"
             append_segment((x, y, z, nx, ny, nz, color))
-            if include_moves:
-                moves.append(
-                    GcodeMove(
-                        start=(x, y, z),
-                        end=(nx, ny, nz),
-                        motion=motion,
-                        feed=feed_for_mode,
-                        feed_mode=feed_mode,
-                        dx=dx,
-                        dy=dy,
-                        dz=dz,
-                        dist=dist,
-                        arc_len=None,
-                    )
+            if include_moves or move_callback is not None:
+                move = GcodeMove(
+                    start=(x, y, z),
+                    end=(nx, ny, nz),
+                    motion=motion,
+                    feed=feed_for_mode,
+                    feed_mode=feed_mode,
+                    dx=dx,
+                    dy=dy,
+                    dz=dz,
+                    dist=dist,
+                    arc_len=None,
                 )
+                if include_moves:
+                    moves.append(move)
+                if move_callback is not None:
+                    move_callback(move)
             update_bounds(x, y, z)
             update_bounds(nx, ny, nz)
             x, y, z = nx, ny, nz
@@ -472,21 +478,23 @@ def parse_gcode_lines(
             dx = nx - x
             dy = ny - y
             dz = nz - z
-            if include_moves:
-                moves.append(
-                    GcodeMove(
-                        start=(x, y, z),
-                        end=(nx, ny, nz),
-                        motion=motion,
-                        feed=feed_for_mode,
-                        feed_mode=feed_mode,
-                        dx=dx,
-                        dy=dy,
-                        dz=dz,
-                        dist=dist,
-                        arc_len=arc_len2d,
-                    )
+            if include_moves or move_callback is not None:
+                move = GcodeMove(
+                    start=(x, y, z),
+                    end=(nx, ny, nz),
+                    motion=motion,
+                    feed=feed_for_mode,
+                    feed_mode=feed_mode,
+                    dx=dx,
+                    dy=dy,
+                    dz=dz,
+                    dist=dist,
+                    arc_len=arc_len2d,
                 )
+                if include_moves:
+                    moves.append(move)
+                if move_callback is not None:
+                    move_callback(move)
             update_bounds(nx, ny, nz)
             x, y, z = nx, ny, nz
             last_motion = motion

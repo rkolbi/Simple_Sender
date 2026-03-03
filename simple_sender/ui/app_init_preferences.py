@@ -41,6 +41,7 @@ def _init_behavior_preferences(
     setting,
     default_settings: dict,
     gcode_streaming_line_threshold: int,
+    gcode_ultra_large_size_threshold_mb: int,
     pygame_available: bool,
     watchdog_homing_timeout: float,
     tk,
@@ -105,6 +106,7 @@ def _init_behavior_preferences(
         value=str(setting("performance_profile_log_path", "") or "").strip()
     )
     app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
+    app.force_3d_session_override = tk.BooleanVar(value=False)
     app._render3d_blocked = False
     app.all_stop_mode = tk.StringVar(value=setting("all_stop_mode", "stop_reset"))
     app.training_wheels = tk.BooleanVar(value=setting("training_wheels", True))
@@ -116,6 +118,9 @@ def _init_behavior_preferences(
     )
     app.streaming_line_threshold = tk.IntVar(
         value=setting("streaming_line_threshold", gcode_streaming_line_threshold)
+    )
+    app.ultra_large_size_threshold_mb = tk.IntVar(
+        value=setting("ultra_large_size_threshold_mb", gcode_ultra_large_size_threshold_mb)
     )
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
     app.fullscreen_on_startup = tk.BooleanVar(value=setting("fullscreen_on_startup", True))
@@ -315,6 +320,10 @@ def init_basic_preferences(app, app_version: str, module):
     deps = module
     default_settings = deps.DEFAULT_SETTINGS
     gcode_streaming_line_threshold = deps.GCODE_STREAMING_LINE_THRESHOLD
+    gcode_ultra_large_size_threshold_mb = max(
+        0,
+        int(getattr(deps, "GCODE_ULTRA_LARGE_SIZE_THRESHOLD", 0) or 0) // (1024 * 1024),
+    )
     pygame_available = deps.PYGAME_AVAILABLE
     watchdog_homing_timeout = deps.WATCHDOG_HOMING_TIMEOUT
     tk = deps.tk
@@ -329,6 +338,7 @@ def init_basic_preferences(app, app_version: str, module):
         setting=setting,
         default_settings=default_settings,
         gcode_streaming_line_threshold=gcode_streaming_line_threshold,
+        gcode_ultra_large_size_threshold_mb=gcode_ultra_large_size_threshold_mb,
         pygame_available=pygame_available,
         watchdog_homing_timeout=watchdog_homing_timeout,
         tk=tk,

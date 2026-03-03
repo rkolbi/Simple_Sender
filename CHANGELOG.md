@@ -22,9 +22,13 @@ All notable changes to this project are documented in this file.
 - App Settings now includes top-level Search filtering and a `Basic`/`Advanced` view selector for faster settings navigation on touch and desktop workflows.
 - Touch command feedback now acknowledges button/checkbutton taps by pulsing the control and writing `Touch received: <control>` in the status bar.
 - Disabled-control tooltip reasons now include clearer state context (connecting/disconnecting, handshake/status wait, stream running/paused, and deferred idle completion) for affected toolbar actions.
+- Logs viewer now includes `Clear Logs`, which truncates active `.log` files and removes rotated log files on a background worker.
+- 3D tab visibility now follows render enablement state: when 3D render is disabled, the `3D View` tab is hidden.
+- App Settings now includes a session-only `force 3D tab + render` override (not persisted; resets on restart).
+- Preview-only toolpath policy now honors the session-only 3D override so operators can force 3D preview for the current run.
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`859 passed, 3 skipped` on `python -m pytest tests -q`, validated 2026-03-02).
+- README testing baseline was refreshed to the current local result (`942 passed, 3 skipped` on `python -m pytest -q`, validated 2026-03-03).
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
@@ -34,6 +38,8 @@ All notable changes to this project are documented in this file.
 - README checklist docs now mention collapsible checklist titles in the Checklists tab.
 - README Jobs/Streaming docs now reflect the unified disk-backed load path and preview-only threshold semantics.
 - README Diagnostics docs now include runtime performance profiling/leak-watch settings and the exit performance report fields.
+- README Logs/Diagnostics docs now include `Clear Logs`, `Export diagnostics bundle (Save ZIP)`, and `Save final performance report (Save to Logs)`.
+- README 3D docs now include automatic 3D-tab hide-when-disabled behavior and the session-only 3D override.
 - README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
 - `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.

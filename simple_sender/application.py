@@ -27,6 +27,7 @@
 import logging
 import os
 import sys
+import time
 from typing import Any, TYPE_CHECKING
 
 # GUI imports
@@ -253,12 +254,36 @@ class App(tk.Tk):
         self.bind_all("<FocusOut>", self._on_app_focus_out)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.refresh_ports(auto_connect=bool(self.reconnect_on_open.get()))
+        self.refresh_ports(auto_connect=False)
         if not self.connected and bool(self.reconnect_on_open.get()):
             last_port = (self.settings.get("last_port") or "").strip()
             if last_port:
                 self._auto_reconnect_last_port = last_port
                 self._auto_reconnect_pending = True
+                delay_s = 0.0
+                try:
+                    delay_s = float(getattr(self, "_startup_auto_connect_delay_s", 5.0) or 0.0)
+                except Exception:
+                    delay_s = 5.0
+                if delay_s > 0.0:
+                    gate_until = time.time() + delay_s
+                    self._auto_reconnect_startup_gate_ts = gate_until
+                    self._auto_reconnect_next_ts = max(
+                        float(getattr(self, "_auto_reconnect_next_ts", 0.0) or 0.0),
+                        gate_until,
+                    )
+                    try:
+                        history = getattr(self, "_connection_timeline", None)
+                        if history is not None:
+                            history.append(
+                                {
+                                    "ts": float(time.time()),
+                                    "event": "startup_autoconnect_delay",
+                                    "details": f"delay_s={delay_s:.1f} port={last_port}",
+                                }
+                            )
+                    except Exception as exc:
+                        _log_suppressed("Failed recording startup auto-connect delay timeline event", exc)
         geometry = self.settings.get("window_geometry", "")
         if isinstance(geometry, str) and geometry:
             try:

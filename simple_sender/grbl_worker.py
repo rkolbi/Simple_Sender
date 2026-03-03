@@ -81,6 +81,7 @@ from .utils.constants import (
     RT_JOG_CANCEL,
     THREAD_JOIN_TIMEOUT,
     WATCHDOG_HOMING_TIMEOUT,
+    WATCHDOG_SETTINGS_DUMP_TIMEOUT,
 )
 from .utils.exceptions import SerialWriteError
 
@@ -113,6 +114,19 @@ def _format_realtime_for_log(command: bytes) -> str:
         else:
             parts.append(f"0x{value:02X}")
     return " ".join(parts)
+
+
+def _env_positive_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if value <= 0:
+        return float(default)
+    return float(value)
 
 
 def _get_rx_logger():
@@ -287,10 +301,34 @@ class GrblWorker(
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._watchdog_ready_armed = False
+        self._watchdog_ready_ts = 0.0
         self._homing_watchdog_enabled = True
         self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
+        self._settings_dump_watchdog_timeout = WATCHDOG_SETTINGS_DUMP_TIMEOUT
         self._connect_started_ts = 0.0
         self._tx_loop_idle_wait_s = float(TX_LOOP_IDLE_WAIT_S)
+        # Throttle high-frequency serial debug lines so logging I/O does not
+        # steal CPU on low-power deployments.
+        self._rx_status_log_interval_s = _env_positive_float(
+            "SIMPLE_SENDER_RX_STATUS_LOG_INTERVAL_S",
+            1.0,
+        )
+        self._rx_idle_status_log_interval_s = _env_positive_float(
+            "SIMPLE_SENDER_RX_IDLE_STATUS_LOG_INTERVAL_S",
+            4.0,
+        )
+        self._tx_status_query_log_interval_s = _env_positive_float(
+            "SIMPLE_SENDER_TX_STATUS_QUERY_LOG_INTERVAL_S",
+            1.0,
+        )
+        self._tx_idle_status_query_log_interval_s = _env_positive_float(
+            "SIMPLE_SENDER_TX_IDLE_STATUS_QUERY_LOG_INTERVAL_S",
+            4.0,
+        )
+        self._last_rx_status_log_ts = 0.0
+        self._last_tx_status_query_log_ts = 0.0
+        self._ui_rx_log_enabled = True
 
     def _serial_module(self):
         return serial
@@ -310,8 +348,54 @@ class GrblWorker(
     def _time_module(self):
         return time
 
-    def _log_rx_line(self, line: str) -> None:
+    def _should_log_rx_line(self, line: str) -> bool:
+        text = str(line or "").strip()
+        if not text:
+            return False
+        lower = text.lower()
+        if lower == "ok":
+            # "ok" can be very high frequency while streaming.
+            return False
+        if text.startswith("<") and text.endswith(">"):
+            interval_s = self._rx_status_log_interval_s
+            if lower.startswith("<idle"):
+                interval_s = max(interval_s, self._rx_idle_status_log_interval_s)
+            now = time.monotonic()
+            if (now - self._last_rx_status_log_ts) < interval_s:
+                return False
+            self._last_rx_status_log_ts = now
+        return True
+
+    @staticmethod
+    def _is_critical_ui_log_rx(line: str) -> bool:
         if not line:
+            return False
+        upper = line.upper()
+        if "ALARM" in upper or "ERROR" in upper:
+            return True
+        if upper.startswith("GRBL"):
+            return True
+        if line.startswith("[GC:") or line.startswith("[PRB:") or line.startswith("$13="):
+            return True
+        if line.startswith("$") and "=" in line:
+            return True
+        if "[MSG" in upper:
+            return True
+        return False
+
+    def set_ui_rx_logging(self, enabled: bool) -> None:
+        self._ui_rx_log_enabled = bool(enabled)
+
+    def _should_forward_log_rx_line(self, line: str) -> bool:
+        text = str(line or "").strip()
+        if not text:
+            return False
+        if self._ui_rx_log_enabled:
+            return True
+        return self._is_critical_ui_log_rx(text)
+
+    def _log_rx_line(self, line: str) -> None:
+        if not line or (not self._should_log_rx_line(line)):
             return
         rx_logger = self._rx_logger
         if not rx_logger:
@@ -321,8 +405,22 @@ class GrblWorker(
         except Exception as exc:
             _log_suppressed("Failed writing RX serial line to debug logger", exc)
 
+    def _should_log_tx_line(self, line: str) -> bool:
+        text = str(line or "").strip().upper()
+        if not text:
+            return False
+        if text == "RT ?":
+            interval_s = self._tx_status_query_log_interval_s
+            if self._ready and (not self._streaming) and (not self._paused):
+                interval_s = max(interval_s, self._tx_idle_status_query_log_interval_s)
+            now = time.monotonic()
+            if (now - self._last_tx_status_query_log_ts) < interval_s:
+                return False
+            self._last_tx_status_query_log_ts = now
+        return True
+
     def _log_tx_line(self, line: str) -> None:
-        if not line:
+        if not line or (not self._should_log_tx_line(line)):
             return
         rx_logger = self._rx_logger
         if not rx_logger:
@@ -725,6 +823,22 @@ class GrblWorker(
         serial_module = self._serial_module()
         timeout_exc = _serial_timeout_exception_type(serial_module)
         serial_exc = _serial_exception_type(serial_module)
+
+        def _shutdown_in_progress() -> bool:
+            shared_stop_evt = getattr(self, "_stop_evt", None)
+            if shared_stop_evt is not None:
+                try:
+                    if shared_stop_evt.is_set():
+                        return True
+                except Exception:
+                    return True
+            current_ser = self.ser
+            if current_ser is None:
+                return True
+            try:
+                return not bool(getattr(current_ser, "is_open", False))
+            except Exception:
+                return True
         
         try:
             while not stop_evt.is_set():
@@ -751,12 +865,18 @@ class GrblWorker(
                     # Normal timeout - just continue
                     continue
                 except serial_exc as e:
+                    if _shutdown_in_progress():
+                        logger.debug("RX loop serial read aborted during shutdown: %s", e)
+                        break
                     logger.error(f"Serial read error: {e}")
                     self.ui_q.put(("log", f"[read error] {e}"))
                     self._signal_disconnect(f"Serial read error: {e}")
                     stop_evt.set()
                     break
                 except Exception as e:
+                    if _shutdown_in_progress():
+                        logger.debug("RX loop read aborted during shutdown: %s", e)
+                        break
                     logger.error(f"Unexpected read error: {e}")
                     self._signal_disconnect(f"Unexpected serial read error: {e}")
                     stop_evt.set()
@@ -777,10 +897,13 @@ class GrblWorker(
                         self._handle_rx_line(line_str)
         
         except Exception as e:
-            logger.error(f"RX thread error: {e}", exc_info=True)
-            self._emit_exception("RX thread error", e)
-            self._signal_disconnect(f"RX thread error: {e}")
-            stop_evt.set()
+            if _shutdown_in_progress():
+                logger.debug("RX thread exiting during shutdown: %s", e)
+            else:
+                logger.error(f"RX thread error: {e}", exc_info=True)
+                self._emit_exception("RX thread error", e)
+                self._signal_disconnect(f"RX thread error: {e}")
+                stop_evt.set()
         
         finally:
             logger.debug("RX thread stopped")

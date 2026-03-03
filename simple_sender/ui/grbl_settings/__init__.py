@@ -187,12 +187,22 @@ class GRBLSettingsController:
             return
         if low == "ok":
             self._settings_capture = False
-            self._render_settings()
-            self._update_rapid_rates()
-            self._update_accel_rates()
-            if self.app._last_gcode_lines:
-                self.app._update_gcode_stats(self.app._last_gcode_lines)
-            self._render_settings_raw()
+            def _finalize_settings_capture() -> None:
+                self._render_settings()
+                self._update_rapid_rates()
+                self._update_accel_rates()
+                if self.app._last_gcode_lines:
+                    self.app._update_gcode_stats(self.app._last_gcode_lines)
+                self._render_settings_raw()
+
+            after = getattr(self.app, "after", None)
+            if callable(after):
+                try:
+                    after(0, _finalize_settings_capture)
+                except Exception:
+                    _finalize_settings_capture()
+            else:
+                _finalize_settings_capture()
         elif low.startswith("error"):
             self._settings_capture = False
             self.app.status.config(text=f"Settings error: {s}")

@@ -596,11 +596,37 @@ def build_toolpath_settings_section(app, parent: ttk.Frame, row: int) -> int:
     toolpath_settings = ttk.LabelFrame(parent, text="3D View", padding=8)
     toolpath_settings.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     toolpath_settings.grid_columnconfigure(1, weight=1)
+    if not hasattr(app, "force_3d_session_override"):
+        app.force_3d_session_override = tk.BooleanVar(master=parent, value=False)
+
+    apply_force_override = getattr(app, "_apply_force_3d_session_override", None)
+    if not callable(apply_force_override):
+        apply_force_override = lambda *_args, **_kwargs: None
+
+    app.force_3d_session_override_check = ttk.Checkbutton(
+        toolpath_settings,
+        text="Session override: force 3D tab + render (not saved)",
+        variable=app.force_3d_session_override,
+        command=apply_force_override,
+    )
+    app.force_3d_session_override_check.grid(
+        row=0,
+        column=0,
+        columnspan=2,
+        sticky="w",
+        pady=(0, 6),
+    )
+    apply_tooltip(
+        app.force_3d_session_override_check,
+        "Temporarily force-enable the 3D tab and render for this app session only. "
+        "This override resets after restart and is not saved to settings.",
+    )
+
     ttk.Label(toolpath_settings, text="Streaming refresh (sec)").grid(
-        row=0, column=0, sticky="w", padx=(0, 10), pady=4
+        row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     toolpath_interval_row = ttk.Frame(toolpath_settings)
-    toolpath_interval_row.grid(row=0, column=1, sticky="w", pady=4)
+    toolpath_interval_row.grid(row=1, column=1, sticky="w", pady=4)
     app.toolpath_streaming_interval_entry = ttk.Entry(
         toolpath_interval_row,
         textvariable=app.toolpath_streaming_render_interval,

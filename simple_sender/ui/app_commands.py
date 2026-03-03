@@ -23,6 +23,8 @@
 import logging
 import os
 import threading
+import time
+from collections import deque
 from datetime import datetime
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
@@ -34,6 +36,7 @@ from simple_sender.utils.constants import BAUD_DEFAULT
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_CONNECTION_TIMELINE_LIMIT = 200
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -42,6 +45,22 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _append_connection_timeline_event(app, event: str, details: str = "") -> None:
+    history = getattr(app, "_connection_timeline", None)
+    if history is None:
+        history = deque(maxlen=_CONNECTION_TIMELINE_LIMIT)
+        setattr(app, "_connection_timeline", history)
+    payload = {
+        "ts": float(time.time()),
+        "event": str(event or "").strip() or "unknown",
+        "details": str(details or "").strip(),
+    }
+    try:
+        history.append(payload)
+    except Exception as exc:
+        _log_suppressed("Failed appending connection timeline event", exc)
 
 
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
@@ -126,6 +145,11 @@ def refresh_ports(app, auto_connect: bool = False):
     if auto_connect and (not app.connected):
         if last and last in ports:
             app.current_port.set(last)
+            _append_connection_timeline_event(
+                app,
+                "auto_connect_refresh_trigger",
+                f"port={last}",
+            )
             try:
                 app.toggle_connect()
             except Exception as exc:
@@ -192,6 +216,7 @@ def toggle_connect(app):
     except Exception as exc:
         _log_suppressed("Failed reading GRBL connected state in toggle_connect", exc)
     if is_connected:
+        _append_connection_timeline_event(app, "disconnect_requested")
         app._user_disconnect = True
         app._auto_reconnect_pending = False
         app._auto_reconnect_retry = 0
@@ -208,6 +233,7 @@ def toggle_connect(app):
         messagebox.showwarning("No port", "No serial port selected.")
         return
     _set_connection_controls_pending(app, "Connecting...")
+    _append_connection_timeline_event(app, "connect_requested", f"port={port}")
     app._start_connect_worker(port)
 
 
@@ -229,9 +255,12 @@ def start_connect_worker(
                 baud = int(app.settings.get("baud_rate", BAUD_DEFAULT))
             except Exception:
                 baud = BAUD_DEFAULT
+            _append_connection_timeline_event(app, "connect_worker_start", f"port={port} baud={baud}")
             app.grbl.connect(port, baud)
             connected_ok = True
+            _append_connection_timeline_event(app, "connect_worker_success", f"port={port}")
         except Exception as exc:
+            _append_connection_timeline_event(app, "connect_worker_failed", f"port={port} error={exc}")
             if show_error:
                 try:
                     app.after(0, lambda exc=exc: messagebox.showerror("Connect failed", str(exc)))

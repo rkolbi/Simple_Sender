@@ -46,7 +46,7 @@ STATUS_POLL_DEFAULT = 0.2
 STATUS_POLL_IDLE = 0.5
 """Status poll interval when machine is idle."""
 
-STATUS_POLL_RUNNING = 0.1
+STATUS_POLL_RUNNING = 0.2
 """Status poll interval when machine is running."""
 
 STATUS_POLL_INTERVAL_MIN = 0.05
@@ -152,6 +152,9 @@ UI_QUEUE_MAINTENANCE_INTERVAL_S = 0.25
 UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S = 1.0
 """Maintenance cadence while the UI queue is idle."""
 
+UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S = 3.0
+"""Maintenance cadence during sustained connected-and-idle quiet runtime."""
+
 UI_QUEUE_RECONNECT_CHECK_INTERVAL_S = 0.25
 """Auto-reconnect check cadence while UI events are actively flowing."""
 
@@ -214,6 +217,15 @@ GCODE_VIEWER_LARGE_FILE_THRESHOLD = 10000
 
 GCODE_STREAMING_SIZE_THRESHOLD = 50 * 1024 * 1024
 """File size (bytes) above which streaming mode is used."""
+
+GCODE_ULTRA_LARGE_SIZE_THRESHOLD = 200 * 1024 * 1024
+"""File size (bytes) above which ultra-large fast-load safeguards are forced."""
+
+GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER = 3
+"""Required free-space multiplier versus source file size for ultra-large loads."""
+
+GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES = 256 * 1024 * 1024
+"""Additional free-space margin required for ultra-large temp/working files."""
 
 GCODE_STREAMING_LINE_THRESHOLD = 250_000
 """Cleaned line count above which streaming mode is used."""
@@ -493,8 +505,11 @@ TOOLPATH_ORIGIN_CROSS_SIZE = 6
 TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT = 50000
 """Maximum segments to keep when parsing job preview data for Top View."""
 
-TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT = 35000
-"""Maximum Top View segments to draw per render pass."""
+TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT = 50000
+"""Maximum Top View segments to draw per render pass while not streaming."""
+
+TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT_STREAMING = 35000
+"""Maximum Top View segments to draw per render pass while streaming."""
 
 TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD = 6000
 """Drawn segment count above which Top View renders progressively in chunks."""
@@ -656,13 +671,19 @@ WATCHDOG_DISCONNECT_TIMEOUT = 10.0
 WATCHDOG_HOMING_TIMEOUT = 180.0
 """Seconds to suspend watchdog checks after issuing a homing cycle."""
 
+WATCHDOG_SETTINGS_DUMP_TIMEOUT = 30.0
+"""Seconds to suspend watchdog checks while processing a GRBL ``$$`` settings dump."""
+
+WATCHDOG_READY_ARM_GRACE = 30.0
+"""Idle-only grace after GRBL becomes ready before watchdog disconnect logic is enforced."""
+
 WATCHDOG_ALARM_DISCONNECT_TIMEOUT = 60.0
 """Seconds without RX before disconnecting while in alarm state."""
 
 GRBL_STARTUP_TIMEOUT = 6.0
 """Seconds to wait for GRBL banner/status before disconnecting."""
 
-RX_STATUS_LOG_INTERVAL = 0.2
+RX_STATUS_LOG_INTERVAL = 1.0
 """Minimum seconds between status log entries in the UI console."""
 
 RX_OK_SUMMARY_INTERVAL = 0.5

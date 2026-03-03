@@ -78,6 +78,9 @@ def handle_stream_state_event(app, evt):
             app._stream_pause_total = 0.0
             app._stream_paused_at = None
             app._live_estimate_min = None
+            app._live_estimate_total_min = None
+            app._live_estimate_display_min = None
+            app._live_estimate_display_ts = 0.0
             app._refresh_gcode_stats_display()
             app.throughput_var.set("TX: 0 B/s")
         try:
@@ -104,6 +107,10 @@ def handle_stream_state_event(app, evt):
         app._stream_pause_total = 0.0
         app._stream_paused_at = None
         app._live_estimate_min = None
+        app._live_estimate_display_min = None
+        app._live_estimate_display_ts = 0.0
+        if st in ("error", "alarm", "loaded"):
+            app._live_estimate_total_min = None
         app._refresh_gcode_stats_display()
         app.throughput_var.set("TX: 0 B/s")
 

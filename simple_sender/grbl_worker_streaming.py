@@ -84,6 +84,41 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return float(EVENT_QUEUE_TIMEOUT)
         return value
 
+    def _wait_for_tx_activity_or_stop(
+        self,
+        stop_evt: threading.Event,
+        timeout_s: float,
+    ) -> bool:
+        """Wait for TX activity with periodic stop checks.
+
+        Returns True when stop was requested, False otherwise.
+        """
+        timeout = max(float(EVENT_QUEUE_TIMEOUT), float(timeout_s))
+        wake_evt = getattr(self, "_tx_activity_evt", None)
+        if wake_evt is None or timeout <= EVENT_QUEUE_TIMEOUT:
+            return bool(stop_evt.wait(timeout))
+        deadline = time.monotonic() + timeout
+        while not stop_evt.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                if isinstance(stop_evt, threading.Event):
+                    return bool(stop_evt.is_set())
+                try:
+                    return bool(stop_evt.wait(timeout))
+                except Exception:
+                    return False
+            wait_slice = min(0.05, remaining)
+            try:
+                if wake_evt.wait(wait_slice):
+                    try:
+                        wake_evt.clear()
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                return bool(stop_evt.wait(wait_slice))
+        return True
+
     def is_streaming(self) -> bool:
         """Check if currently streaming G-code.
         
@@ -365,6 +400,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._process_manual_queue()
 
                 idle_wait = EVENT_QUEUE_TIMEOUT
+                blocked_waiting_for_ack = False
                 with self._stream_lock:
                     has_stream_work = bool(
                         self._streaming
@@ -380,24 +416,20 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         or not self._outgoing_q.empty()
                         or self._purge_jog_queue.is_set()
                     )
-                if not has_stream_work and not has_manual_work:
+                    blocked_waiting_for_ack = bool(
+                        has_stream_work
+                        and not has_manual_work
+                        and self._stream_pending_item is not None
+                        and self._stream_buf_used > 0
+                    )
+                if (not has_stream_work and not has_manual_work) or blocked_waiting_for_ack:
                     idle_wait = self._tx_idle_wait_s()
                     self._tx_loop_idle_cycles += 1
                     self._tx_loop_idle_wait_total_s += idle_wait
-                    evt = getattr(self, "_tx_activity_evt", None)
-                    if evt is not None:
-                        try:
-                            evt.clear()
-                        except Exception:
-                            pass
                 else:
                     self._tx_loop_active_cycles += 1
-                if stop_evt.wait(idle_wait):
+                if self._wait_for_tx_activity_or_stop(stop_evt, idle_wait):
                     break
-                if idle_wait > EVENT_QUEUE_TIMEOUT:
-                    evt = getattr(self, "_tx_activity_evt", None)
-                    if evt is not None and evt.is_set():
-                        continue
         
         except Exception as e:
             logger.error(f"TX thread error: {e}", exc_info=True)
@@ -798,6 +830,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 if is_settings_dump:
                     self._settings_dump_active = False
                     self._settings_dump_seen = False
+                    self.clear_watchdog_ignore("settings_dump")
                 with self._stream_lock:
                     self._rollback_reserved_manual_locked(line_len)
                     if self.is_connected():

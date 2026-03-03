@@ -89,7 +89,14 @@ def _handle_log_rx_event(app: Any, raw: str) -> None:
     probe_controller = getattr(app, "probe_controller", None)
     if probe_controller is not None:
         probe_controller.handle_rx_line(raw)
-    app.settings_controller.handle_line(raw)
+    settings_controller = getattr(app, "settings_controller", None)
+    if settings_controller is not None:
+        should_route_settings = bool(getattr(settings_controller, "_settings_capture", False))
+        if not should_route_settings:
+            stripped = str(raw).lstrip()
+            should_route_settings = stripped.startswith("$") and ("=" in stripped)
+        if should_route_settings:
+            settings_controller.handle_line(raw)
     app.streaming_controller.handle_log_rx(raw)
 
 
@@ -428,6 +435,8 @@ def handle_macro_prompt(app, title, message, choices, cancel_label, result_q):
 
 def handle_gcode_load_progress(app, token, done, total, label):
     if token != app._gcode_load_token:
+        return
+    if not getattr(app, "_gcode_loading", False):
         return
     try:
         app._set_gcode_loading_progress(done, total, label)

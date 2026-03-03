@@ -86,6 +86,9 @@ def set_led_state(app, key, on):
     entry = app._led_indicators.get(key)
     if not entry:
         return
+    on = bool(on)
+    if bool(app._led_states.get(key, False)) == on:
+        return
     canvas, oval = entry
     color = "#00c853" if on else "#b0b0b0"
     canvas.itemconfig(oval, fill=color)

@@ -31,6 +31,7 @@ from tkinter import messagebox
 from . import joystick_hold
 from simple_sender.utils.constants import (
     JOYSTICK_CAPTURE_TIMEOUT_MS,
+    JOYSTICK_DISCOVERY_INTERVAL_MS,
     JOYSTICK_LISTENING_TEXT,
     JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS,
     JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS,
@@ -54,6 +55,28 @@ def _stream_busy(app) -> bool:
         return True
     state = str(getattr(app, "_stream_state", "") or "").strip().lower()
     return state in {"running", "paused"}
+
+
+def _joystick_live_status_visible(app) -> bool:
+    if bool(getattr(app, "_joystick_capture_state", None)):
+        return True
+    return bool(getattr(app, "_app_settings_tab_active", False))
+
+
+def _joystick_poll_intervals_ms(app) -> tuple[int, int, int]:
+    base = max(
+        1,
+        int(getattr(app, "_joystick_poll_interval_ms", JOYSTICK_POLL_INTERVAL_MS)),
+    )
+    idle_step = max(
+        1,
+        int(getattr(app, "_joystick_poll_idle_backoff_step_ms", JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS)),
+    )
+    idle_max = max(
+        base,
+        int(getattr(app, "_joystick_poll_idle_max_interval_ms", JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS)),
+    )
+    return base, idle_step, idle_max
 
 
 def _save_bindings(app) -> None:
@@ -157,7 +180,8 @@ def poll_joystick_events(
             app, "_active_joystick_hold_binding", None
         ):
             app._stop_joystick_hold()
-        update_joystick_live_status(app, py)
+        if _joystick_live_status_visible(app):
+            update_joystick_live_status(app, py)
         for event in events:
             app._handle_joystick_event(event)
         joystick_hold.check_release(app)
@@ -185,9 +209,7 @@ def poll_joystick_events(
             app._joystick_poll_idle_streak = 0
             return
         if can_poll:
-            base_interval = max(1, int(JOYSTICK_POLL_INTERVAL_MS))
-            idle_step = max(1, int(JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS))
-            idle_max = max(base_interval, int(JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS))
+            base_interval, idle_step, idle_max = _joystick_poll_intervals_ms(app)
             interval = base_interval
             if getattr(app, "_active_joystick_hold_binding", None):
                 interval = joystick_hold.JOYSTICK_HOLD_POLL_INTERVAL_MS
@@ -200,6 +222,14 @@ def poll_joystick_events(
                 idle_streak = int(getattr(app, "_joystick_poll_idle_streak", 0) or 0) + 1
                 app._joystick_poll_idle_streak = idle_streak
                 interval = min(idle_max, base_interval + (idle_streak * idle_step))
+                # When no joystick devices are connected, stop high-rate polling
+                # after a short backoff and fall back to discovery cadence.
+                if (
+                    idle_streak >= 3
+                    and (not getattr(app, "_joystick_instances", None))
+                    and not app._joystick_capture_state
+                ):
+                    interval = max(interval, int(JOYSTICK_DISCOVERY_INTERVAL_MS))
             app._joystick_poll_id = app.after(interval, app._poll_joystick_events)
 
 

@@ -30,11 +30,14 @@ from simple_sender.ui.dialogs.backup_bundle import (
     import_backup_bundle,
 )
 from simple_sender.ui.dialogs.diagnostics import (
+    apply_performance_test_preset,
+    export_diagnostics_bundle,
     export_session_diagnostics,
     open_release_checklist,
     open_runtime_telemetry,
     open_run_checklist,
     run_preflight_check,
+    save_performance_report_to_logs,
 )
 from simple_sender.ui.dialogs.logs import show_logs_dialog
 from simple_sender.ui.dialogs.macro_manager import show_macro_manager
@@ -62,8 +65,17 @@ class LayoutMixin:
     def _export_session_diagnostics(self):
         export_session_diagnostics(self)
 
+    def _export_diagnostics_bundle(self):
+        export_diagnostics_bundle(self)
+
     def _open_runtime_telemetry(self):
         open_runtime_telemetry(self)
+
+    def _save_performance_report_to_logs(self):
+        save_performance_report_to_logs(self)
+
+    def _apply_performance_test_preset(self):
+        apply_performance_test_preset(self)
 
     def _export_backup_bundle(self):
         export_backup_bundle(self)

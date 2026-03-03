@@ -24,6 +24,7 @@ import logging
 import hashlib
 import os
 import queue
+import shutil
 import sys
 import tempfile
 import threading
@@ -45,6 +46,9 @@ from simple_sender.utils.constants import (
     GCODE_LOAD_PROGRESS_INTERVAL,
     GCODE_STREAMING_PREVIEW_LINES,
     GCODE_STREAMING_SIZE_THRESHOLD,
+    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
+    GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER,
+    GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES,
     GCODE_STREAMING_LINE_THRESHOLD,
     GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
     GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
@@ -72,6 +76,7 @@ _PIPELINE_DEPS = (
     hashlib,
     queue,
     tempfile,
+    shutil,
     time,
     array,
     clean_gcode_line,
@@ -82,6 +87,9 @@ _PIPELINE_DEPS = (
     GCODE_LOAD_PROGRESS_INTERVAL,
     GCODE_STREAMING_PREVIEW_LINES,
     GCODE_STREAMING_SIZE_THRESHOLD,
+    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
+    GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER,
+    GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES,
     GCODE_STREAMING_LINE_THRESHOLD,
     GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
     GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
@@ -202,11 +210,20 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
     if not lines:
         app._last_parse_result = None
         app._last_parse_hash = None
+        app._gcode_parsing_active = False
         return
     app._gcode_parse_token += 1
     token = app._gcode_parse_token
     arc_step = app.toolpath_panel.get_arc_step_rad(len(lines))
     parse_limit = _preview_parse_segment_limit(app)
+    app._gcode_parsing_active = True
+
+    def _clear_parse_active_flag() -> None:
+        try:
+            if token == app._gcode_parse_token:
+                app._gcode_parsing_active = False
+        except Exception:
+            pass
 
     def worker():
         try:
@@ -256,7 +273,13 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
 
         app.after(0, apply_result)
 
-    threading.Thread(target=worker, daemon=True).start()
+    def _worker_wrapper() -> None:
+        try:
+            worker()
+        finally:
+            _clear_parse_active_flag()
+
+    threading.Thread(target=_worker_wrapper, daemon=True).start()
 
 
 def clear_gcode(app):
@@ -312,6 +335,9 @@ def clear_gcode(app):
     app._last_parse_result = None
     app._last_parse_hash = None
     app._live_estimate_min = None
+    app._live_estimate_total_min = None
+    app._live_estimate_display_min = None
+    app._live_estimate_display_ts = 0.0
     app._last_stats = None
     app._last_rate_source = None
     app._last_error_index = -1

@@ -52,7 +52,16 @@ def toggle_tooltips(app):
 
 
 def on_gui_logging_change(app):
-    status = "enabled" if app.gui_logging_enabled.get() else "disabled"
+    enabled = bool(app.gui_logging_enabled.get())
+    status = "enabled" if enabled else "disabled"
+    grbl = getattr(app, "grbl", None)
+    if grbl is not None:
+        setter = getattr(grbl, "set_ui_rx_logging", None)
+        if callable(setter):
+            try:
+                setter(enabled)
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+                _log_suppressed("Failed applying GUI logging setting to GRBL worker", exc)
     try:
         app.streaming_controller.handle_log(f"[settings] GUI logging {status}")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
@@ -486,7 +495,12 @@ def on_performance_mode_change(app):
         app.streaming_controller.flush_console()
     app._apply_status_poll_profile()
     try:
-        app.status.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
+        status_label = object.__getattribute__(app, "status")
+    except Exception:
+        status_label = None
+    try:
+        if status_label is not None and hasattr(status_label, "config"):
+            status_label.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for performance mode change", exc)
 

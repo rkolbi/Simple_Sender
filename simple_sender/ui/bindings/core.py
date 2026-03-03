@@ -184,6 +184,12 @@ def _stream_busy_for_joystick_polling(app) -> bool:
     state = str(getattr(app, "_stream_state", "") or "").strip().lower()
     return state in {"running", "paused"}
 
+
+def _joystick_live_status_visible(app) -> bool:
+    if bool(getattr(app, "_joystick_capture_state", None)):
+        return True
+    return bool(getattr(app, "_app_settings_tab_active", False))
+
 def update_joystick_polling_state(app):
     app._refresh_joystick_toggle_text()
     if not app.joystick_bindings_enabled.get():
@@ -192,14 +198,18 @@ def update_joystick_polling_state(app):
         app._stop_joystick_hold()
         app._joystick_safety_active = False
         if hasattr(app, "joystick_live_status"):
-            app.joystick_live_status.set("Joystick state: disabled.")
+            text = "Joystick state: disabled."
+            app.joystick_live_status.set(text)
+            app._joystick_last_live_status_text = text
         return
     if _stream_busy_for_joystick_polling(app) and not app._joystick_capture_state:
         app._stop_joystick_polling()
         app._stop_joystick_hold()
         app._joystick_safety_active = False
         if hasattr(app, "joystick_live_status"):
-            app.joystick_live_status.set("Joystick state: paused while streaming.")
+            text = "Joystick state: paused while streaming."
+            app.joystick_live_status.set(text)
+            app._joystick_last_live_status_text = text
         return
     if not app._ensure_joystick_backend():
         messagebox.showwarning(
@@ -284,13 +294,18 @@ def update_joystick_device_status(app, count: int, reason: str | None = None) ->
 def update_joystick_live_status(app, py) -> None:
     if not hasattr(app, "joystick_live_status"):
         return
+    if not _joystick_live_status_visible(app):
+        return
     now = time.monotonic()
     last = getattr(app, "_joystick_last_live_status", 0.0)
     if (now - last) < (JOYSTICK_LIVE_STATUS_INTERVAL_MS / 1000.0):
         return
     app._joystick_last_live_status = now
     if not app._joystick_instances:
-        app.joystick_live_status.set("Joystick state: none detected.")
+        text = "Joystick state: none detected."
+        if text != str(getattr(app, "_joystick_last_live_status_text", "")):
+            app.joystick_live_status.set(text)
+            app._joystick_last_live_status_text = text
         return
     lines = []
     error_types = _pygame_error_types(py)
@@ -318,7 +333,11 @@ def update_joystick_live_status(app, py) -> None:
             break
     if not lines:
         lines = ["Joystick state: unavailable."]
-    app.joystick_live_status.set("\n".join(lines))
+    text = "\n".join(lines)
+    if text == str(getattr(app, "_joystick_last_live_status_text", "")):
+        return
+    app.joystick_live_status.set(text)
+    app._joystick_last_live_status_text = text
 
 def refresh_joystick_test_info(app):
     if not hasattr(app, "joystick_test_status"):

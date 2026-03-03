@@ -34,6 +34,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from simple_sender.utils.task_timing import snapshot_task_timings
+
 logger = logging.getLogger(__name__)
 
 
@@ -279,19 +281,22 @@ class AppPerformanceMonitor:
         self._rss_peak = self._rss_start or 0
         self._rss_steady_state: int | None = None
         self._idle_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
+        self._quiet_idle_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         self._stream_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         # Backward-compatible attributes used by diagnostics/tests.
         self._idle_cpu_samples = self._idle_cpu_stats.samples
+        self._quiet_idle_cpu_samples = self._quiet_idle_cpu_stats.samples
         self._stream_cpu_samples = self._stream_cpu_stats.samples
         self._cpu_prev_wall = time.perf_counter()
         self._cpu_prev_proc = time.process_time()
         self._stream_seen = False
         self._leak_watch = bool(leak_watch)
+        self._leak_trace_frames = max(1, _env_int("SIMPLE_SENDER_LEAK_TRACE_FRAMES", 1))
         self._idle_snapshot_taken = False
         self._snapshots: deque[_SnapshotEntry] = deque(maxlen=self._leak_snapshot_max)
         if self._leak_watch:
             try:
-                tracemalloc.start(10)
+                tracemalloc.start(self._leak_trace_frames)
             except Exception as exc:
                 logger.debug("Failed enabling tracemalloc leak watch: %s", exc, exc_info=exc)
                 self._leak_watch = False
@@ -346,6 +351,11 @@ class AppPerformanceMonitor:
                 pass
         return report
 
+    def build_report_snapshot(self) -> str:
+        """Build a point-in-time report without stopping the monitor."""
+        self._sample_once()
+        return self._build_report()
+
     def _take_snapshot(self, label: str) -> None:
         if not self._leak_watch:
             return
@@ -360,7 +370,49 @@ class AppPerformanceMonitor:
         try:
             connected = bool(getattr(self._app, "connected", False))
             stream_state = str(getattr(self._app, "_stream_state", "") or "").strip().lower()
-            return connected and stream_state not in {"running", "paused"}
+            if not connected or stream_state in {"running", "paused"}:
+                return False
+            if bool(getattr(self._app, "_gcode_loading", False)):
+                return False
+            if bool(getattr(self._app, "_stream_done_pending_idle", False)):
+                return False
+            if bool(getattr(self._app, "_homing_in_progress", False)):
+                return False
+            if bool(getattr(self._app, "_gcode_parsing_active", False)):
+                return False
+            if getattr(self._app, "_stats_pending_request", None):
+                return False
+            machine_state = str(getattr(self._app, "_machine_state_text", "") or "").strip().lower()
+            if machine_state and (not machine_state.startswith("idle")):
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _connected_and_quiet_idle(self) -> bool:
+        try:
+            if not self._connected_and_idle():
+                return False
+            if not bool(getattr(self._app, "_grbl_ready", False)):
+                return False
+            if bool(getattr(self._app, "_app_settings_tab_active", False)):
+                return False
+            if bool(getattr(self._app, "_status_seen", False)) is False:
+                return False
+            status_last_non_idle = float(getattr(self._app, "_status_last_non_idle_ts", 0.0) or 0.0)
+            if status_last_non_idle <= 0.0:
+                return False
+            quiet_elapsed_s = max(0.0, time.monotonic() - status_last_non_idle)
+            if quiet_elapsed_s < 20.0:
+                return False
+            ui_q = getattr(self._app, "ui_q", None)
+            if ui_q is not None and hasattr(ui_q, "qsize"):
+                try:
+                    if int(ui_q.qsize()) > 0:
+                        return False
+                except Exception:
+                    pass
+            return True
         except Exception:
             return False
 
@@ -393,6 +445,8 @@ class AppPerformanceMonitor:
                     self._rss_peak = rss
             if self._connected_and_idle():
                 self._idle_cpu_stats.add(cpu_pct)
+            if self._connected_and_quiet_idle():
+                self._quiet_idle_cpu_stats.add(cpu_pct)
             if self._connected_and_streaming():
                 self._stream_cpu_stats.add(cpu_pct)
 
@@ -409,7 +463,12 @@ class AppPerformanceMonitor:
                 self._idle_snapshot_taken = True
                 self._take_snapshot("idle_10m")
 
-    def _build_budget_lines(self, idle_cpu_avg: float | None, stream_cpu_p95: float | None) -> list[str]:
+    def _build_budget_lines(
+        self,
+        idle_cpu_avg: float | None,
+        quiet_idle_cpu_avg: float | None,
+        stream_cpu_p95: float | None,
+    ) -> list[str]:
         lines: list[str] = []
         idle_target = 3.0
         if idle_cpu_avg is None:
@@ -418,9 +477,18 @@ class AppPerformanceMonitor:
             lines.append(f"- Idle CPU <= {idle_target:.1f}%: PASS ({idle_cpu_avg:.2f}%)")
         else:
             lines.append(f"- Idle CPU <= {idle_target:.1f}%: FAIL ({idle_cpu_avg:.2f}%)")
+        if quiet_idle_cpu_avg is None:
+            lines.append(f"- Quiet idle CPU <= {idle_target:.1f}%: n/a (no quiet-idle samples)")
+        elif quiet_idle_cpu_avg <= idle_target:
+            lines.append(
+                f"- Quiet idle CPU <= {idle_target:.1f}%: PASS ({quiet_idle_cpu_avg:.2f}%)"
+            )
+        else:
+            lines.append(
+                f"- Quiet idle CPU <= {idle_target:.1f}%: FAIL ({quiet_idle_cpu_avg:.2f}%)"
+            )
 
-        max_drain_ms = float(getattr(self._app, "_ui_queue_drain_max_ms", 0.0) or 0.0)
-        drain_stalls = int(getattr(self._app, "_ui_queue_drain_stall_count", 0) or 0)
+        _ticks, _events, max_drain_ms, drain_stalls = self._ui_drain_metrics()
         stall_target_ms = float(getattr(self._app, "_ui_queue_drain_stall_budget_ms", 16.0) or 16.0)
         if max_drain_ms <= stall_target_ms and drain_stalls <= 0:
             lines.append(
@@ -433,7 +501,9 @@ class AppPerformanceMonitor:
                 f"(max {max_drain_ms:.2f} ms, stalls {drain_stalls})"
             )
 
-        if self._rss_start is not None and self._rss_steady_state is not None:
+        if self._leak_watch:
+            lines.append("- Steady-state RSS growth <= 64 MB: n/a (leak watch enabled)")
+        elif self._rss_start is not None and self._rss_steady_state is not None:
             growth_mb = (self._rss_steady_state - self._rss_start) / (1024.0 * 1024.0)
             if growth_mb <= 64.0:
                 lines.append(f"- Steady-state RSS growth <= 64 MB: PASS ({growth_mb:.2f} MB)")
@@ -476,15 +546,26 @@ class AppPerformanceMonitor:
         return lines
 
     def _build_report(self) -> str:
-        uptime_s = max(0.0, time.perf_counter() - self._created_at)
-        idle_cpu_avg, idle_cpu_p95 = self._idle_cpu_stats.summary()
-        stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
+        with self._lock:
+            uptime_s = max(0.0, time.perf_counter() - self._created_at)
+            idle_cpu_avg, idle_cpu_p95 = self._idle_cpu_stats.summary()
+            quiet_idle_cpu_avg, quiet_idle_cpu_p95 = self._quiet_idle_cpu_stats.summary()
+            quiet_idle_sample_count = len(self._quiet_idle_cpu_stats.samples)
+            stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
+            ui_ticks, ui_events, ui_max_ms, ui_stalls = self._ui_drain_metrics()
+            rss_start = self._rss_start
+            rss_current = self._rss_current
+            rss_peak = self._rss_peak
+            rss_steady_state = self._rss_steady_state
+            startup_time_s = self._startup_time_s
+            leak_watch = self._leak_watch
+            leak_trace_frames = self._leak_trace_frames
         lines: list[str] = []
         lines.append("=== Simple Sender Performance Report ===")
         lines.append(f"Uptime: {uptime_s:.2f}s")
         lines.append(
             "Startup time: "
-            + (f"{self._startup_time_s:.3f}s" if self._startup_time_s is not None else "n/a")
+            + (f"{startup_time_s:.3f}s" if startup_time_s is not None else "n/a")
         )
         lines.append(
             "CPU sample window: "
@@ -495,23 +576,57 @@ class AppPerformanceMonitor:
             lines.append("Idle CPU avg/p95: n/a")
         else:
             lines.append(f"Idle CPU avg/p95: {idle_cpu_avg:.2f}% / {idle_cpu_p95:.2f}%")
+        if quiet_idle_cpu_avg is None or quiet_idle_cpu_p95 is None:
+            lines.append("Quiet idle CPU avg/p95: n/a")
+        else:
+            lines.append(
+                "Quiet idle CPU avg/p95: "
+                f"{quiet_idle_cpu_avg:.2f}% / {quiet_idle_cpu_p95:.2f}% "
+                f"(samples={quiet_idle_sample_count})"
+            )
         if stream_cpu_avg is None or stream_cpu_p95 is None:
             lines.append("Streaming CPU avg/p95: n/a")
         else:
             lines.append(f"Streaming CPU avg/p95: {stream_cpu_avg:.2f}% / {stream_cpu_p95:.2f}%")
-        lines.append(f"RSS start: {_format_mb(self._rss_start)}")
-        lines.append(f"RSS current: {_format_mb(self._rss_current)}")
-        lines.append(f"RSS peak: {_format_mb(self._rss_peak)}")
-        lines.append(f"RSS steady-state ({self._steady_state_after_s:.0f}s): {_format_mb(self._rss_steady_state)}")
+        lines.append(f"RSS start: {_format_mb(rss_start)}")
+        lines.append(f"RSS current: {_format_mb(rss_current)}")
+        lines.append(f"RSS peak: {_format_mb(rss_peak)}")
+        lines.append(f"RSS steady-state ({self._steady_state_after_s:.0f}s): {_format_mb(rss_steady_state)}")
+        if leak_watch:
+            lines.append(
+                f"Leak watch trace frames: {leak_trace_frames} "
+                "(RSS/CPU include tracemalloc overhead)"
+            )
         lines.append(
             "UI queue drain: "
-            f"ticks={int(getattr(self._app, '_ui_queue_drain_ticks', 0) or 0)}, "
-            f"events={int(getattr(self._app, '_ui_queue_drain_events', 0) or 0)}, "
-            f"max_ms={float(getattr(self._app, '_ui_queue_drain_max_ms', 0.0) or 0.0):.2f}, "
-            f"stalls={int(getattr(self._app, '_ui_queue_drain_stall_count', 0) or 0)}"
+            f"ticks={ui_ticks}, "
+            f"events={ui_events}, "
+            f"max_ms={ui_max_ms:.2f}, "
+            f"stalls={ui_stalls}"
         )
+        slow_event_ms = float(getattr(self._app, "_ui_queue_drain_runtime_slowest_event_ms", 0.0) or 0.0)
+        slow_event_kind = str(getattr(self._app, "_ui_queue_drain_runtime_slowest_event_kind", "") or "").strip()
+        if slow_event_ms > 0.0:
+            lines.append(
+                "UI queue slowest runtime event: "
+                f"{slow_event_kind or 'unknown'} ({slow_event_ms:.2f} ms)"
+            )
+        task_timings = snapshot_task_timings(self._app)
+        if task_timings:
+            lines.append("Background I/O timings:")
+            for task_name in sorted(task_timings.keys()):
+                entry = task_timings[task_name]
+                lines.append(
+                    "- "
+                    f"{task_name}: "
+                    f"count={int(entry.get('count', 0) or 0)}, "
+                    f"ok={int(entry.get('ok_count', 0) or 0)}, "
+                    f"err={int(entry.get('err_count', 0) or 0)}, "
+                    f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
+                    f"max={float(entry.get('max_ms', 0.0) or 0.0):.2f} ms"
+                )
         lines.append("Budgets:")
-        lines.extend(self._build_budget_lines(idle_cpu_avg, stream_cpu_p95))
+        lines.extend(self._build_budget_lines(idle_cpu_avg, quiet_idle_cpu_avg, stream_cpu_p95))
         leak_lines = self._format_leak_watch()
         if leak_lines:
             lines.append("")
@@ -522,6 +637,7 @@ class AppPerformanceMonitor:
         """Return a best-effort live snapshot for diagnostics windows/exports."""
         with self._lock:
             idle_cpu_avg, idle_cpu_p95 = self._idle_cpu_stats.summary()
+            quiet_idle_cpu_avg, quiet_idle_cpu_p95 = self._quiet_idle_cpu_stats.summary()
             stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
             snapshot = {
                 "available": True,
@@ -529,6 +645,9 @@ class AppPerformanceMonitor:
                 "startup_time_s": self._startup_time_s,
                 "idle_cpu_avg": idle_cpu_avg,
                 "idle_cpu_p95": idle_cpu_p95,
+                "quiet_idle_cpu_avg": quiet_idle_cpu_avg,
+                "quiet_idle_cpu_p95": quiet_idle_cpu_p95,
+                "quiet_idle_cpu_samples": len(self._quiet_idle_cpu_stats.samples),
                 "stream_cpu_avg": stream_cpu_avg,
                 "stream_cpu_p95": stream_cpu_p95,
                 "rss_start_bytes": self._rss_start,
@@ -553,9 +672,37 @@ class AppPerformanceMonitor:
             snapshot["ui_queue_drain_stall_budget_ms"] = float(
                 getattr(self._app, "_ui_queue_drain_stall_budget_ms", 16.0) or 16.0
             )
+            rt_ticks, rt_events, rt_max_ms, rt_stalls = self._ui_drain_metrics()
+            snapshot["ui_queue_drain_runtime_ticks"] = rt_ticks
+            snapshot["ui_queue_drain_runtime_events"] = rt_events
+            snapshot["ui_queue_drain_runtime_max_ms"] = rt_max_ms
+            snapshot["ui_queue_drain_runtime_stall_count"] = rt_stalls
+            snapshot["ui_queue_drain_runtime_slowest_event_ms"] = float(
+                getattr(self._app, "_ui_queue_drain_runtime_slowest_event_ms", 0.0) or 0.0
+            )
+            snapshot["ui_queue_drain_runtime_slowest_event_kind"] = str(
+                getattr(self._app, "_ui_queue_drain_runtime_slowest_event_kind", "") or ""
+            )
+            snapshot["background_task_timings"] = snapshot_task_timings(self._app)
         except Exception:
             pass
         return snapshot
+
+    def _ui_drain_metrics(self) -> tuple[int, int, float, int]:
+        runtime_ticks = int(getattr(self._app, "_ui_queue_drain_runtime_ticks", 0) or 0)
+        if runtime_ticks > 0:
+            return (
+                runtime_ticks,
+                int(getattr(self._app, "_ui_queue_drain_runtime_events", 0) or 0),
+                float(getattr(self._app, "_ui_queue_drain_runtime_max_ms", 0.0) or 0.0),
+                int(getattr(self._app, "_ui_queue_drain_runtime_stall_count", 0) or 0),
+            )
+        return (
+            int(getattr(self._app, "_ui_queue_drain_ticks", 0) or 0),
+            int(getattr(self._app, "_ui_queue_drain_events", 0) or 0),
+            float(getattr(self._app, "_ui_queue_drain_max_ms", 0.0) or 0.0),
+            int(getattr(self._app, "_ui_queue_drain_stall_count", 0) or 0),
+        )
 
 
 def create_app_performance_monitor(

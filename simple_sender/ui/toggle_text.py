@@ -64,8 +64,15 @@ def refresh_tooltips_toggle_text(app):
 
 def refresh_render_3d_toggle_text(app):
     text = "3DR"
+    force_override = getattr(app, "_is_force_3d_override_enabled", None)
+    forced = False
+    if callable(force_override):
+        try:
+            forced = bool(force_override())
+        except Exception:
+            forced = False
     blocked = bool(getattr(app, "_render3d_blocked", False))
-    enabled = app.render3d_enabled.get() and not blocked
+    enabled = forced or (app.render3d_enabled.get() and not blocked)
     for attr in ("btn_toggle_3d", "btn_toggle_3d_settings"):
         btn = getattr(app, attr, None)
         if btn:

@@ -47,6 +47,15 @@ from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 _APP_SETTINGS_VIEW_BASIC = "Basic"
 _APP_SETTINGS_VIEW_ADVANCED = "Advanced"
 _NO_MATCHING_SETTINGS_TEXT = "No matching settings"
+_APP_SETTINGS_STICKY_UPDATE_MS = 50
+_APP_SETTINGS_FILTER_DEBOUNCE_MS = 120
+_APP_SETTINGS_LAZY_BUILD_SLICE_MS = 8
+_LAZY_SECTION_TITLES = frozenset(
+    {
+        "Auto-Level",
+        "Diagnostics",
+    }
+)
 
 
 def _build_category_header(
@@ -127,6 +136,216 @@ def _build_app_settings_section_entry(
     }
 
 
+def _build_app_settings_lazy_section_entry(
+    parent: ttk.Frame,
+    row: int,
+    category_title: str,
+    section_title: str,
+    description: str,
+    mode: str,
+    keywords: tuple[str, ...],
+    visibility_predicate: Callable[[Any], bool] | None,
+    builder: Callable[[Any, ttk.Frame, int], int],
+) -> dict[str, Any]:
+    placeholder = ttk.Frame(parent)
+    placeholder.grid(row=row, column=0, sticky="ew")
+    placeholder.grid_columnconfigure(0, weight=1)
+    return {
+        "category_title": category_title,
+        "title": section_title,
+        "description": description,
+        "mode": str(mode).strip().lower(),
+        "keywords": keywords,
+        "search_text": _build_section_search_text(category_title, section_title, description, keywords),
+        "widget": placeholder,
+        "available": True,
+        "visibility_predicate": visibility_predicate,
+        "next_row": row + 1,
+        "visible": False,
+        "lazy": True,
+        "built": False,
+        "builder": builder,
+    }
+
+
+def _ensure_section_built(app, entry: dict[str, Any]) -> bool:
+    if not bool(entry.get("lazy", False)):
+        return False
+    if bool(entry.get("built", False)):
+        return False
+    placeholder = entry.get("widget")
+    builder = entry.get("builder")
+    if placeholder is None or not callable(builder):
+        entry["built"] = True
+        return False
+    built_now = False
+    try:
+        builder(app, placeholder, 0)
+        built_now = True
+        entry["built"] = True
+    except Exception:
+        entry["available"] = False
+        entry["built"] = True
+    bind_wheel = getattr(app, "_bind_app_settings_mousewheel", None)
+    if callable(bind_wheel):
+        bind_wheel()
+    bind_touch = getattr(app, "_bind_app_settings_touch_scroll", None)
+    if callable(bind_touch):
+        bind_touch()
+    return built_now
+
+
+def _drain_app_settings_lazy_build_queue(app) -> None:
+    try:
+        app._app_settings_lazy_build_after_id = None
+    except Exception:
+        pass
+
+    queue = getattr(app, "_app_settings_lazy_build_queue", None)
+    if not isinstance(queue, list) or not queue:
+        return
+
+    pending_ids = getattr(app, "_app_settings_lazy_build_ids", None)
+    if not isinstance(pending_ids, set):
+        pending_ids = set()
+        app._app_settings_lazy_build_ids = pending_ids
+
+    built_any = False
+    while queue:
+        entry = queue.pop(0)
+        pending_ids.discard(id(entry))
+        if not bool(entry.get("visible", False)):
+            continue
+        if bool(entry.get("built", False)):
+            continue
+        built_any = bool(_ensure_section_built(app, entry))
+        break
+
+    if built_any:
+        _mark_app_settings_header_cache_dirty(app)
+        updater = getattr(app, "_update_app_settings_scrollregion", None)
+        if callable(updater):
+            updater()
+        _schedule_app_settings_sticky_header(app, force=False)
+
+    _schedule_app_settings_lazy_build(app)
+
+
+def _schedule_app_settings_lazy_build(app) -> None:
+    queue = getattr(app, "_app_settings_lazy_build_queue", None)
+    if not isinstance(queue, list) or not queue:
+        return
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        return
+    if getattr(app, "_app_settings_lazy_build_after_id", None) is not None:
+        return
+    after = getattr(app, "after", None)
+    if not callable(after):
+        _drain_app_settings_lazy_build_queue(app)
+        return
+    try:
+        app._app_settings_lazy_build_after_id = after(
+            _APP_SETTINGS_LAZY_BUILD_SLICE_MS,
+            lambda: _drain_app_settings_lazy_build_queue(app),
+        )
+    except Exception:
+        _drain_app_settings_lazy_build_queue(app)
+
+
+def _queue_app_settings_lazy_build(app, entry: dict[str, Any]) -> None:
+    if not bool(entry.get("lazy", False)):
+        return
+    if bool(entry.get("built", False)):
+        return
+    queue = getattr(app, "_app_settings_lazy_build_queue", None)
+    if not isinstance(queue, list):
+        queue = []
+        app._app_settings_lazy_build_queue = queue
+    pending_ids = getattr(app, "_app_settings_lazy_build_ids", None)
+    if not isinstance(pending_ids, set):
+        pending_ids = set()
+        app._app_settings_lazy_build_ids = pending_ids
+    entry_id = id(entry)
+    if entry_id in pending_ids:
+        return
+    pending_ids.add(entry_id)
+    queue.append(entry)
+    _schedule_app_settings_lazy_build(app)
+
+
+def _mark_app_settings_header_cache_dirty(app) -> None:
+    try:
+        app._app_settings_header_cache_dirty = True
+    except Exception:
+        pass
+
+
+def _set_grid_visibility(widget: Any, visible: bool) -> bool:
+    try:
+        currently_visible = bool(widget.grid_info())
+    except Exception:
+        currently_visible = not bool(visible)
+    if currently_visible == bool(visible):
+        return False
+    try:
+        if visible:
+            widget.grid()
+        else:
+            widget.grid_remove()
+        return True
+    except Exception:
+        return False
+
+
+def _rebuild_app_settings_header_positions(app) -> list[tuple[str, float]]:
+    headers = getattr(app, "app_settings_section_headers", None) or []
+    positions: list[tuple[str, float]] = []
+    for title, header_widget in headers:
+        try:
+            if not bool(header_widget.winfo_ismapped()):
+                continue
+            header_y = float(header_widget.winfo_y())
+        except Exception:
+            continue
+        positions.append((str(title), header_y))
+    try:
+        app._app_settings_header_positions = positions
+        app._app_settings_header_cache_dirty = False
+    except Exception:
+        pass
+    return positions
+
+
+def _flush_app_settings_sticky_header(app) -> None:
+    try:
+        app._app_settings_sticky_after_id = None
+    except Exception:
+        pass
+    _update_app_settings_sticky_header(app)
+
+
+def _schedule_app_settings_sticky_header(app, *, force: bool = False) -> None:
+    if not force and not bool(getattr(app, "_app_settings_tab_active", False)):
+        return
+    if force:
+        _flush_app_settings_sticky_header(app)
+        return
+    pending = getattr(app, "_app_settings_sticky_after_id", None)
+    if pending is not None:
+        return
+    after = getattr(app, "after", None)
+    if not callable(after):
+        _flush_app_settings_sticky_header(app)
+        return
+    try:
+        app._app_settings_sticky_after_id = after(
+            _APP_SETTINGS_STICKY_UPDATE_MS,
+            lambda: _flush_app_settings_sticky_header(app),
+        )
+    except Exception:
+        _flush_app_settings_sticky_header(app)
+
+
 def _should_show_section(app, entry: dict[str, Any], mode: str, tokens: list[str]) -> bool:
     if not bool(entry.get("available", False)):
         return False
@@ -178,18 +397,16 @@ def _apply_app_settings_filters(app, *, reset_scroll: bool = False) -> None:
         pass
 
     visible_section_count = 0
+    layout_changed = False
     for entry in sections:
         widget = entry.get("widget")
         visible = _should_show_section(app, entry, mode, tokens)
+        if visible and bool(entry.get("lazy", False)) and not bool(entry.get("built", False)):
+            _queue_app_settings_lazy_build(app, entry)
         entry["visible"] = visible
         if widget is not None:
-            try:
-                if visible:
-                    widget.grid()
-                else:
-                    widget.grid_remove()
-            except Exception:
-                pass
+            if _set_grid_visibility(widget, visible):
+                layout_changed = True
         if visible:
             visible_section_count += 1
 
@@ -197,26 +414,18 @@ def _apply_app_settings_filters(app, *, reset_scroll: bool = False) -> None:
     for category in categories:
         category_visible = any(bool(section.get("visible", False)) for section in category.get("sections", ()))
         for widget in category.get("widgets", ()):
-            try:
-                if category_visible:
-                    widget.grid()
-                else:
-                    widget.grid_remove()
-            except Exception:
-                continue
+            if _set_grid_visibility(widget, category_visible):
+                layout_changed = True
         if category_visible:
             visible_headers.append((str(category.get("title", "")), category.get("title_widget")))
 
     app.app_settings_section_headers = visible_headers
+    if layout_changed:
+        _mark_app_settings_header_cache_dirty(app)
 
     if empty_label is not None:
-        try:
-            if visible_section_count == 0:
-                empty_label.grid()
-            else:
-                empty_label.grid_remove()
-        except Exception:
-            pass
+        if _set_grid_visibility(empty_label, visible_section_count == 0):
+            layout_changed = True
 
     if sticky_var is not None:
         try:
@@ -228,7 +437,7 @@ def _apply_app_settings_filters(app, *, reset_scroll: bool = False) -> None:
             pass
 
     updater = getattr(app, "_update_app_settings_scrollregion", None)
-    if callable(updater):
+    if callable(updater) and (layout_changed or reset_scroll):
         updater()
     if reset_scroll:
         canvas = getattr(app, "app_settings_canvas", None)
@@ -237,11 +446,53 @@ def _apply_app_settings_filters(app, *, reset_scroll: bool = False) -> None:
                 canvas.yview_moveto(0.0)
             except Exception:
                 pass
-    _update_app_settings_sticky_header(app)
+    _schedule_app_settings_sticky_header(app, force=True)
+    _schedule_app_settings_lazy_build(app)
 
 
-def _on_app_settings_filter_change(app, *_args) -> None:
-    _apply_app_settings_filters(app, reset_scroll=True)
+def _flush_pending_app_settings_filter(app) -> None:
+    pending = getattr(app, "_app_settings_filter_after_id", None)
+    if pending is None:
+        return
+    try:
+        app.after_cancel(pending)
+    except Exception:
+        pass
+    app._app_settings_filter_after_id = None
+
+
+def _run_app_settings_filter_change(app) -> None:
+    reset_scroll = bool(getattr(app, "_app_settings_filter_reset_scroll", False))
+    app._app_settings_filter_after_id = None
+    app._app_settings_filter_reset_scroll = False
+    _apply_app_settings_filters(app, reset_scroll=reset_scroll)
+
+
+def _schedule_app_settings_filter_change(app, *, reset_scroll: bool) -> None:
+    current_reset = bool(getattr(app, "_app_settings_filter_reset_scroll", False))
+    app._app_settings_filter_reset_scroll = current_reset or bool(reset_scroll)
+    if getattr(app, "_app_settings_filter_after_id", None) is not None:
+        return
+    after = getattr(app, "after", None)
+    if not callable(after):
+        _run_app_settings_filter_change(app)
+        return
+    try:
+        app._app_settings_filter_after_id = after(
+            _APP_SETTINGS_FILTER_DEBOUNCE_MS,
+            lambda: _run_app_settings_filter_change(app),
+        )
+    except Exception:
+        _run_app_settings_filter_change(app)
+
+
+def _on_app_settings_filter_change(app, *_args, debounce: bool = True) -> None:
+    if debounce:
+        _schedule_app_settings_filter_change(app, reset_scroll=True)
+        return
+    _flush_pending_app_settings_filter(app)
+    app._app_settings_filter_reset_scroll = True
+    _run_app_settings_filter_change(app)
 
 
 def _update_app_settings_sticky_header(app, *_args) -> None:
@@ -256,15 +507,11 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
     except Exception:
         return
 
-    positions: list[tuple[str, float]] = []
-    for title, header_widget in headers:
-        try:
-            if not bool(header_widget.winfo_ismapped()):
-                continue
-            header_y = float(header_widget.winfo_y())
-        except Exception:
-            continue
-        positions.append((str(title), header_y))
+    cache_dirty = bool(getattr(app, "_app_settings_header_cache_dirty", True))
+    if cache_dirty:
+        positions = _rebuild_app_settings_header_positions(app)
+    else:
+        positions = list(getattr(app, "_app_settings_header_positions", ()))
 
     if not positions:
         active_title = str(headers[0][0])
@@ -341,11 +588,11 @@ def build_app_settings_tab(app, notebook):
     app.app_settings_view_mode_combo.grid(row=0, column=3, sticky="e")
     app.app_settings_view_mode_combo.bind(
         "<<ComboboxSelected>>",
-        lambda _event: _on_app_settings_filter_change(app),
+        lambda _event: _on_app_settings_filter_change(app, debounce=False),
     )
     app.app_settings_search_var.trace_add(
         "write",
-        lambda *_args: _on_app_settings_filter_change(app),
+        lambda *_args: _on_app_settings_filter_change(app, debounce=True),
     )
 
     app.app_settings_sticky_var = tk.StringVar(value="Interface & Viewer")
@@ -356,6 +603,19 @@ def build_app_settings_tab(app, notebook):
     )
     app.app_settings_sticky_label.grid(row=1, column=0, sticky="w")
     ttk.Separator(sticky_frame, orient="horizontal").grid(row=2, column=0, sticky="ew", pady=(4, 0))
+    app._app_settings_sticky_after_id = None
+    app._app_settings_filter_after_id = None
+    app._app_settings_filter_reset_scroll = False
+    app._app_settings_header_positions: list[tuple[str, float]] = []
+    app._app_settings_header_cache_dirty = True
+    app._app_settings_lazy_build_queue: list[dict[str, Any]] = []
+    app._app_settings_lazy_build_ids: set[int] = set()
+    app._app_settings_lazy_build_after_id = None
+    app._refresh_app_settings_sticky_header = lambda force=False: _schedule_app_settings_sticky_header(
+        app,
+        force=bool(force),
+    )
+    app._resume_app_settings_lazy_build = lambda: _schedule_app_settings_lazy_build(app)
 
     app.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
     app.app_settings_canvas.grid(row=1, column=0, sticky="nsew")
@@ -368,7 +628,7 @@ def build_app_settings_tab(app, notebook):
 
     def _on_canvas_yview(first: str, last: str) -> None:
         app.app_settings_scroll.set(first, last)
-        _update_app_settings_sticky_header(app)
+        _schedule_app_settings_sticky_header(app, force=False)
 
     app.app_settings_canvas.configure(yscrollcommand=_on_canvas_yview)
     app._app_settings_inner = ttk.Frame(app.app_settings_canvas)
@@ -378,11 +638,13 @@ def build_app_settings_tab(app, notebook):
 
     def _on_inner_configure(_event=None) -> None:
         app._update_app_settings_scrollregion()
-        _update_app_settings_sticky_header(app)
+        _mark_app_settings_header_cache_dirty(app)
+        _schedule_app_settings_sticky_header(app, force=False)
 
     def _on_canvas_configure(event) -> None:
         app.app_settings_canvas.itemconfig(app._app_settings_window, width=event.width)
-        _update_app_settings_sticky_header(app)
+        _mark_app_settings_header_cache_dirty(app)
+        _schedule_app_settings_sticky_header(app, force=False)
 
     app._app_settings_inner.bind("<Configure>", _on_inner_configure)
     app.app_settings_canvas.bind("<Configure>", _on_canvas_configure)
@@ -431,22 +693,37 @@ def build_app_settings_tab(app, notebook):
         description: str,
         keywords: tuple[str, ...] = (),
         visibility_predicate: Callable[[Any], bool] | None = None,
+        lazy_build: bool = False,
     ) -> None:
         nonlocal next_row
         if active_category is None:
             return
-        entry = _build_app_settings_section_entry(
-            app,
-            app._app_settings_inner,
-            next_row,
-            str(active_category.get("title", "")),
-            section_title,
-            description,
-            mode,
-            keywords,
-            visibility_predicate,
-            builder,
-        )
+        use_lazy_build = bool(lazy_build or section_title in _LAZY_SECTION_TITLES)
+        if use_lazy_build:
+            entry = _build_app_settings_lazy_section_entry(
+                app._app_settings_inner,
+                next_row,
+                str(active_category.get("title", "")),
+                section_title,
+                description,
+                mode,
+                keywords,
+                visibility_predicate,
+                builder,
+            )
+        else:
+            entry = _build_app_settings_section_entry(
+                app,
+                app._app_settings_inner,
+                next_row,
+                str(active_category.get("title", "")),
+                section_title,
+                description,
+                mode,
+                keywords,
+                visibility_predicate,
+                builder,
+            )
         app.app_settings_section_entries.append(entry)
         active_category["sections"].append(entry)
         next_row = int(entry["next_row"])
@@ -586,7 +863,7 @@ def build_app_settings_tab(app, notebook):
     _apply_app_settings_filters(app, reset_scroll=False)
     after_idle = getattr(app, "after_idle", None)
     if callable(after_idle):
-        after_idle(lambda: _update_app_settings_sticky_header(app))
+        after_idle(lambda: _schedule_app_settings_sticky_header(app, force=True))
     else:
-        _update_app_settings_sticky_header(app)
+        _schedule_app_settings_sticky_header(app, force=True)
 

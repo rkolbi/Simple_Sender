@@ -26,6 +26,7 @@
 # Standard library imports
 from simple_sender.ui.toggle_text import refresh_render_3d_toggle_text
 from simple_sender.ui.toolpath.toolpath_settings import (
+    apply_force_3d_session_override,
     apply_toolpath_arc_detail,
     apply_toolpath_draw_limits,
     apply_toolpath_performance,
@@ -43,6 +44,7 @@ from simple_sender.ui.toolpath.toolpath_settings import (
     save_3d_view,
     schedule_toolpath_arc_detail_reparse,
     toggle_render_3d,
+    is_force_3d_override_enabled,
     toolpath_limit_value,
     toolpath_perf_values,
 )
@@ -54,6 +56,12 @@ class ToolpathMixin:
 
     def _toggle_render_3d(self):
         toggle_render_3d(self)
+
+    def _is_force_3d_override_enabled(self) -> bool:
+        return is_force_3d_override_enabled(self)
+
+    def _apply_force_3d_session_override(self, _event=None):
+        apply_force_3d_session_override(self, _event)
 
     def _toolpath_limit_value(self, raw, fallback):
         return toolpath_limit_value(self, raw, fallback)

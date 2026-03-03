@@ -31,6 +31,7 @@ from .utils.constants import (
     RT_RESUME,
     RT_JOG_CANCEL,
     WATCHDOG_HOMING_TIMEOUT,
+    WATCHDOG_SETTINGS_DUMP_TIMEOUT,
 )
 from .utils.exceptions import GrblNotConnectedException, SerialWriteError
 from .utils.validation import validate_feed_rate, validate_unit_mode, validate_rpm
@@ -98,6 +99,20 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                             _log_suppressed("Failed queueing watchdog homing-grace log", exc)
             except Exception as exc:
                 _log_suppressed("Failed configuring watchdog homing grace window", exc)
+        elif cmd_upper == "$$":
+            try:
+                timeout = float(getattr(self, "_settings_dump_watchdog_timeout", WATCHDOG_SETTINGS_DUMP_TIMEOUT))
+            except Exception:
+                timeout = WATCHDOG_SETTINGS_DUMP_TIMEOUT
+            if timeout > 0:
+                try:
+                    self.suspend_watchdog(timeout, reason="settings_dump")
+                    try:
+                        self.ui_q.put(("log", f"[watchdog] Settings dump grace {timeout:g}s"))
+                    except Exception as exc:
+                        _log_suppressed("Failed queueing watchdog settings-dump grace log", exc)
+                except Exception as exc:
+                    _log_suppressed("Failed configuring watchdog settings-dump grace window", exc)
         
         with self._stream_lock:
             self._enqueue_manual_command(command, command_source)
@@ -131,6 +146,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._watchdog_ready_armed = False
+        self._watchdog_ready_ts = 0.0
         self._settings_dump_active = False
         self._settings_dump_seen = False
         was_streaming = self._streaming or self._paused

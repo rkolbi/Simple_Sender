@@ -23,6 +23,7 @@
 import logging
 
 from simple_sender.gcode_source import FileGcodeSource
+from .stats import format_streaming_estimate_text
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -171,6 +172,9 @@ def apply_loaded_gcode(
     app._stats_after_id = None
     app._stats_token = int(getattr(app, "_stats_token", 0)) + 1
     app._live_estimate_min = None
+    app._live_estimate_total_min = None
+    app._live_estimate_display_min = None
+    app._live_estimate_display_ts = 0.0
     app._last_stats = None
     app._last_rate_source = None
     existing_source = getattr(app, "_gcode_source", None)
@@ -234,7 +238,11 @@ def apply_loaded_gcode(
         preview_only,
     )
     if preview_only:
-        app.gcode_stats_var.set("Preview only (streaming mode)")
+        if isinstance(streaming_source, FileGcodeSource):
+            app.gcode_stats_var.set("Calculating stats...")
+            app._update_gcode_stats(lines)
+        else:
+            app.gcode_stats_var.set(format_streaming_estimate_text(app))
     elif lines:
         app.gcode_stats_var.set("Calculating stats...")
         deps.schedule_gcode_parse(app, lines, app._gcode_hash)

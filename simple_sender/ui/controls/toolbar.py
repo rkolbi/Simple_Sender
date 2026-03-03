@@ -190,9 +190,20 @@ def _ensure_toolbar_group_styles(app: Any) -> None:
             size=base_font.cget("size"),
             weight="bold",
         )
+        style_signature = (
+            label_style,
+            focus_style,
+            str(default_fg),
+            str(default_bg),
+            str(base_font.cget("family")),
+            str(base_font.cget("size")),
+        )
+        if style_signature == getattr(app, "_toolbar_group_style_signature", None):
+            return
         app._toolbar_group_focus_font = focus_font
         app.toolbar_group_label_style = label_style
         app.toolbar_group_focus_label_style = focus_style
+        app._toolbar_group_style_signature = style_signature
         style.configure(
             label_style,
             foreground=default_fg,
@@ -250,9 +261,19 @@ def refresh_toolbar_action_focus(app) -> None:
     focus_group_style = str(
         getattr(app, "toolbar_group_focus_label_style", _TOOLBAR_GROUP_FOCUS_LABEL_STYLE)
     )
+    focus_group = _toolbar_focus_group(app)
+    signature = (
+        default_style,
+        default_group_style,
+        focus_group_style,
+        focus_group,
+        tuple(sorted((str(name), id(label)) for name, label in group_labels.items())),
+    )
+    if signature == getattr(app, "_toolbar_focus_signature", None):
+        return
+    app._toolbar_focus_signature = signature
     for label in group_labels.values():
         _apply_toolbar_group_style(label, default_group_style)
-    focus_group = _toolbar_focus_group(app)
     if focus_group:
         _apply_toolbar_group_style(group_labels.get(focus_group), focus_group_style)
 

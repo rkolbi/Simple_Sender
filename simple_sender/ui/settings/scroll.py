@@ -24,6 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 
 _TOUCH_SCROLL_THRESHOLD = 6
+_TOUCH_SCROLL_STEP_THRESHOLD = 4
 _WHEEL_DELTA_UNIT = 120
 _TOUCH_SCROLL_MODE_SWIPE = "thumb_and_swipe"
 _TOUCH_SCROLL_MODE_THUMB_ONLY = "thumb_only"
@@ -84,6 +85,31 @@ def _pointer_widget(app):
         return canvas.winfo_containing(x_root, y_root)
     except Exception:
         return None
+
+
+def _iter_bind_targets(widget):
+    if widget is None:
+        return
+    yield widget
+    try:
+        children = tuple(widget.winfo_children())
+    except Exception:
+        children = ()
+    for child in children:
+        yield from _iter_bind_targets(child)
+
+
+def _bind_targets(app):
+    canvas = getattr(app, "app_settings_canvas", None)
+    inner = getattr(app, "_app_settings_inner", None)
+    seen: set[str] = set()
+    for root in (canvas, inner):
+        for target in _iter_bind_targets(root):
+            key = str(target)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield key, target
 
 
 def _touch_scroll_allowed(app, widget) -> bool:
@@ -160,18 +186,20 @@ def bind_app_settings_mousewheel(app):
     if not hasattr(app, "app_settings_canvas"):
         return
     app._app_settings_mousewheel_enabled = True
-    if getattr(app, "_app_settings_mousewheel_bound", False):
-        return
-    bind_all = getattr(app, "bind_all", None)
-    if callable(bind_all):
-        bind_all("<MouseWheel>", app._on_app_settings_mousewheel, add="+")
-        bind_all("<Button-4>", app._on_app_settings_mousewheel, add="+")
-        bind_all("<Button-5>", app._on_app_settings_mousewheel, add="+")
-    else:
-        app.app_settings_canvas.bind_all("<MouseWheel>", app._on_app_settings_mousewheel, add="+")
-        app.app_settings_canvas.bind_all("<Button-4>", app._on_app_settings_mousewheel, add="+")
-        app.app_settings_canvas.bind_all("<Button-5>", app._on_app_settings_mousewheel, add="+")
-    app._app_settings_mousewheel_bound = True
+    bound_ids = getattr(app, "_app_settings_mousewheel_bound_ids", None)
+    if not isinstance(bound_ids, set):
+        bound_ids = set()
+        app._app_settings_mousewheel_bound_ids = bound_ids
+    for key, target in _bind_targets(app):
+        if key in bound_ids:
+            continue
+        try:
+            target.bind("<MouseWheel>", app._on_app_settings_mousewheel, add="+")
+            target.bind("<Button-4>", app._on_app_settings_mousewheel, add="+")
+            target.bind("<Button-5>", app._on_app_settings_mousewheel, add="+")
+            bound_ids.add(key)
+        except Exception:
+            continue
 
 def unbind_app_settings_mousewheel(app):
     if not hasattr(app, "app_settings_canvas"):
@@ -209,6 +237,7 @@ def on_app_settings_touch_start(app, event):
     app._app_settings_touch_active = True
     app._app_settings_touch_moved = False
     app._app_settings_touch_start = (x, y)
+    app._app_settings_touch_last = (x, y)
     canvas.scan_mark(x, y)
 
 
@@ -219,8 +248,7 @@ def on_app_settings_touch_move(app, event):
         return
     if not getattr(app, "_app_settings_touch_active", False):
         return
-    pointer_widget = _pointer_widget(app)
-    if _is_scrollbar_widget(pointer_widget) or _is_scrollbar_widget(getattr(event, "widget", None)):
+    if _is_scrollbar_widget(getattr(event, "widget", None)):
         app._app_settings_touch_active = False
         app._app_settings_touch_moved = False
         return
@@ -234,31 +262,38 @@ def on_app_settings_touch_move(app, event):
         if abs(dx) < _TOUCH_SCROLL_THRESHOLD and abs(dy) < _TOUCH_SCROLL_THRESHOLD:
             return
         app._app_settings_touch_moved = True
+    last = getattr(app, "_app_settings_touch_last", start)
+    if abs(x - last[0]) < _TOUCH_SCROLL_STEP_THRESHOLD and abs(y - last[1]) < _TOUCH_SCROLL_STEP_THRESHOLD:
+        return "break"
     canvas.scan_dragto(x, y, gain=1)
+    app._app_settings_touch_last = (x, y)
     return "break"
 
 
 def on_app_settings_touch_end(app, _event=None):
     app._app_settings_touch_active = False
     app._app_settings_touch_moved = False
+    app._app_settings_touch_last = None
 
 
 def bind_app_settings_touch_scroll(app):
     if not hasattr(app, "app_settings_canvas"):
         return
     app._app_settings_touch_enabled = _touch_swipe_enabled(app)
-    if getattr(app, "_app_settings_touch_bound", False):
-        return
-    bind_all = getattr(app, "bind_all", None)
-    if callable(bind_all):
-        bind_all("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
-        bind_all("<B1-Motion>", app._on_app_settings_touch_move, add="+")
-        bind_all("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
-    else:
-        app.app_settings_canvas.bind_all("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
-        app.app_settings_canvas.bind_all("<B1-Motion>", app._on_app_settings_touch_move, add="+")
-        app.app_settings_canvas.bind_all("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
-    app._app_settings_touch_bound = True
+    bound_ids = getattr(app, "_app_settings_touch_bound_ids", None)
+    if not isinstance(bound_ids, set):
+        bound_ids = set()
+        app._app_settings_touch_bound_ids = bound_ids
+    for key, target in _bind_targets(app):
+        if key in bound_ids:
+            continue
+        try:
+            target.bind("<ButtonPress-1>", app._on_app_settings_touch_start, add="+")
+            target.bind("<B1-Motion>", app._on_app_settings_touch_move, add="+")
+            target.bind("<ButtonRelease-1>", app._on_app_settings_touch_end, add="+")
+            bound_ids.add(key)
+        except Exception:
+            continue
 
 
 def unbind_app_settings_touch_scroll(app):

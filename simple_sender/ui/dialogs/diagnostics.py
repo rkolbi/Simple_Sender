@@ -23,13 +23,21 @@
 import logging
 import json
 import os
+import platform
+import sys
+import threading
+import zipfile
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
 from typing import Any, cast
 
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.ui.macro_files import discover_macro_assets
+from simple_sender.ui.pi_profile import PI_PROFILE_STATUS_POLL_INTERVAL
+from simple_sender.utils.logging_config import get_log_dir
 from .popup_utils import center_window
 
 CHECKLIST_ITEMS = [
@@ -54,6 +62,7 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 PREFLIGHT_DECISION_HISTORY_LIMIT = 100
 RUNTIME_TELEMETRY_REFRESH_MS = 1000
+PERF_TEST_STATUS_POLL_INTERVAL = max(1.0, float(PI_PROFILE_STATUS_POLL_INTERVAL))
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -62,6 +71,66 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _set_var_value(app: Any, attr_name: str, value: Any) -> None:
+    var = getattr(app, attr_name, None)
+    setter = getattr(var, "set", None)
+    if not callable(setter):
+        return
+    try:
+        setter(value)
+    except Exception as exc:
+        _log_suppressed(f"Failed setting {attr_name}", exc)
+
+
+def _json_dump(obj: Any) -> str:
+    def _default(value: Any):
+        return str(value)
+
+    try:
+        return json.dumps(obj, indent=2, sort_keys=True, default=_default)
+    except Exception as exc:
+        _log_suppressed("Failed serializing diagnostics JSON payload", exc)
+        return "{}"
+
+
+def _build_system_info_text(app: Any) -> str:
+    lines: list[str] = []
+    lines.append("Simple Sender system snapshot")
+    lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
+    version_getter = getattr(getattr(app, "version_var", None), "get", None)
+    version_text = str(version_getter() if callable(version_getter) else "").strip()
+    if version_text:
+        lines.append(f"App version: {version_text}")
+    lines.append(f"Python: {sys.version.splitlines()[0] if sys.version else 'n/a'}")
+    lines.append(f"Executable: {sys.executable}")
+    lines.append(f"Platform: {platform.platform()}")
+    lines.append(f"Machine: {platform.machine()}")
+    lines.append(f"Processor: {platform.processor()}")
+    lines.append(f"PID: {os.getpid()}")
+    try:
+        cwd = os.getcwd()
+    except Exception:
+        cwd = ""
+    if cwd:
+        lines.append(f"CWD: {cwd}")
+    env = os.environ
+    for key in ("USER", "LOGNAME", "HOME", "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY"):
+        value = str(env.get(key, "") or "").strip()
+        if value:
+            lines.append(f"{key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def _resolved_settings_path(app: Any) -> Path | None:
+    raw_path = str(getattr(app, "settings_path", "") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_file():
+        return None
+    return path
 
 
 def _safe_job_hash(app: Any) -> str:
@@ -114,6 +183,26 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics["perf_available"] = bool(snapshot.get("available", True))
     for key, value in snapshot.items():
         metrics[f"perf_{key}"] = value
+    raw_status_perf = getattr(app, "_status_perf_metrics", None)
+    if isinstance(raw_status_perf, dict) and raw_status_perf:
+        status_perf: dict[str, dict[str, float | int]] = {}
+        for raw_name, raw_entry in raw_status_perf.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            count = int(raw_entry.get("count", 0) or 0)
+            total_ms = float(raw_entry.get("total_ms", 0.0) or 0.0)
+            max_ms = float(raw_entry.get("max_ms", 0.0) or 0.0)
+            avg_ms = (total_ms / count) if count > 0 else 0.0
+            status_perf[name] = {
+                "count": count,
+                "avg_ms": avg_ms,
+                "max_ms": max_ms,
+            }
+        if status_perf:
+            metrics["status_perf_metrics"] = status_perf
     return metrics
 
 
@@ -189,12 +278,30 @@ def _format_runtime_metrics(
 
     idle_cpu_avg = metrics.get("perf_idle_cpu_avg")
     idle_cpu_p95 = metrics.get("perf_idle_cpu_p95")
+    quiet_idle_cpu_avg = metrics.get("perf_quiet_idle_cpu_avg")
+    quiet_idle_cpu_p95 = metrics.get("perf_quiet_idle_cpu_p95")
+    quiet_idle_samples = metrics.get("perf_quiet_idle_cpu_samples")
     stream_cpu_avg = metrics.get("perf_stream_cpu_avg")
     stream_cpu_p95 = metrics.get("perf_stream_cpu_p95")
     if idle_cpu_avg is None or idle_cpu_p95 is None:
         lines.append("- Idle CPU avg/p95: n/a")
     else:
         lines.append(f"- Idle CPU avg/p95: {float(idle_cpu_avg):.2f}% / {float(idle_cpu_p95):.2f}%")
+    if quiet_idle_cpu_avg is None or quiet_idle_cpu_p95 is None:
+        lines.append("- Quiet idle CPU avg/p95: n/a")
+    else:
+        sample_suffix = ""
+        try:
+            sample_count = int(quiet_idle_samples or 0)
+        except (TypeError, ValueError):
+            sample_count = 0
+        if sample_count > 0:
+            sample_suffix = f" (samples={sample_count})"
+        lines.append(
+            "- Quiet idle CPU avg/p95: "
+            f"{float(quiet_idle_cpu_avg):.2f}% / {float(quiet_idle_cpu_p95):.2f}%"
+            f"{sample_suffix}"
+        )
     if stream_cpu_avg is None or stream_cpu_p95 is None:
         lines.append("- Streaming CPU avg/p95: n/a")
     else:
@@ -215,8 +322,12 @@ def _format_runtime_metrics(
         lines.append(f"- Perf monitor uptime: {float(uptime_s):.1f}s")
     if startup_s is not None:
         lines.append(f"- Startup time: {float(startup_s):.3f}s")
-    max_drain_ms = metrics.get("perf_ui_queue_drain_max_ms")
-    stall_count = metrics.get("perf_ui_queue_drain_stall_count")
+    max_drain_ms = metrics.get("perf_ui_queue_drain_runtime_max_ms")
+    stall_count = metrics.get("perf_ui_queue_drain_runtime_stall_count")
+    if max_drain_ms is None:
+        max_drain_ms = metrics.get("perf_ui_queue_drain_max_ms")
+    if stall_count is None:
+        stall_count = metrics.get("perf_ui_queue_drain_stall_count")
     stall_budget = metrics.get("perf_ui_queue_drain_stall_budget_ms")
     if max_drain_ms is not None and stall_count is not None:
         budget_text = f"{float(stall_budget):.1f}" if stall_budget is not None else "n/a"
@@ -224,6 +335,48 @@ def _format_runtime_metrics(
             "- UI queue drain max/stalls: "
             f"{float(max_drain_ms):.2f} ms / {int(stall_count)} (budget {budget_text} ms)"
         )
+    slow_event_ms = metrics.get("perf_ui_queue_drain_runtime_slowest_event_ms")
+    if slow_event_ms is not None:
+        try:
+            slow_ms = float(slow_event_ms)
+        except (TypeError, ValueError):
+            slow_ms = 0.0
+        if slow_ms > 0.0:
+            slow_kind = str(metrics.get("perf_ui_queue_drain_runtime_slowest_event_kind", "") or "")
+            lines.append(
+                "- UI queue slowest runtime event: "
+                f"{slow_kind or 'unknown'} ({slow_ms:.2f} ms)"
+            )
+    status_perf = metrics.get("status_perf_metrics")
+    if isinstance(status_perf, dict) and status_perf:
+        lines.append("- Status handler timings:")
+        for name in sorted(status_perf.keys()):
+            entry = status_perf.get(name)
+            if not isinstance(entry, dict):
+                continue
+            lines.append(
+                "  "
+                f"{name}: "
+                f"count={int(entry.get('count', 0) or 0)}, "
+                f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.3f} ms, "
+                f"max={float(entry.get('max_ms', 0.0) or 0.0):.3f} ms"
+            )
+    task_timings = metrics.get("perf_background_task_timings")
+    if isinstance(task_timings, dict) and task_timings:
+        lines.append("- Background I/O timings:")
+        for task_name in sorted(task_timings.keys()):
+            entry = task_timings.get(task_name)
+            if not isinstance(entry, dict):
+                continue
+            lines.append(
+                "  "
+                f"{task_name}: "
+                f"count={int(entry.get('count', 0) or 0)}, "
+                f"ok={int(entry.get('ok_count', 0) or 0)}, "
+                f"err={int(entry.get('err_count', 0) or 0)}, "
+                f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
+                f"max={float(entry.get('max_ms', 0.0) or 0.0):.2f} ms"
+            )
     return lines
 
 
@@ -722,20 +875,94 @@ def run_preflight_check(app) -> None:
     messagebox.showinfo("Preflight check", "No issues detected.")
 
 
-def export_session_diagnostics(app) -> None:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_name = f"simple_sender_diagnostics_{timestamp}.txt"
-    path = run_file_dialog(
-        app,
-        filedialog.asksaveasfilename,
-        title="Export diagnostics",
-        defaultextension=".txt",
-        initialfile=default_name,
-        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
+def _build_performance_report_text(app: Any) -> str:
+    perf_monitor = getattr(app, "_perf_monitor", None)
+    if perf_monitor is not None:
+        build_report = getattr(perf_monitor, "build_report_snapshot", None)
+        if callable(build_report):
+            try:
+                report = str(build_report() or "").strip()
+                if report:
+                    return report
+            except Exception as exc:
+                _log_suppressed("Failed building performance monitor report snapshot", exc)
+
+    lines: list[str] = []
+    lines.append("=== Simple Sender Performance Snapshot ===")
+    lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
+    metrics = _runtime_metrics(app)
+    if metrics:
+        lines.extend(_format_runtime_metrics(metrics, include_samples=False))
+    else:
+        lines.append("Runtime telemetry unavailable.")
+    return "\n".join(lines)
+
+
+def apply_performance_test_preset(app) -> None:
+    try:
+        app._status_perf_metrics_enabled = True
+    except Exception as exc:
+        _log_suppressed("Failed enabling status perf-metric capture in diagnostics preset", exc)
+    _set_var_value(app, "performance_profile_enabled", True)
+    _set_var_value(app, "performance_leak_watch_enabled", False)
+    _set_var_value(app, "performance_mode", True)
+    _set_var_value(app, "gui_logging_enabled", False)
+    _set_var_value(app, "status_poll_interval", PERF_TEST_STATUS_POLL_INTERVAL)
+
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        settings["performance_profile_enabled"] = True
+        settings["performance_leak_watch_enabled"] = False
+        settings["performance_mode"] = True
+        settings["gui_logging_enabled"] = False
+        settings["status_poll_interval"] = PERF_TEST_STATUS_POLL_INTERVAL
+
+    saver = getattr(app, "_save_settings", None)
+    if callable(saver):
+        try:
+            saver()
+        except Exception as exc:
+            _log_suppressed("Failed saving settings for diagnostics perf-test preset", exc)
+            messagebox.showerror("Diagnostics preset", f"Failed to save settings:\n{exc}")
+            return
+    try:
+        app.ui_q.put(("log", "[diagnostics] Performance test preset applied (restart required)."))
+    except Exception as exc:
+        _log_suppressed("Failed queueing diagnostics preset status log", exc)
+    messagebox.showinfo(
+        "Diagnostics preset",
+        (
+            "Performance test preset applied.\n\n"
+            "- Runtime performance profiling: ON\n"
+            "- Leak-watch snapshots: OFF\n"
+            "- Performance mode: ON\n"
+            "- GUI logging: OFF\n"
+            f"- Status poll interval: {PERF_TEST_STATUS_POLL_INTERVAL:.2f}s\n\n"
+            "Restart the app before the next run for clean benchmark numbers."
+        ),
     )
-    if not path:
-        return
-    lines = []
+
+
+def save_performance_report_to_logs(app) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"simple_sender_performance_report_{timestamp}.txt"
+    path = get_log_dir() / filename
+    report = _build_performance_report_text(app)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        _log_suppressed("Failed creating logs directory for performance report", exc)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as outfile:
+            outfile.write(report)
+            outfile.write("\n")
+        messagebox.showinfo("Save performance report", f"Saved to:\n{path}")
+    except Exception as exc:
+        messagebox.showerror("Save performance report", f"Failed to write report:\n{exc}")
+
+
+def _build_session_diagnostics_lines(app: Any) -> list[str]:
+    lines: list[str] = []
     lines.append("Simple Sender diagnostics")
     lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
     lines.append("")
@@ -806,6 +1033,25 @@ def export_session_diagnostics(app) -> None:
             stamp = datetime.fromtimestamp(ts).isoformat(timespec="seconds")
             lines.append(f"{stamp} {raw.strip()}")
         lines.append("")
+    connection_history = getattr(app, "_connection_timeline", [])
+    connection_entries = list(connection_history) if connection_history else []
+    if connection_entries:
+        lines.append("Connection timeline:")
+        for entry in connection_entries[-80:]:
+            if not isinstance(entry, dict):
+                continue
+            ts = entry.get("ts")
+            try:
+                stamp = datetime.fromtimestamp(float(ts)).isoformat(timespec="seconds")
+            except Exception:
+                stamp = str(ts or "n/a")
+            event = str(entry.get("event", "") or "unknown")
+            details = str(entry.get("details", "") or "")
+            if details:
+                lines.append(f"{stamp} {event} | {details}")
+            else:
+                lines.append(f"{stamp} {event}")
+        lines.append("")
     console_lines = []
     try:
         console_lines = app.streaming_controller.get_console_lines()
@@ -822,6 +1068,205 @@ def export_session_diagnostics(app) -> None:
         lines.append("Settings:")
         lines.append(json.dumps(settings, indent=2, sort_keys=True))
         lines.append("")
+    return lines
+
+
+def _collect_diagnostics_bundle_payload(app: Any) -> dict[str, Any]:
+    session_text = "\n".join(_build_session_diagnostics_lines(app)) + "\n"
+    perf_text = _build_performance_report_text(app).strip() + "\n"
+    runtime_metrics_json = _json_dump(_runtime_metrics(app)) + "\n"
+    connection_timeline_json = _json_dump(list(getattr(app, "_connection_timeline", []) or [])) + "\n"
+    system_info_text = _build_system_info_text(app)
+    settings_snapshot_json = _json_dump(getattr(app, "settings", {}) or {}) + "\n"
+    settings_path = _resolved_settings_path(app)
+    macro_assets = discover_macro_assets(app)
+    log_dir = get_log_dir()
+    try:
+        log_candidates = list(log_dir.iterdir())
+    except Exception as exc:
+        _log_suppressed("Failed enumerating log files for diagnostics bundle", exc)
+        log_candidates = []
+    log_files = sorted(
+        (
+            candidate
+            for candidate in log_candidates
+            if candidate.is_file()
+            and (
+                candidate.name.endswith(".log")
+                or ".log." in candidate.name
+                or candidate.name.startswith("simple_sender_performance_report_")
+                or candidate.name.startswith("simple_sender_diagnostics_")
+            )
+        ),
+        key=lambda p: p.name,
+    )
+    bundle_manifest: dict[str, Any] = {
+        "kind": "simple_sender_diagnostics_bundle",
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "version": str(getattr(getattr(app, "version_var", None), "get", lambda: "")() or ""),
+        "files": {
+            "session_diagnostics": True,
+            "performance_report": True,
+            "runtime_metrics": True,
+            "connection_timeline": True,
+            "system_info": True,
+            "runtime_settings_snapshot": True,
+            "settings_file": bool(settings_path is not None),
+            "log_count": 0,
+            "macro_asset_count": 0,
+        },
+    }
+    return {
+        "session_text": session_text,
+        "perf_text": perf_text,
+        "runtime_metrics_json": runtime_metrics_json,
+        "connection_timeline_json": connection_timeline_json,
+        "system_info_text": system_info_text,
+        "settings_snapshot_json": settings_snapshot_json,
+        "settings_path": settings_path,
+        "macro_assets": macro_assets,
+        "log_files": log_files,
+        "bundle_manifest": bundle_manifest,
+    }
+
+
+def _write_diagnostics_bundle_archive(out_path: Path, payload: dict[str, Any]) -> None:
+    bundle_manifest = dict(payload.get("bundle_manifest", {}) or {})
+    files_section = dict(bundle_manifest.get("files", {}) or {})
+    bundle_manifest["files"] = files_section
+    settings_path = payload.get("settings_path")
+    macro_assets = list(payload.get("macro_assets", []) or [])
+    log_files = list(payload.get("log_files", []) or [])
+    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("session_diagnostics.txt", str(payload.get("session_text", "")))
+        archive.writestr("performance_report.txt", str(payload.get("perf_text", "")))
+        archive.writestr("runtime_metrics.json", str(payload.get("runtime_metrics_json", "")))
+        archive.writestr("connection_timeline.json", str(payload.get("connection_timeline_json", "")))
+        archive.writestr("system_info.txt", str(payload.get("system_info_text", "")))
+        archive.writestr(
+            "settings/runtime_settings_snapshot.json",
+            str(payload.get("settings_snapshot_json", "")),
+        )
+        if isinstance(settings_path, Path):
+            try:
+                archive.write(settings_path, arcname="settings/settings.json")
+            except Exception as exc:
+                _log_suppressed("Failed adding settings file to diagnostics bundle", exc)
+        macro_added = 0
+        for source, name in macro_assets:
+            try:
+                archive.write(source, arcname=f"macros/{os.path.basename(name)}")
+                macro_added += 1
+            except Exception as exc:
+                _log_suppressed("Failed adding macro/checklist asset to diagnostics bundle", exc)
+        log_added = 0
+        for log_path in log_files:
+            try:
+                archive.write(log_path, arcname=f"logs/{log_path.name}")
+                log_added += 1
+            except Exception as exc:
+                _log_suppressed("Failed adding log file to diagnostics bundle", exc)
+        files_section["log_count"] = log_added
+        files_section["macro_asset_count"] = macro_added
+        archive.writestr("manifest.json", _json_dump(bundle_manifest))
+
+
+def export_diagnostics_bundle(app) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    default_name = f"simple_sender_diagnostics_bundle_{timestamp}.zip"
+    path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
+        title="Export diagnostics bundle",
+        defaultextension=".zip",
+        initialfile=default_name,
+        filetypes=(("Zip files", "*.zip"), ("All files", "*.*")),
+    )
+    if not path:
+        return
+    out_path = Path(path)
+    if out_path.parent:
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            _log_suppressed("Failed creating export directory for diagnostics bundle", exc)
+
+    saver = getattr(app, "_save_settings", None)
+    if callable(saver):
+        try:
+            saver()
+        except Exception as exc:
+            _log_suppressed("Failed saving settings before diagnostics-bundle export", exc)
+
+    payload = _collect_diagnostics_bundle_payload(app)
+    use_background_export = bool(getattr(app, "_diagnostics_bundle_async_export", True))
+    if use_background_export and callable(getattr(app, "after", None)):
+        if bool(getattr(app, "_diagnostics_bundle_export_inflight", False)):
+            messagebox.showinfo(
+                "Export diagnostics bundle",
+                "A diagnostics bundle export is already running.",
+            )
+            return
+        app._diagnostics_bundle_export_inflight = True
+        try:
+            app.ui_q.put(("log", "[diagnostics] Exporting diagnostics bundle..."))
+        except Exception:
+            pass
+
+        def _complete_export(error: Exception | None = None) -> None:
+            app._diagnostics_bundle_export_inflight = False
+            if error is None:
+                messagebox.showinfo("Export diagnostics bundle", f"Saved to:\n{out_path}")
+                return
+            messagebox.showerror("Export diagnostics bundle", f"Failed to create bundle:\n{error}")
+
+        after = getattr(app, "after")
+
+        def _export_worker() -> None:
+            error: Exception | None = None
+            try:
+                _write_diagnostics_bundle_archive(out_path, payload)
+            except Exception as exc:
+                error = exc
+            try:
+                after(0, lambda: _complete_export(error))
+            except Exception as exc:
+                _log_suppressed("Failed posting diagnostics bundle completion callback", exc)
+                _complete_export(error)
+
+        try:
+            worker = threading.Thread(
+                target=_export_worker,
+                name="diagnostics-bundle-export",
+                daemon=True,
+            )
+            worker.start()
+            return
+        except Exception as exc:
+            app._diagnostics_bundle_export_inflight = False
+            _log_suppressed("Failed starting diagnostics bundle export thread", exc)
+
+    try:
+        _write_diagnostics_bundle_archive(out_path, payload)
+        messagebox.showinfo("Export diagnostics bundle", f"Saved to:\n{out_path}")
+    except Exception as exc:
+        messagebox.showerror("Export diagnostics bundle", f"Failed to create bundle:\n{exc}")
+
+
+def export_session_diagnostics(app) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    default_name = f"simple_sender_diagnostics_{timestamp}.txt"
+    path = run_file_dialog(
+        app,
+        filedialog.asksaveasfilename,
+        title="Export diagnostics",
+        defaultextension=".txt",
+        initialfile=default_name,
+        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
+    )
+    if not path:
+        return
+    lines = _build_session_diagnostics_lines(app)
     dir_name = os.path.dirname(path)
     if dir_name:
         try:

@@ -36,6 +36,7 @@ from simple_sender.utils.constants import (
     TOOLPATH_TOP_VIEW_PROGRESSIVE_CHUNK_SIZE,
     TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD,
     TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT,
+    TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT_STREAMING,
     TOOLPATH_GRID_MAX_POINTS,
     TOOLPATH_GRID_POINT_RADIUS,
     TOOLPATH_ORIGIN_CROSS_SIZE,
@@ -48,6 +49,11 @@ _TOOLPATH_SEGMENT_COLORS = {
     "rapid": "#8a8a8a",
     "feed": "#2c6dd2",
     "arc": "#2aa876",
+}
+_TOOLPATH_SEGMENT_WIDTHS = {
+    "rapid": 1.0,
+    "feed": 1.4,
+    "arc": 1.5,
 }
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -82,6 +88,8 @@ class TopViewPanel(ttk.Frame):
         self._overlay_grid: ProbeGrid | None = None
         self._status_message: str | None = None
         self._render_segment_limit = TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT
+        self._render_segment_limit_streaming = TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT_STREAMING
+        self._streaming = False
         self._scene_revision = 0
         self._last_render_signature: tuple[int, int, int] | None = None
         self._progressive_render_after_id: str | int | None = None
@@ -211,6 +219,12 @@ class TopViewPanel(ttk.Frame):
         if self._visible:
             self._schedule_render()
 
+    def set_streaming(self, streaming: bool) -> None:
+        next_state = bool(streaming)
+        if self._streaming == next_state:
+            return
+        self._streaming = next_state
+
     def set_position(self, x: float, y: float, z: float) -> None:
         self.position = (x, y, z)
         if self._visible and self.segments:
@@ -218,6 +232,26 @@ class TopViewPanel(ttk.Frame):
                 self._update_position_marker()
             else:
                 self._schedule_render()
+
+    def _active_render_segment_limit(self) -> int:
+        limit = (
+            self._render_segment_limit_streaming
+            if self._streaming
+            else self._render_segment_limit
+        )
+        try:
+            return max(1, int(limit))
+        except Exception:
+            return max(1, int(TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT))
+
+    def _line_style_for_color(self, color: str) -> dict[str, Any]:
+        color_key = str(color or "").strip().lower()
+        return {
+            "fill": self._colors.get(color_key, "#2c6dd2"),
+            "width": float(_TOOLPATH_SEGMENT_WIDTHS.get(color_key, 1.2)),
+            "capstyle": tk.ROUND,
+            "joinstyle": tk.ROUND,
+        }
 
     def _segments_bounds(
         self, segments: Sequence[tuple[float, float, float, float, float, float, str]]
@@ -339,9 +373,9 @@ class TopViewPanel(ttk.Frame):
             processed += 1
 
         for color, polylines in runs.items():
-            color_hex = self._colors.get(color, "#2c6dd2")
+            style = self._line_style_for_color(color)
             for pts in polylines:
-                self.canvas.create_line(*pts, fill=color_hex)
+                self.canvas.create_line(*pts, **style)
 
         done = next_idx >= total_segments
         if done:
@@ -426,8 +460,9 @@ class TopViewPanel(ttk.Frame):
         render_segments = self.segments
         total_segments = len(render_segments)
         stride = 1
-        if self._render_segment_limit > 0 and total_segments > self._render_segment_limit:
-            stride = max(2, math.ceil(total_segments / self._render_segment_limit))
+        render_limit = self._active_render_segment_limit()
+        if render_limit > 0 and total_segments > render_limit:
+            stride = max(2, math.ceil(total_segments / render_limit))
 
         x0, y0 = to_canvas(minx, miny)
         x1, y1 = to_canvas(maxx, maxy)
@@ -535,9 +570,9 @@ class TopViewPanel(ttk.Frame):
         flush_run()
 
         for color, polylines in runs.items():
-            color_hex = self._colors.get(color, "#2c6dd2")
+            style = self._line_style_for_color(color)
             for pts in polylines:
-                self.canvas.create_line(*pts, fill=color_hex)
+                self.canvas.create_line(*pts, **style)
 
         self._draw_top_view_overlay(
             total_segments=total_segments,

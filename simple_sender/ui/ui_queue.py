@@ -33,6 +33,7 @@ from simple_sender.utils.constants import (
     UI_EVENT_QUEUE_MAXSIZE,
     UI_EVENT_QUEUE_DROP_NOTICE_INTERVAL,
     UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S,
+    UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S,
     UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
     UI_QUEUE_MAINTENANCE_INTERVAL_S,
     UI_QUEUE_RECONNECT_CHECK_INTERVAL_S,
@@ -42,6 +43,7 @@ from simple_sender.types import AppProtocol, UiEvent
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_LOW_IMPACT_UI_EVENT_KINDS = frozenset({"buffer_fill", "log_rx", "log_tx", "status", "throughput"})
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -56,6 +58,39 @@ def _stream_ui_busy(app: AppProtocol) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return True
     return str(getattr(app, "_stream_state", "") or "").strip().lower() in {"running", "paused"}
+
+
+def _connected_quiet_idle(app: AppProtocol) -> bool:
+    try:
+        if not bool(getattr(app, "connected", False)):
+            return False
+        if not bool(getattr(app, "_grbl_ready", False)):
+            return False
+        if _stream_ui_busy(app):
+            return False
+        if bool(getattr(app, "_gcode_loading", False)):
+            return False
+        if bool(getattr(app, "_gcode_parsing_active", False)):
+            return False
+        if bool(getattr(app, "_homing_in_progress", False)):
+            return False
+        if bool(getattr(app, "_alarm_locked", False)):
+            return False
+        if getattr(app, "_stats_pending_request", None):
+            return False
+        state = str(getattr(app, "_machine_state_text", "") or "").strip().lower()
+        if state and not state.startswith("idle"):
+            return False
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None and hasattr(ui_q, "qsize"):
+            try:
+                if int(ui_q.qsize()) > 0:
+                    return False
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
 
 
 class UiEventQueue:
@@ -314,6 +349,9 @@ class UiEventQueue:
 def drain_ui_queue(app: AppProtocol) -> None:
     processed = 0
     pending = 0
+    processed_low_impact_only = True
+    max_event_elapsed_ms = 0.0
+    max_event_kind = ""
     drain_start = time.perf_counter()
     try:
         event_limit = max(1, int(getattr(app, "_ui_queue_drain_event_limit", UI_QUEUE_DRAIN_EVENT_LIMIT)))
@@ -335,10 +373,20 @@ def drain_ui_queue(app: AppProtocol) -> None:
             except queue.Empty:
                 break
             processed += 1
+            evt_kind = ""
+            if isinstance(evt, tuple) and evt:
+                evt_kind = str(evt[0] or "")
+            if (not evt_kind) or (evt_kind not in _LOW_IMPACT_UI_EVENT_KINDS):
+                processed_low_impact_only = False
+            evt_start = time.perf_counter()
             try:
                 app._handle_evt(evt)
             except Exception as exc:
                 app._log_exception("UI event error", exc)
+            evt_elapsed_ms = max(0.0, (time.perf_counter() - evt_start) * 1000.0)
+            if evt_elapsed_ms > max_event_elapsed_ms:
+                max_event_elapsed_ms = evt_elapsed_ms
+                max_event_kind = evt_kind or "unknown"
             if (time.perf_counter() - drain_start) >= time_budget_s:
                 break
         if hasattr(app.ui_q, "pop_drop_summary"):
@@ -368,6 +416,7 @@ def drain_ui_queue(app: AppProtocol) -> None:
             pending = 0
         queue_busy = (processed > 0) or (pending > 0)
         stream_busy = _stream_ui_busy(app)
+        quiet_idle = (not queue_busy) and _connected_quiet_idle(app)
         if not stream_busy:
             maintenance_interval_key = (
                 "_ui_maintenance_interval_s"
@@ -377,7 +426,20 @@ def drain_ui_queue(app: AppProtocol) -> None:
             maintenance_interval_default = UI_QUEUE_MAINTENANCE_INTERVAL_S
             if not queue_busy:
                 maintenance_interval_default = float(
-                    getattr(app, "_ui_maintenance_interval_s", UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S)
+                    getattr(
+                        app,
+                        "_ui_maintenance_idle_interval_s",
+                        UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S,
+                    )
+                )
+            if quiet_idle:
+                maintenance_interval_key = "_ui_maintenance_quiet_idle_interval_s"
+                maintenance_interval_default = float(
+                    getattr(
+                        app,
+                        "_ui_maintenance_quiet_idle_interval_s",
+                        UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S,
+                    )
                 )
             maintenance_interval = max(
                 0.0,
@@ -405,41 +467,42 @@ def drain_ui_queue(app: AppProtocol) -> None:
                         app._sync_tool_reference_label()
                     except Exception as exc:
                         app._log_exception("UI tool-reference sync error", exc)
-            reconnect_interval_key = (
-                "_auto_reconnect_check_interval_s"
-                if queue_busy
-                else "_auto_reconnect_check_idle_interval_s"
-            )
-            reconnect_interval_default = UI_QUEUE_RECONNECT_CHECK_INTERVAL_S
-            if not queue_busy:
-                reconnect_interval_default = float(
-                    getattr(
-                        app,
-                        "_auto_reconnect_check_interval_s",
-                        UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
-                    )
+            if not bool(getattr(app, "connected", False)):
+                reconnect_interval_key = (
+                    "_auto_reconnect_check_interval_s"
+                    if queue_busy
+                    else "_auto_reconnect_check_idle_interval_s"
                 )
-            reconnect_interval = max(
-                0.0,
-                float(
-                    getattr(
-                        app,
-                        reconnect_interval_key,
-                        reconnect_interval_default,
+                reconnect_interval_default = UI_QUEUE_RECONNECT_CHECK_INTERVAL_S
+                if not queue_busy:
+                    reconnect_interval_default = float(
+                        getattr(
+                            app,
+                            "_auto_reconnect_check_idle_interval_s",
+                            UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
+                        )
                     )
-                ),
-            )
-            last_reconnect_check = float(getattr(app, "_auto_reconnect_check_ts", 0.0) or 0.0)
-            should_check_reconnect = (
-                last_reconnect_check <= 0.0
-                or (now - last_reconnect_check) >= reconnect_interval
-            )
-            if should_check_reconnect:
-                setattr(app, "_auto_reconnect_check_ts", now)
-                try:
-                    app._maybe_auto_reconnect()
-                except Exception as exc:
-                    app._log_exception("UI auto-reconnect check error", exc)
+                reconnect_interval = max(
+                    0.0,
+                    float(
+                        getattr(
+                            app,
+                            reconnect_interval_key,
+                            reconnect_interval_default,
+                        )
+                    ),
+                )
+                last_reconnect_check = float(getattr(app, "_auto_reconnect_check_ts", 0.0) or 0.0)
+                should_check_reconnect = (
+                    last_reconnect_check <= 0.0
+                    or (now - last_reconnect_check) >= reconnect_interval
+                )
+                if should_check_reconnect:
+                    setattr(app, "_auto_reconnect_check_ts", now)
+                    try:
+                        app._maybe_auto_reconnect()
+                    except Exception as exc:
+                        app._log_exception("UI auto-reconnect check error", exc)
     finally:
         try:
             elapsed_ms = max(0.0, (time.perf_counter() - drain_start) * 1000.0)
@@ -456,17 +519,45 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 app._ui_queue_drain_stall_count = int(
                     getattr(app, "_ui_queue_drain_stall_count", 0)
                 ) + 1
+            runtime_eligible = (
+                bool(getattr(app, "connected", False))
+                and bool(getattr(app, "_grbl_ready", False))
+                and not bool(getattr(app, "_gcode_loading", False))
+                and not bool(getattr(app, "_closing", False))
+                and not bool(getattr(app, "_connecting", False))
+                and not bool(getattr(app, "_disconnecting", False))
+            )
+            if runtime_eligible:
+                app._ui_queue_drain_runtime_ticks = int(
+                    getattr(app, "_ui_queue_drain_runtime_ticks", 0)
+                ) + 1
+                app._ui_queue_drain_runtime_events = int(
+                    getattr(app, "_ui_queue_drain_runtime_events", 0)
+                ) + int(processed)
+                app._ui_queue_drain_runtime_max_ms = max(
+                    float(getattr(app, "_ui_queue_drain_runtime_max_ms", 0.0)),
+                    elapsed_ms,
+                )
+                if max_event_elapsed_ms > float(
+                    getattr(app, "_ui_queue_drain_runtime_slowest_event_ms", 0.0) or 0.0
+                ):
+                    app._ui_queue_drain_runtime_slowest_event_ms = float(max_event_elapsed_ms)
+                    app._ui_queue_drain_runtime_slowest_event_kind = str(max_event_kind or "unknown")
+                if elapsed_ms > stall_budget_ms:
+                    app._ui_queue_drain_runtime_stall_count = int(
+                        getattr(app, "_ui_queue_drain_runtime_stall_count", 0)
+                    ) + 1
         except Exception:
             pass
         if app._closing:
             return
         next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
-        if processed > 0 or pending > 0:
+        stream_busy = _stream_ui_busy(app)
+        if pending > 0:
             try:
                 setattr(app, "_ui_queue_idle_streak", 0)
             except Exception:
                 pass
-        if pending > 0:
             if pending >= 500:
                 next_delay_ms = 1
             elif pending >= 200:
@@ -475,7 +566,10 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 next_delay_ms = 15
             else:
                 next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
-        elif processed <= 0:
+        elif (
+            processed <= 0
+            or ((not stream_busy) and processed_low_impact_only)
+        ):
             try:
                 idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1
                 setattr(app, "_ui_queue_idle_streak", idle_streak)
@@ -508,6 +602,11 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 )
             except Exception:
                 next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+        else:
+            try:
+                setattr(app, "_ui_queue_idle_streak", 0)
+            except Exception:
+                pass
         try:
             app.after(next_delay_ms, app._drain_ui_queue)
         except Exception as exc:

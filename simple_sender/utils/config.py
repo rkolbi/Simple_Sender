@@ -38,6 +38,7 @@ from pathlib import Path
 
 from .constants import (
     GCODE_STREAMING_LINE_THRESHOLD,
+    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
     SETTINGS_FILENAME,
     SETTINGS_BACKUP_SUFFIX,
     SETTINGS_TEMP_SUFFIX,
@@ -85,7 +86,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "grbl_popup_enabled": True,
     "grbl_popup_auto_dismiss_sec": 12.0,
     "grbl_popup_dedupe_sec": 3.0,
-    "estimate_factor": 1.1257575757575757,
+    "estimate_factor": 1.0,
     "estimate_fallback_rapid": 5000.0,
     "estimate_rate_x": "",
     "estimate_rate_y": "",
@@ -123,6 +124,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "performance_leak_watch_enabled": False,
     "recent_files": [],
     "reconnect_on_open": True,
+    "startup_auto_connect_delay_s": 5.0,
     "render3d_enabled": True,
     "show_recover_button": False,
     "show_resume_from_button": False,
@@ -171,6 +173,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "vacuum_outlet": 1,
     "validate_streaming_gcode": True,
     "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,
+    "ultra_large_size_threshold_mb": max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
     "window_geometry": "1194x864+261+83",
     "zeroing_persistent": False,
     "show_autolevel_overlay": True,
@@ -241,6 +244,16 @@ def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
 
     if "auto_reconnect" in migrated and "reconnect_on_open" not in migrated:
         migrated["reconnect_on_open"] = bool(migrated.get("auto_reconnect"))
+
+    # Legacy builds shipped with an inflated estimate-factor default. Normalize
+    # that exact historical default to neutral unless the user chose another value.
+    legacy_estimate_factor = 1.1257575757575757
+    try:
+        estimate_factor = float(migrated.get("estimate_factor"))
+    except (TypeError, ValueError):
+        estimate_factor = None
+    if estimate_factor is not None and abs(estimate_factor - legacy_estimate_factor) <= 1e-9:
+        migrated["estimate_factor"] = 1.0
 
     # Rebalance legacy toolpath defaults so Top View keeps higher detail while
     # 3D defaults remain responsive. Only rewrite known old-default values.

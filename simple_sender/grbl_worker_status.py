@@ -35,6 +35,7 @@ from .utils.constants import (
     WATCHDOG_ALARM_DISCONNECT_TIMEOUT,
     WATCHDOG_DISCONNECT_TIMEOUT,
     WATCHDOG_RX_TIMEOUT,
+    WATCHDOG_READY_ARM_GRACE,
     GRBL_STARTUP_TIMEOUT,
 )
 from .utils.validation import validate_interval
@@ -42,6 +43,7 @@ from .utils.validation import validate_interval
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_WATCHDOG_READY_ARM_GRACE_S = float(WATCHDOG_READY_ARM_GRACE)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -70,10 +72,14 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         """
         interval = validate_interval(interval, min_val=0.01)
         
+        changed = True
         with self._status_interval_lock:
+            prev = float(getattr(self, "_status_poll_interval", interval))
             self._status_poll_interval = interval
+            changed = abs(prev - interval) > 1e-9
 
-        logger.debug(f"Status poll interval set to {interval}s")
+        if changed:
+            logger.debug(f"Status poll interval set to {interval}s")
 
     def set_status_query_failure_limit(self, limit: int) -> None:
         """Set the number of consecutive status failures before disconnect.
@@ -96,9 +102,23 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         """Mark GRBL as ready (banner received)."""
         if not self._ready:
             self._ready = True
+            self._watchdog_ready_armed = False
+            self._watchdog_ready_ts = time.time()
             self._connect_started_ts = 0.0
             self.ui_q.put(("ready", True))
             logger.info("GRBL ready")
+
+    def _watchdog_enforced(self, now: float) -> bool:
+        if self._streaming or self._paused:
+            return True
+        if not self._ready:
+            return False
+        if bool(getattr(self, "_watchdog_ready_armed", False)):
+            return True
+        ready_ts = float(getattr(self, "_watchdog_ready_ts", 0.0) or 0.0)
+        if ready_ts <= 0.0:
+            return True
+        return (now - ready_ts) >= _WATCHDOG_READY_ARM_GRACE_S
     
     def _safe_ui_put(self, *args, context: str = "operation") -> None:
         """Safely put item on UI queue with error logging.
@@ -114,8 +134,28 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         except Exception as e:
             logger.error(f"Failed to send UI event during {context}: {e}")
 
+    def _emit_ui_log_rx(self, line: str, *, context: str = "rx line") -> None:
+        text = str(line or "").strip()
+        if not text:
+            return
+        should_forward = True
+        checker = getattr(self, "_should_forward_log_rx_line", None)
+        if callable(checker):
+            try:
+                should_forward = bool(checker(text))
+            except Exception as exc:
+                _log_suppressed("Failed evaluating UI RX-log forwarding rule", exc)
+                should_forward = True
+        if not should_forward:
+            return
+        self._safe_ui_put(("log_rx", text), context=context)
+
     def _status_log_due(self, now: float) -> bool:
         interval = float(getattr(self, "_status_log_interval", RX_STATUS_LOG_INTERVAL))
+        if self._streaming or self._paused:
+            interval = max(interval, 1.0)
+        else:
+            interval = max(interval, 0.5)
         last = float(getattr(self, "_last_status_log_ts", 0.0))
         if (now - last) >= interval:
             self._last_status_log_ts = now
@@ -253,19 +293,20 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         if line_lower == "ok":
             ok_summary = self._note_ok_log(now)
             if ok_summary:
-                self._safe_ui_put(("log_rx", ok_summary), context="ok summary")
+                self._emit_ui_log_rx(ok_summary, context="ok summary")
             if getattr(self, "_settings_dump_active", False):
                 if getattr(self, "_settings_dump_seen", False):
                     self._settings_dump_active = False
                     self._settings_dump_seen = False
+                    self.clear_watchdog_ignore("settings_dump")
                     self._safe_ui_put(("settings_dump_done",), context="settings dump")
-                    self._safe_ui_put(("log_rx", "ok"), context="settings ok")
+                    self._emit_ui_log_rx("ok", context="settings ok")
         else:
             ok_summary = self._flush_ok_log(now)
             if ok_summary:
-                self._safe_ui_put(("log_rx", ok_summary), context="ok summary")
+                self._emit_ui_log_rx(ok_summary, context="ok summary")
             if (not is_status) or self._status_log_due(now):
-                self.ui_q.put(("log_rx", line))
+                self._emit_ui_log_rx(line, context="rx line")
         
         # GRBL banner
         if line_lower.startswith("grbl"):
@@ -285,6 +326,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             if line_lower.startswith("error") and getattr(self, "_settings_dump_active", False):
                 self._settings_dump_active = False
                 self._settings_dump_seen = False
+                self.clear_watchdog_ignore("settings_dump")
             ack_index = None
             ack_line_idx = None
             err_idx = None
@@ -310,6 +352,12 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             err_line = queued_item.line
             
             self._emit_buffer_fill()
+            wake_evt = getattr(self, "_tx_activity_evt", None)
+            if wake_evt is not None:
+                try:
+                    wake_evt.set()
+                except Exception as exc:
+                    _log_suppressed("Failed signaling TX activity after ACK", exc)
             
             # Report progress
             if ack_index is not None:
@@ -338,6 +386,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         # Status report
         if is_status:
             self._mark_ready()
+            if self._ready and not bool(getattr(self, "_watchdog_ready_armed", False)):
+                self._watchdog_ready_armed = True
             parts = line.strip("<>").split("|")
             state = parts[0] if parts else ""
             
@@ -401,10 +451,12 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                     watchdog_ignore_until = float(getattr(self, "_watchdog_ignore_until", 0.0))
                     watchdog_ignored = watchdog_ignore_until and (now < watchdog_ignore_until)
                     idle = now - self._last_rx_ts
+                    watchdog_enforced = self._watchdog_enforced(now)
                     if self._alarm_active:
                         if (
                             idle >= WATCHDOG_ALARM_DISCONNECT_TIMEOUT
                             and (self._streaming or self._ready)
+                            and watchdog_enforced
                             and not watchdog_ignored
                         ):
                             self._signal_disconnect("Connection watchdog timeout (alarm)")
@@ -414,6 +466,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         if (
                             idle >= WATCHDOG_RX_TIMEOUT
                             and (self._streaming or self._paused or self._ready)
+                            and watchdog_enforced
                             and not self._watchdog_paused
                             and not watchdog_ignored
                         ):
@@ -428,6 +481,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         if (
                             idle >= WATCHDOG_DISCONNECT_TIMEOUT
                             and (self._streaming or self._ready)
+                            and watchdog_enforced
                             and not watchdog_ignored
                         ):
                             self._signal_disconnect("Connection watchdog timeout")

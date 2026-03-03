@@ -148,6 +148,8 @@ class GrblWorkerState:
     _watchdog_trip_ts: float
     _watchdog_ignore_until: float
     _watchdog_ignore_reason: str | None
+    _watchdog_ready_armed: bool
+    _watchdog_ready_ts: float
     _homing_watchdog_enabled: bool
     _homing_watchdog_timeout: float
 
@@ -218,6 +220,9 @@ class GrblWorkerState:
         raise NotImplementedError
 
     def _log_rx_line(self, line: str) -> None:
+        raise NotImplementedError
+
+    def _should_forward_log_rx_line(self, line: str) -> bool:
         raise NotImplementedError
 
     def _maybe_pause_after_ack(self, idx: int | None) -> None:

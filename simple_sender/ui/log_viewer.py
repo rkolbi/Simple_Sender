@@ -22,15 +22,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
+import time
 import zipfile
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.logging_config import get_log_dir
 
 LEVEL_ORDER = {
@@ -49,6 +52,17 @@ LOG_SOURCES = {
     "Errors": ("errors.log",),
     "All": ("simple_sender.log", "serial.log", "ui.log", "errors.log"),
 }
+
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _resolve_log_files(log_dir: Path, source: str) -> list[Path]:
@@ -69,16 +83,57 @@ def _resolve_log_files(log_dir: Path, source: str) -> list[Path]:
     return files
 
 
-def _read_log_lines(paths: list[Path], limit: int = 1000) -> list[str]:
-    lines: deque[str] = deque(maxlen=limit)
-    for path in paths:
+def _read_tail_lines(path: Path, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    try:
+        file_size = int(path.stat().st_size)
+    except Exception:
+        return []
+    if file_size <= 0:
+        return []
+    window = min(file_size, max(16 * 1024, int(limit) * 256))
+    while True:
+        start = max(0, file_size - window)
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                for line in handle:
-                    lines.append(line.rstrip("\n"))
+            with path.open("rb") as handle:
+                handle.seek(start)
+                raw = handle.read(file_size - start)
         except Exception:
+            return []
+        if start > 0:
+            newline_idx = raw.find(b"\n")
+            if newline_idx >= 0:
+                raw = raw[newline_idx + 1 :]
+            else:
+                raw = b""
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) >= limit or start <= 0:
+            return lines[-limit:]
+        if window >= file_size:
+            return lines[-limit:]
+        window = min(file_size, window * 2)
+
+
+def _read_log_lines(paths: list[Path], limit: int = 1000) -> list[str]:
+    capped_limit = max(1, int(limit))
+    remaining = capped_limit
+    chunks: list[list[str]] = []
+    for path in reversed(paths):
+        if remaining <= 0:
+            break
+        tail = _read_tail_lines(path, remaining)
+        if not tail:
             continue
-    return list(lines)
+        chunks.append(tail)
+        remaining -= len(tail)
+    lines: list[str] = []
+    for chunk in reversed(chunks):
+        lines.extend(chunk)
+    if len(lines) > capped_limit:
+        return lines[-capped_limit:]
+    return lines
 
 
 def _filter_lines(lines: list[str], min_level: str) -> list[str]:
@@ -93,6 +148,59 @@ def _filter_lines(lines: list[str], min_level: str) -> list[str]:
         if level_value >= min_value:
             filtered.append(line)
     return filtered
+
+
+def _active_log_basenames() -> set[str]:
+    names: set[str] = set()
+    for values in LOG_SOURCES.values():
+        for value in values:
+            if value.endswith(".log"):
+                names.add(value)
+    return names
+
+
+def _clear_log_files(paths: list[Path]) -> tuple[int, int]:
+    active_basenames = _active_log_basenames()
+    truncated = 0
+    deleted = 0
+    failures: list[str] = []
+
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+        except Exception:
+            continue
+
+        is_active = path.name in active_basenames
+        if is_active:
+            try:
+                path.write_text("", encoding="utf-8")
+                truncated += 1
+            except Exception as exc:
+                failures.append(f"{path.name}: {exc}")
+            continue
+
+        try:
+            path.unlink()
+            deleted += 1
+            continue
+        except Exception:
+            pass
+
+        try:
+            path.write_text("", encoding="utf-8")
+            truncated += 1
+        except Exception as exc:
+            failures.append(f"{path.name}: {exc}")
+
+    if failures:
+        preview = "; ".join(failures[:3])
+        if len(failures) > 3:
+            preview = f"{preview}; ..."
+        raise RuntimeError(f"Failed clearing one or more log files ({preview})")
+
+    return truncated, deleted
 
 
 class LogViewer(ttk.Frame):
@@ -110,7 +218,13 @@ class LogViewer(ttk.Frame):
         self._include_close = include_close
         self._close_callback = close_callback
         self._line_limit = line_limit
+        self._closing = False
+        self._refresh_inflight = False
+        self._refresh_pending: tuple[str, str] | None = None
+        self._export_inflight = False
+        self._clear_inflight = False
         self._build_ui()
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self.refresh()
 
     def _build_ui(self) -> None:
@@ -155,7 +269,10 @@ class LogViewer(ttk.Frame):
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(8, 0))
         ttk.Button(actions, text="Refresh", command=self.refresh).pack(side="left")
-        ttk.Button(actions, text="Export Logs...", command=self.export_logs).pack(side="left", padx=(8, 0))
+        self.export_button = ttk.Button(actions, text="Export Logs...", command=self.export_logs)
+        self.export_button.pack(side="left", padx=(8, 0))
+        self.clear_button = ttk.Button(actions, text="Clear Logs", command=self.clear_logs)
+        self.clear_button.pack(side="left", padx=(8, 0))
         if self._include_close:
             ttk.Button(actions, text="Close", command=self._close).pack(side="right")
 
@@ -171,17 +288,116 @@ class LogViewer(ttk.Frame):
             self.text.insert("end", "No log entries found.")
         self.text.configure(state="disabled")
 
-    def refresh(self, *_args) -> None:
-        log_dir = get_log_dir()
-        paths = _resolve_log_files(log_dir, self.source_var.get())
-        if not paths:
-            self._render([])
+    def _post_ui(self, callback) -> None:
+        if self._closing:
             return
-        lines = _read_log_lines(paths, limit=self._line_limit)
-        filtered = _filter_lines(lines, self.level_var.get())
-        self._render(filtered)
+        after = getattr(self.app, "after", None)
+        if callable(after):
+            try:
+                after(0, callback)
+                return
+            except Exception as exc:
+                _log_suppressed("Failed posting Log Viewer callback to UI thread", exc)
+        try:
+            callback()
+        except Exception as exc:
+            _log_suppressed("Failed running Log Viewer callback", exc)
+
+    def _start_refresh_worker(self) -> None:
+        request = self._refresh_pending
+        if request is None or self._closing:
+            return
+        self._refresh_pending = None
+        source, level = request
+        self._refresh_inflight = True
+        started_at = time.perf_counter()
+
+        def _worker() -> None:
+            lines: list[str] = []
+            error: Exception | None = None
+            try:
+                log_dir = get_log_dir()
+                paths = _resolve_log_files(log_dir, source)
+                if paths:
+                    raw_lines = _read_log_lines(paths, limit=self._line_limit)
+                    lines = _filter_lines(raw_lines, level)
+            except Exception as exc:
+                error = exc
+            elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+            self._post_ui(lambda: self._complete_refresh(request, lines, error, elapsed_ms))
+
+        try:
+            worker = threading.Thread(
+                target=_worker,
+                name="log-viewer-refresh",
+                daemon=True,
+            )
+            worker.start()
+        except Exception as exc:
+            self._refresh_inflight = False
+            _log_suppressed("Failed starting Log Viewer refresh thread", exc)
+            self._render([])
+
+    def _complete_refresh(
+        self,
+        request: tuple[str, str],
+        lines: list[str],
+        error: Exception | None,
+        elapsed_ms: float,
+    ) -> None:
+        self._refresh_inflight = False
+        if self._closing:
+            return
+        pending = self._refresh_pending
+        stale = pending is not None and pending != request
+        if error is not None:
+            _log_suppressed("Log Viewer refresh failed", error)
+            if not stale:
+                self._render(["Failed to load logs."])
+        elif not stale:
+            self._render(lines)
+        record_task_timing(self.app, "log_viewer.refresh", elapsed_ms, success=(error is None))
+        if self._refresh_pending is not None:
+            self._start_refresh_worker()
+
+    def refresh(self, *_args) -> None:
+        source = str(self.source_var.get() or "Application")
+        level = str(self.level_var.get() or "INFO")
+        self._refresh_pending = (source, level)
+        if self._refresh_inflight:
+            return
+        self._start_refresh_worker()
+
+    def _set_action_buttons_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        try:
+            self.export_button.configure(state=state)
+            self.clear_button.configure(state=state)
+        except Exception:
+            return
+
+    def _set_export_inflight(self, value: bool) -> None:
+        self._export_inflight = bool(value)
+        self._set_action_buttons_enabled(not (self._export_inflight or self._clear_inflight))
+
+    def _set_clear_inflight(self, value: bool) -> None:
+        self._clear_inflight = bool(value)
+        self._set_action_buttons_enabled(not (self._export_inflight or self._clear_inflight))
+
+    def _complete_export(self, out_path: Path, error: Exception | None, elapsed_ms: float) -> None:
+        self._set_export_inflight(False)
+        if self._closing:
+            return
+        record_task_timing(self.app, "log_viewer.export", elapsed_ms, success=(error is None))
+        if error is None:
+            messagebox.showinfo("Export Logs", f"Saved to:\n{out_path}")
+            return
+        messagebox.showerror("Export Logs", f"Failed to export logs:\n{error}")
 
     def export_logs(self) -> None:
+        if self._export_inflight or self._clear_inflight:
+            messagebox.showinfo("Export Logs", "Log operation already in progress.")
+            return
         log_dir = get_log_dir()
         log_files = _resolve_log_files(log_dir, "All")
         if not log_files:
@@ -203,16 +419,102 @@ class LogViewer(ttk.Frame):
         )
         if not path:
             return
+        out_path = Path(path)
+        self._set_export_inflight(True)
+        started_at = time.perf_counter()
+
+        def _worker() -> None:
+            error: Exception | None = None
+            try:
+                with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    for log_path in log_files:
+                        try:
+                            archive.write(log_path, arcname=log_path.name)
+                        except Exception as exc:
+                            _log_suppressed("Failed adding log file to export archive", exc)
+            except Exception as exc:
+                error = exc
+            elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+            self._post_ui(lambda: self._complete_export(out_path, error, elapsed_ms))
+
         try:
-            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                for log_path in log_files:
-                    try:
-                        archive.write(log_path, arcname=log_path.name)
-                    except Exception:
-                        continue
-            messagebox.showinfo("Export Logs", f"Saved to:\n{path}")
+            worker = threading.Thread(
+                target=_worker,
+                name="log-viewer-export",
+                daemon=True,
+            )
+            worker.start()
         except Exception as exc:
+            self._set_export_inflight(False)
+            _log_suppressed("Failed starting log export thread", exc)
             messagebox.showerror("Export Logs", f"Failed to export logs:\n{exc}")
+
+    def _complete_clear(
+        self,
+        truncated: int,
+        deleted: int,
+        error: Exception | None,
+        elapsed_ms: float,
+    ) -> None:
+        self._set_clear_inflight(False)
+        if self._closing:
+            return
+        record_task_timing(self.app, "log_viewer.clear", elapsed_ms, success=(error is None))
+        if error is not None:
+            messagebox.showerror("Clear Logs", f"Failed to clear logs:\n{error}")
+            return
+        self.refresh()
+        messagebox.showinfo(
+            "Clear Logs",
+            f"Cleared active logs: {truncated}\nRemoved rotated logs: {deleted}",
+        )
+
+    def clear_logs(self) -> None:
+        if self._export_inflight or self._clear_inflight:
+            messagebox.showinfo("Clear Logs", "Log operation already in progress.")
+            return
+        log_dir = get_log_dir()
+        log_files = _resolve_log_files(log_dir, "All")
+        if not log_files:
+            messagebox.showinfo("Clear Logs", "No log files found.")
+            return
+        confirmed = messagebox.askyesno(
+            "Clear Logs",
+            "Clear all current logs and remove rotated log files?",
+        )
+        if not confirmed:
+            return
+
+        self._set_clear_inflight(True)
+        started_at = time.perf_counter()
+
+        def _worker() -> None:
+            truncated = 0
+            deleted = 0
+            error: Exception | None = None
+            try:
+                truncated, deleted = _clear_log_files(log_files)
+            except Exception as exc:
+                error = exc
+            elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+            self._post_ui(lambda: self._complete_clear(truncated, deleted, error, elapsed_ms))
+
+        try:
+            worker = threading.Thread(
+                target=_worker,
+                name="log-viewer-clear",
+                daemon=True,
+            )
+            worker.start()
+        except Exception as exc:
+            self._set_clear_inflight(False)
+            _log_suppressed("Failed starting log clear thread", exc)
+            messagebox.showerror("Clear Logs", f"Failed to clear logs:\n{exc}")
+
+    def _on_destroy(self, event=None) -> None:
+        if event is not None and getattr(event, "widget", None) is not self:
+            return
+        self._closing = True
 
     def _close(self) -> None:
         if callable(self._close_callback):

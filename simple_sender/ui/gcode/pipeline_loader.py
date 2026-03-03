@@ -144,6 +144,83 @@ def _new_offset_index(deps):
         return []
 
 
+def _resolve_preferred_temp_dir(deps) -> str:
+    temp_dir_getter = getattr(deps, "get_preferred_temp_dir", None)
+    if callable(temp_dir_getter):
+        try:
+            candidate = str(temp_dir_getter() or "").strip()
+            if candidate:
+                return candidate
+        except Exception:
+            pass
+    tempfile_mod = getattr(deps, "tempfile", None)
+    if tempfile_mod is not None:
+        gettempdir = getattr(tempfile_mod, "gettempdir", None)
+        if callable(gettempdir):
+            try:
+                return str(gettempdir())
+            except Exception:
+                pass
+    return "."
+
+
+def _resolve_ultra_large_threshold_bytes(app, deps) -> int:
+    default_bytes = 0
+    try:
+        default_bytes = int(getattr(deps, "GCODE_ULTRA_LARGE_SIZE_THRESHOLD", 0) or 0)
+    except Exception:
+        default_bytes = 0
+    if app is None:
+        return max(0, default_bytes)
+    var = getattr(app, "ultra_large_size_threshold_mb", None)
+    if var is None:
+        return max(0, default_bytes)
+    try:
+        threshold_mb = int(var.get())
+    except Exception:
+        try:
+            threshold_mb = int(var)
+        except Exception:
+            return max(0, default_bytes)
+    if threshold_mb <= 0:
+        return 0
+    return int(threshold_mb) * 1024 * 1024
+
+
+def _is_ultra_large_file_with_threshold(*, file_size: int | None, threshold_bytes: int) -> bool:
+    if file_size is None:
+        return False
+    return int(threshold_bytes) > 0 and int(file_size) >= int(threshold_bytes)
+
+
+def _ultra_large_disk_headroom(deps, file_size: int) -> tuple[bool, int | None, int | None, str | None]:
+    try:
+        multiplier = int(getattr(deps, "GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER", 3) or 3)
+    except Exception:
+        multiplier = 3
+    multiplier = max(1, multiplier)
+    try:
+        margin = int(getattr(deps, "GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES", 0) or 0)
+    except Exception:
+        margin = 0
+    margin = max(0, margin)
+    required_bytes = int(file_size) * multiplier + margin
+    temp_dir = _resolve_preferred_temp_dir(deps)
+    shutil_mod = getattr(deps, "shutil", None)
+    disk_usage = getattr(shutil_mod, "disk_usage", None) if shutil_mod is not None else None
+    if not callable(disk_usage):
+        return True, required_bytes, None, temp_dir
+    try:
+        usage = disk_usage(temp_dir)
+        free_value = getattr(usage, "free", None)
+        if free_value is None:
+            free_value = usage[2]
+        free_bytes = int(free_value)
+    except Exception:
+        return True, required_bytes, None, temp_dir
+    return free_bytes >= required_bytes, required_bytes, free_bytes, temp_dir
+
+
 def _split_stream_to_temp_file(
     app,
     path: str,
@@ -478,21 +555,50 @@ def load_gcode_from_path(app, path: str, module):
     token = app._gcode_load_token
     app._gcode_loading = True
     deps.disable_job_controls(app)
-    app.gcode_stats_var.set("Loading...")
-    app.status.config(text=f"Loading: {deps.os.path.basename(path)}")
-    app._set_gcode_loading_indeterminate(f"Reading {deps.os.path.basename(path)}")
+    app.gcode_stats_var.set("Preparing job...")
+    app.status.config(text=f"Preparing job: {deps.os.path.basename(path)}")
+    app._set_gcode_loading_indeterminate(f"reading {deps.os.path.basename(path)}")
     app.gview.set_lines_chunked([])
 
     file_size = None
     preview_only = False
+    ultra_large_mode = False
+    ultra_large_threshold_bytes = _resolve_ultra_large_threshold_bytes(app, deps)
     try:
         file_size = deps.os.path.getsize(path)
         preview_only = file_size >= deps.GCODE_STREAMING_SIZE_THRESHOLD
+        ultra_large_mode = _is_ultra_large_file_with_threshold(
+            file_size=file_size,
+            threshold_bytes=ultra_large_threshold_bytes,
+        )
     except OSError:
         preview_only = False
+        ultra_large_mode = False
     try:
         validate_streaming = bool(app.validate_streaming_gcode.get())
     except (AttributeError, TypeError, ValueError):
+        validate_streaming = False
+    validate_streaming_requested = bool(validate_streaming)
+    if ultra_large_mode:
+        preview_only = True
+        if file_size is not None:
+            ok, required_bytes, free_bytes, temp_dir = _ultra_large_disk_headroom(deps, int(file_size))
+            if not ok:
+                required_text = _format_mb(required_bytes)
+                free_text = _format_mb(free_bytes)
+                app._gcode_loading = False
+                app._finish_gcode_loading()
+                deps.messagebox.showerror(
+                    "Open G-code",
+                    "Not enough free disk space for this ultra-large file load.\n"
+                    f"Required: {required_text} free in temp workspace.\n"
+                    f"Available: {free_text}\n"
+                    f"Temp dir: {temp_dir}",
+                )
+                app.gcode_stats_var.set("No file loaded")
+                app.status.config(text="G-code load failed (insufficient disk space)")
+                return
+        # Ultra-large mode always uses fast-load behavior to keep Pi-class systems stable.
         validate_streaming = False
 
     try:
@@ -511,6 +617,17 @@ def load_gcode_from_path(app, path: str, module):
                     f"[gcode] Large file detected ({size_text} >= {threshold_text}); "
                     "using preview-only mode."
                 )
+            if ultra_large_mode:
+                ultra_threshold_text = _format_mb(ultra_large_threshold_bytes)
+                size_text = _format_mb(file_size)
+                app.ui_q.put((
+                    "log",
+                    f"[gcode] Ultra-large mode active ({size_text} >= {ultra_threshold_text}); "
+                    "forcing preview-only mode and fast-load safeguards.",
+                ))
+                if validate_streaming_requested:
+                    app.ui_q.put(("log", "[gcode] Full validation disabled automatically for ultra-large file load."))
+                app.ui_q.put(("log", "[gcode] Recommendation: run a load-only dry-run before cutting."))
             _stream_from_disk(
                 app,
                 path,

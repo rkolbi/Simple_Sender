@@ -75,7 +75,14 @@ def _init_keyboard_runtime_state(app) -> None:
     app._kb_edit_state = cast(dict[Any, dict[str, Any]], {})
 
 
-def _init_joystick_runtime_state(app, tk) -> None:
+def _init_joystick_runtime_state(
+    app,
+    tk,
+    *,
+    joystick_poll_interval_ms: int,
+    joystick_poll_idle_max_interval_ms: int,
+    joystick_poll_idle_backoff_step_ms: int,
+) -> None:
     app._joystick_binding_map = cast(dict[tuple, Any], {})
     app._joystick_capture_state = None
     app._joystick_poll_id = None
@@ -83,7 +90,14 @@ def _init_joystick_runtime_state(app, tk) -> None:
     app._joystick_device_count = 0
     app._joystick_last_discovery = 0.0
     app._joystick_last_live_status = 0.0
+    app._joystick_last_live_status_text = ""
     app._joystick_poll_idle_streak = 0
+    app._joystick_poll_interval_default_ms = int(joystick_poll_interval_ms)
+    app._joystick_poll_idle_max_interval_default_ms = int(joystick_poll_idle_max_interval_ms)
+    app._joystick_poll_idle_backoff_step_default_ms = int(joystick_poll_idle_backoff_step_ms)
+    app._joystick_poll_interval_ms = int(joystick_poll_interval_ms)
+    app._joystick_poll_idle_max_interval_ms = int(joystick_poll_idle_max_interval_ms)
+    app._joystick_poll_idle_backoff_step_ms = int(joystick_poll_idle_backoff_step_ms)
     app._joystick_names = cast(dict[int, str], {})
     app._joystick_instances = cast(dict[int, Any], {})
     app._joystick_button_poll_state = cast(dict[tuple[int, int], bool], {})
@@ -253,6 +267,12 @@ def _init_worker_and_runtime_controllers(
     app.grbl = deps.GrblWorker(app.ui_q)
     app.grbl.set_status_query_failure_limit(app.status_query_failure_limit.get())
     try:
+        app.grbl.set_ui_rx_logging(
+            bool(app.settings.get("gui_logging_enabled", default_settings.get("gui_logging_enabled", True)))
+        )
+    except Exception as exc:
+        logger.debug("Failed applying initial UI RX logging state to worker: %s", exc, exc_info=exc)
+    try:
         app._on_homing_watchdog_change()
     except Exception as exc:
         logger.debug("Failed applying initial homing watchdog settings: %s", exc, exc_info=exc)
@@ -383,6 +403,7 @@ def _init_stream_and_override_state(
     default_settings: dict,
     ui_maintenance_interval_s: float,
     ui_maintenance_idle_interval_s: float,
+    ui_maintenance_quiet_idle_interval_s: float,
     auto_reconnect_check_interval_s: float,
     auto_reconnect_check_idle_interval_s: float,
 ) -> None:
@@ -405,11 +426,15 @@ def _init_stream_and_override_state(
     app._stats_debounce_ms = 75
     app._ui_maintenance_interval_s = ui_maintenance_interval_s
     app._ui_maintenance_idle_interval_s = ui_maintenance_idle_interval_s
+    app._ui_maintenance_quiet_idle_interval_s = ui_maintenance_quiet_idle_interval_s
     app._ui_maintenance_last_ts = 0.0
     app._auto_reconnect_check_interval_s = auto_reconnect_check_interval_s
     app._auto_reconnect_check_idle_interval_s = auto_reconnect_check_idle_interval_s
     app._auto_reconnect_check_ts = 0.0
     app._live_estimate_min = None
+    app._live_estimate_total_min = None
+    app._live_estimate_display_min = None
+    app._live_estimate_display_ts = 0.0
 
     app._stream_state = None
     app._stream_start_ts = None
@@ -430,6 +455,7 @@ def _init_stream_and_override_state(
     app._connected_port = None
     app._status_seen = False
     app._status_history = deque(maxlen=200)
+    app._connection_timeline = deque(maxlen=200)
 
     app.progress_pct = tk.IntVar(value=0)
     app.buffer_fill = tk.StringVar(value="Buffer: 0%")
@@ -478,6 +504,21 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._auto_reconnect_port_scan_result_q = None
     app._auto_reconnect_port_scan_min_interval_s = 1.0
     app._auto_reconnect_port_scan_cache_max_age_s = 8.0
+    try:
+        startup_delay_s = float(
+            app.settings.get(
+                "startup_auto_connect_delay_s",
+                default_settings.get("startup_auto_connect_delay_s", 5.0),
+            )
+        )
+    except Exception:
+        startup_delay_s = float(default_settings.get("startup_auto_connect_delay_s", 5.0))
+    if startup_delay_s < 0.0:
+        startup_delay_s = 0.0
+    if startup_delay_s > 30.0:
+        startup_delay_s = 30.0
+    app._startup_auto_connect_delay_s = startup_delay_s
+    app._auto_reconnect_startup_gate_ts = 0.0
     app._user_disconnect = False
     app._ui_throttle_ms = 100
     app._ui_queue_idle_interval_ms = 250
@@ -491,10 +532,26 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._ui_queue_drain_events = 0
     app._ui_queue_drain_max_ms = 0.0
     app._ui_queue_drain_stall_count = 0
+    app._ui_queue_drain_runtime_ticks = 0
+    app._ui_queue_drain_runtime_events = 0
+    app._ui_queue_drain_runtime_max_ms = 0.0
+    app._ui_queue_drain_runtime_stall_count = 0
+    app._ui_queue_drain_runtime_slowest_event_ms = 0.0
+    app._ui_queue_drain_runtime_slowest_event_kind = ""
+    app._status_last_non_idle_ts = 0.0
+    app._status_perf_metrics: dict[str, dict[str, float | int]] = {}
+    app._status_perf_metrics_enabled = bool(app.settings.get("performance_profile_enabled", False))
+    app._manual_controls_last_enabled = False
+    app._task_timing_metrics: dict[str, dict[str, float | int]] = {}
+    app._settings_dump_deferred_pending = False
+    app._deferred_stream_finalize_pending = False
+    app._gcode_parsing_active = False
     app._state_flash_after_id = None
     app._state_flash_color = None
     app._state_flash_on = False
     app._state_default_bg = None
+    app._app_settings_tab_active = False
+    app._active_tab_label = ""
 
 
 def init_runtime_state(
@@ -515,12 +572,18 @@ def init_runtime_state(
     ui_maintenance_idle_interval_s = float(
         getattr(deps, "UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S", 1.0)
     )
+    ui_maintenance_quiet_idle_interval_s = float(
+        getattr(deps, "UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S", 3.0)
+    )
     auto_reconnect_check_interval_s = float(
         getattr(deps, "UI_QUEUE_RECONNECT_CHECK_INTERVAL_S", 0.25)
     )
     auto_reconnect_check_idle_interval_s = float(
         getattr(deps, "UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S", 1.0)
     )
+    joystick_poll_interval_ms = int(getattr(deps, "JOYSTICK_POLL_INTERVAL_MS", 50))
+    joystick_poll_idle_max_interval_ms = int(getattr(deps, "JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS", 200))
+    joystick_poll_idle_backoff_step_ms = int(getattr(deps, "JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS", 10))
 
     def setting(key: str, fallback):
         return app.settings.get(key, default_settings.get(key, fallback))
@@ -528,7 +591,13 @@ def init_runtime_state(
     _normalize_key_bindings(app)
     _normalize_joystick_bindings(app)
     _init_keyboard_runtime_state(app)
-    _init_joystick_runtime_state(app, tk)
+    _init_joystick_runtime_state(
+        app,
+        tk,
+        joystick_poll_interval_ms=joystick_poll_interval_ms,
+        joystick_poll_idle_max_interval_ms=joystick_poll_idle_max_interval_ms,
+        joystick_poll_idle_backoff_step_ms=joystick_poll_idle_backoff_step_ms,
+    )
     _init_connection_runtime_state(app)
     _init_kasa_runtime_state(app, tk)
     _init_error_dialog_runtime_state(app, setting, tk)
@@ -563,6 +632,7 @@ def init_runtime_state(
         default_settings=default_settings,
         ui_maintenance_interval_s=ui_maintenance_interval_s,
         ui_maintenance_idle_interval_s=ui_maintenance_idle_interval_s,
+        ui_maintenance_quiet_idle_interval_s=ui_maintenance_quiet_idle_interval_s,
         auto_reconnect_check_interval_s=auto_reconnect_check_interval_s,
         auto_reconnect_check_idle_interval_s=auto_reconnect_check_idle_interval_s,
     )

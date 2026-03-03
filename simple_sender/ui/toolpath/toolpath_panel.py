@@ -39,6 +39,8 @@ class ToolpathPanel:
     def __init__(self, app: Any) -> None:
         self.app = app
         self.view: Toolpath3D | None = None
+        self.notebook: ttk.Notebook | None = None
+        self.top_tab: ttk.Frame | None = None
         self.top_view: Optional["TopViewPanel"] = None
         self.tab: ttk.Frame | None = None
         self._streaming = False
@@ -82,11 +84,14 @@ class ToolpathPanel:
             self._pending_view_overlay = None
 
     def build_tab(self, notebook: ttk.Notebook):
+        self.notebook = notebook
         top_tab = ttk.Frame(notebook, padding=6)
         notebook.add(top_tab, text="Top View")
         set_tab_tooltip(notebook, top_tab, "2D top-down toolpath preview and bounds.")
+        self.top_tab = top_tab
         self.top_view = TopViewPanel(top_tab)
         self.top_view.pack(fill="both", expand=True)
+        self.top_view.set_streaming(self._streaming)
         if self._pending_top_overlay is not None:
             self.top_view.set_autolevel_grid(self._pending_top_overlay)
             self._pending_top_overlay = None
@@ -104,6 +109,41 @@ class ToolpathPanel:
             pending_lines, max_segments, arc_step_rad = self._pending_top_request
             self._pending_top_request = None
             self.top_view.set_lines(pending_lines, max_segments=max_segments, arc_step_rad=arc_step_rad)
+        self.sync_3d_tab_visibility()
+
+    def _render3d_enabled(self) -> bool:
+        force_override = getattr(self.app, "_is_force_3d_override_enabled", None)
+        if callable(force_override):
+            try:
+                if bool(force_override()):
+                    return True
+            except Exception:
+                pass
+        var = getattr(self.app, "render3d_enabled", None)
+        if var is None:
+            return True
+        try:
+            return bool(var.get())
+        except Exception:
+            return bool(var)
+
+    def sync_3d_tab_visibility(self) -> None:
+        if self.notebook is None or self.tab is None:
+            return
+        show_3d_tab = self._render3d_enabled()
+        tab_state = "normal" if show_3d_tab else "hidden"
+        if not show_3d_tab:
+            try:
+                selected = self.notebook.select()
+                if selected and str(selected) == str(self.tab) and self.top_tab is not None:
+                    self.notebook.select(self.top_tab)
+            except Exception:
+                pass
+            self.set_visible(False)
+        try:
+            self.notebook.tab(self.tab, state=tab_state)
+        except Exception:
+            return
 
     def set_autolevel_overlay(self, grid: ProbeGrid | None):
         if self.top_view:
@@ -130,7 +170,7 @@ class ToolpathPanel:
             self.app._apply_toolpath_performance,
             self.app._on_toolpath_performance_key_release,
         )
-        self.view.set_enabled(bool(self.app.render3d_enabled.get()))
+        self.view.set_enabled(self._render3d_enabled())
         self.view.set_lightweight_mode(bool(self.app.toolpath_lightweight.get()))
         self.view.set_draw_limits(
             self.app._toolpath_limit_value(self.app.toolpath_full_limit.get(), self.app._toolpath_full_limit_default),
@@ -237,8 +277,10 @@ class ToolpathPanel:
             self.top_view.set_lines(lines, max_segments=max_segments, arc_step_rad=arc_step_rad)
 
     def set_enabled(self, enabled: bool):
+        enabled = bool(enabled or self._render3d_enabled())
         if self.view:
             self.view.set_enabled(enabled)
+        self.sync_3d_tab_visibility()
 
     def set_lightweight(self, value: bool):
         if self.view:
@@ -264,6 +306,8 @@ class ToolpathPanel:
         self._streaming = bool(streaming)
         if self.view:
             self.view.set_streaming_mode(self._streaming)
+        if self.top_view:
+            self.top_view.set_streaming(self._streaming)
 
     def reparse_lines(self, lines: list[str], lines_hash: str | None = None):
         if self.view:

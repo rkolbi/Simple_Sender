@@ -169,6 +169,15 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
             ),
             "streaming line threshold",
         ),
+        "ultra_large_size_threshold_mb": _safe_int(
+            app,
+            app.ultra_large_size_threshold_mb,
+            app.settings.get(
+                "ultra_large_size_threshold_mb",
+                DEFAULT_SETTINGS.get("ultra_large_size_threshold_mb", 0),
+            ),
+            "ultra-large threshold (MB)",
+        ),
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
         "fullscreen_on_startup": bool(app.fullscreen_on_startup.get()),
     }

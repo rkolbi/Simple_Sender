@@ -38,6 +38,16 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _format_prepare_message(stage: str | None = None) -> str:
+    stage_text = str(stage or "").strip()
+    if not stage_text:
+        return "Preparing job..."
+    normalized = stage_text.lower()
+    if normalized.startswith("preparing job"):
+        return stage_text
+    return f"Preparing job - {stage_text}"
+
+
 def ensure_gcode_loading_popup(app):
     if app._gcode_load_popup is not None:
         try:
@@ -46,7 +56,7 @@ def ensure_gcode_loading_popup(app):
         except Exception as exc:
             _log_suppressed("Failed checking existing G-code loading popup state", exc)
     popup = tk.Toplevel(app)
-    popup.title("Loading G-code")
+    popup.title("Preparing Job")
     popup.transient(app)
     popup.resizable(False, False)
     popup.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -75,18 +85,26 @@ def show_gcode_loading(app):
 
 def hide_gcode_loading(app):
     popup = app._gcode_load_popup
+    bar = app._gcode_load_popup_bar
+    if bar is not None:
+        try:
+            bar.stop()
+        except Exception as exc:
+            _log_suppressed("Failed stopping G-code loading progress bar", exc)
     if popup is not None:
         try:
-            if app._gcode_load_popup_bar is not None:
-                app._gcode_load_popup_bar.stop()
-            popup.withdraw()
+            if popup.winfo_exists():
+                popup.destroy()
         except Exception as exc:
             _log_suppressed("Failed hiding G-code loading popup", exc)
+    app._gcode_load_popup = None
+    app._gcode_load_popup_label = None
+    app._gcode_load_popup_bar = None
     app.gcode_load_var.set("")
 
 def set_gcode_loading_indeterminate(app, text: str):
     app._show_gcode_loading()
-    app.gcode_load_var.set(text)
+    app.gcode_load_var.set(_format_prepare_message(text))
     if app._gcode_load_popup_bar is not None:
         app._gcode_load_popup_bar.config(mode="indeterminate")
         app._gcode_load_popup_bar.start(10)
@@ -102,9 +120,11 @@ def set_gcode_loading_progress(app, done: int, total: int, name: str = ""):
     if app._gcode_load_popup_bar is not None:
         app._gcode_load_popup_bar.config(mode="determinate", maximum=bar_total, value=done)
     if name:
-        app.gcode_load_var.set(f"Loading {name}: {display_done}/{display_total}")
+        app.gcode_load_var.set(
+            f"{_format_prepare_message(name)}: {display_done}/{display_total}"
+        )
     else:
-        app.gcode_load_var.set(f"Loading {display_done}/{display_total}")
+        app.gcode_load_var.set(f"Preparing job: {display_done}/{display_total}")
 
 def finish_gcode_loading(app):
     app._hide_gcode_loading()

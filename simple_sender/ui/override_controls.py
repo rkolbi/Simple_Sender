@@ -132,4 +132,10 @@ def refresh_override_info(app):
     with app.macro_executor.macro_vars() as macro_vars:
         feed = macro_vars.get("OvFeed", 100)
         spindle = macro_vars.get("OvSpindle", 100)
-    app.override_info_var.set(f"Overrides: Feed {feed}% | Spindle {spindle}%")
+    text = f"Overrides: Feed {feed}% | Spindle {spindle}%"
+    try:
+        if app.override_info_var.get() == text:
+            return
+    except Exception:
+        pass
+    app.override_info_var.set(text)

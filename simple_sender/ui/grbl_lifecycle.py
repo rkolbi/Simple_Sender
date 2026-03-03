@@ -25,6 +25,7 @@ import queue
 import threading
 import time
 import logging
+from collections import deque
 from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
@@ -39,6 +40,12 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _AUTO_RECONNECT_PORT_SCAN_MIN_INTERVAL_S = 1.0
 _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S = 8.0
+_STATUS_POLL_PERF_IDLE_FLOOR = 2.0
+_STATUS_POLL_PERF_QUIET_IDLE_FLOOR = 3.0
+_STATUS_POLL_QUIET_IDLE_MIN_SECONDS = 15.0
+_STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR = 4.0
+_STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS = 60.0
+_CONNECTION_TIMELINE_LIMIT = 200
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -56,6 +63,23 @@ def _signal_thread_event(obj, attr_name: str) -> None:
             evt.set()
         except Exception as exc:
             _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
+
+
+def _record_connection_timeline(app, event: str, details: str = "") -> None:
+    history = getattr(app, "_connection_timeline", None)
+    if history is None:
+        history = deque(maxlen=_CONNECTION_TIMELINE_LIMIT)
+        setattr(app, "_connection_timeline", history)
+    stamp = time.time()
+    payload = {
+        "ts": float(stamp),
+        "event": str(event or "").strip() or "unknown",
+        "details": str(details or "").strip(),
+    }
+    try:
+        history.append(payload)
+    except Exception as exc:
+        _log_suppressed("Failed appending connection timeline event", exc)
 
 
 def _normalize_status_state(app) -> str:
@@ -83,6 +107,22 @@ def _status_poll_should_use_running_profile(app) -> bool:
         return True
     if state.startswith("jog"):
         return True
+    return False
+
+
+def _performance_mode_enabled(app) -> bool:
+    mode_var = getattr(app, "performance_mode", None)
+    if mode_var is not None and hasattr(mode_var, "get"):
+        try:
+            return bool(mode_var.get())
+        except Exception:
+            return False
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get("performance_mode", False))
+        except Exception:
+            return False
     return False
 
 
@@ -206,6 +246,18 @@ def _pi_profile_enabled(app) -> bool:
     return False
 
 
+def _worker_reports_connected(app) -> bool:
+    worker = getattr(app, "grbl", None)
+    checker = getattr(worker, "is_connected", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL worker serial connection state", exc)
+        return False
+
+
 def handle_connection_event(app, is_on: bool, port):
     app.connected = bool(is_on)
     app._connecting = False
@@ -213,12 +265,14 @@ def handle_connection_event(app, is_on: bool, port):
     app._homing_in_progress = False
     app._homing_state_seen = False
     if app.connected:
+        _record_connection_timeline(app, "connected", f"port={port or ''}")
         app._auto_reconnect_last_port = port or app._auto_reconnect_last_port
         app._auto_reconnect_pending = False
         app._auto_reconnect_last_attempt = 0.0
         app._auto_reconnect_retry = 0
         app._auto_reconnect_delay = 3.0
         app._auto_reconnect_next_ts = 0.0
+        app._auto_reconnect_startup_gate_ts = 0.0
         app._auto_reconnect_blocked = False
         app._auto_reconnect_port_scan_inflight = False
         app._report_units = None
@@ -275,6 +329,7 @@ def handle_connection_event(app, is_on: bool, port):
         except Exception as exc:
             _log_suppressed("Failed restoring loaded G-code after connect", exc)
     else:
+        _record_connection_timeline(app, "disconnected")
         try:
             app._stop_macro_status()
         except Exception as exc:
@@ -339,6 +394,7 @@ def handle_connection_event(app, is_on: bool, port):
 def handle_ready_event(app, ready):
     app._grbl_ready = bool(ready)
     if not app._grbl_ready:
+        _record_connection_timeline(app, "ready_false")
         app._status_seen = False
         app._alarm_locked = False
         app._alarm_message = ""
@@ -352,15 +408,12 @@ def handle_ready_event(app, ready):
     if app._alarm_locked:
         return
     if app.connected and app._connected_port:
+        _record_connection_timeline(app, "ready_true", f"port={app._connected_port}")
         app.status.config(text=f"Connected: {app._connected_port}")
         try:
             app._send_manual("$G", "status")
         except Exception as exc:
             _log_suppressed("Failed requesting modal state with $G after ready", exc)
-        try:
-            app._send_manual("$$", "status")
-        except Exception as exc:
-            _log_suppressed("Failed requesting settings with $$ after ready", exc)
         if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
             app._resume_after_disconnect = False
             total_lines = (
@@ -389,6 +442,10 @@ def handle_ready_event(app, ready):
 def maybe_auto_reconnect(app):
     if app.connected or app._closing or (not app._auto_reconnect_pending):
         return
+    # Prevent duplicate connect attempts while the worker already has an
+    # open serial connection and the UI is still processing conn events.
+    if _worker_reports_connected(app):
+        return
     if getattr(app, "_user_disconnect", False):
         return
     if getattr(app, "_auto_reconnect_blocked", False):
@@ -404,6 +461,11 @@ def maybe_auto_reconnect(app):
     except Exception as exc:
         _log_suppressed("Failed reading reconnect-on-open setting during auto-reconnect", exc)
     now = time.time()
+    startup_gate_ts = float(getattr(app, "_auto_reconnect_startup_gate_ts", 0.0) or 0.0)
+    if startup_gate_ts > 0.0 and now < startup_gate_ts:
+        if app._auto_reconnect_next_ts < startup_gate_ts:
+            app._auto_reconnect_next_ts = startup_gate_ts
+        return
     if now < app._auto_reconnect_next_ts:
         return
     _drain_auto_reconnect_port_scan_results(app)
@@ -439,6 +501,11 @@ def maybe_auto_reconnect(app):
     app._auto_reconnect_last_attempt = now
     app.current_port.set(app._auto_reconnect_last_port)
     app._auto_reconnect_next_ts = now + app._auto_reconnect_delay
+    _record_connection_timeline(
+        app,
+        "auto_reconnect_attempt",
+        f"port={app._auto_reconnect_last_port} retry={app._auto_reconnect_retry}",
+    )
     app._start_connect_worker(
         app._auto_reconnect_last_port,
         show_error=False,
@@ -449,6 +516,7 @@ def maybe_auto_reconnect(app):
 def handle_auto_reconnect_failure(app, exc: Exception):
     now = time.time()
     app.ui_q.put(("log", f"[auto-reconnect] Attempt failed: {exc}"))
+    _record_connection_timeline(app, "auto_reconnect_failed", str(exc))
     app._auto_reconnect_retry += 1
     if app._auto_reconnect_retry > app._auto_reconnect_max_retry:
         app._auto_reconnect_delay = 30.0
@@ -467,6 +535,32 @@ def effective_status_poll_interval(app) -> float:
         base = STATUS_POLL_DEFAULT
     if _status_poll_should_use_running_profile(app):
         return min(base, float(STATUS_POLL_RUNNING))
+    if _performance_mode_enabled(app):
+        idle_floor = float(_STATUS_POLL_PERF_IDLE_FLOOR)
+        try:
+            last_non_idle_ts = float(getattr(app, "_status_last_non_idle_ts", 0.0) or 0.0)
+        except Exception:
+            last_non_idle_ts = 0.0
+        quiet_idle_elapsed_s = 0.0
+        if last_non_idle_ts > 0.0:
+            quiet_idle_elapsed_s = max(0.0, time.monotonic() - last_non_idle_ts)
+        if (
+            bool(getattr(app, "connected", False))
+            and bool(getattr(app, "_grbl_ready", False))
+            and not bool(getattr(app, "_alarm_locked", False))
+            and _normalize_status_state(app).startswith("idle")
+            and quiet_idle_elapsed_s >= float(_STATUS_POLL_QUIET_IDLE_MIN_SECONDS)
+        ):
+            idle_floor = max(idle_floor, float(_STATUS_POLL_PERF_QUIET_IDLE_FLOOR))
+        if (
+            bool(getattr(app, "connected", False))
+            and bool(getattr(app, "_grbl_ready", False))
+            and not bool(getattr(app, "_alarm_locked", False))
+            and _normalize_status_state(app).startswith("idle")
+            and quiet_idle_elapsed_s >= float(_STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS)
+        ):
+            idle_floor = max(idle_floor, float(_STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR))
+        base = max(base, idle_floor)
     return max(base, float(STATUS_POLL_IDLE))
 
 

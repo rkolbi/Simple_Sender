@@ -26,6 +26,22 @@ from typing import Any
 from simple_sender.utils.constants import GCODE_TOP_VIEW_STREAMING_SEGMENT_LIMIT
 
 
+def _force_3d_override_enabled(app: Any) -> bool:
+    checker = getattr(app, "_is_force_3d_override_enabled", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+    override_var = getattr(app, "force_3d_session_override", None)
+    if override_var is None:
+        return False
+    try:
+        return bool(override_var.get())
+    except Exception:
+        return bool(override_var)
+
+
 def set_preview_streaming_state(app: Any, streaming: bool) -> None:
     app._gcode_streaming_mode = bool(streaming)
     app._render3d_blocked = bool(streaming)
@@ -42,10 +58,16 @@ def configure_toolpath_preview(
     streaming_source: Any | None,
     preview_only: bool = False,
 ) -> None:
-    enabled = bool(app.render3d_enabled.get()) and not preview_only
+    force_3d = _force_3d_override_enabled(app)
+    enabled = bool(force_3d or (bool(app.render3d_enabled.get()) and not preview_only))
     app.toolpath_panel.set_enabled(enabled)
     app.toolpath_panel.clear()
     app.toolpath_panel.set_job_name(os.path.basename(path))
+    if force_3d and streaming_source is not None:
+        app.toolpath_panel.set_gcode_lines(
+            streaming_source,
+            lines_hash=getattr(app, "_gcode_hash", None),
+        )
     if preview_only and streaming_source is not None:
         try:
             total_lines = app._gcode_total_lines or len(streaming_source)

@@ -151,6 +151,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._watchdog_ready_armed = False
+        self._watchdog_ready_ts = 0.0
 
         def _cleanup_failed_connect() -> None:
             self._stop_evt.set()
@@ -261,6 +263,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._watchdog_ready_armed = False
+        self._watchdog_ready_ts = 0.0
         self._connect_started_ts = 0.0
 
         # Notify UI
@@ -341,6 +345,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
         self._watchdog_ignore_reason = None
+        self._watchdog_ready_armed = False
+        self._watchdog_ready_ts = 0.0
         self._connect_started_ts = 0.0
         self._reset_stream_buffer()
         self._clear_outgoing()
