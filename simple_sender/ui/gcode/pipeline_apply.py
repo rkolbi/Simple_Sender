@@ -55,6 +55,22 @@ def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) 
     return bool(default)
 
 
+def _read_int_setting(app, *, attr_name: str, key: str, default: int) -> int:
+    var = getattr(app, attr_name, None)
+    if var is not None:
+        try:
+            return int(var.get())
+        except Exception:
+            pass
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return int(settings.get(key, default))
+        except Exception:
+            return int(default)
+    return int(default)
+
+
 def _pi_profile_enabled(app) -> bool:
     return _read_bool_setting(
         app,
@@ -70,7 +86,13 @@ def _should_prime_file_backed_send_cache(app) -> bool:
     return not _pi_profile_enabled(app)
 
 
-def _viewer_virtualization_policy(app, line_count: int, deps) -> tuple[bool, int]:
+def _viewer_virtualization_policy(
+    app,
+    line_count: int,
+    deps,
+    *,
+    preview_only: bool = False,
+) -> tuple[bool, int, int]:
     try:
         default_threshold = int(getattr(deps, "GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT"))
     except Exception:
@@ -91,10 +113,20 @@ def _viewer_virtualization_policy(app, line_count: int, deps) -> tuple[bool, int
     if _pi_profile_enabled(app):
         threshold = max(1000, int(low_power_threshold))
         window = max(200, int(low_power_window))
+        if preview_only:
+            # Preview-only loads should virtualize earlier on low-power systems.
+            preview_threshold = _read_int_setting(
+                app,
+                attr_name="streaming_line_threshold",
+                key="streaming_line_threshold",
+                default=threshold,
+            )
+            if preview_threshold > 0:
+                threshold = min(threshold, max(5000, int(preview_threshold)))
     else:
         threshold = max(1000, int(default_threshold))
         window = max(200, int(default_window))
-    return line_count >= threshold, window
+    return line_count >= threshold, window, threshold
 
 
 def apply_loaded_gcode(
@@ -295,12 +327,26 @@ def apply_loaded_gcode(
         on_done()
         return
 
-    use_virtualized_viewer, virtual_window = _viewer_virtualization_policy(app, len(lines), deps)
+    policy_line_count = int(total_lines) if total_lines is not None else len(lines)
+    use_virtualized_viewer, virtual_window, virtual_threshold = _viewer_virtualization_policy(
+        app,
+        policy_line_count,
+        deps,
+        preview_only=preview_only,
+    )
+    app._gcode_viewer_policy_line_count = int(policy_line_count)
+    app._gcode_viewer_preview_line_count = int(len(lines))
+    app._gcode_viewer_virtualization_threshold = int(virtual_threshold)
+    app._gcode_viewer_preview_only = bool(preview_only)
+    app._gcode_viewer_virtual_window = int(virtual_window)
     if use_virtualized_viewer and hasattr(app.gview, "set_lines_virtualized"):
+        app._gcode_viewer_mode = "virtualized"
+        app._gcode_viewer_chunk_size = None
         try:
             message = (
-                f"[gcode] Virtualized G-code viewer enabled for {len(lines):,} lines "
-                f"(window {virtual_window:,})."
+                f"[gcode] Virtualized G-code viewer enabled for {policy_line_count:,} line job "
+                f"(showing {len(lines):,} lines, threshold {virtual_threshold:,}, "
+                f"window {virtual_window:,}, preview_only={bool(preview_only)})."
             )
             logger_fn = getattr(getattr(app, "streaming_controller", None), "log", None)
             if callable(logger_fn):
@@ -323,7 +369,22 @@ def apply_loaded_gcode(
         if len(lines) > deps.GCODE_VIEWER_CHUNK_LOAD_THRESHOLD
         else deps.GCODE_VIEWER_CHUNK_SIZE_SMALL
     )
+    app._gcode_viewer_mode = "chunked"
+    app._gcode_viewer_chunk_size = int(chunk_size)
     app._set_gcode_loading_progress(0, len(lines), name)
+    try:
+        message = (
+            f"[gcode] Chunked G-code viewer load selected for {policy_line_count:,} line job "
+            f"(showing {len(lines):,} lines, threshold {virtual_threshold:,}, "
+            f"chunk {int(chunk_size):,}, preview_only={bool(preview_only)})."
+        )
+        logger_fn = getattr(getattr(app, "streaming_controller", None), "log", None)
+        if callable(logger_fn):
+            logger_fn(message)
+        else:
+            app.ui_q.put(("log", message))
+    except Exception as exc:
+        _log_suppressed("Failed reporting chunked G-code viewer mode", exc)
     app.gview.set_lines_chunked(
         lines,
         chunk_size=chunk_size,

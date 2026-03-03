@@ -203,6 +203,41 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
             }
         if status_perf:
             metrics["status_perf_metrics"] = status_perf
+    viewer_mode = str(getattr(app, "_gcode_viewer_mode", "") or "").strip()
+    if viewer_mode:
+        metrics["viewer_mode"] = viewer_mode
+    policy_lines = getattr(app, "_gcode_viewer_policy_line_count", None)
+    preview_lines = getattr(app, "_gcode_viewer_preview_line_count", None)
+    threshold = getattr(app, "_gcode_viewer_virtualization_threshold", None)
+    window = getattr(app, "_gcode_viewer_virtual_window", None)
+    chunk_size = getattr(app, "_gcode_viewer_chunk_size", None)
+    preview_only = getattr(app, "_gcode_viewer_preview_only", None)
+    if policy_lines is not None:
+        metrics["viewer_policy_line_count"] = int(policy_lines)
+    if preview_lines is not None:
+        metrics["viewer_preview_line_count"] = int(preview_lines)
+    if threshold is not None:
+        metrics["viewer_virtualization_threshold"] = int(threshold)
+    if window is not None:
+        metrics["viewer_virtual_window_size"] = int(window)
+    if chunk_size is not None:
+        metrics["viewer_chunk_size"] = int(chunk_size)
+    if preview_only is not None:
+        metrics["viewer_preview_only"] = bool(preview_only)
+    gview = getattr(app, "gview", None)
+    if gview is not None:
+        for attr_name, metric_name in (
+            ("_insert_hidden_delay_ms", "viewer_hidden_insert_delay_ms"),
+            ("_insert_hidden_max_chunks_per_tick", "viewer_hidden_max_chunks_per_tick"),
+            ("_insert_hidden_chunk_size", "viewer_hidden_chunk_size"),
+        ):
+            raw_value = getattr(gview, attr_name, None)
+            if raw_value is None:
+                continue
+            try:
+                metrics[metric_name] = int(raw_value)
+            except (TypeError, ValueError):
+                continue
     return metrics
 
 
@@ -377,6 +412,41 @@ def _format_runtime_metrics(
                 f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
                 f"max={float(entry.get('max_ms', 0.0) or 0.0):.2f} ms"
             )
+    viewer_mode = str(metrics.get("viewer_mode", "") or "").strip()
+    if viewer_mode:
+        details: list[str] = [f"mode={viewer_mode}"]
+        policy_lines = metrics.get("viewer_policy_line_count")
+        preview_lines = metrics.get("viewer_preview_line_count")
+        threshold = metrics.get("viewer_virtualization_threshold")
+        preview_only = metrics.get("viewer_preview_only")
+        window_size = metrics.get("viewer_virtual_window_size")
+        chunk_size = metrics.get("viewer_chunk_size")
+        if policy_lines is not None:
+            details.append(f"policy_lines={int(policy_lines):,}")
+        if preview_lines is not None:
+            details.append(f"preview_lines={int(preview_lines):,}")
+        if threshold is not None:
+            details.append(f"threshold={int(threshold):,}")
+        if preview_only is not None:
+            details.append(f"preview_only={bool(preview_only)}")
+        if window_size is not None:
+            details.append(f"window={int(window_size):,}")
+        if chunk_size is not None:
+            details.append(f"chunk={int(chunk_size):,}")
+        lines.append("- G-code viewer load policy: " + ", ".join(details))
+    hidden_delay = metrics.get("viewer_hidden_insert_delay_ms")
+    hidden_chunks = metrics.get("viewer_hidden_max_chunks_per_tick")
+    hidden_chunk_size = metrics.get("viewer_hidden_chunk_size")
+    if hidden_delay is not None or hidden_chunks is not None or hidden_chunk_size is not None:
+        details: list[str] = []
+        if hidden_delay is not None:
+            details.append(f"delay={int(hidden_delay)} ms")
+        if hidden_chunks is not None:
+            details.append(f"max_chunks={int(hidden_chunks)}")
+        if hidden_chunk_size is not None:
+            details.append(f"chunk_size={int(hidden_chunk_size)}")
+        if details:
+            lines.append("- G-code viewer hidden-tab throttle: " + ", ".join(details))
     return lines
 
 
@@ -979,6 +1049,34 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
     lines.append(f"G-code path: {getattr(app, '_last_gcode_path', '')}")
     lines.append(f"G-code streaming mode: {getattr(app, '_gcode_streaming_mode', False)}")
     lines.append(f"G-code total lines: {getattr(app, '_gcode_total_lines', 0)}")
+    viewer_mode = str(getattr(app, "_gcode_viewer_mode", "") or "").strip()
+    if viewer_mode:
+        lines.append(f"G-code viewer mode: {viewer_mode}")
+        lines.append(
+            "G-code viewer policy lines: "
+            f"{int(getattr(app, '_gcode_viewer_policy_line_count', 0) or 0)}"
+        )
+        lines.append(
+            "G-code viewer preview lines: "
+            f"{int(getattr(app, '_gcode_viewer_preview_line_count', 0) or 0)}"
+        )
+        lines.append(
+            "G-code viewer virtualization threshold: "
+            f"{int(getattr(app, '_gcode_viewer_virtualization_threshold', 0) or 0)}"
+        )
+        lines.append(
+            "G-code viewer virtual window: "
+            f"{int(getattr(app, '_gcode_viewer_virtual_window', 0) or 0)}"
+        )
+        chunk_size = getattr(app, "_gcode_viewer_chunk_size", None)
+        lines.append(
+            "G-code viewer chunk size: "
+            + ("n/a" if chunk_size is None else str(int(chunk_size)))
+        )
+        lines.append(
+            "G-code viewer preview_only: "
+            f"{bool(getattr(app, '_gcode_viewer_preview_only', False))}"
+        )
     lines.append("")
     report = getattr(app, "_gcode_validation_report", None)
     report_summary = _format_validation_summary(report)

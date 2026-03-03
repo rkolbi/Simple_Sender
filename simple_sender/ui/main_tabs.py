@@ -53,6 +53,14 @@ def update_tab_visibility(app, nb=None):
         pass
     app.toolpath_panel.set_visible(label == "3D View")
     app.toolpath_panel.set_top_view_visible(label == "Top View")
+    if label == "G-code":
+        gview = getattr(app, "gview", None)
+        notify_visible = getattr(gview, "notify_tab_visible", None)
+        if callable(notify_visible):
+            try:
+                notify_visible()
+            except Exception as exc:
+                logger.debug("Failed notifying G-code viewer tab visibility", exc_info=exc)
     try:
         app._update_quick_button_visibility()
     except Exception as exc:
@@ -102,6 +110,13 @@ def build_gcode_tab(app, notebook):
     app.gcode_stats_label = ttk.Label(stats_row, textvariable=app.gcode_stats_var, anchor="w")
     app.gcode_stats_label.pack(side="left", fill="x", expand=True)
     app.gview = GcodeViewer(gtab)
+    def _gcode_tab_visible() -> bool:
+        try:
+            selected = notebook.select()
+            return bool(selected and str(selected) == str(gtab))
+        except Exception:
+            return str(getattr(app, "_active_tab_label", "")) == "G-code"
+    app.gview.set_chunk_insert_visibility_callback(_gcode_tab_visible)
     app.gview.pack(fill="both", expand=True)
 
 

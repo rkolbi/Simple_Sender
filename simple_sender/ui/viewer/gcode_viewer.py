@@ -137,6 +137,11 @@ class GcodeViewer(ttk.Frame):
         )
         self._insert_max_chunks_per_tick = max(1, int(GCODE_VIEWER_INSERT_MAX_CHUNKS_PER_TICK))
         self._insert_delay_ms = max(1, int(GCODE_VIEWER_INSERT_DELAY_MS))
+        self._insert_hidden_time_budget_s = min(self._insert_time_budget_s, 0.002)
+        self._insert_hidden_max_chunks_per_tick = 1
+        self._insert_hidden_delay_ms = max(self._insert_delay_ms, 40)
+        self._insert_hidden_chunk_size = 100
+        self._insert_visibility_cb: Optional[Callable[[], bool]] = None
 
         # Virtualized rendering state for very large jobs.
         self._virtual_enabled = False
@@ -222,6 +227,20 @@ class GcodeViewer(ttk.Frame):
             self.lines_count,
             self._virtual_window_size,
         )
+
+    def set_chunk_insert_visibility_callback(self, callback: Optional[Callable[[], bool]]) -> None:
+        """Set an optional callback that reports whether the G-code tab is visible."""
+        self._insert_visibility_cb = callback
+
+    def notify_tab_visible(self) -> None:
+        """Prompt chunked insertion to resume immediately when the G-code tab is shown."""
+        if self._insert_after_id is None or not self._insert_lines:
+            return
+        try:
+            self.after_cancel(self._insert_after_id)
+        except Exception:
+            pass
+        self._insert_after_id = self.after(0, self._insert_next_chunk)
     
     def clear(self) -> None:
         """Clear all G-code and reset state."""
@@ -462,11 +481,38 @@ class GcodeViewer(ttk.Frame):
             return
 
         total = len(self._insert_lines)
+        insert_visible = True
+        callback = self._insert_visibility_cb
+        if callable(callback):
+            try:
+                insert_visible = bool(callback())
+            except Exception:
+                insert_visible = True
+        max_chunks_this_tick = (
+            self._insert_max_chunks_per_tick
+            if insert_visible
+            else self._insert_hidden_max_chunks_per_tick
+        )
+        chunk_size_this_tick = (
+            self._insert_chunk_size
+            if insert_visible
+            else min(self._insert_chunk_size, max(20, int(self._insert_hidden_chunk_size)))
+        )
+        tick_budget_s = (
+            self._insert_time_budget_s
+            if insert_visible
+            else self._insert_hidden_time_budget_s
+        )
+        schedule_delay_ms = (
+            self._insert_delay_ms
+            if insert_visible
+            else self._insert_hidden_delay_ms
+        )
         tick_start = time.perf_counter()
         inserted_chunks = 0
-        while self._insert_index < total and inserted_chunks < self._insert_max_chunks_per_tick:
+        while self._insert_index < total and inserted_chunks < max_chunks_this_tick:
             start = self._insert_index
-            end = min(start + self._insert_chunk_size, total)
+            end = min(start + chunk_size_this_tick, total)
             chunk = self._insert_lines[start:end]
             if chunk:
                 # Format lines with line numbers in one text insert call per chunk.
@@ -476,7 +522,7 @@ class GcodeViewer(ttk.Frame):
             self._insert_index = end
             inserted_chunks += 1
             self._emit_insert_progress(force=False)
-            if (time.perf_counter() - tick_start) >= self._insert_time_budget_s:
+            if (time.perf_counter() - tick_start) >= tick_budget_s:
                 break
 
         # Check if done
@@ -499,9 +545,9 @@ class GcodeViewer(ttk.Frame):
             
             logger.info(f"Loaded {self.lines_count} lines of G-code")
             return
-        
+
         # Schedule next chunk
-        self._insert_after_id = self.after(self._insert_delay_ms, self._insert_next_chunk)
+        self._insert_after_id = self.after(schedule_delay_ms, self._insert_next_chunk)
 
     def _emit_insert_progress(self, *, force: bool) -> None:
         callback = self._insert_progress_cb
