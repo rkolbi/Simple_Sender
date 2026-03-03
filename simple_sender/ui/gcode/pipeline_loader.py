@@ -24,6 +24,8 @@
 from dataclasses import dataclass
 from typing import IO, Protocol, Sequence, cast
 
+from simple_sender.utils.task_timing import record_task_timing
+
 
 def _format_mb(value: int | None) -> str:
     if value is None:
@@ -231,50 +233,52 @@ def _split_stream_to_temp_file(
     capture_full_lines: bool,
     full_lines_limit: int | None,
 ) -> _StreamTempData:
-    _check_load_token(app, token)
-    offsets = _new_offset_index(deps)
-    preview_lines: list[str] = []
-    all_lines: list[str] | None = [] if capture_full_lines else None
-    line_capture_limit_hit = False
-    total_lines_raw = 0
-    cleaned_input_lines = 0
-    current_line_no = 0
-    hasher = deps.hashlib.sha256()
-    progress_label = f"Scanning {deps.os.path.basename(path)}"
-    progress_last_ts = 0.0
-    progress_last_pct = -1
+    started_at = deps.time.perf_counter()
+    success = False
     temp_path: str | None = None
-    temp_file: IO[str] | None = None
-    split_result: _SplitStreamResultLike | None = None
-
-    def write_output(line: str) -> None:
-        nonlocal all_lines, line_capture_limit_hit
-        _check_load_token(app, token)
-        assert temp_file is not None
-        offsets.append(temp_file.tell())
-        temp_file.write(line)
-        temp_file.write("\n")
-        if len(preview_lines) < deps.GCODE_STREAMING_PREVIEW_LINES:
-            preview_lines.append(line)
-        if all_lines is not None:
-            if full_lines_limit is not None and len(all_lines) >= full_lines_limit:
-                all_lines = None
-                line_capture_limit_hit = True
-            else:
-                all_lines.append(line)
-        hasher.update(line.encode("utf-8"))
-        hasher.update(b"\n")
-
-    def clean_and_track(raw_text: str) -> str:
-        nonlocal cleaned_input_lines
-        cleaned = cast(str, deps.clean_gcode_line(raw_text))
-        if cleaned:
-            cleaned_input_lines += 1
-            if cleaned.startswith("$"):
-                raise _SystemCommandError(current_line_no, cleaned)
-        return cleaned
-
     try:
+        _check_load_token(app, token)
+        offsets = _new_offset_index(deps)
+        preview_lines: list[str] = []
+        all_lines: list[str] | None = [] if capture_full_lines else None
+        line_capture_limit_hit = False
+        total_lines_raw = 0
+        cleaned_input_lines = 0
+        current_line_no = 0
+        hasher = deps.hashlib.sha256()
+        progress_label = f"Scanning {deps.os.path.basename(path)}"
+        progress_last_ts = 0.0
+        progress_last_pct = -1
+        temp_file: IO[str] | None = None
+        split_result: _SplitStreamResultLike | None = None
+
+        def write_output(line: str) -> None:
+            nonlocal all_lines, line_capture_limit_hit
+            _check_load_token(app, token)
+            assert temp_file is not None
+            offsets.append(temp_file.tell())
+            temp_file.write(line)
+            temp_file.write("\n")
+            if len(preview_lines) < deps.GCODE_STREAMING_PREVIEW_LINES:
+                preview_lines.append(line)
+            if all_lines is not None:
+                if full_lines_limit is not None and len(all_lines) >= full_lines_limit:
+                    all_lines = None
+                    line_capture_limit_hit = True
+                else:
+                    all_lines.append(line)
+            hasher.update(line.encode("utf-8"))
+            hasher.update(b"\n")
+
+        def clean_and_track(raw_text: str) -> str:
+            nonlocal cleaned_input_lines
+            cleaned = cast(str, deps.clean_gcode_line(raw_text))
+            if cleaned:
+                cleaned_input_lines += 1
+                if cleaned.startswith("$"):
+                    raise _SystemCommandError(current_line_no, cleaned)
+            return cleaned
+
         try:
             temp_dir = None
             temp_dir_getter = getattr(deps, "get_preferred_temp_dir", None)
@@ -304,6 +308,7 @@ def _split_stream_to_temp_file(
             )
             temp_path = temp_file.name
             with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+
                 def iter_raw_lines():
                     nonlocal total_lines_raw, current_line_no, progress_last_ts, progress_last_pct
                     while True:
@@ -324,6 +329,7 @@ def _split_stream_to_temp_file(
                                     progress_last_pct = pct
                                 progress_last_ts = now
                         yield ln
+
                 _check_load_token(app, token)
 
                 split_result = deps.split_gcode_lines_stream(
@@ -337,23 +343,27 @@ def _split_stream_to_temp_file(
                 _emit_progress(app, token, 100, 100, progress_label)
         finally:
             _close_temp_file(temp_file)
+
+        assert temp_path is not None
+        assert split_result is not None
+        success = True
+        return _StreamTempData(
+            temp_path=temp_path,
+            offsets=offsets,
+            preview_lines=preview_lines,
+            all_lines=all_lines,
+            line_capture_limit_hit=line_capture_limit_hit,
+            lines_hash=hasher.hexdigest() if offsets else None,
+            split_result=split_result,
+            total_lines_raw=total_lines_raw,
+            cleaned_input_lines=cleaned_input_lines,
+        )
     except Exception:
         _remove_temp_path(deps, temp_path)
         raise
-
-    assert temp_path is not None
-    assert split_result is not None
-    return _StreamTempData(
-        temp_path=temp_path,
-        offsets=offsets,
-        preview_lines=preview_lines,
-        all_lines=all_lines,
-        line_capture_limit_hit=line_capture_limit_hit,
-        lines_hash=hasher.hexdigest() if offsets else None,
-        split_result=split_result,
-        total_lines_raw=total_lines_raw,
-        cleaned_input_lines=cleaned_input_lines,
-    )
+    finally:
+        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        record_task_timing(app, "gcode.load.split_stream", elapsed_ms, success=success)
 
 
 def _validate_streaming_output(
@@ -365,6 +375,8 @@ def _validate_streaming_output(
     temp_path: str,
     output_lines: int,
 ) -> object | None:
+    started_at = deps.time.perf_counter()
+    success = False
     _check_load_token(app, token)
 
     progress_label = f"Validating {deps.os.path.basename(path)}"
@@ -405,10 +417,15 @@ def _validate_streaming_output(
         _emit_progress(app, token, 100, 100, progress_label)
 
     try:
-        return cast(object, deps.validate_gcode_lines(iter_lines_with_progress()))
+        result = cast(object, deps.validate_gcode_lines(iter_lines_with_progress()))
+        success = True
+        return result
     except Exception as exc:
         app.ui_q.put(("log", f"[gcode] Streaming validation failed: {exc}"))
         return None
+    finally:
+        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        record_task_timing(app, "gcode.load.validate_stream", elapsed_ms, success=success)
 
 
 def _stream_from_disk(
@@ -423,6 +440,8 @@ def _stream_from_disk(
     streaming_line_threshold: int | None,
     log_message: str | None = None,
 ) -> None:
+    started_at = deps.time.perf_counter()
+    success = False
     temp_data = None
     try:
         _check_load_token(app, token)
@@ -524,6 +543,7 @@ def _stream_from_disk(
             report,
             preview_only,
         ))
+        success = True
     except _GcodeLoadCancelled:
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         return
@@ -540,6 +560,9 @@ def _stream_from_disk(
     except Exception:
         _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         raise
+    finally:
+        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        record_task_timing(app, "gcode.load.stream_total", elapsed_ms, success=success)
 
 
 def load_gcode_from_path(app, path: str, module):
@@ -554,6 +577,10 @@ def load_gcode_from_path(app, path: str, module):
     app._gcode_load_token += 1
     token = app._gcode_load_token
     app._gcode_loading = True
+    try:
+        app._gcode_load_started_at = deps.time.perf_counter()
+    except Exception:
+        app._gcode_load_started_at = None
     deps.disable_job_controls(app)
     app.gcode_stats_var.set("Preparing job...")
     app.status.config(text=f"Preparing job: {deps.os.path.basename(path)}")

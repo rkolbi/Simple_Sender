@@ -21,8 +21,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import time
 
 from simple_sender.gcode_source import FileGcodeSource
+from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
 
 logger = logging.getLogger(__name__)
@@ -261,6 +263,14 @@ def apply_loaded_gcode(
     name = deps.os.path.basename(path)
 
     def on_done():
+        started_at = getattr(app, "_gcode_load_started_at", None)
+        app._gcode_load_started_at = None
+        if started_at is not None:
+            try:
+                elapsed_ms = max(0.0, (time.perf_counter() - float(started_at)) * 1000.0)
+                record_task_timing(app, "gcode.load.end_to_end", elapsed_ms, success=True)
+            except Exception as exc:
+                _log_suppressed("Failed recording end-to-end G-code load timing", exc)
         app._gcode_loading = False
         app._finish_gcode_loading()
         if (

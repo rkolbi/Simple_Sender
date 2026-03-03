@@ -842,6 +842,7 @@ python tools/perf_microbench.py
   - streaming CPU avg/p95
   - RSS start/current/peak/steady-state
   - UI queue drain metrics (including slowest runtime event kind/ms) and budget pass/fail summary
+  - background task timings (including `gcode.load.*`, `gcode.parse.preview`, and `gcode.stats.compute.*`)
   - optional tracemalloc growth deltas when leak-watch is enabled
 
 ## Troubleshooting
@@ -884,6 +885,7 @@ python tools/perf_microbench.py
 - Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
 - Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 - Parser/split hot paths were optimized (reduced modal/bounds overhead in parse and lighter word matching in split) for lower CPU cost on large files.
+- Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
 
 ## Pre-release Notes
 1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).

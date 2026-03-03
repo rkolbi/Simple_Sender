@@ -42,6 +42,7 @@ from simple_sender.gcode_parser import (
 from simple_sender.gcode_validator import validate_gcode_lines
 from simple_sender.gcode_source import FileGcodeSource
 from simple_sender.utils.hashing import hash_lines
+from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import (
     GCODE_LOAD_PROGRESS_INTERVAL,
     GCODE_STREAMING_PREVIEW_LINES,
@@ -226,52 +227,59 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
             pass
 
     def worker():
+        parse_started_at = time.perf_counter()
+        parse_success = False
         try:
-            def keep_running():
-                return token == app._gcode_parse_token
+            try:
+                def keep_running():
+                    return token == app._gcode_parse_token
 
-            result = parse_gcode_lines(
-                lines,
-                arc_step,
-                keep_running=keep_running,
-                max_segments=parse_limit,
-                include_moves=True,
-            )
-        except Exception as exc:
-            app.ui_q.put(("log", f"[gcode] Parse failed: {exc}"))
+                result = parse_gcode_lines(
+                    lines,
+                    arc_step,
+                    keep_running=keep_running,
+                    max_segments=parse_limit,
+                    include_moves=True,
+                )
+                parse_success = result is not None
+            except Exception as exc:
+                app.ui_q.put(("log", f"[gcode] Parse failed: {exc}"))
 
-            def apply_error():
+                def apply_error():
+                    if token != app._gcode_parse_token:
+                        return
+                    app._last_parse_result = None
+                    app._last_parse_hash = None
+                    app._stats_token += 1
+                    app._last_stats = None
+                    app._last_rate_source = None
+                    app.gcode_stats_var.set("Estimate unavailable")
+
+                app.after(0, apply_error)
+                return
+            if result is None:
+                return
+
+            def apply_result():
                 if token != app._gcode_parse_token:
                     return
-                app._last_parse_result = None
-                app._last_parse_hash = None
-                app._stats_token += 1
-                app._last_stats = None
-                app._last_rate_source = None
-                app.gcode_stats_var.set("Estimate unavailable")
+                cached_result = result
+                # Avoid retaining large move lists in long-lived cache.
+                if len(lines) > int(GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD):
+                    cached_result = _lightweight_cached_parse_result(result)
+                try:
+                    setattr(result, "_includes_moves", True)
+                except Exception as exc:
+                    _log_suppressed("Failed tagging parse result with include-moves marker", exc)
+                app._last_parse_result = cached_result
+                app._last_parse_hash = lines_hash
+                app.toolpath_panel.apply_parse_result(lines, result, lines_hash=lines_hash)
+                app._update_gcode_stats(lines, parse_result=result)
 
-            app.after(0, apply_error)
-            return
-        if result is None:
-            return
-
-        def apply_result():
-            if token != app._gcode_parse_token:
-                return
-            cached_result = result
-            # Avoid retaining large move lists in long-lived cache.
-            if len(lines) > int(GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD):
-                cached_result = _lightweight_cached_parse_result(result)
-            try:
-                setattr(result, "_includes_moves", True)
-            except Exception as exc:
-                _log_suppressed("Failed tagging parse result with include-moves marker", exc)
-            app._last_parse_result = cached_result
-            app._last_parse_hash = lines_hash
-            app.toolpath_panel.apply_parse_result(lines, result, lines_hash=lines_hash)
-            app._update_gcode_stats(lines, parse_result=result)
-
-        app.after(0, apply_result)
+            app.after(0, apply_result)
+        finally:
+            elapsed_ms = max(0.0, (time.perf_counter() - parse_started_at) * 1000.0)
+            record_task_timing(app, "gcode.parse.preview", elapsed_ms, success=parse_success)
 
     def _worker_wrapper() -> None:
         try:

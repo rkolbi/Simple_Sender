@@ -44,83 +44,13 @@ def _compute_stats_from_moves(
     rapid_rates: tuple[float, float, float] | None = None,
     accel_rates: tuple[float, float, float] | None = None,
 ) -> dict:
-    total_time_min = 0.0
-    has_time = False
-    total_rapid_min = 0.0
-    has_rapid = False
-    last_f = None
-
-    def axis_limits(dx: float, dy: float, dz: float):
-        max_feed = None
-        min_accel = None
-        if rapid_rates:
-            candidates = []
-            if dx:
-                candidates.append(rapid_rates[0])
-            if dy:
-                candidates.append(rapid_rates[1])
-            if dz:
-                candidates.append(rapid_rates[2])
-            if candidates:
-                max_feed = min(candidates)
-        if accel_rates:
-            candidates = []
-            if dx:
-                candidates.append(accel_rates[0])
-            if dy:
-                candidates.append(accel_rates[1])
-            if dz:
-                candidates.append(accel_rates[2])
-            if candidates:
-                min_accel = min(candidates)
-        return max_feed, min_accel
-
-    def move_duration(dist: float, feed_mm_min: float | None, min_accel: float | None, last_feed: float | None):
-        if dist <= 0:
-            return 0.0, last_feed
-        if feed_mm_min is None or feed_mm_min <= 0:
-            return None, last_feed
-        f = feed_mm_min / 60.0
-        if f <= 0:
-            return None, last_feed
-        accel = min_accel if (min_accel and min_accel > 0) else 0.0
-        if accel <= 0:
-            return dist / f, f
-        if last_feed is not None and abs(f - last_feed) < 1e-6:
-            return dist / f, f
-        accel = accel if accel > 0 else 750.0
-        half_len = dist / 2.0
-        init_time = f / accel
-        init_dx = 0.5 * f * init_time
-        time_sec = 0.0
-        if half_len >= init_dx:
-            half_len -= init_dx
-            time_sec += init_time
-        time_sec += half_len / f
-        return 2 * time_sec, f
-
+    consume_move, _consume_values, finalize = _build_move_stats_accumulator(
+        rapid_rates,
+        accel_rates,
+    )
     for move in moves:
-        if move.motion == 0 and rapid_rates:
-            max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
-            if max_feed:
-                t_sec, last_f = move_duration(move.dist, max_feed, min_accel, last_f)
-                if t_sec is not None:
-                    total_rapid_min += t_sec / 60.0
-                    has_rapid = True
-        if move.motion in (1, 2, 3):
-            if move.feed and move.feed > 0:
-                if move.feed_mode == "G93":
-                    total_time_min += 1.0 / move.feed
-                else:
-                    max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
-                    use_feed = move.feed
-                    if max_feed and use_feed > max_feed:
-                        use_feed = max_feed
-                    t_sec, last_f = move_duration(move.dist, use_feed, min_accel, last_f)
-                    if t_sec is not None:
-                        total_time_min += t_sec / 60.0
-                has_time = True
-    return {"bounds": bounds, "time_min": total_time_min if has_time else None, "rapid_min": total_rapid_min if has_rapid else None}
+        consume_move(move)
+    return finalize(bounds)
 
 
 def _build_move_stats_accumulator(
@@ -182,28 +112,49 @@ def _build_move_stats_accumulator(
         time_sec += half_len / f
         return 2 * time_sec, f
 
-    def consume(move) -> None:
+    def consume_values(
+        motion: int,
+        feed: float | None,
+        feed_mode: str,
+        dx: float,
+        dy: float,
+        dz: float,
+        dist: float,
+        _arc_len: float | None,
+    ) -> None:
         nonlocal total_time_min, has_time, total_rapid_min, has_rapid, last_f
-        if move.motion == 0 and rapid_rates:
-            max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
+        if motion == 0 and rapid_rates:
+            max_feed, min_accel = axis_limits(dx, dy, dz)
             if max_feed:
-                t_sec, last_f = move_duration(move.dist, max_feed, min_accel, last_f)
+                t_sec, last_f = move_duration(dist, max_feed, min_accel, last_f)
                 if t_sec is not None:
                     total_rapid_min += t_sec / 60.0
                     has_rapid = True
-        if move.motion in (1, 2, 3):
-            if move.feed and move.feed > 0:
-                if move.feed_mode == "G93":
-                    total_time_min += 1.0 / move.feed
+        if motion in (1, 2, 3):
+            if feed and feed > 0:
+                if feed_mode == "G93":
+                    total_time_min += 1.0 / feed
                 else:
-                    max_feed, min_accel = axis_limits(move.dx, move.dy, move.dz)
-                    use_feed = move.feed
+                    max_feed, min_accel = axis_limits(dx, dy, dz)
+                    use_feed = feed
                     if max_feed and use_feed > max_feed:
                         use_feed = max_feed
-                    t_sec, last_f = move_duration(move.dist, use_feed, min_accel, last_f)
+                    t_sec, last_f = move_duration(dist, use_feed, min_accel, last_f)
                     if t_sec is not None:
                         total_time_min += t_sec / 60.0
                 has_time = True
+
+    def consume_move(move) -> None:
+        consume_values(
+            int(move.motion),
+            move.feed,
+            str(move.feed_mode),
+            float(move.dx),
+            float(move.dy),
+            float(move.dz),
+            float(move.dist),
+            getattr(move, "arc_len", None),
+        )
 
     def finalize(bounds) -> dict:
         return {
@@ -212,7 +163,7 @@ def _build_move_stats_accumulator(
             "rapid_min": total_rapid_min if has_rapid else None,
         }
 
-    return consume, finalize
+    return consume_move, consume_values, finalize
 
 
 def compute_gcode_stats_from_result(
@@ -233,12 +184,12 @@ def compute_gcode_stats(
 ) -> dict:
     if not lines:
         return {"bounds": None, "time_min": None, "rapid_min": None}
-    consume_move, finalize_stats = _build_move_stats_accumulator(rapid_rates, accel_rates)
+    _consume_move, consume_values, finalize_stats = _build_move_stats_accumulator(rapid_rates, accel_rates)
     result = parse_gcode_lines(
         lines,
         keep_running=keep_running,
         include_moves=False,
-        move_callback=consume_move,
+        move_values_callback=consume_values,
         include_segments=False,
     )
     if result is None:

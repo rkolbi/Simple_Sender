@@ -151,6 +151,9 @@ def parse_gcode_lines(
     max_segments: int | None = None,
     include_moves: bool = True,
     move_callback: Optional[Callable[[GcodeMove], None]] = None,
+    move_values_callback: Optional[
+        Callable[[int, float | None, str, float, float, float, float, float | None], None]
+    ] = None,
     include_segments: bool = True,
 ) -> Optional[GcodeParseResult]:
     """Parse G-code into toolpath segments, bounds, and move summaries."""
@@ -378,6 +381,17 @@ def parse_gcode_lines(
                     moves.append(move)
                 if move_callback is not None:
                     move_callback(move)
+            if move_values_callback is not None:
+                move_values_callback(
+                    motion,
+                    feed_for_mode,
+                    feed_mode,
+                    dx,
+                    dy,
+                    dz,
+                    dist,
+                    None,
+                )
             update_bounds(x, y, z)
             update_bounds(nx, ny, nz)
             x, y, z = nx, ny, nz
@@ -495,6 +509,17 @@ def parse_gcode_lines(
                     moves.append(move)
                 if move_callback is not None:
                     move_callback(move)
+            if move_values_callback is not None:
+                move_values_callback(
+                    motion,
+                    feed_for_mode,
+                    feed_mode,
+                    dx,
+                    dy,
+                    dz,
+                    dist,
+                    arc_len2d,
+                )
             update_bounds(nx, ny, nz)
             x, y, z = nx, ny, nz
             last_motion = motion
