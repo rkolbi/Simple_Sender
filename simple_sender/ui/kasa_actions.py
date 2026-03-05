@@ -26,7 +26,7 @@ import logging
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from simple_sender.kasa_accessory import (
     DeviceInfo,
@@ -109,6 +109,94 @@ def kasa_settings_snapshot(app) -> dict[str, Any]:
     }
 
 
+def kasa_status_snapshot(app) -> dict[str, Any]:
+    settings = kasa_settings_snapshot(app)
+    enabled = bool(settings.get("kasa_enabled", False))
+    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
+    outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
+    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
+    light_enabled = bool(settings.get("light_enabled", False)) and outlet_count >= 2
+    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
+    light_outlet = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
+    vacuum_state = (
+        bool(getattr(app, "_kasa_vacuum_quick_on", False)) if vacuum_enabled else None
+    )
+    light_state = (
+        bool(getattr(app, "_kasa_light_quick_on", False)) if light_enabled else None
+    )
+    return {
+        "enabled": enabled,
+        "device_identifier": device_identifier,
+        "outlet_count": outlet_count,
+        "vacuum_enabled": vacuum_enabled,
+        "vacuum_outlet": vacuum_outlet,
+        "vacuum_on": vacuum_state,
+        "light_enabled": light_enabled,
+        "light_outlet": light_outlet,
+        "light_on": light_state,
+    }
+
+
+def format_kasa_status_line(app) -> str:
+    if not _kasa_supported():
+        return "enabled=False | linux_only=True"
+    snapshot = kasa_status_snapshot(app)
+
+    def _channel_text(name: str, *, enabled: bool, outlet: int, state: bool | None) -> str:
+        if not enabled:
+            return f"{name}=disabled"
+        state_text = "ON" if bool(state) else "OFF"
+        return f"{name}=Outlet {int(outlet)}:{state_text}"
+
+    enabled = bool(snapshot.get("enabled", False))
+    device = str(snapshot.get("device_identifier", "") or "").strip() or "none"
+    vacuum_text = _channel_text(
+        "vacuum",
+        enabled=bool(snapshot.get("vacuum_enabled", False)),
+        outlet=int(snapshot.get("vacuum_outlet", 1) or 1),
+        state=cast(bool | None, snapshot.get("vacuum_on")),
+    )
+    light_text = _channel_text(
+        "light",
+        enabled=bool(snapshot.get("light_enabled", False)),
+        outlet=int(snapshot.get("light_outlet", 2) or 2),
+        state=cast(bool | None, snapshot.get("light_on")),
+    )
+    return (
+        f"enabled={enabled} | device={device} | outlets={int(snapshot.get('outlet_count', 2) or 2)}"
+        f" | {vacuum_text} | {light_text}"
+    )
+
+
+def _set_stringvar_if_changed(var: Any, value: str) -> bool:
+    if var is None:
+        return False
+    getter = getattr(var, "get", None)
+    setter = getattr(var, "set", None)
+    if not callable(setter):
+        return False
+    current = None
+    if callable(getter):
+        try:
+            current = str(getter() or "")
+        except Exception:
+            current = None
+    text = str(value or "")
+    if current == text:
+        return False
+    try:
+        setter(text)
+        return True
+    except Exception:
+        return False
+
+
+def refresh_kasa_status_line(app) -> None:
+    line = format_kasa_status_line(app)
+    setattr(app, "_kasa_status_line_cached", line)
+    _set_stringvar_if_changed(getattr(app, "kasa_status_line_var", None), line)
+
+
 def _kasa_quick_ready(app) -> bool:
     settings = kasa_settings_snapshot(app)
     if not bool(settings.get("kasa_enabled", False)):
@@ -127,6 +215,10 @@ def _refresh_kasa_quick_ui(app) -> None:
             app._update_quick_button_visibility()
     except Exception as exc:
         _log_suppressed("Failed refreshing Kasa quick-button visibility", exc)
+    try:
+        refresh_kasa_status_line(app)
+    except Exception as exc:
+        _log_suppressed("Failed refreshing Kasa status line", exc)
 
 
 def _set_kasa_quick_state(app, *, vacuum: bool | None = None, light: bool | None = None) -> None:
@@ -373,6 +465,7 @@ def refresh_kasa_controls_state(app) -> None:
             "btn_kasa_outlet2_off",
         ):
             _set_widget_state(getattr(app, widget_name, None), "disabled")
+        refresh_kasa_status_line(app)
         return
 
     enabled = bool(_read_var_value(app, "kasa_enabled", False))
@@ -413,6 +506,7 @@ def refresh_kasa_controls_state(app) -> None:
         getattr(app, "btn_kasa_outlet2_off", None),
         test_state if has_dual_outlet else "disabled",
     )
+    refresh_kasa_status_line(app)
 
 
 def validate_kasa_outlet_mapping(app, *, changed: str | None = None) -> bool:
@@ -809,8 +903,10 @@ def handle_stream_spindle_state(app, is_on: bool) -> None:
 __all__ = [
     "OUTLET_LABELS",
     "discover_kasa_devices",
+    "format_kasa_status_line",
     "handle_outgoing_gcode_line",
     "handle_stream_spindle_state",
+    "kasa_status_snapshot",
     "kasa_settings_snapshot",
     "log_kasa_message",
     "on_kasa_command_result",
@@ -818,6 +914,7 @@ __all__ = [
     "on_kasa_mapping_change",
     "on_kasa_master_change",
     "refresh_kasa_controls_state",
+    "refresh_kasa_status_line",
     "refresh_kasa_outlet_list",
     "start_job_accessories",
     "stop_job_accessories",

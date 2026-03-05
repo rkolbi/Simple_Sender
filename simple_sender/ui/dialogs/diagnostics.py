@@ -36,6 +36,7 @@ from typing import Any, cast
 
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.ui.kasa_actions import format_kasa_status_line, kasa_status_snapshot
 from simple_sender.ui.macro_files import discover_macro_assets
 from simple_sender.ui.pi_profile import PI_PROFILE_STATUS_POLL_INTERVAL
 from simple_sender.utils.constants import (
@@ -209,6 +210,20 @@ def _viewer_window_line_count(gview: Any) -> int:
 
 def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
+    try:
+        kasa_snapshot = kasa_status_snapshot(app)
+    except Exception as exc:
+        _log_suppressed("Failed collecting Kasa status snapshot for diagnostics", exc)
+        kasa_snapshot = {}
+    if isinstance(kasa_snapshot, dict) and kasa_snapshot:
+        metrics["kasa_status"] = dict(kasa_snapshot)
+    try:
+        kasa_line = str(format_kasa_status_line(app) or "").strip()
+    except Exception as exc:
+        _log_suppressed("Failed building Kasa status line for diagnostics", exc)
+        kasa_line = ""
+    if kasa_line:
+        metrics["kasa_status_line"] = kasa_line
     grbl = getattr(app, "grbl", None)
     getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
     if callable(getter):
@@ -668,6 +683,9 @@ def _format_runtime_metrics(
     if not metrics:
         return []
     lines: list[str] = []
+    kasa_status_line = str(metrics.get("kasa_status_line", "") or "").strip()
+    if kasa_status_line:
+        lines.append(f"- Kasa status: {kasa_status_line}")
     has_worker_metrics = any(
         key in metrics
         for key in (
@@ -1956,6 +1974,10 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
     lines.append(f"Port: {getattr(app, '_connected_port', '')}")
     lines.append(f"Streaming: {getattr(app, '_stream_state', '')}")
     lines.append(f"G-code path: {getattr(app, '_last_gcode_path', '')}")
+    try:
+        lines.append(f"Kasa status: {format_kasa_status_line(app)}")
+    except Exception as exc:
+        _log_suppressed("Failed appending Kasa status line to session diagnostics", exc)
     auto_level_source_path = str(
         getattr(app, "_auto_level_job_source_path", "") or ""
     ).strip()

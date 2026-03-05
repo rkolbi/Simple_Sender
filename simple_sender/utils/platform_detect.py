@@ -47,13 +47,29 @@ def detect_raspberry_pi() -> bool:
         except Exception:
             continue
 
+    compatible_paths = (
+        "/proc/device-tree/compatible",
+        "/sys/firmware/devicetree/base/compatible",
+    )
+    for path in compatible_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                    text = handle.read().lower()
+                    if "raspberrypi" in text or "raspberry pi" in text:
+                        return True
+        except Exception:
+            continue
+
     try:
         with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as handle:
-            if "raspberry pi" in handle.read().lower():
+            text = handle.read().lower()
+            if "raspberry pi" in text or "raspberrypi" in text:
                 return True
     except Exception:
         pass
 
+    # Final fallback for Pi-like Linux ARM hosts where model/cpuinfo data may be hidden.
+    # Kept intentionally broad as a last resort.
     machine = platform.machine().lower()
     return machine in ("armv6l", "armv7l", "aarch64", "arm64")
-

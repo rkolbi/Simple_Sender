@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 
 from .config import get_settings_path
+from .temp_paths import get_preferred_temp_dir
 
 APP_LOGGER_NAME = "simple_sender"
 LOG_DIRNAME = "logs"
@@ -50,7 +51,7 @@ def get_log_dir() -> Path:
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
     except Exception:
-        fallback = Path(tempfile.gettempdir()) / "simple_sender_logs"
+        fallback = Path(get_preferred_temp_dir()) / "logs"
         try:
             fallback.mkdir(parents=True, exist_ok=True)
             return fallback
@@ -115,7 +116,7 @@ def setup_logging() -> logging.Logger:
         serial_handler.setLevel(logging.DEBUG)
         serial_handler.setFormatter(
             logging.Formatter(
-                "%(asctime)s.%(msecs)0spatial [%(levelname)s] %(message)s",
+                "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )

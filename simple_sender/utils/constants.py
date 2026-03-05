@@ -26,11 +26,9 @@ This module centralizes all magic numbers, default values, and configuration
 constants used throughout the application.
 """
 
-import os
-import platform
 import re
-import sys
 from typing import Dict, Tuple, Set
+from simple_sender.utils.platform_detect import detect_raspberry_pi
 
 # ============================================================================
 # SERIAL COMMUNICATION CONSTANTS
@@ -392,34 +390,7 @@ JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS = 120
 JOYSTICK_HOLD_MAX_ELAPSED_MULTIPLIER = 3.0
 """Maximum multiple of the repeat interval used to compute hold jog distance."""
 
-
-def _is_raspberry_pi() -> bool:
-    if not sys.platform.startswith("linux"):
-        return False
-    model_paths = (
-        "/proc/device-tree/model",
-        "/sys/firmware/devicetree/base/model",
-    )
-    for path in model_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-                    if "raspberry pi" in handle.read().lower():
-                        return True
-        except Exception:
-            continue
-    try:
-        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as handle:
-            if "raspberry pi" in handle.read().lower():
-                return True
-    except Exception:
-        machine = platform.machine().lower()
-        return machine in ("armv6l", "armv7l", "aarch64", "arm64")
-    machine = platform.machine().lower()
-    return machine in ("armv6l", "armv7l", "aarch64", "arm64")
-
-
-if _is_raspberry_pi():
+if detect_raspberry_pi():
     JOYSTICK_POLL_INTERVAL_MS = 20
     JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS = 160
     JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS = 8

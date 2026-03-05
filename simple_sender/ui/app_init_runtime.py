@@ -179,6 +179,7 @@ def _init_kasa_runtime_state(app, tk) -> None:
     )
     app.kasa_outlet_info_var = tk.StringVar(value="Outlet list: not loaded")
     app.kasa_validation_var = tk.StringVar(value="")
+    app.kasa_status_line_var = tk.StringVar(value="enabled=False | device=none")
     app.kasa_outlet_1_status = tk.StringVar(value="Last command: none")
     app.kasa_outlet_2_status = tk.StringVar(value="Last command: none")
     app._kasa_device_label_to_identifier = {}

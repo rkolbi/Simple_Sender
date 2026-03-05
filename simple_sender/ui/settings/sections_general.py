@@ -296,6 +296,27 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.performance_profile_log_path_entry,
         "Optional file path to append the performance report on exit.",
     )
+    if not hasattr(app, "kasa_status_line_var"):
+        app.kasa_status_line_var = tk.StringVar(
+            master=parent,
+            value="enabled=False | device=none",
+        )
+    ttk.Label(diagnostics_frame, text="Kasa status").grid(
+        row=14, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+    )
+    app.kasa_status_line_diag_label = ttk.Label(
+        diagnostics_frame,
+        textvariable=app.kasa_status_line_var,
+        justify="left",
+        wraplength=560,
+    )
+    app.kasa_status_line_diag_label.grid(
+        row=14, column=1, sticky="w", pady=(6, 0)
+    )
+    apply_tooltip(
+        app.kasa_status_line_diag_label,
+        "Read-only Kasa status (enabled, selected device, and mapped outlet states).",
+    )
     return row + 1
 
 

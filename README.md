@@ -739,6 +739,7 @@ Ruff syntax/pyflakes gate:
 python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools
 ```
 If `python -m ruff` fails on Windows due a broken global launcher, run `.\.venv\Scripts\ruff.exe check --select E9,F63,F7,F82 simple_sender tests tools` instead.
+You can also use the resilient launcher helper: `python tools/run_ruff.py check --select E9,F63,F7,F82 simple_sender tests tools`.
 
 Validate mypy target manifest and README count note:
 ```powershell

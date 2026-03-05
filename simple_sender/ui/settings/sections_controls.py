@@ -415,8 +415,20 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.kasa_outlet_info_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
+    app.kasa_status_line_label = ttk.Label(
+        kasa_frame,
+        textvariable=app.kasa_status_line_var,
+        justify="left",
+        wraplength=560,
+    )
+    app.kasa_status_line_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 6))
+    apply_tooltip(
+        app.kasa_status_line_label,
+        "Read-only Kasa status (enabled, device, and mapped outlet states).",
+    )
+
     vacuum_row = ttk.Frame(kasa_frame)
-    vacuum_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+    vacuum_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
     vacuum_row.grid_columnconfigure(2, weight=1)
     app.vacuum_check = ttk.Checkbutton(
         vacuum_row,
@@ -446,7 +458,7 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
     apply_tooltip(app.vacuum_outlet_combo, "Select which outlet controls Vacuum.")
 
     light_row = ttk.Frame(kasa_frame)
-    light_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+    light_row.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
     light_row.grid_columnconfigure(2, weight=1)
     app.light_check = ttk.Checkbutton(
         light_row,
@@ -482,10 +494,10 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
         wraplength=560,
         foreground="#b00020",
     )
-    app.kasa_validation_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 6))
+    app.kasa_validation_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
     test_frame = ttk.LabelFrame(kasa_frame, text="Test Outlets", padding=8)
-    test_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
+    test_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
     test_frame.grid_columnconfigure(1, weight=1)
 
     app.btn_kasa_refresh_outlets = ttk.Button(
