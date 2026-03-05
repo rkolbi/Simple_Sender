@@ -995,7 +995,8 @@ def handle_gcode_load_invalid(
     _clear_autolevel_restore(app)
     app._gcode_loading = False
     app._finish_gcode_loading()
-    app.gcode_stats_var.set("No file loaded")
+    app.gcode_stats_var.set("")
+    app._gcode_status_last_text = ""
     msg = f"{too_long} non-empty line(s) exceed GRBL's {MAX_LINE_LENGTH}-byte limit."
     if first_idx is not None and first_len is not None:
         msg += f"\nFirst at line {first_idx + 1} ({first_len} bytes including newline)."
@@ -1020,7 +1021,8 @@ def handle_gcode_load_invalid_command(
     _clear_autolevel_restore(app)
     app._gcode_loading = False
     app._finish_gcode_loading()
-    app.gcode_stats_var.set("No file loaded")
+    app.gcode_stats_var.set("")
+    app._gcode_status_last_text = ""
     text = (line_text or "").strip() or "$"
     msg = "GRBL system commands ($...) are not allowed inside G-code jobs."
     if line_no is not None:
@@ -1036,7 +1038,8 @@ def handle_gcode_load_error(app, token, _path, err):
     _clear_autolevel_restore(app)
     app._gcode_loading = False
     app._finish_gcode_loading()
-    app.gcode_stats_var.set("No file loaded")
+    app.gcode_stats_var.set("")
+    app._gcode_status_last_text = ""
     messagebox.showerror("Open G-code", f"Failed to read file:\n{err}")
     app.status.config(text="G-code load failed")
 
@@ -1056,5 +1059,4 @@ def _clear_autolevel_restore(app) -> None:
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
-
 

@@ -1097,8 +1097,18 @@ def _stream_from_disk(
         )
         setattr(
             source,
+            "_prepare_executable_total_lines_known",
+            bool(getattr(prepare_data, "cleaned_lines_known", False)),
+        )
+        setattr(
+            source,
             "_prepare_motion_total_lines",
             int(prepare_data.motion_lines_estimate),
+        )
+        setattr(
+            source,
+            "_prepare_motion_total_lines_known",
+            bool(getattr(prepare_data, "cleaned_lines_known", False)),
         )
         setattr(
             source,

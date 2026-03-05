@@ -479,9 +479,44 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         file_line_count_known = True
     if file_line_count <= 0:
         file_line_count_known = False
+    executable_line_count = int(getattr(app, "_gcode_executable_lines", 0) or 0)
+    if executable_line_count <= 0:
+        executable_line_count = int(
+            getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0
+        )
+    if executable_line_count <= 0:
+        executable_line_count = int(getattr(app, "_gcode_total_lines", 0) or 0)
+    executable_line_count_known = bool(
+        getattr(app, "_gcode_executable_lines_known", False)
+    )
+    if (not executable_line_count_known) and executable_line_count > 0:
+        executable_line_count_known = bool(
+            getattr(app, "_gcode_source_line_count_known", False)
+        )
+    motion_line_count = int(getattr(app, "_gcode_motion_lines", 0) or 0)
+    if motion_line_count <= 0:
+        motion_line_count = int(getattr(app, "_gcode_prepare_motion_total_lines", 0) or 0)
+    motion_line_count_known = bool(getattr(app, "_gcode_motion_lines_known", False))
+    if (not motion_line_count_known) and motion_line_count > 0:
+        motion_line_count_known = bool(executable_line_count_known)
+    total_line_count = int(file_line_count)
+    total_line_count_known = bool(file_line_count_known)
     metrics["gcode_file_size_bytes"] = int(file_size_bytes)
-    metrics["gcode_file_line_count"] = int(file_line_count)
-    metrics["gcode_file_line_count_known"] = bool(file_line_count_known)
+    metrics["gcode_total_lines"] = int(total_line_count)
+    metrics["gcode_total_lines_known"] = bool(total_line_count_known)
+    metrics["gcode_executable_lines"] = int(executable_line_count)
+    metrics["gcode_executable_lines_known"] = bool(executable_line_count_known)
+    metrics["gcode_motion_lines"] = int(motion_line_count)
+    metrics["gcode_motion_lines_known"] = bool(motion_line_count_known)
+    # Backward-compatible aliases.
+    metrics["total_lines"] = int(total_line_count)
+    metrics["total_lines_known"] = bool(total_line_count_known)
+    metrics["executable_lines"] = int(executable_line_count)
+    metrics["executable_lines_known"] = bool(executable_line_count_known)
+    metrics["motion_lines"] = int(motion_line_count)
+    metrics["motion_lines_known"] = bool(motion_line_count_known)
+    metrics["gcode_file_line_count"] = int(total_line_count)
+    metrics["gcode_file_line_count_known"] = bool(total_line_count_known)
     metrics["gcode_prepare_executable_total_lines"] = int(
         getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0
     )
@@ -2006,7 +2041,27 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
     lines.append(
         f"G-code streaming mode: {getattr(app, '_gcode_streaming_mode', False)}"
     )
-    lines.append(f"G-code total lines: {getattr(app, '_gcode_total_lines', 0)}")
+    total_lines = int(getattr(app, "_gcode_file_line_count", 0) or 0)
+    total_known = bool(getattr(app, "_gcode_file_line_count_known", False))
+    exec_lines = int(
+        getattr(app, "_gcode_executable_lines", 0)
+        or getattr(app, "_gcode_prepare_executable_total_lines", 0)
+        or getattr(app, "_gcode_total_lines", 0)
+        or 0
+    )
+    exec_known = bool(getattr(app, "_gcode_executable_lines_known", False))
+    motion_lines = int(
+        getattr(app, "_gcode_motion_lines", 0)
+        or getattr(app, "_gcode_prepare_motion_total_lines", 0)
+        or 0
+    )
+    motion_known = bool(getattr(app, "_gcode_motion_lines_known", False))
+    lines.append(
+        "G-code line counts: "
+        f"total={total_lines:,} ({'known' if total_known else 'estimated'}), "
+        f"executable={exec_lines:,} ({'known' if exec_known else 'estimated'}), "
+        f"motion={motion_lines:,} ({'known' if motion_known else 'estimated'})"
+    )
     viewer_mode = str(getattr(app, "_gcode_viewer_mode", "") or "").strip()
     if viewer_mode:
         lines.append(f"G-code viewer mode: {viewer_mode}")

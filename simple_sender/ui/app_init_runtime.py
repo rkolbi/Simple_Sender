@@ -91,6 +91,7 @@ def _init_joystick_runtime_state(
     app._joystick_last_discovery = 0.0
     app._joystick_last_live_status = 0.0
     app._joystick_last_live_status_text = ""
+    app._joystick_live_status_app_settings_interval_ms = 1250
     app._joystick_poll_idle_streak = 0
     app._joystick_poll_interval_default_ms = int(joystick_poll_interval_ms)
     app._joystick_poll_idle_max_interval_default_ms = int(
@@ -400,7 +401,13 @@ def _init_gcode_and_autolevel_state(
     app._gcode_source = None
     app._gcode_streaming_mode = False
     app._gcode_total_lines = 0
+    app._gcode_total_lines_known = False
+    app._gcode_executable_lines = 0
+    app._gcode_executable_lines_known = False
+    app._gcode_motion_lines = 0
+    app._gcode_motion_lines_known = False
     app._gcode_storage_mode = "none"
+    app._gcode_source_line_count_known = False
     app._gcode_retained_line_count = 0
     app._gcode_source_offset_count = 0
     app._gcode_source_offset_type = ""
@@ -477,8 +484,8 @@ def _init_gcode_and_autolevel_state(
     app._gcode_loading = False
     app._gcode_load_token = 0
     app._gcode_parse_token = 0
-    app.gcode_stats_var = tk.StringVar(value="No file loaded")
-    app._gcode_status_last_text = "No file loaded"
+    app.gcode_stats_var = tk.StringVar(value="")
+    app._gcode_status_last_text = ""
     app.gcode_load_var = tk.StringVar(value="")
     app._gcode_load_popup = None
     app._gcode_load_popup_label = None

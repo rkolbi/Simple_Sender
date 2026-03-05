@@ -83,6 +83,22 @@ def _set_gcode_status_text_if_changed(app, text: str) -> None:
     app.gcode_stats_var.set(normalized)
 
 
+def _job_loaded_for_status(app) -> bool:
+    storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip().lower()
+    if storage_mode and storage_mode != "none":
+        return True
+    if getattr(app, "_gcode_source", None) is not None:
+        return True
+    last_lines = getattr(app, "_last_gcode_lines", None)
+    if isinstance(last_lines, list) and len(last_lines) > 0:
+        return True
+    if int(getattr(app, "_gcode_total_lines", 0) or 0) > 0:
+        return True
+    if int(getattr(app, "_gcode_file_line_count", 0) or 0) > 0:
+        return True
+    return False
+
+
 def _current_bounds_box(app, stats: dict | None = None) -> dict[str, float] | None:
     if isinstance(stats, dict):
         bounds = stats.get("bounds")
@@ -144,8 +160,8 @@ def _format_dimensions_block(app, stats: dict | None = None) -> str:
     )
     return (
         "Job Dimensions: "
-        f"{_fmt_dim_value(mm_x, unit='mm')}, {_fmt_dim_value(mm_y, unit='mm')}, {_fmt_dim_value(mm_z, unit='mm')} mm / "
-        f"{_fmt_dim_value(mm_x, unit='in')}, {_fmt_dim_value(mm_y, unit='in')}, {_fmt_dim_value(mm_z, unit='in')} in "
+        f"{_fmt_dim_value(mm_x, unit='mm')},{_fmt_dim_value(mm_y, unit='mm')},{_fmt_dim_value(mm_z, unit='mm')} mm / "
+        f"{_fmt_dim_value(mm_x, unit='in')},{_fmt_dim_value(mm_y, unit='in')},{_fmt_dim_value(mm_z, unit='in')} in "
         f"[{_confidence_badge(dim_conf)}]"
     )
 
@@ -584,7 +600,7 @@ def format_streaming_estimate_text(app) -> str:
     else:
         estimate_txt = format_duration(estimated_seconds)
     text = f"Estimated Job Time: {estimate_txt} [{_confidence_badge(confidence)}]"
-    return f"{text}\n{_format_dimensions_block(app)}"
+    return f"{text} / {_format_dimensions_block(app)}"
 
 
 def _remaining_estimate_for_display_min(app) -> float | None:
@@ -644,6 +660,9 @@ def estimate_factor_value(app) -> float:
 
 
 def refresh_gcode_stats_display(app):
+    if not _job_loaded_for_status(app):
+        _set_gcode_status_text_if_changed(app, "")
+        return
     if getattr(app, "_gcode_streaming_mode", False):
         _set_gcode_status_text_if_changed(app, format_streaming_estimate_text(app))
         return
@@ -737,7 +756,7 @@ def format_gcode_stats_text(app, stats: dict, rate_source: str | None) -> str:
         or _ESTIMATE_CONFIDENCE_PROVISIONAL
     )
     line_1 = f"Estimated Job Time: {estimate_txt} [{_confidence_badge(confidence)}]"
-    return f"{line_1}\n{_format_dimensions_block(app, stats)}"
+    return f"{line_1} / {_format_dimensions_block(app, stats)}"
 
 
 def apply_gcode_stats(app, token: int, stats: dict | None, rate_source: str | None):
@@ -1152,7 +1171,7 @@ def update_gcode_stats(
         _clear_pending_stats_request(app, cancel_launch=True)
         app._last_stats = None
         app._last_rate_source = None
-        app.gcode_stats_var.set("No file loaded")
+        _set_gcode_status_text_if_changed(app, "")
         _safe_close_source(cleanup_stats_source)
         return
     if parse_result is None and not getattr(app, "_gcode_streaming_mode", False):

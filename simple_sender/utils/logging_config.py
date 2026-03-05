@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
-import tempfile
 from pathlib import Path
 
 from .config import get_settings_path

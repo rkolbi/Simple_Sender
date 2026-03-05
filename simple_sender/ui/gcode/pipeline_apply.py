@@ -32,6 +32,23 @@ _logged_suppressed: set[tuple[str, str]] = set()
 _GCODE_APPLY_STAGE_BUDGET_MS = 15.0
 
 
+def _is_motion_line(line: str) -> bool:
+    text = str(line or "").strip().upper()
+    if not text:
+        return False
+    if any(token in text for token in ("G0", "G1", "G2", "G3")):
+        return True
+    return any(axis in text for axis in ("X", "Y", "Z"))
+
+
+def _count_motion_lines(lines: list[str]) -> int:
+    motion = 0
+    for line in lines:
+        if _is_motion_line(line):
+            motion += 1
+    return int(motion)
+
+
 def _log_suppressed(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)
     if key in _logged_suppressed:
@@ -277,6 +294,11 @@ def apply_loaded_gcode(
         app._gcode_file_size_bytes = 0
         app._gcode_file_line_count = 0
         app._gcode_file_line_count_known = False
+        app._gcode_total_lines_known = True
+        app._gcode_executable_lines = max(0, int(total_lines or len(lines)))
+        app._gcode_executable_lines_known = True
+        app._gcode_motion_lines = _count_motion_lines(lines)
+        app._gcode_motion_lines_known = True
         app._gcode_prepare_executable_total_lines = 0
         app._gcode_prepare_motion_total_lines = 0
         app._gcode_prepare_sampled_executable_lines = 0
@@ -396,8 +418,24 @@ def apply_loaded_gcode(
         app._gcode_prepare_executable_total_lines = int(
             getattr(streaming_source, "_prepare_executable_total_lines", 0) or 0
         )
+        app._gcode_executable_lines = int(app._gcode_prepare_executable_total_lines)
+        app._gcode_executable_lines_known = bool(
+            getattr(
+                streaming_source,
+                "_prepare_executable_total_lines_known",
+                app._gcode_file_line_count_known,
+            )
+        )
         app._gcode_prepare_motion_total_lines = int(
             getattr(streaming_source, "_prepare_motion_total_lines", 0) or 0
+        )
+        app._gcode_motion_lines = int(app._gcode_prepare_motion_total_lines)
+        app._gcode_motion_lines_known = bool(
+            getattr(
+                streaming_source,
+                "_prepare_motion_total_lines_known",
+                app._gcode_file_line_count_known,
+            )
         )
         app._gcode_prepare_sampled_executable_lines = int(
             getattr(streaming_source, "_prepare_sampled_executable_lines", 0) or 0
@@ -461,6 +499,7 @@ def apply_loaded_gcode(
             or "provisional"
         )
         app._gcode_offset_index_enabled = bool(index_mode in {"full", "sparse"})
+        app._gcode_total_lines_known = bool(app._gcode_file_line_count_known)
     deps.set_sample_streaming_state(app, sample_only)
     try:
         app._set_job_button_mode(
@@ -470,7 +509,25 @@ def apply_loaded_gcode(
         _log_suppressed(
             "Failed updating job button mode after applying loaded G-code", exc
         )
-    app._gcode_total_lines = total_lines if total_lines is not None else len(lines)
+    if streaming_source is not None:
+        app._gcode_total_lines = int(getattr(app, "_gcode_executable_lines", 0) or 0)
+    else:
+        app._gcode_total_lines = int(total_lines) if total_lines is not None else len(lines)
+    if streaming_source is not None and app._gcode_total_lines <= 0 and total_lines is not None:
+        app._gcode_total_lines = int(max(0, int(total_lines)))
+    if streaming_source is not None and app._gcode_executable_lines <= 0:
+        app._gcode_executable_lines = int(max(0, app._gcode_total_lines))
+    if streaming_source is None and app._gcode_file_line_count <= 0:
+        app._gcode_file_line_count = int(len(lines))
+        app._gcode_file_line_count_known = True
+    if streaming_source is None and app._gcode_executable_lines <= 0:
+        app._gcode_executable_lines = int(app._gcode_total_lines)
+        app._gcode_executable_lines_known = True
+    if streaming_source is None and (not getattr(app, "_gcode_motion_lines_known", False)):
+        app._gcode_motion_lines = _count_motion_lines(lines)
+        app._gcode_motion_lines_known = True
+    if streaming_source is None:
+        app._gcode_total_lines_known = True
     load_started_at = getattr(app, "_gcode_load_started_at", None)
     if load_started_at is not None:
         try:
@@ -743,7 +800,7 @@ def apply_loaded_gcode(
             app.gcode_stats_var.set("Calculating stats...")
 
         def _set_no_file_loaded() -> None:
-            app.gcode_stats_var.set("No file loaded")
+            app.gcode_stats_var.set("")
 
         def _run_parse_schedule() -> None:
             deps.schedule_gcode_parse(app, lines, app._gcode_hash)

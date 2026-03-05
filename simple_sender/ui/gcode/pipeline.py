@@ -315,10 +315,15 @@ def clear_gcode(app):
     except Exception as exc:
         _log_suppressed("Failed resetting job button mode after clear", exc)
     app._gcode_total_lines = 0
+    app._gcode_total_lines_known = False
+    app._gcode_executable_lines = 0
+    app._gcode_executable_lines_known = False
+    app._gcode_motion_lines = 0
+    app._gcode_motion_lines_known = False
     app._gcode_storage_mode = "none"
     app._gcode_load_mode = ""
     app._gcode_index_mode = "none"
-    app._gcode_source_line_count_known = True
+    app._gcode_source_line_count_known = False
     app._gcode_time_to_stream_ready_ms = None
     app._gcode_time_to_popup_close_ms = None
     app._gcode_retained_line_count = 0
@@ -405,8 +410,8 @@ def clear_gcode(app):
     app._stats_cache.clear()
     app.grbl.load_gcode([])
     app.gview.set_lines([])
-    app.gcode_stats_var.set("No file loaded")
-    app._gcode_status_last_text = "No file loaded"
+    app.gcode_stats_var.set("")
+    app._gcode_status_last_text = ""
     app.progress_pct.set(0)
     try:
         app.buffer_fill.set("Buffer: 0%")

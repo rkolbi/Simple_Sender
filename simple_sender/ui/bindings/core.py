@@ -73,6 +73,7 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_JOYSTICK_LIVE_STATUS_APP_SETTINGS_INTERVAL_MS = 1250
 _REEXPORTED_BINDING_API = (
     apply_keyboard_bindings,
     refresh_keyboard_table,
@@ -190,6 +191,23 @@ def _joystick_live_status_visible(app) -> bool:
         return True
     return bool(getattr(app, "_app_settings_tab_active", False))
 
+
+def _joystick_live_status_interval_s(app) -> float:
+    if bool(getattr(app, "_joystick_capture_state", None)):
+        interval_ms = int(JOYSTICK_LIVE_STATUS_INTERVAL_MS)
+    else:
+        interval_ms = int(
+            getattr(
+                app,
+                "_joystick_live_status_app_settings_interval_ms",
+                _JOYSTICK_LIVE_STATUS_APP_SETTINGS_INTERVAL_MS,
+            )
+            or _JOYSTICK_LIVE_STATUS_APP_SETTINGS_INTERVAL_MS
+        )
+    interval_ms = max(50, int(interval_ms))
+    return float(interval_ms) / 1000.0
+
+
 def update_joystick_polling_state(app):
     app._refresh_joystick_toggle_text()
     if not app.joystick_bindings_enabled.get():
@@ -298,7 +316,7 @@ def update_joystick_live_status(app, py) -> None:
         return
     now = time.monotonic()
     last = getattr(app, "_joystick_last_live_status", 0.0)
-    if (now - last) < (JOYSTICK_LIVE_STATUS_INTERVAL_MS / 1000.0):
+    if (now - last) < _joystick_live_status_interval_s(app):
         return
     app._joystick_last_live_status = now
     if not app._joystick_instances:
