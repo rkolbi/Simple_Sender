@@ -24,7 +24,6 @@ from .sections_advanced import (
     build_auto_level_section,
     build_interface_section,
     build_safety_aids_section,
-    build_toolpath_settings_section,
 )
 from .sections_controls import (
     build_kasa_plug_section,
@@ -60,6 +59,5 @@ __all__ = [
     "build_safety_section",
     "build_status_polling_section",
     "build_theme_section",
-    "build_toolpath_settings_section",
     "build_zeroing_section",
 ]

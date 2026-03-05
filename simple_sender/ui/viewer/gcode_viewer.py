@@ -149,6 +149,14 @@ class GcodeViewer(ttk.Frame):
         self._virtual_window_size = 0
         self._virtual_window_start = 0
         self._virtual_window_end = 0
+        self._virtual_initial_after_id: Optional[str] = None
+        self._virtual_initial_pending_start = 0
+        self._virtual_initial_pending_end = 0
+        self._virtual_initial_next_index = 0
+        self._virtual_initial_chunk_size = 120
+        self._virtual_initial_budget_s = min(self._insert_time_budget_s, 0.008)
+        self._virtual_initial_done_cb: Optional[Callable] = None
+        self._virtual_initial_progress_cb: Optional[Callable[[int, int], None]] = None
     
     def set_lines(self, lines: List[str]) -> None:
         """Load G-code lines with adaptive chunk size.
@@ -198,9 +206,11 @@ class GcodeViewer(ttk.Frame):
         window_size: int,
         on_done: Optional[Callable] = None,
         on_progress: Optional[Callable[[int, int], None]] = None,
+        defer_initial_render: bool = False,
     ) -> None:
         """Load lines into a virtualized windowed viewer for extreme jobs."""
         self._cancel_chunk_insert()
+        self._cancel_virtual_initial_render()
 
         self.lines_count = len(lines)
         self._sent_upto = -1
@@ -214,6 +224,9 @@ class GcodeViewer(ttk.Frame):
 
         if callable(on_progress):
             on_progress(0, self.lines_count)
+        if defer_initial_render:
+            self._start_virtual_initial_render(on_done=on_done, on_progress=on_progress)
+            return
         self._render_virtual_window_for_index(0, force=True)
         self.clear_highlights()
         if self.lines_count:
@@ -245,6 +258,7 @@ class GcodeViewer(ttk.Frame):
     def clear(self) -> None:
         """Clear all G-code and reset state."""
         self._cancel_chunk_insert()
+        self._cancel_virtual_initial_render()
         self.lines_count = 0
         self._sent_upto = -1
         self._acked_upto = -1
@@ -428,6 +442,21 @@ class GcodeViewer(ttk.Frame):
         self._insert_index = 0
         self._insert_done_cb = None
         self._insert_progress_cb = None
+
+    def _cancel_virtual_initial_render(self) -> None:
+        """Cancel deferred initial virtual window rendering."""
+        after_id = getattr(self, "_virtual_initial_after_id", None)
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception as e:
+                logger.warning(f"Failed to cancel virtual initial render: {e}")
+        self._virtual_initial_after_id = None
+        self._virtual_initial_pending_start = 0
+        self._virtual_initial_pending_end = 0
+        self._virtual_initial_next_index = 0
+        self._virtual_initial_done_cb = None
+        self._virtual_initial_progress_cb = None
     
     def _start_chunk_insert(
         self,
@@ -444,6 +473,7 @@ class GcodeViewer(ttk.Frame):
             on_done: Completion callback
             on_progress: Progress callback (current, total)
         """
+        self._cancel_virtual_initial_render()
         self._cancel_chunk_insert()
         
         self.lines_count = len(lines)
@@ -561,6 +591,91 @@ class GcodeViewer(ttk.Frame):
             return
         self._insert_progress_last_ts = now
         callback(self._insert_index, len(self._insert_lines))
+
+    def _start_virtual_initial_render(
+        self,
+        *,
+        on_done: Optional[Callable],
+        on_progress: Optional[Callable[[int, int], None]],
+    ) -> None:
+        """Render the initial virtualized window in cooperative slices."""
+        self._cancel_virtual_initial_render()
+        total = self.lines_count
+        if total <= 0:
+            self.text.config(state="normal")
+            self.text.delete("1.0", "end")
+            self.text.config(state="disabled")
+            if callable(on_progress):
+                on_progress(0, 0)
+            if callable(on_done):
+                on_done()
+            return
+
+        window_size = min(total, max(200, int(self._virtual_window_size or 200)))
+        self._virtual_initial_pending_start = 0
+        self._virtual_initial_pending_end = min(total, window_size)
+        self._virtual_initial_next_index = self._virtual_initial_pending_start
+        self._virtual_initial_done_cb = on_done
+        self._virtual_initial_progress_cb = on_progress
+
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        self._virtual_render_initial_slice()
+
+    def _virtual_render_initial_slice(self) -> None:
+        total = self.lines_count
+        start = self._virtual_initial_pending_start
+        end = self._virtual_initial_pending_end
+        idx = self._virtual_initial_next_index
+        if total <= 0 or end <= start:
+            self.text.config(state="disabled")
+            self._finish_virtual_initial_render()
+            return
+
+        tick_start = time.perf_counter()
+        while idx < end:
+            chunk_end = min(end, idx + max(20, int(self._virtual_initial_chunk_size)))
+            chunk = self._virtual_lines[idx:chunk_end]
+            if chunk:
+                base = idx + 1
+                lines_out = [f"{base + i:5d}  {ln}" for i, ln in enumerate(chunk)]
+                self.text.insert("end", "\n".join(lines_out) + "\n")
+            idx = chunk_end
+            self._virtual_initial_next_index = idx
+            callback = self._virtual_initial_progress_cb
+            if callable(callback):
+                callback(idx, total)
+            if (time.perf_counter() - tick_start) >= self._virtual_initial_budget_s:
+                break
+
+        if self._virtual_initial_next_index < end:
+            self._virtual_initial_after_id = self.after(0, self._virtual_render_initial_slice)
+            return
+
+        self._virtual_window_start = start
+        self._virtual_window_end = end
+        self._apply_virtual_visible_tags()
+        self.text.config(state="disabled")
+        self._finish_virtual_initial_render()
+
+    def _finish_virtual_initial_render(self) -> None:
+        self._virtual_initial_after_id = None
+        callback = self._virtual_initial_progress_cb
+        if callable(callback):
+            callback(self.lines_count, self.lines_count)
+        self.clear_highlights()
+        if self.lines_count:
+            self.highlight_current(0)
+        done_cb = self._virtual_initial_done_cb
+        self._virtual_initial_done_cb = None
+        self._virtual_initial_progress_cb = None
+        if callable(done_cb):
+            done_cb()
+        logger.info(
+            "Loaded %d lines of G-code (virtualized window=%d, deferred_initial=True)",
+            self.lines_count,
+            self._virtual_window_size,
+        )
 
     def _global_range_to_widget_range(self, start_idx: int, end_idx: int) -> Tuple[str, str] | None:
         if end_idx < start_idx:

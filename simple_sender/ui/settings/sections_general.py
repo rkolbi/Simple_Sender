@@ -27,11 +27,13 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from simple_sender.utils.constants import ALL_STOP_CHOICES, GCODE_ULTRA_LARGE_SIZE_THRESHOLD
+from simple_sender.utils.constants import (
+    ALL_STOP_CHOICES,
+    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
+)
 from simple_sender.ui.pi_profile import (
     PI_PROFILE_STATUS_POLL_INTERVAL as _PI_PROFILE_STATUS_POLL_INTERVAL,
     PI_PROFILE_STREAMING_LINE_THRESHOLD as _PI_PROFILE_STREAMING_LINE_THRESHOLD,
-    PI_PROFILE_STREAMING_RENDER_INTERVAL as _PI_PROFILE_STREAMING_RENDER_INTERVAL,
     PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS as _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS,
     PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS as _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS,
     apply_pi_profile,
@@ -44,9 +46,10 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 PI_PROFILE_STATUS_POLL_INTERVAL = _PI_PROFILE_STATUS_POLL_INTERVAL
 PI_PROFILE_STREAMING_LINE_THRESHOLD = _PI_PROFILE_STREAMING_LINE_THRESHOLD
-PI_PROFILE_STREAMING_RENDER_INTERVAL = _PI_PROFILE_STREAMING_RENDER_INTERVAL
 PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS
-PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS
+PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = (
+    _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS
+)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -169,12 +172,14 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Validate streaming (large) G-code files",
         variable=app.validate_streaming_gcode,
     )
-    app.validate_streaming_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.validate_streaming_check.grid(
+        row=7, column=0, columnspan=2, sticky="w", pady=(6, 0)
+    )
     apply_tooltip(
         app.validate_streaming_check,
         "Validate large files while loading; adds an extra scan but improves preflight checks.",
     )
-    ttk.Label(diagnostics_frame, text="Preview-only threshold (lines)").grid(
+    ttk.Label(diagnostics_frame, text="Sample-only threshold (lines)").grid(
         row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
@@ -186,7 +191,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
-        "Cleaned line count that switches large jobs to preview-only mode (set to 0 to disable).",
+        "Cleaned line count that switches large jobs to sample-only mode (set to 0 to disable).",
     )
     if not hasattr(app, "ultra_large_size_threshold_mb"):
         app.ultra_large_size_threshold_mb = tk.IntVar(
@@ -201,11 +206,13 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.ultra_large_size_threshold_mb,
         width=10,
     )
-    app.ultra_large_size_threshold_mb_entry.grid(row=9, column=1, sticky="w", pady=(6, 0))
+    app.ultra_large_size_threshold_mb_entry.grid(
+        row=9, column=1, sticky="w", pady=(6, 0)
+    )
     attach_numeric_keypad(app.ultra_large_size_threshold_mb_entry, allow_decimal=False)
     apply_tooltip(
         app.ultra_large_size_threshold_mb_entry,
-        "File size at or above this value forces ultra-large safeguards (preview-only + fast-load). Set to 0 to disable.",
+        "File size at or above this value forces ultra-large safeguards (sample-only + fast-load). Set to 0 to disable.",
     )
     if not hasattr(app, "ultra_large_size_threshold_info_var"):
         app.ultra_large_size_threshold_info_var = tk.StringVar(master=parent, value="")
@@ -221,15 +228,17 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
             )
             return
         threshold_bytes = int(threshold_mb) * 1024 * 1024
-        threshold_gib = threshold_bytes / float(1024 ** 3)
+        threshold_gib = threshold_bytes / float(1024**3)
         app.ultra_large_size_threshold_info_var.set(
             f"Current trigger: {threshold_mb:,} MB ({threshold_gib:.2f} GiB, {threshold_bytes:,} bytes)"
         )
 
     _update_ultra_large_threshold_info()
-    app.ultra_large_size_threshold_info_trace = app.ultra_large_size_threshold_mb.trace_add(
-        "write",
-        _update_ultra_large_threshold_info,
+    app.ultra_large_size_threshold_info_trace = (
+        app.ultra_large_size_threshold_mb.trace_add(
+            "write",
+            _update_ultra_large_threshold_info,
+        )
     )
     app.ultra_large_size_threshold_info_label = ttk.Label(
         diagnostics_frame,
@@ -243,7 +252,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         "Computed ultra-large trigger derived from the MB threshold above.",
     )
     if not hasattr(app, "performance_profile_enabled"):
-        app.performance_profile_enabled = tk.BooleanVar(master=parent, value=False)
+        app.performance_profile_enabled = tk.BooleanVar(master=parent, value=True)
     if not hasattr(app, "performance_leak_watch_enabled"):
         app.performance_leak_watch_enabled = tk.BooleanVar(master=parent, value=False)
     if not hasattr(app, "performance_profile_log_path"):
@@ -253,7 +262,9 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable runtime performance profiling (restart required)",
         variable=app.performance_profile_enabled,
     )
-    app.performance_profile_check.grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    app.performance_profile_check.grid(
+        row=11, column=0, columnspan=2, sticky="w", pady=(8, 0)
+    )
     apply_tooltip(
         app.performance_profile_check,
         "Capture startup/CPU/RSS metrics and print a budget report on app exit.",
@@ -263,7 +274,9 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable leak-watch snapshots (higher overhead)",
         variable=app.performance_leak_watch_enabled,
     )
-    app.performance_leak_watch_check.grid(row=12, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    app.performance_leak_watch_check.grid(
+        row=12, column=0, columnspan=2, sticky="w", pady=(4, 0)
+    )
     apply_tooltip(
         app.performance_leak_watch_check,
         "Take tracemalloc snapshots at key milestones and include growth deltas in the exit report.",
@@ -276,7 +289,9 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.performance_profile_log_path,
         width=36,
     )
-    app.performance_profile_log_path_entry.grid(row=13, column=1, sticky="ew", pady=(6, 0))
+    app.performance_profile_log_path_entry.grid(
+        row=13, column=1, sticky="ew", pady=(6, 0)
+    )
     apply_tooltip(
         app.performance_profile_log_path_entry,
         "Optional file path to append the performance report on exit.",
@@ -300,7 +315,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.tooltip_enabled = tk.BooleanVar(master=parent, value=True)
     if not hasattr(app, "tooltip_timeout_sec"):
         app.tooltip_timeout_sec = tk.DoubleVar(master=parent, value=10.0)
-    ttk.Label(theme_frame, text="UI theme").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Label(theme_frame, text="UI theme").grid(
+        row=0, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.theme_combo = ttk.Combobox(
         theme_frame,
         state="readonly",
@@ -315,24 +332,32 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.theme_combo,
         "Pick a ttk theme; some themes require a restart for best results.",
     )
-    ttk.Label(theme_frame, text="UI scale").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Label(theme_frame, text="UI scale").grid(
+        row=1, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     ui_scale_row = ttk.Frame(theme_frame)
     ui_scale_row.grid(row=1, column=1, sticky="w", pady=4)
     app.ui_scale_entry = ttk.Entry(ui_scale_row, textvariable=app.ui_scale, width=10)
     app.ui_scale_entry.pack(side="left")
     attach_numeric_keypad(app.ui_scale_entry, allow_decimal=True)
     ttk.Label(ui_scale_row, text="(0.5 - 3.0)").pack(side="left", padx=(6, 0))
-    on_ui_scale_change = getattr(app, "_on_ui_scale_change", lambda *_args, **_kwargs: None)
+    on_ui_scale_change = getattr(
+        app, "_on_ui_scale_change", lambda *_args, **_kwargs: None
+    )
     app.ui_scale_entry.bind("<Return>", on_ui_scale_change)
     app.ui_scale_entry.bind("<FocusOut>", on_ui_scale_change)
-    app.ui_scale_apply_btn = ttk.Button(ui_scale_row, text="Apply", command=on_ui_scale_change)
+    app.ui_scale_apply_btn = ttk.Button(
+        ui_scale_row, text="Apply", command=on_ui_scale_change
+    )
     app.ui_scale_apply_btn.pack(side="left", padx=(8, 0))
+
     def _apply_scale_preset(value: float) -> None:
         try:
             app.ui_scale.set(value)
         except (AttributeError, tk.TclError, TypeError, ValueError) as exc:
             _log_suppressed("Failed setting UI scale preset value", exc)
         on_ui_scale_change()
+
     apply_tooltip(
         app.ui_scale_entry,
         "Scale the UI; changes apply immediately.",
@@ -341,7 +366,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.ui_scale_apply_btn,
         "Apply the UI scale immediately.",
     )
-    ttk.Label(theme_frame, text="Scrollbar width").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Label(theme_frame, text="Scrollbar width").grid(
+        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.scrollbar_width_combo = ttk.Combobox(
         theme_frame,
         state="readonly",
@@ -360,7 +387,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.scrollbar_width_combo,
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
-    ttk.Label(theme_frame, text="Touch scroll mode").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Label(theme_frame, text="Touch scroll mode").grid(
+        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.touch_scroll_mode_combo = ttk.Combobox(
         theme_frame,
         state="readonly",
@@ -374,11 +403,14 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         "_on_touch_scroll_mode_change",
         lambda *_args, **_kwargs: None,
     )
-    app.touch_scroll_mode_combo.bind("<<ComboboxSelected>>", on_touch_scroll_mode_change)
+    app.touch_scroll_mode_combo.bind(
+        "<<ComboboxSelected>>", on_touch_scroll_mode_change
+    )
     apply_tooltip(
         app.touch_scroll_mode_combo,
         "Thumb only keeps swipe scrolling off in App Settings; thumb_and_swipe enables both thumb drag and swipe.",
     )
+
     def _sync_tooltip_timeout_state() -> None:
         try:
             enabled = bool(app.tooltip_enabled.get())
@@ -402,13 +434,17 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.tooltip_enabled,
         command=_on_tooltip_setting_change,
     )
-    app.tooltips_enabled_check.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.tooltips_enabled_check.grid(
+        row=4, column=0, columnspan=3, sticky="w", pady=(6, 0)
+    )
     apply_tooltip(
         app.tooltips_enabled_check,
         "Show tooltips on hover (disabled controls include the reason).",
     )
     try:
-        app.tooltip_enabled.trace_add("write", lambda *_args: _sync_tooltip_timeout_state())
+        app.tooltip_enabled.trace_add(
+            "write", lambda *_args: _sync_tooltip_timeout_state()
+        )
     except (AttributeError, tk.TclError) as exc:
         _log_suppressed("Failed wiring tooltip-enabled variable trace handler", exc)
 
@@ -422,7 +458,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.tooltip_timeout_entry.pack(side="left")
     attach_numeric_keypad(app.tooltip_timeout_entry, allow_decimal=True)
-    ttk.Label(tooltip_timeout_row, text="(0 = no auto-hide)").pack(side="left", padx=(6, 0))
+    ttk.Label(tooltip_timeout_row, text="(0 = no auto-hide)").pack(
+        side="left", padx=(6, 0)
+    )
     apply_tooltip(
         app.tooltip_timeout_entry,
         "How long tooltips stay visible before hiding automatically (0 keeps them open).",
@@ -433,7 +471,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         text="Enable numeric keypad popups (click numeric fields)",
         variable=app.numeric_keypad_enabled,
     )
-    app.numeric_keypad_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    app.numeric_keypad_check.grid(
+        row=6, column=0, columnspan=3, sticky="w", pady=(6, 0)
+    )
     apply_tooltip(
         app.numeric_keypad_check,
         "Show the touch keypad when tapping numeric fields.",
@@ -445,7 +485,9 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     safety = ttk.LabelFrame(parent, text="Safety", padding=8)
     safety.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     safety.grid_columnconfigure(1, weight=1)
-    ttk.Label(safety, text="All Stop behavior").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
+    ttk.Label(safety, text="All Stop behavior").grid(
+        row=0, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.all_stop_combo = ttk.Combobox(
         safety,
         state="readonly",
@@ -471,7 +513,9 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
         text="Dry run: disable spindle/coolant/tool changes while streaming",
         variable=app.dry_run_sanitize_stream,
     )
-    app.dry_run_sanitize_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.dry_run_sanitize_check.grid(
+        row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+    )
     apply_tooltip(
         app.dry_run_sanitize_check,
         "Strip M3/M4/M5, M7/M8/M9, M6, S, and T words from streamed G-code for safe dry runs.",
@@ -482,7 +526,9 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.homing_watchdog_enabled,
         command=app._on_homing_watchdog_change,
     )
-    app.homing_watchdog_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    app.homing_watchdog_check.grid(
+        row=3, column=0, columnspan=2, sticky="w", pady=(6, 0)
+    )
     apply_tooltip(
         app.homing_watchdog_check,
         "Ignore watchdog timeouts while the homing cycle runs.",
@@ -514,7 +560,9 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(estimation, text="Fallback rapid rate (mm/min)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
-    app.fallback_rapid_entry = ttk.Entry(estimation, textvariable=app.fallback_rapid_rate, width=12)
+    app.fallback_rapid_entry = ttk.Entry(
+        estimation, textvariable=app.fallback_rapid_rate, width=12
+    )
     app.fallback_rapid_entry.grid(row=0, column=1, sticky="w", pady=4)
     attach_numeric_keypad(app.fallback_rapid_entry, allow_decimal=True)
     app.fallback_rapid_entry.bind("<Return>", app._on_fallback_rate_change)
@@ -535,7 +583,9 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
         command=app._on_estimate_factor_change,
     )
     app.estimate_factor_scale.grid(row=1, column=1, sticky="ew", pady=4)
-    app.estimate_factor_value = ttk.Label(estimation, textvariable=app._estimate_factor_label)
+    app.estimate_factor_value = ttk.Label(
+        estimation, textvariable=app._estimate_factor_label
+    )
     app.estimate_factor_value.grid(row=1, column=2, sticky="w", padx=(8, 0))
     apply_tooltip(
         app.estimate_factor_scale,
@@ -655,7 +705,10 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         command=app._on_error_dialogs_enabled_change,
     )
     app.error_dialogs_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-    apply_tooltip(app.error_dialogs_check, "Show modal dialogs for errors (tracebacks still log to console).")
+    apply_tooltip(
+        app.error_dialogs_check,
+        "Show modal dialogs for errors (tracebacks still log to console).",
+    )
     ttk.Label(dialog_frame, text="Minimum interval (seconds)").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
@@ -712,7 +765,9 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         text="Show job completion dialog",
         variable=app.job_completion_popup,
     )
-    app.job_completion_popup_check.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 2))
+    app.job_completion_popup_check.grid(
+        row=4, column=0, columnspan=3, sticky="w", pady=(8, 2)
+    )
     apply_tooltip(
         app.job_completion_popup_check,
         "Pop up an alert when a job completes, summarizing start/finish/elapsed times.",
@@ -722,7 +777,9 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         text="Play reminder beep on completion",
         variable=app.job_completion_beep,
     )
-    app.job_completion_beep_check.grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 4))
+    app.job_completion_beep_check.grid(
+        row=5, column=0, columnspan=3, sticky="w", pady=(0, 4)
+    )
     apply_tooltip(
         app.job_completion_beep_check,
         "Ring the system bell when a job has finished streaming.",
@@ -733,7 +790,9 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.grbl_popup_enabled,
         command=app._apply_error_dialog_settings,
     )
-    app.grbl_popup_enabled_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 2))
+    app.grbl_popup_enabled_check.grid(
+        row=6, column=0, columnspan=3, sticky="w", pady=(8, 2)
+    )
     apply_tooltip(
         app.grbl_popup_enabled_check,
         "Show a non-blocking popup with alarm/error code definitions.",
@@ -750,7 +809,9 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     attach_numeric_keypad(app.grbl_popup_auto_dismiss_entry, allow_decimal=True)
     ttk.Label(grbl_popup_dismiss_row, text="sec (0=off)").pack(side="left", padx=(6, 0))
     app.grbl_popup_auto_dismiss_entry.bind("<Return>", app._apply_error_dialog_settings)
-    app.grbl_popup_auto_dismiss_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
+    app.grbl_popup_auto_dismiss_entry.bind(
+        "<FocusOut>", app._apply_error_dialog_settings
+    )
     apply_tooltip(
         app.grbl_popup_auto_dismiss_entry,
         "Automatically close GRBL popups after this many seconds (0 disables auto-close).",
@@ -801,15 +862,28 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
             return
         try:
             app._save_settings()
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, tk.TclError) as exc:
+        except (
+            AttributeError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            tk.TclError,
+        ) as exc:
             _log_suppressed("Failed saving settings before Linux power action", exc)
         try:
             subprocess.Popen(["systemctl", action])
             _log_status(f"[system] {label} requested")
             return
         except (OSError, ValueError) as exc:
-            _log_suppressed("Failed invoking systemctl power action; trying shutdown fallback", exc)
-        fallback_args = ["shutdown", "-h", "now"] if action == "poweroff" else ["shutdown", "-r", "now"]
+            _log_suppressed(
+                "Failed invoking systemctl power action; trying shutdown fallback", exc
+            )
+        fallback_args = (
+            ["shutdown", "-h", "now"]
+            if action == "poweroff"
+            else ["shutdown", "-r", "now"]
+        )
         try:
             subprocess.Popen(fallback_args)
             _log_status(f"[system] {label} requested")

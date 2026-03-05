@@ -22,7 +22,10 @@
 
 
 from dataclasses import dataclass
-from typing import IO, Protocol, Sequence, cast
+from collections import deque
+import math
+import re
+from typing import Any, cast
 
 from simple_sender.utils.task_timing import record_task_timing
 
@@ -37,101 +40,39 @@ def _emit_progress(app, token_id: int, done: int, total: int, label: str) -> Non
     app.ui_q.put(("gcode_load_progress", token_id, done, total, label))
 
 
-class _SystemCommandError(Exception):
-    def __init__(self, line_no: int, text: str) -> None:
-        super().__init__()
-        self.line_no = line_no
-        self.text = text
-
-
 class _GcodeLoadCancelled(Exception):
     """Raised when a newer load token supersedes the active worker."""
 
 
-class _SplitStreamResultLike(Protocol):
-    lines_written: int
-    split_count: int
-    modified_count: int
-    failed_index: int | None
-    failed_len: int | None
-    too_long: int
-
-
 @dataclass(slots=True)
-class _StreamTempData:
-    temp_path: str
-    offsets: Sequence[int]
-    preview_lines: list[str]
-    all_lines: list[str] | None
-    line_capture_limit_hit: bool
-    lines_hash: str | None
-    split_result: _SplitStreamResultLike
-    total_lines_raw: int
-    cleaned_input_lines: int
-
-
-def _should_run_full_validation(
-    app,
-    deps,
-    *,
-    token: int,
-    path: str,
-    line_count: int,
-    validation_enabled: bool,
-) -> bool:
-    _check_load_token(app, token)
-    threshold = int(deps.STREAMING_VALIDATION_PROMPT_LINES)
-    if line_count <= threshold:
-        return validation_enabled
-    if not validation_enabled:
-        app.ui_q.put(("log", "[gcode] Full validation skipped for large file (fast-load mode)."))
-        return False
-
-    result_q = deps.queue.Queue(maxsize=1)
-    app.ui_q.put((
-        "streaming_validation_prompt",
-        token,
-        deps.os.path.basename(path),
-        line_count,
-        threshold,
-        result_q,
-    ))
-    try:
-        allow = bool(result_q.get(timeout=deps.STREAMING_VALIDATION_PROMPT_TIMEOUT))
-    except deps.queue.Empty:
-        allow = False
-    _check_load_token(app, token)
-    if not allow:
-        app.ui_q.put(("log", "[gcode] Full validation skipped for large file by user request."))
-    return allow
-
-
-def _close_temp_file(temp_file: IO[str] | None) -> None:
-    if temp_file is None:
-        return
-    try:
-        temp_file.close()
-    except (OSError, ValueError):
-        return
-
-
-def _remove_temp_path(deps, temp_path: str | None) -> None:
-    if not temp_path:
-        return
-    try:
-        deps.os.remove(temp_path)
-    except OSError:
-        return
-
-
-def _format_adjusted_lines_message(modified_count: int, split_count: int, max_line_length: int) -> str:
-    base = (
-        f"[gcode] Adjusted {modified_count} line(s) to fit "
-        f"{max_line_length}-byte limit"
-    )
-    if split_count:
-        return f"{base} (split {split_count})."
-    return f"{base}."
+class _FastPrepareData:
+    sample_lines: list[str]
+    sampled_head_lines: int
+    sampled_tail_lines: int
+    sampled_interval_lines: int
+    sampled_max_lines: int
+    sampled_line_count: int
+    file_size_bytes: int
+    file_line_count: int
+    file_line_count_known: bool
+    cleaned_lines_estimate: int
+    cleaned_lines_known: bool
+    executable_lines_estimate: int
+    motion_lines_estimate: int
+    sampled_executable_lines: int
+    sampled_motion_lines: int
+    raw_lines_scanned: int
+    bytes_scanned: int
+    lines_hash_quick: str
+    quick_scan_ms: float
+    bounds_box: dict[str, float] | None
+    bounds_confidence: str
+    dimensions_confidence_reasons: dict[str, bool]
+    estimated_job_time_sec: int | None
+    estimate_confidence: str
+    estimate_confidence_reasons: dict[str, bool]
+    estimate_inputs_snapshot: dict[str, Any]
+    autolevel_prereq_snapshot: dict[str, Any]
 
 
 def _check_load_token(app, token: int) -> None:
@@ -139,31 +80,20 @@ def _check_load_token(app, token: int) -> None:
         raise _GcodeLoadCancelled()
 
 
-def _new_offset_index(deps):
-    try:
-        return deps.array.array("Q")
-    except Exception:
-        return []
-
-
-def _resolve_preferred_temp_dir(deps) -> str:
-    temp_dir_getter = getattr(deps, "get_preferred_temp_dir", None)
-    if callable(temp_dir_getter):
+def _pi_profile_enabled(app) -> bool:
+    var = getattr(app, "pi_profile_enabled", None)
+    if var is not None:
         try:
-            candidate = str(temp_dir_getter() or "").strip()
-            if candidate:
-                return candidate
+            return bool(var.get())
         except Exception:
             pass
-    tempfile_mod = getattr(deps, "tempfile", None)
-    if tempfile_mod is not None:
-        gettempdir = getattr(tempfile_mod, "gettempdir", None)
-        if callable(gettempdir):
-            try:
-                return str(gettempdir())
-            except Exception:
-                pass
-    return "."
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get("pi_profile_enabled", False))
+        except Exception:
+            return False
+    return False
 
 
 def _resolve_ultra_large_threshold_bytes(app, deps) -> int:
@@ -189,243 +119,862 @@ def _resolve_ultra_large_threshold_bytes(app, deps) -> int:
     return int(threshold_mb) * 1024 * 1024
 
 
-def _is_ultra_large_file_with_threshold(*, file_size: int | None, threshold_bytes: int) -> bool:
+def _is_ultra_large_file_with_threshold(
+    *, file_size: int | None, threshold_bytes: int
+) -> bool:
     if file_size is None:
         return False
     return int(threshold_bytes) > 0 and int(file_size) >= int(threshold_bytes)
 
 
-def _ultra_large_disk_headroom(deps, file_size: int) -> tuple[bool, int | None, int | None, str | None]:
+def _quick_file_fingerprint(deps, path: str, *, file_size: int | None) -> str:
     try:
-        multiplier = int(getattr(deps, "GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER", 3) or 3)
+        stat = deps.os.stat(path)
+        mtime_ns = int(getattr(stat, "st_mtime_ns", 0) or 0)
     except Exception:
-        multiplier = 3
-    multiplier = max(1, multiplier)
-    try:
-        margin = int(getattr(deps, "GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES", 0) or 0)
-    except Exception:
-        margin = 0
-    margin = max(0, margin)
-    required_bytes = int(file_size) * multiplier + margin
-    temp_dir = _resolve_preferred_temp_dir(deps)
-    shutil_mod = getattr(deps, "shutil", None)
-    disk_usage = getattr(shutil_mod, "disk_usage", None) if shutil_mod is not None else None
-    if not callable(disk_usage):
-        return True, required_bytes, None, temp_dir
-    try:
-        usage = disk_usage(temp_dir)
-        free_value = getattr(usage, "free", None)
-        if free_value is None:
-            free_value = usage[2]
-        free_bytes = int(free_value)
-    except Exception:
-        return True, required_bytes, None, temp_dir
-    return free_bytes >= required_bytes, required_bytes, free_bytes, temp_dir
+        mtime_ns = 0
+    size_part = int(file_size) if file_size is not None else -1
+    return f"quick:{size_part}:{mtime_ns}"
 
 
-def _split_stream_to_temp_file(
+_MOTION_GCODE_PAT = re.compile(r"(?<![0-9.])G(?:0|1|2|3)(?![0-9.])")
+_MOTION_AXIS_PAT = re.compile(r"[XYZ][-+]?(?:\d+(?:\.\d*)?|\.\d+)?", re.IGNORECASE)
+_G20_PAT = re.compile(r"(?<![0-9.])G20(?![0-9.])", re.IGNORECASE)
+_G21_PAT = re.compile(r"(?<![0-9.])G21(?![0-9.])", re.IGNORECASE)
+_G90_PAT = re.compile(r"(?<![0-9.])G90(?![0-9.])", re.IGNORECASE)
+_G91_PAT = re.compile(r"(?<![0-9.])G91(?![0-9.])", re.IGNORECASE)
+_G0_PAT = re.compile(r"(?<![0-9.])G0(?![0-9.])", re.IGNORECASE)
+_G1_PAT = re.compile(r"(?<![0-9.])G1(?![0-9.])", re.IGNORECASE)
+_G2_PAT = re.compile(r"(?<![0-9.])G2(?![0-9.])", re.IGNORECASE)
+_G3_PAT = re.compile(r"(?<![0-9.])G3(?![0-9.])", re.IGNORECASE)
+_WORD_PAT = re.compile(r"([A-Z])\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", re.IGNORECASE)
+_AXIS_WORDS = ("X", "Y", "Z")
+
+
+def _is_motion_line(line: str) -> bool:
+    text = str(line or "").strip().upper()
+    if not text:
+        return False
+    if _MOTION_GCODE_PAT.search(text):
+        return True
+    return bool(_MOTION_AXIS_PAT.search(text))
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _extract_motion_setting(settings_data: Any, key: str) -> float | None:
+    if not isinstance(settings_data, dict):
+        return None
+    raw_entry = settings_data.get(key)
+    if isinstance(raw_entry, tuple):
+        raw = raw_entry[0] if raw_entry else None
+    else:
+        raw = raw_entry
+    return _safe_float(raw)
+
+
+def _capture_motion_settings_snapshot(app: Any) -> dict[str, float | None]:
+    motion_settings: dict[str, float | None] = {}
+    settings_controller = getattr(app, "settings_controller", None)
+    settings_data = (
+        getattr(settings_controller, "_settings_data", None)
+        if settings_controller is not None
+        else None
+    )
+    for key in ("$110", "$111", "$112", "$120", "$121", "$122"):
+        motion_settings[key] = _extract_motion_setting(settings_data, key)
+    return motion_settings
+
+
+def _has_complete_motion_settings(motion_settings: dict[str, float | None]) -> bool:
+    for key in ("$110", "$111", "$112", "$120", "$121", "$122"):
+        if _safe_float(motion_settings.get(key)) is None:
+            return False
+    return True
+
+
+def _resolve_quick_rate_tuple(
+    app: Any, motion_settings: dict[str, float | None]
+) -> tuple[tuple[float, float, float], str]:
+    if _has_complete_motion_settings(motion_settings):
+        return (
+            (
+                float(motion_settings.get("$110") or 0.0),
+                float(motion_settings.get("$111") or 0.0),
+                float(motion_settings.get("$112") or 0.0),
+            ),
+            "grbl",
+        )
+    try:
+        rx = float(getattr(app, "estimate_rate_x_var", None).get())
+        ry = float(getattr(app, "estimate_rate_y_var", None).get())
+        rz = float(getattr(app, "estimate_rate_z_var", None).get())
+        if rx > 0.0 and ry > 0.0 and rz > 0.0:
+            units = str(
+                getattr(getattr(app, "unit_mode", None), "get", lambda: "mm")() or "mm"
+            ).lower()
+            scale = 25.4 if units.startswith("in") else 1.0
+            return ((rx * scale, ry * scale, rz * scale), "estimate")
+    except Exception:
+        pass
+    try:
+        fallback = float(getattr(app, "fallback_rapid_rate", None).get())
+        if fallback > 0.0:
+            return ((fallback, fallback, fallback), "fallback")
+    except Exception:
+        pass
+    # Keep a deterministic default for rough quick-scan estimates.
+    return ((2000.0, 2000.0, 500.0), "default")
+
+
+def _quick_scan_bounds_and_estimate(
+    app: Any,
+    deps: Any,
+    *,
+    sampled_lines: list[str],
+    sampled_executable_lines: int,
+    sampled_motion_lines: int,
+    executable_total_estimate: int,
+    motion_total_estimate: int,
+    cleaned_lines_known: bool,
+    source_path: str,
+    source_hash: str,
+    source_total_lines: int,
+) -> tuple[
+    dict[str, float] | None,
+    str,
+    dict[str, bool],
+    int | None,
+    str,
+    dict[str, bool],
+    dict[str, Any],
+    dict[str, Any],
+]:
+    if not sampled_lines:
+        now_ts = float(deps.time.time())
+        empty_snapshot = {
+            "captured_at_ts": now_ts,
+            "capture_stage": "quick_scan",
+            "gcode_hash": str(source_hash or ""),
+            "stats_mode": "quick_scan_empty",
+            "stats_sample_scale": 1.0,
+            "stats_sample_line_count": 0,
+            "stats_sample_total_lines": int(max(0, source_total_lines)),
+            "stats_sample_executable_lines": 0,
+            "stats_sample_motion_lines": 0,
+            "stats_executable_total_lines": int(max(0, executable_total_estimate)),
+            "stats_motion_total_lines": int(max(0, motion_total_estimate)),
+            "rate_source": "n/a",
+            "estimate_confidence": "provisional",
+            "grbl_motion_settings": _capture_motion_settings_snapshot(app),
+            "modal_context": {
+                "units": None,
+                "distance_mode": None,
+                "feed_mode": None,
+                "sampled_lines": 0,
+                "sample_limit": 0,
+            },
+        }
+        autolevel_snapshot = {
+            "stage": "quick_scan",
+            "prepared_at_ts": now_ts,
+            "source_path": str(source_path or ""),
+            "source_exists": bool(source_path and deps.os.path.isfile(source_path)),
+            "source_hash": str(source_hash or ""),
+            "source_total_lines": int(max(0, source_total_lines)),
+            "bounds_ready": False,
+            "bounds": None,
+            "bounds_confidence": "rough",
+            "xy_width_mm": 0.0,
+            "xy_height_mm": 0.0,
+            "z_min_mm": 0.0,
+            "z_max_mm": 0.0,
+            "probe_grid_applicable": False,
+        }
+        return (
+            None,
+            "rough",
+            {
+                "sampled_scan": True,
+                "scan_incomplete": True,
+                "no_motion_lines_found": True,
+            },
+            None,
+            "provisional",
+            {
+                "missing_grbl_settings": True,
+                "sampled_scan": True,
+                "scan_incomplete": True,
+                "no_motion_lines_found": True,
+            },
+            empty_snapshot,
+            autolevel_snapshot,
+        )
+
+    motion_settings = _capture_motion_settings_snapshot(app)
+    rapid_rates, rate_source = _resolve_quick_rate_tuple(app, motion_settings)
+    default_feed = max(50.0, min(rapid_rates))
+
+    units_scale = 1.0
+    distance_mode = "absolute"
+    feed_mode = "units_per_minute"
+    motion_mode = 1
+    feed_mm_min = float(default_feed)
+
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    min_x = math.inf
+    max_x = -math.inf
+    min_y = math.inf
+    max_y = -math.inf
+    min_z = math.inf
+    max_z = -math.inf
+    have_bounds = False
+    sample_exec_count = 0
+    sample_motion_count = 0
+    sample_motion_distance_mm = 0.0
+    sample_rapid_distance_mm = 0.0
+    sample_motion_time_min = 0.0
+    sample_rapid_time_min = 0.0
+
+    for raw_line in sampled_lines:
+        line = str(raw_line or "").strip().upper()
+        if not line:
+            continue
+        sample_exec_count += 1
+        if _G20_PAT.search(line):
+            units_scale = 25.4
+        elif _G21_PAT.search(line):
+            units_scale = 1.0
+        if _G90_PAT.search(line):
+            distance_mode = "absolute"
+        elif _G91_PAT.search(line):
+            distance_mode = "relative"
+        if _G0_PAT.search(line):
+            motion_mode = 0
+        elif _G1_PAT.search(line):
+            motion_mode = 1
+        elif _G2_PAT.search(line):
+            motion_mode = 2
+        elif _G3_PAT.search(line):
+            motion_mode = 3
+
+        words: dict[str, float] = {}
+        for word, value in _WORD_PAT.findall(line):
+            val = _safe_float(value)
+            if val is None:
+                continue
+            words[str(word).upper()] = float(val)
+        if "F" in words and words["F"] > 0.0:
+            feed_mm_min = max(1.0, float(words["F"]) * units_scale)
+
+        prev_x, prev_y, prev_z = x, y, z
+        moved = False
+        for axis_name in _AXIS_WORDS:
+            if axis_name not in words:
+                continue
+            moved = True
+            val_mm = float(words[axis_name]) * units_scale
+            if distance_mode == "relative":
+                if axis_name == "X":
+                    x += val_mm
+                elif axis_name == "Y":
+                    y += val_mm
+                else:
+                    z += val_mm
+            else:
+                if axis_name == "X":
+                    x = val_mm
+                elif axis_name == "Y":
+                    y = val_mm
+                else:
+                    z = val_mm
+        if not moved:
+            continue
+
+        have_bounds = True
+        min_x = min(min_x, prev_x, x)
+        max_x = max(max_x, prev_x, x)
+        min_y = min(min_y, prev_y, y)
+        max_y = max(max_y, prev_y, y)
+        min_z = min(min_z, prev_z, z)
+        max_z = max(max_z, prev_z, z)
+
+        dx = x - prev_x
+        dy = y - prev_y
+        dz = z - prev_z
+        dist_mm = math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+        if dist_mm <= 0.0:
+            continue
+        sample_motion_count += 1
+        if motion_mode == 0:
+            axis_rates = []
+            if abs(dx) > 1e-9:
+                axis_rates.append(float(rapid_rates[0]))
+            if abs(dy) > 1e-9:
+                axis_rates.append(float(rapid_rates[1]))
+            if abs(dz) > 1e-9:
+                axis_rates.append(float(rapid_rates[2]))
+            rapid_rate = min(axis_rates) if axis_rates else float(min(rapid_rates))
+            rapid_rate = max(1.0, rapid_rate)
+            sample_rapid_distance_mm += dist_mm
+            sample_rapid_time_min += dist_mm / rapid_rate
+        else:
+            effective_feed = max(1.0, float(feed_mm_min))
+            sample_motion_distance_mm += dist_mm
+            sample_motion_time_min += dist_mm / effective_feed
+
+    bounds_box: dict[str, float] | None = None
+    if have_bounds:
+        bounds_box = {
+            "min_x": float(min_x),
+            "max_x": float(max_x),
+            "min_y": float(min_y),
+            "max_y": float(max_y),
+            "min_z": float(min_z),
+            "max_z": float(max_z),
+            "width": float(max(0.0, max_x - min_x)),
+            "height": float(max(0.0, max_y - min_y)),
+        }
+    bounds_confidence = (
+        "confident" if (cleaned_lines_known and have_bounds) else "rough"
+    )
+    dimensions_confidence_reasons = {
+        "sampled_scan": not bool(cleaned_lines_known),
+        "scan_incomplete": not bool(cleaned_lines_known),
+        "no_motion_lines_found": not bool(have_bounds),
+    }
+
+    sample_scale = 1.0
+    min_exec = max(
+        1,
+        int(getattr(deps, "GCODE_ESTIMATE_SAMPLE_MIN_EXECUTABLE_LINES", 2000) or 2000),
+    )
+    min_motion = max(
+        1, int(getattr(deps, "GCODE_ESTIMATE_SAMPLE_MIN_MOTION_LINES", 500) or 500)
+    )
+    max_scale = max(
+        1.0, float(getattr(deps, "GCODE_ESTIMATE_SAMPLE_MAX_SCALE", 64.0) or 64.0)
+    )
+    if sample_motion_count >= min_motion and motion_total_estimate > 0:
+        sample_scale = float(motion_total_estimate) / float(max(1, sample_motion_count))
+    elif sample_exec_count >= min_exec and executable_total_estimate > 0:
+        sample_scale = float(executable_total_estimate) / float(
+            max(1, sample_exec_count)
+        )
+        sample_scale = min(sample_scale, max_scale * 0.5)
+    elif sample_exec_count >= 250 and executable_total_estimate > 0:
+        sample_scale = min(
+            8.0, float(executable_total_estimate) / float(max(1, sample_exec_count))
+        )
+    sample_scale = max(1.0, min(float(sample_scale), max_scale))
+
+    total_time_min = (sample_motion_time_min + sample_rapid_time_min) * sample_scale
+    estimated_job_time_sec = (
+        int(round(max(0.0, total_time_min) * 60.0)) if total_time_min > 0.0 else None
+    )
+    has_motion_settings = _has_complete_motion_settings(motion_settings)
+    estimate_confidence = (
+        "confident"
+        if (
+            has_motion_settings
+            and bool(cleaned_lines_known)
+            and sample_motion_count > 0
+        )
+        else "provisional"
+    )
+    estimate_confidence_reasons = {
+        "missing_grbl_settings": not has_motion_settings,
+        "sampled_scan": not bool(cleaned_lines_known),
+        "scan_incomplete": not bool(cleaned_lines_known),
+        "no_motion_lines_found": sample_motion_count <= 0,
+    }
+
+    now_ts = float(deps.time.time())
+    modal_context = {
+        "units": "inch" if units_scale > 1.0 else "mm",
+        "distance_mode": str(distance_mode),
+        "feed_mode": str(feed_mode),
+        "sampled_lines": int(sample_exec_count),
+        "sample_limit": int(len(sampled_lines)),
+    }
+    estimate_snapshot: dict[str, Any] = {
+        "captured_at_ts": now_ts,
+        "capture_stage": "quick_scan",
+        "gcode_hash": str(source_hash or ""),
+        "stats_mode": "quick_scan",
+        "stats_sample_scale": float(sample_scale),
+        "stats_sample_line_count": int(len(sampled_lines)),
+        "stats_sample_total_lines": int(max(0, source_total_lines)),
+        "stats_sample_executable_lines": int(max(0, sampled_executable_lines)),
+        "stats_sample_motion_lines": int(max(0, sampled_motion_lines)),
+        "stats_executable_total_lines": int(max(0, executable_total_estimate)),
+        "stats_motion_total_lines": int(max(0, motion_total_estimate)),
+        "sample_motion_count_quick": int(max(0, sample_motion_count)),
+        "rate_source": str(rate_source),
+        "estimate_confidence": str(estimate_confidence),
+        "estimated_job_time_sec": int(estimated_job_time_sec)
+        if estimated_job_time_sec is not None
+        else None,
+        "sample_motion_distance_mm": float(max(0.0, sample_motion_distance_mm)),
+        "sample_rapid_distance_mm": float(max(0.0, sample_rapid_distance_mm)),
+        "sample_motion_time_min": float(max(0.0, sample_motion_time_min)),
+        "sample_rapid_time_min": float(max(0.0, sample_rapid_time_min)),
+        "grbl_motion_settings": motion_settings,
+        "rapid_rates_mm_min": (
+            float(rapid_rates[0]),
+            float(rapid_rates[1]),
+            float(rapid_rates[2]),
+        ),
+        "modal_context": modal_context,
+    }
+    autolevel_prereq_snapshot = {
+        "stage": "quick_scan",
+        "prepared_at_ts": now_ts,
+        "source_path": str(source_path or ""),
+        "source_exists": bool(source_path and deps.os.path.isfile(source_path)),
+        "source_hash": str(source_hash or ""),
+        "source_total_lines": int(max(0, source_total_lines)),
+        "bounds_ready": bool(bounds_box is not None),
+        "bounds_confidence": str(bounds_confidence),
+        "bounds": (
+            (
+                float(bounds_box["min_x"]),
+                float(bounds_box["max_x"]),
+                float(bounds_box["min_y"]),
+                float(bounds_box["max_y"]),
+                float(bounds_box["min_z"]),
+                float(bounds_box["max_z"]),
+            )
+            if bounds_box is not None
+            else None
+        ),
+        "xy_width_mm": float(bounds_box["width"]) if bounds_box is not None else 0.0,
+        "xy_height_mm": float(bounds_box["height"]) if bounds_box is not None else 0.0,
+        "z_min_mm": float(bounds_box["min_z"]) if bounds_box is not None else 0.0,
+        "z_max_mm": float(bounds_box["max_z"]) if bounds_box is not None else 0.0,
+        "probe_grid_applicable": bool(
+            bounds_box is not None
+            and float(bounds_box["width"]) > 0.0
+            and float(bounds_box["height"]) > 0.0
+        ),
+    }
+    return (
+        bounds_box,
+        bounds_confidence,
+        dimensions_confidence_reasons,
+        estimated_job_time_sec,
+        estimate_confidence,
+        estimate_confidence_reasons,
+        estimate_snapshot,
+        autolevel_prereq_snapshot,
+    )
+
+
+def _resolve_fast_prepare_scan_limit_lines(app, deps, *, file_size: int | None) -> int:
+    try:
+        default_limit = int(
+            getattr(deps, "GCODE_PREP_FAST_SCAN_MAX_LINES_DEFAULT", 50_000)
+        )
+    except Exception:
+        default_limit = 50_000
+    try:
+        low_power_limit = int(
+            getattr(deps, "GCODE_PREP_FAST_SCAN_MAX_LINES_LOW_POWER", 20_000)
+        )
+    except Exception:
+        low_power_limit = 20_000
+    limit = low_power_limit if _pi_profile_enabled(app) else default_limit
+    limit = max(1_000, int(limit))
+    if file_size is not None and int(file_size) <= 8 * 1024 * 1024:
+        # Small files complete quickly; allow more scan coverage.
+        limit = max(limit, 200_000)
+    return limit
+
+
+def _resolve_index_mode_policy(
+    deps,
+    *,
+    file_size: int | None,
+    cleaned_lines_estimate: int,
+) -> str:
+    try:
+        full_max_bytes = int(getattr(deps, "GCODE_OFFSET_INDEX_MAX_FILE_BYTES", 0) or 0)
+    except Exception:
+        full_max_bytes = 0
+    try:
+        full_max_lines = int(
+            getattr(deps, "GCODE_OFFSET_INDEX_MAX_LINES", 250_000) or 0
+        )
+    except Exception:
+        full_max_lines = 250_000
+    try:
+        sparse_min_lines = int(
+            getattr(deps, "GCODE_OFFSET_INDEX_SPARSE_MIN_LINES", 40_000) or 0
+        )
+    except Exception:
+        sparse_min_lines = 40_000
+    try:
+        sparse_stride = int(
+            getattr(deps, "GCODE_OFFSET_INDEX_SPARSE_STRIDE_LINES", 256) or 0
+        )
+    except Exception:
+        sparse_stride = 256
+    if (
+        full_max_bytes > 0
+        and file_size is not None
+        and int(file_size) <= full_max_bytes
+    ):
+        if full_max_lines <= 0 or cleaned_lines_estimate <= full_max_lines:
+            return "full"
+    if cleaned_lines_estimate >= max(1_000, sparse_min_lines) and sparse_stride > 1:
+        return "sparse"
+    return "none"
+
+
+def _sample_tail_lines_from_file(
+    path: str,
+    *,
+    deps,
+    limit: int,
+    file_size: int | None,
+) -> list[str]:
+    if limit <= 0:
+        return []
+    max_bytes = 2 * 1024 * 1024
+    if file_size is not None:
+        max_bytes = min(int(file_size), max_bytes)
+    try:
+        with open(path, "rb") as handle:
+            if file_size is None:
+                try:
+                    handle.seek(0, 2)
+                    file_size = int(handle.tell())
+                except Exception:
+                    file_size = None
+            if file_size is not None and file_size > 0:
+                handle.seek(max(0, int(file_size) - max_bytes))
+            raw = handle.read()
+    except Exception:
+        return []
+    if not raw:
+        return []
+    text = raw.decode("utf-8", errors="replace")
+    cleaned: list[str] = []
+    for raw_line in text.splitlines():
+        line = cast(str, deps.clean_gcode_line(raw_line))
+        if line:
+            cleaned.append(line)
+    if not cleaned:
+        return []
+    return cleaned[-limit:]
+
+
+def _trim_sampled_lines(
+    *,
+    head_lines: list[str],
+    periodic_lines: list[str],
+    tail_lines: list[str],
+    sampled_max_lines: int,
+) -> list[str]:
+    if sampled_max_lines <= 0:
+        out = list(head_lines)
+        out.extend(periodic_lines)
+        out.extend(tail_lines)
+        return out
+    out: list[str] = []
+    head_take = min(len(head_lines), sampled_max_lines)
+    out.extend(head_lines[:head_take])
+    remaining = sampled_max_lines - len(out)
+    if remaining <= 0:
+        return out
+
+    tail_reserve = min(len(tail_lines), max(0, remaining // 2))
+    periodic_budget = max(0, remaining - tail_reserve)
+    if periodic_budget > 0 and periodic_lines:
+        if len(periodic_lines) <= periodic_budget:
+            out.extend(periodic_lines)
+        else:
+            stride = max(1, len(periodic_lines) // periodic_budget)
+            out.extend(periodic_lines[::stride][:periodic_budget])
+    remaining = sampled_max_lines - len(out)
+    if remaining > 0 and tail_lines:
+        out.extend(tail_lines[-remaining:])
+    return out[:sampled_max_lines]
+
+
+def _prepare_stream_source_fast(
     app,
     path: str,
     token: int,
     deps,
     *,
     file_size: int | None,
-    capture_full_lines: bool,
-    full_lines_limit: int | None,
-) -> _StreamTempData:
+) -> _FastPrepareData:
     started_at = deps.time.perf_counter()
     success = False
-    temp_path: str | None = None
     try:
         _check_load_token(app, token)
-        offsets = _new_offset_index(deps)
-        preview_lines: list[str] = []
-        all_lines: list[str] | None = [] if capture_full_lines else None
-        line_capture_limit_hit = False
-        total_lines_raw = 0
-        cleaned_input_lines = 0
-        current_line_no = 0
-        hasher = deps.hashlib.sha256()
-        progress_label = f"Scanning {deps.os.path.basename(path)}"
+        sample_lines: list[str] = []
+        sampled_head: list[str] = []
+        sampled_periodic: list[str] = []
+        sampled_tail_limit = max(
+            0, int(getattr(deps, "GCODE_PREP_SAMPLE_TAIL_LINES", 0) or 0)
+        )
+        sampled_tail = deque(
+            maxlen=sampled_tail_limit if sampled_tail_limit > 0 else None
+        )
+        sampled_head_limit = max(
+            0, int(getattr(deps, "GCODE_PREP_SAMPLE_HEAD_LINES", 0) or 0)
+        )
+        sampled_interval = max(
+            1, int(getattr(deps, "GCODE_PREP_SAMPLE_INTERVAL_LINES", 1) or 1)
+        )
+        sampled_max_lines = max(
+            0, int(getattr(deps, "GCODE_PREP_SAMPLE_MAX_LINES", 0) or 0)
+        )
+        sample_limit = max(
+            0, int(getattr(deps, "GCODE_STREAMING_SAMPLE_LINES", 0) or 0)
+        )
+        line_scan_limit = _resolve_fast_prepare_scan_limit_lines(
+            app, deps, file_size=file_size
+        )
+
+        progress_label = f"Preparing {deps.os.path.basename(path)}"
         progress_last_ts = 0.0
         progress_last_pct = -1
-        temp_file: IO[str] | None = None
-        split_result: _SplitStreamResultLike | None = None
+        raw_lines_scanned = 0
+        cleaned_lines_scanned = 0
+        motion_lines_scanned = 0
+        bytes_scanned = 0
+        sampled_line_index = 0
+        reached_eof = False
+        sample_hasher = deps.hashlib.sha256()
 
-        def write_output(line: str) -> None:
-            nonlocal all_lines, line_capture_limit_hit
-            _check_load_token(app, token)
-            assert temp_file is not None
-            offsets.append(temp_file.tell())
-            temp_file.write(line)
-            temp_file.write("\n")
-            if len(preview_lines) < deps.GCODE_STREAMING_PREVIEW_LINES:
-                preview_lines.append(line)
-            if all_lines is not None:
-                if full_lines_limit is not None and len(all_lines) >= full_lines_limit:
-                    all_lines = None
-                    line_capture_limit_hit = True
-                else:
-                    all_lines.append(line)
-            hasher.update(line.encode("utf-8"))
-            hasher.update(b"\n")
-
-        def clean_and_track(raw_text: str) -> str:
-            nonlocal cleaned_input_lines
-            cleaned = cast(str, deps.clean_gcode_line(raw_text))
-            if cleaned:
-                cleaned_input_lines += 1
-                if cleaned.startswith("$"):
-                    raise _SystemCommandError(current_line_no, cleaned)
-            return cleaned
-
-        try:
-            temp_dir = None
-            temp_dir_getter = getattr(deps, "get_preferred_temp_dir", None)
-            if callable(temp_dir_getter):
-                try:
-                    temp_dir = str(temp_dir_getter())
-                except Exception:
-                    temp_dir = None
-            try:
-                temp_buffer_size = int(getattr(deps, "TEMP_FILE_BUFFER_SIZE", 0) or 0)
-            except Exception:
-                temp_buffer_size = 0
-            temp_kwargs = {
-                "mode": "w",
-                "encoding": "utf-8",
-                "newline": "",
-                "delete": False,
-                "prefix": "simple_sender_stream_",
-                "suffix": ".gcode",
-            }
-            if temp_dir:
-                temp_kwargs["dir"] = temp_dir
-            if temp_buffer_size > 0:
-                temp_kwargs["buffering"] = temp_buffer_size
-            temp_file = deps.tempfile.NamedTemporaryFile(
-                **temp_kwargs,
-            )
-            temp_path = temp_file.name
-            with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
-
-                def iter_raw_lines():
-                    nonlocal total_lines_raw, current_line_no, progress_last_ts, progress_last_pct
-                    while True:
-                        if (total_lines_raw & 0x1FF) == 0:
-                            _check_load_token(app, token)
-                        ln = f.readline()
-                        if not ln:
-                            break
-                        total_lines_raw += 1
-                        current_line_no = total_lines_raw
-                        if file_size and (total_lines_raw & 0x7F) == 0:
-                            now = deps.time.perf_counter()
-                            if now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL:
-                                pos = f.tell()
-                                pct = min(100, int(pos * 100 / file_size))
-                                if pct != progress_last_pct:
-                                    _emit_progress(app, token, pct, 100, progress_label)
-                                    progress_last_pct = pct
-                                progress_last_ts = now
-                        yield ln
-
-                _check_load_token(app, token)
-
-                split_result = deps.split_gcode_lines_stream(
-                    iter_raw_lines(),
-                    max_len=deps.MAX_LINE_LENGTH,
-                    clean_line=clean_and_track,
-                    write_line=write_output,
-                )
-                _check_load_token(app, token)
-            if file_size:
-                _emit_progress(app, token, 100, 100, progress_label)
-        finally:
-            _close_temp_file(temp_file)
-
-        assert temp_path is not None
-        assert split_result is not None
-        success = True
-        return _StreamTempData(
-            temp_path=temp_path,
-            offsets=offsets,
-            preview_lines=preview_lines,
-            all_lines=all_lines,
-            line_capture_limit_hit=line_capture_limit_hit,
-            lines_hash=hasher.hexdigest() if offsets else None,
-            split_result=split_result,
-            total_lines_raw=total_lines_raw,
-            cleaned_input_lines=cleaned_input_lines,
-        )
-    except Exception:
-        _remove_temp_path(deps, temp_path)
-        raise
-    finally:
-        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
-        record_task_timing(app, "gcode.load.split_stream", elapsed_ms, success=success)
-
-
-def _validate_streaming_output(
-    app,
-    *,
-    deps,
-    token: int,
-    path: str,
-    temp_path: str,
-    output_lines: int,
-) -> object | None:
-    started_at = deps.time.perf_counter()
-    success = False
-    _check_load_token(app, token)
-
-    progress_label = f"Validating {deps.os.path.basename(path)}"
-    progress_last_ts = 0.0
-    progress_last_pct = -1
-    temp_size = None
-    try:
-        temp_size = deps.os.path.getsize(temp_path)
-    except OSError:
-        temp_size = None
-
-    def iter_lines_with_progress():
-        nonlocal progress_last_ts, progress_last_pct
-        with open(temp_path, "r", encoding="utf-8", errors="replace") as rf:
-            line_no = 0
-            while True:
-                if (line_no & 0x1FF) == 0:
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+            while raw_lines_scanned < line_scan_limit:
+                if (raw_lines_scanned & 0x1FF) == 0:
                     _check_load_token(app, token)
-                raw_line = rf.readline()
+                raw_line = handle.readline()
                 if not raw_line:
+                    reached_eof = True
                     break
-                line_no += 1
-                yield raw_line.rstrip("\r\n")
-                if (line_no & 0x7F) == 0:
+                raw_lines_scanned += 1
+                try:
+                    bytes_scanned = int(handle.tell())
+                except Exception:
+                    bytes_scanned = max(0, bytes_scanned)
+                if file_size and (raw_lines_scanned & 0x7F) == 0:
                     now = deps.time.perf_counter()
                     if now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL:
-                        if temp_size:
-                            pos = rf.tell()
-                            pct = min(100, int(pos * 100 / temp_size))
-                        elif output_lines:
-                            pct = min(100, int(line_no * 100 / output_lines))
-                        else:
-                            pct = 100
+                        pct = min(100, int(bytes_scanned * 100 / file_size))
                         if pct != progress_last_pct:
                             _emit_progress(app, token, pct, 100, progress_label)
                             progress_last_pct = pct
                         progress_last_ts = now
-        _emit_progress(app, token, 100, 100, progress_label)
+                cleaned = cast(str, deps.clean_gcode_line(raw_line))
+                if not cleaned:
+                    continue
+                cleaned_lines_scanned += 1
+                if _is_motion_line(cleaned):
+                    motion_lines_scanned += 1
+                sampled_line_index += 1
+                if sample_limit > 0 and len(sample_lines) < sample_limit:
+                    sample_lines.append(cleaned)
+                if sampled_head_limit > 0 and sampled_line_index <= sampled_head_limit:
+                    sampled_head.append(cleaned)
+                elif (
+                    sampled_interval > 0
+                    and (sampled_line_index % sampled_interval) == 0
+                ):
+                    sampled_periodic.append(cleaned)
+                if sampled_tail_limit > 0:
+                    sampled_tail.append(cleaned)
+                if len(sampled_head) < 256:
+                    sample_hasher.update(cleaned.encode("utf-8"))
+                    sample_hasher.update(b"\n")
 
-    try:
-        result = cast(object, deps.validate_gcode_lines(iter_lines_with_progress()))
+        if file_size:
+            _emit_progress(
+                app,
+                token,
+                min(progress_last_pct if progress_last_pct >= 0 else 0, 95),
+                100,
+                progress_label,
+            )
+        tail_lines = list(sampled_tail)
+        if not reached_eof and sampled_tail_limit > 0:
+            tail_lines = _sample_tail_lines_from_file(
+                path,
+                deps=deps,
+                limit=sampled_tail_limit,
+                file_size=file_size,
+            )
+        sampled_lines = _trim_sampled_lines(
+            head_lines=sampled_head,
+            periodic_lines=sampled_periodic,
+            tail_lines=tail_lines,
+            sampled_max_lines=sampled_max_lines,
+        )
+        _emit_progress(
+            app, token, 95, 100, f"Computing bounds: {deps.os.path.basename(path)}"
+        )
+        sampled_executable_lines = int(len(sampled_lines))
+        sampled_motion_lines = 0
+        for sampled_line in sampled_lines:
+            if _is_motion_line(sampled_line):
+                sampled_motion_lines += 1
+        cleaned_lines_known = bool(reached_eof)
+        file_line_count_known = bool(reached_eof)
+        file_line_count = int(raw_lines_scanned)
+        if (
+            not file_line_count_known
+            and file_size
+            and bytes_scanned > 0
+            and raw_lines_scanned > 0
+        ):
+            try:
+                file_line_count = max(
+                    file_line_count,
+                    int(
+                        (float(raw_lines_scanned) / float(bytes_scanned))
+                        * float(file_size)
+                    ),
+                )
+            except Exception:
+                file_line_count = int(raw_lines_scanned)
+        cleaned_lines_estimate = int(cleaned_lines_scanned)
+        executable_lines_estimate = int(cleaned_lines_scanned)
+        motion_lines_estimate = int(motion_lines_scanned)
+        if not cleaned_lines_known:
+            if file_size and bytes_scanned > 0 and cleaned_lines_scanned > 0:
+                density = float(cleaned_lines_scanned) / float(max(1, bytes_scanned))
+                estimated = int(float(file_size) * density)
+                cleaned_lines_estimate = max(cleaned_lines_estimate, estimated)
+                executable_lines_estimate = max(executable_lines_estimate, estimated)
+            else:
+                cleaned_lines_estimate = max(cleaned_lines_estimate, raw_lines_scanned)
+                executable_lines_estimate = max(
+                    executable_lines_estimate, raw_lines_scanned
+                )
+            if cleaned_lines_scanned > 0 and motion_lines_scanned > 0:
+                motion_ratio = float(motion_lines_scanned) / float(
+                    max(1, cleaned_lines_scanned)
+                )
+                motion_lines_estimate = max(
+                    motion_lines_estimate,
+                    int(max(1.0, float(executable_lines_estimate) * motion_ratio)),
+                )
+        cleaned_lines_estimate = max(cleaned_lines_estimate, len(sample_lines))
+        executable_lines_estimate = max(executable_lines_estimate, len(sample_lines))
+        motion_lines_estimate = max(motion_lines_estimate, sampled_motion_lines)
+        quick_scan_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        (
+            bounds_box,
+            bounds_confidence,
+            dimensions_confidence_reasons,
+            estimated_job_time_sec,
+            estimate_confidence,
+            estimate_confidence_reasons,
+            estimate_inputs_snapshot,
+            autolevel_prereq_snapshot,
+        ) = _quick_scan_bounds_and_estimate(
+            app,
+            deps,
+            sampled_lines=sampled_lines,
+            sampled_executable_lines=sampled_executable_lines,
+            sampled_motion_lines=sampled_motion_lines,
+            executable_total_estimate=executable_lines_estimate,
+            motion_total_estimate=motion_lines_estimate,
+            cleaned_lines_known=cleaned_lines_known,
+            source_path=path,
+            source_hash="",
+            source_total_lines=cleaned_lines_estimate,
+        )
+        _emit_progress(
+            app, token, 97, 100, f"Computing estimate: {deps.os.path.basename(path)}"
+        )
+        _emit_progress(
+            app,
+            token,
+            99,
+            100,
+            f"Preparing auto-level data: {deps.os.path.basename(path)}",
+        )
+        if cleaned_lines_known:
+            _emit_progress(app, token, 100, 100, progress_label)
+        else:
+            _emit_progress(app, token, 100, 100, f"{progress_label} (sampled)")
+        quick_fingerprint = _quick_file_fingerprint(deps, path, file_size=file_size)
+        lines_hash_quick = f"{quick_fingerprint}:{sample_hasher.hexdigest()[:16]}"
+        estimate_inputs_snapshot["gcode_hash"] = lines_hash_quick
+        autolevel_prereq_snapshot["source_hash"] = lines_hash_quick
         success = True
+        result = _FastPrepareData(
+            sample_lines=sample_lines,
+            sampled_head_lines=sampled_head_limit,
+            sampled_tail_lines=sampled_tail_limit,
+            sampled_interval_lines=sampled_interval,
+            sampled_max_lines=sampled_max_lines,
+            sampled_line_count=int(len(sampled_lines)),
+            file_size_bytes=int(file_size or 0),
+            file_line_count=int(file_line_count),
+            file_line_count_known=bool(file_line_count_known),
+            cleaned_lines_estimate=cleaned_lines_estimate,
+            cleaned_lines_known=cleaned_lines_known,
+            executable_lines_estimate=executable_lines_estimate,
+            motion_lines_estimate=motion_lines_estimate,
+            sampled_executable_lines=sampled_executable_lines,
+            sampled_motion_lines=sampled_motion_lines,
+            raw_lines_scanned=raw_lines_scanned,
+            bytes_scanned=bytes_scanned,
+            lines_hash_quick=lines_hash_quick,
+            quick_scan_ms=float(quick_scan_ms),
+            bounds_box=bounds_box,
+            bounds_confidence=str(bounds_confidence),
+            dimensions_confidence_reasons=dict(dimensions_confidence_reasons),
+            estimated_job_time_sec=estimated_job_time_sec,
+            estimate_confidence=str(estimate_confidence),
+            estimate_confidence_reasons=dict(estimate_confidence_reasons),
+            estimate_inputs_snapshot=estimate_inputs_snapshot,
+            autolevel_prereq_snapshot=autolevel_prereq_snapshot,
+        )
+        # Drop scan-temporary buffers before returning to keep worker RSS steady.
+        sampled_head.clear()
+        sampled_periodic.clear()
+        sampled_tail.clear()
+        tail_lines.clear()
+        sampled_lines.clear()
         return result
-    except Exception as exc:
-        app.ui_q.put(("log", f"[gcode] Streaming validation failed: {exc}"))
-        return None
     finally:
         elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
-        record_task_timing(app, "gcode.load.validate_stream", elapsed_ms, success=success)
+        record_task_timing(app, "gcode.load.prepare_fast", elapsed_ms, success=success)
+
+
+def quick_scan_gcode(
+    app,
+    path: str,
+    token: int,
+    deps,
+    *,
+    file_size: int | None,
+) -> _FastPrepareData:
+    """Unified low-memory quick scan used by every load before stream-ready."""
+    return _prepare_stream_source_fast(
+        app,
+        path,
+        token,
+        deps,
+        file_size=file_size,
+    )
 
 
 def _stream_from_disk(
@@ -436,131 +985,231 @@ def _stream_from_disk(
     *,
     file_size: int | None,
     validate_streaming: bool,
-    preview_only: bool,
+    sample_only: bool,
     streaming_line_threshold: int | None,
     log_message: str | None = None,
 ) -> None:
     started_at = deps.time.perf_counter()
     success = False
-    temp_data = None
+    prepare_data: _FastPrepareData | None = None
     try:
         _check_load_token(app, token)
         if log_message:
             app.ui_q.put(("log", log_message))
-        validate_streaming_enabled = bool(validate_streaming)
-        temp_data = _split_stream_to_temp_file(
+        # Fast file-backed load path: become stream-ready immediately without
+        # mandatory full rewrite/validation/hash/index passes.
+        sample_only = True
+        strict_validation_requested = bool(validate_streaming)
+        cache_profile = "disabled"
+        setattr(app, "_gcode_full_line_cache_profile", cache_profile)
+        setattr(app, "_gcode_full_line_cache_cap_lines", 0)
+        setattr(app, "_gcode_full_line_cache_cap_hit", False)
+        setattr(
+            app,
+            "_gcode_sample_line_cap",
+            int(getattr(deps, "GCODE_STREAMING_SAMPLE_LINES", 0) or 0),
+        )
+        prepare_data = quick_scan_gcode(
             app,
             path,
             token,
             deps,
             file_size=file_size,
-            capture_full_lines=not preview_only,
-            full_lines_limit=(
-                streaming_line_threshold
-                if (not preview_only and streaming_line_threshold is not None)
-                else None
+        )
+        _check_load_token(app, token)
+        app._gcode_quick_scan_ms = float(
+            getattr(prepare_data, "quick_scan_ms", 0.0) or 0.0
+        )
+        app._gcode_post_popup_background_tasks = "none"
+        if not bool(validate_streaming):
+            app.ui_q.put(
+                (
+                    "log",
+                    "[gcode] Streaming validation disabled (App Settings > Diagnostics).",
+                )
+            )
+        elif strict_validation_requested:
+            app.ui_q.put(
+                (
+                    "log",
+                    "[gcode] Strict validation deferred (fast mode); send-time guards remain active.",
+                )
+            )
+        else:
+            app.ui_q.put(
+                (
+                    "log",
+                    "[gcode] Strict validation deferred; send-time guards enforce deterministic stop-on-fault.",
+                )
+            )
+        cleaned_lines_estimate = max(0, int(prepare_data.cleaned_lines_estimate))
+        index_mode_requested = _resolve_index_mode_policy(
+            deps,
+            file_size=file_size,
+            cleaned_lines_estimate=cleaned_lines_estimate,
+        )
+        lines_for_app = list(prepare_data.sample_lines)
+        source = deps.FileGcodeSource(
+            path,
+            offsets=None,
+            already_clean=False,
+            total_lines=cleaned_lines_estimate,
+            line_count_known=bool(prepare_data.cleaned_lines_known),
+        )
+        setattr(source, "_cleanup_path", None)
+        setattr(source, "_prepare_sampled_lines", None)
+        setattr(
+            source, "_prepare_sample_head_lines", int(prepare_data.sampled_head_lines)
+        )
+        setattr(
+            source, "_prepare_sample_tail_lines", int(prepare_data.sampled_tail_lines)
+        )
+        setattr(
+            source,
+            "_prepare_sample_interval_lines",
+            int(prepare_data.sampled_interval_lines),
+        )
+        setattr(
+            source, "_prepare_sample_max_lines", int(prepare_data.sampled_max_lines)
+        )
+        setattr(
+            source, "_prepare_sample_line_count", int(prepare_data.sampled_line_count)
+        )
+        setattr(
+            source,
+            "_prepare_file_size_bytes",
+            int(getattr(prepare_data, "file_size_bytes", 0) or 0),
+        )
+        setattr(
+            source,
+            "_prepare_file_line_count",
+            int(getattr(prepare_data, "file_line_count", 0) or 0),
+        )
+        setattr(
+            source,
+            "_prepare_file_line_count_known",
+            bool(getattr(prepare_data, "file_line_count_known", False)),
+        )
+        setattr(
+            source,
+            "_prepare_executable_total_lines",
+            int(prepare_data.executable_lines_estimate),
+        )
+        setattr(
+            source,
+            "_prepare_motion_total_lines",
+            int(prepare_data.motion_lines_estimate),
+        )
+        setattr(
+            source,
+            "_prepare_sampled_executable_lines",
+            int(prepare_data.sampled_executable_lines),
+        )
+        setattr(
+            source,
+            "_prepare_sampled_motion_lines",
+            int(prepare_data.sampled_motion_lines),
+        )
+        setattr(source, "_offset_index_enabled", False)
+        setattr(source, "_index_mode_requested", str(index_mode_requested))
+        setattr(source, "_load_mode", "quick_scan_ready")
+        setattr(source, "_quick_hash", prepare_data.lines_hash_quick)
+        setattr(
+            source, "_strict_validation_requested", bool(strict_validation_requested)
+        )
+        setattr(
+            source,
+            "_quick_scan_ms",
+            float(getattr(prepare_data, "quick_scan_ms", 0.0) or 0.0),
+        )
+        setattr(source, "_quick_bounds_box", prepare_data.bounds_box)
+        setattr(
+            source,
+            "_quick_bounds_confidence",
+            str(getattr(prepare_data, "bounds_confidence", "rough") or "rough"),
+        )
+        setattr(
+            source,
+            "_quick_dimensions_confidence",
+            str(getattr(prepare_data, "bounds_confidence", "rough") or "rough"),
+        )
+        setattr(
+            source,
+            "_quick_dimensions_confidence_reasons",
+            dict(getattr(prepare_data, "dimensions_confidence_reasons", {}) or {}),
+        )
+        setattr(
+            source, "_quick_estimated_job_time_sec", prepare_data.estimated_job_time_sec
+        )
+        setattr(
+            source,
+            "_quick_estimate_confidence",
+            str(
+                getattr(prepare_data, "estimate_confidence", "provisional")
+                or "provisional"
             ),
         )
-
-        split_result = temp_data.split_result
-        if split_result.failed_index is not None:
-            _remove_temp_path(deps, temp_data.temp_path)
-            too_long = split_result.too_long if split_result.too_long else 1
-            app.ui_q.put((
-                "gcode_load_invalid",
+        setattr(
+            source,
+            "_quick_estimate_confidence_reasons",
+            dict(getattr(prepare_data, "estimate_confidence_reasons", {}) or {}),
+        )
+        setattr(
+            source,
+            "_quick_estimate_inputs_snapshot",
+            dict(getattr(prepare_data, "estimate_inputs_snapshot", {}) or {}),
+        )
+        setattr(
+            source,
+            "_quick_autolevel_prereq_snapshot",
+            dict(getattr(prepare_data, "autolevel_prereq_snapshot", {}) or {}),
+        )
+        app.ui_q.put(
+            (
+                "log",
+                "[gcode] Quick scan complete; file-backed stream-ready: "
+                f"mode=quick_scan_ready, "
+                f"index={index_mode_requested}, "
+                f"line_count={'known' if prepare_data.cleaned_lines_known else 'estimated'}({cleaned_lines_estimate:,}).",
+            )
+        )
+        app.ui_q.put(
+            (
+                "log",
+                f"[gcode] Quick Scan summary: bounds_conf={prepare_data.bounds_confidence}, "
+                f"estimate_conf={prepare_data.estimate_confidence}, "
+                f"estimate_sec={prepare_data.estimated_job_time_sec if prepare_data.estimated_job_time_sec is not None else 'n/a'}, "
+                f"quick_scan_ms={float(getattr(prepare_data, 'quick_scan_ms', 0.0) or 0.0):.2f}.",
+            )
+        )
+        app.ui_q.put(
+            (
+                "gcode_loaded_stream",
                 token,
                 path,
-                too_long,
-                split_result.failed_index,
-                split_result.failed_len,
-                temp_data.total_lines_raw,
-                temp_data.cleaned_input_lines,
-            ))
-            return
-        if split_result.modified_count:
-            msg = _format_adjusted_lines_message(
-                split_result.modified_count,
-                split_result.split_count,
-                deps.MAX_LINE_LENGTH,
+                source,
+                lines_for_app,
+                prepare_data.lines_hash_quick,
+                cleaned_lines_estimate,
+                None,
+                sample_only,
             )
-            app.ui_q.put(("log", msg))
-        output_lines = split_result.lines_written
-        if not preview_only and temp_data.line_capture_limit_hit:
-            preview_only = True
-            threshold_text = (
-                f"{streaming_line_threshold:,}"
-                if streaming_line_threshold is not None
-                else "?"
-            )
-            app.ui_q.put((
-                "log",
-                f"[gcode] Large file detected ({output_lines:,} cleaned lines > {threshold_text}); "
-                "using preview-only mode.",
-            ))
-        if not preview_only and temp_data.all_lines is None:
-            preview_only = True
-        report = None
-        should_validate = False
-        if output_lines:
-            should_validate = _should_run_full_validation(
-                app,
-                deps,
-                token=token,
-                path=path,
-                line_count=output_lines,
-                validation_enabled=validate_streaming_enabled,
-            )
-        if should_validate:
-            report = _validate_streaming_output(
-                app,
-                deps=deps,
-                token=token,
-                path=path,
-                temp_path=temp_data.temp_path,
-                output_lines=output_lines,
-            )
-        elif not validate_streaming_enabled:
-            app.ui_q.put((
-                "log",
-                "[gcode] Streaming validation disabled (App Settings > Diagnostics).",
-            ))
-        _check_load_token(app, token)
-        lines_for_app = temp_data.preview_lines if preview_only else (temp_data.all_lines or [])
-        source = deps.FileGcodeSource(
-            temp_data.temp_path,
-            temp_data.offsets,
-            already_clean=True,
         )
-        setattr(source, "_cleanup_path", temp_data.temp_path)
-        app.ui_q.put((
-            "gcode_loaded_stream",
-            token,
-            path,
-            source,
-            lines_for_app,
-            temp_data.lines_hash,
-            output_lines,
-            report,
-            preview_only,
-        ))
+        record_task_timing(
+            app,
+            "gcode.load.time_to_stream_ready",
+            max(0.0, (deps.time.perf_counter() - started_at) * 1000.0),
+            success=True,
+        )
         success = True
     except _GcodeLoadCancelled:
-        _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
-        return
-    except _SystemCommandError as exc:
-        _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
-        app.ui_q.put((
-            "gcode_load_invalid_command",
-            token,
-            path,
-            exc.line_no,
-            exc.text,
-        ))
         return
     except Exception:
-        _remove_temp_path(deps, getattr(temp_data, "temp_path", None))
         raise
     finally:
+        # Release scan objects as soon as possible; streaming source retains only
+        # compact metadata and bounded sample lines passed through the UI event.
+        prepare_data = None
         elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
         record_task_timing(app, "gcode.load.stream_total", elapsed_ms, success=success)
 
@@ -568,7 +1217,9 @@ def _stream_from_disk(
 def load_gcode_from_path(app, path: str, module):
     deps = module
     if app.grbl.is_streaming():
-        deps.messagebox.showwarning("Busy", "Stop the stream before loading a new G-code file.")
+        deps.messagebox.showwarning(
+            "Busy", "Stop the stream before loading a new G-code file."
+        )
         return
     if not deps.os.path.isfile(path):
         deps.messagebox.showerror("Open G-code", "File not found.")
@@ -583,23 +1234,22 @@ def load_gcode_from_path(app, path: str, module):
         app._gcode_load_started_at = None
     deps.disable_job_controls(app)
     app.gcode_stats_var.set("Preparing job...")
+    app._gcode_status_last_text = "Preparing job..."
     app.status.config(text=f"Preparing job: {deps.os.path.basename(path)}")
     app._set_gcode_loading_indeterminate(f"reading {deps.os.path.basename(path)}")
     app.gview.set_lines_chunked([])
 
     file_size = None
-    preview_only = False
+    sample_only = True
     ultra_large_mode = False
     ultra_large_threshold_bytes = _resolve_ultra_large_threshold_bytes(app, deps)
     try:
         file_size = deps.os.path.getsize(path)
-        preview_only = file_size >= deps.GCODE_STREAMING_SIZE_THRESHOLD
         ultra_large_mode = _is_ultra_large_file_with_threshold(
             file_size=file_size,
             threshold_bytes=ultra_large_threshold_bytes,
         )
     except OSError:
-        preview_only = False
         ultra_large_mode = False
     try:
         validate_streaming = bool(app.validate_streaming_gcode.get())
@@ -607,54 +1257,30 @@ def load_gcode_from_path(app, path: str, module):
         validate_streaming = False
     validate_streaming_requested = bool(validate_streaming)
     if ultra_large_mode:
-        preview_only = True
-        if file_size is not None:
-            ok, required_bytes, free_bytes, temp_dir = _ultra_large_disk_headroom(deps, int(file_size))
-            if not ok:
-                required_text = _format_mb(required_bytes)
-                free_text = _format_mb(free_bytes)
-                app._gcode_loading = False
-                app._finish_gcode_loading()
-                deps.messagebox.showerror(
-                    "Open G-code",
-                    "Not enough free disk space for this ultra-large file load.\n"
-                    f"Required: {required_text} free in temp workspace.\n"
-                    f"Available: {free_text}\n"
-                    f"Temp dir: {temp_dir}",
-                )
-                app.gcode_stats_var.set("No file loaded")
-                app.status.config(text="G-code load failed (insufficient disk space)")
-                return
-        # Ultra-large mode always uses fast-load behavior to keep Pi-class systems stable.
+        # Ultra-large mode keeps strict validation off by default to preserve
+        # stream-ready latency; send-time guards still apply.
         validate_streaming = False
-
-    try:
-        raw_line_threshold = int(app.streaming_line_threshold.get())
-    except (AttributeError, TypeError, ValueError):
-        raw_line_threshold = deps.GCODE_STREAMING_LINE_THRESHOLD
-    streaming_line_threshold = raw_line_threshold if raw_line_threshold > 0 else None
 
     def worker():
         try:
-            log_message = None
-            if preview_only:
-                size_text = _format_mb(file_size)
-                threshold_text = _format_mb(deps.GCODE_STREAMING_SIZE_THRESHOLD)
-                log_message = (
-                    f"[gcode] Large file detected ({size_text} >= {threshold_text}); "
-                    "using preview-only mode."
-                )
+            log_message = "[gcode] Using file-backed streaming load mode (bounded sample/sample retention)."
             if ultra_large_mode:
                 ultra_threshold_text = _format_mb(ultra_large_threshold_bytes)
                 size_text = _format_mb(file_size)
-                app.ui_q.put((
-                    "log",
-                    f"[gcode] Ultra-large mode active ({size_text} >= {ultra_threshold_text}); "
-                    "forcing preview-only mode and fast-load safeguards.",
-                ))
+                app.ui_q.put(
+                    (
+                        "log",
+                        f"[gcode] Ultra-large mode active ({size_text} >= {ultra_threshold_text}); "
+                        "forcing fast-load mode with sampled prepare.",
+                    )
+                )
                 if validate_streaming_requested:
-                    app.ui_q.put(("log", "[gcode] Full validation disabled automatically for ultra-large file load."))
-                app.ui_q.put(("log", "[gcode] Recommendation: run a load-only dry-run before cutting."))
+                    app.ui_q.put(
+                        (
+                            "log",
+                            "[gcode] Strict validation disabled automatically for ultra-large load.",
+                        )
+                    )
             _stream_from_disk(
                 app,
                 path,
@@ -662,8 +1288,8 @@ def load_gcode_from_path(app, path: str, module):
                 deps,
                 file_size=file_size,
                 validate_streaming=validate_streaming,
-                preview_only=preview_only,
-                streaming_line_threshold=streaming_line_threshold,
+                sample_only=sample_only,
+                streaming_line_threshold=None,
                 log_message=log_message,
             )
         except _GcodeLoadCancelled:

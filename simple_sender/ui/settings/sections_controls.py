@@ -25,8 +25,6 @@ from tkinter import ttk
 
 from simple_sender.utils.constants import (
     CURRENT_LINE_CHOICES,
-    TOOLPATH_STREAMING_RENDER_INTERVAL_MAX,
-    TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
 )
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
@@ -584,35 +582,6 @@ def build_viewer_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
-    ttk.Separator(view_frame, orient="horizontal").grid(
-        row=2, column=0, columnspan=2, sticky="ew", pady=(8, 6)
-    )
-    ttk.Label(view_frame, text="3D view: streaming refresh (sec)").grid(
-        row=3, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    toolpath_interval_row = ttk.Frame(view_frame)
-    toolpath_interval_row.grid(row=3, column=1, sticky="w", pady=4)
-    app.toolpath_streaming_interval_entry = ttk.Entry(
-        toolpath_interval_row,
-        textvariable=app.toolpath_streaming_render_interval,
-        width=10,
-    )
-    app.toolpath_streaming_interval_entry.pack(side="left")
-    attach_numeric_keypad(app.toolpath_streaming_interval_entry, allow_decimal=True)
-    app.toolpath_streaming_interval_entry.bind(
-        "<Return>", app._apply_toolpath_streaming_render_interval
-    )
-    app.toolpath_streaming_interval_entry.bind(
-        "<FocusOut>", app._apply_toolpath_streaming_render_interval
-    )
-    ttk.Label(
-        toolpath_interval_row,
-        text=f"({TOOLPATH_STREAMING_RENDER_INTERVAL_MIN:g} - {TOOLPATH_STREAMING_RENDER_INTERVAL_MAX:g})",
-    ).pack(side="left", padx=(6, 0))
-    apply_tooltip(
-        app.toolpath_streaming_interval_entry,
-        "Minimum time between 3D redraws while streaming.",
-    )
     return row + 1
 
 

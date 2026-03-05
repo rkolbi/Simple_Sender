@@ -64,6 +64,10 @@ class StreamingController:
         self._pending_buffer: tuple[int, int, int] | None = None
         self._progress_after_id: AfterId | None = None
         self._buffer_after_id: AfterId | None = None
+        self._last_progress_pct: int | None = None
+        self._last_buffer_fill_text: str | None = None
+        self._last_buffer_fill_pct: int | None = None
+        self._last_throughput_text: str | None = None
 
     def attach_widgets(
         self,
@@ -435,7 +439,9 @@ class StreamingController:
             pct = int(round((done / total) * 100)) if total else 0
             if defer_completion and pct >= 100:
                 pct = 99
-            self.progress_pct.set(pct)
+            if self._last_progress_pct != pct:
+                self.progress_pct.set(pct)
+                self._last_progress_pct = pct
         if done and total and not defer_completion:
             self.app._update_live_estimate(done, total)
         if not defer_completion:
@@ -452,10 +458,15 @@ class StreamingController:
             return
         pct, used, window = self._pending_buffer
         self._pending_buffer = None
+        text = f"Buffer: {pct}% ({used}/{window})"
         if self.buffer_fill:
-            self.buffer_fill.set(f"Buffer: {pct}% ({used}/{window})")
+            if self._last_buffer_fill_text != text:
+                self.buffer_fill.set(text)
+                self._last_buffer_fill_text = text
         if self.buffer_fill_pct:
-            self.buffer_fill_pct.set(pct)
+            if self._last_buffer_fill_pct != pct:
+                self.buffer_fill_pct.set(pct)
+                self._last_buffer_fill_pct = pct
 
     def clear_pending_ui_updates(self) -> None:
         """Cancel pending UI updates when switching modes/closing."""
@@ -481,6 +492,10 @@ class StreamingController:
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
+        self._last_buffer_fill_text = None
+        self._last_buffer_fill_pct = None
+        self._last_throughput_text = None
+        self._last_progress_pct = None
 
     @staticmethod
     def _entry_bytes(entry: ConsoleEntry) -> int:
@@ -520,7 +535,10 @@ class StreamingController:
     def handle_throughput(self, bps: float) -> None:
         """Update throughput display."""
         if self.throughput_var:
-            self.throughput_var.set(self.app._format_throughput(float(bps)))
+            text = self.app._format_throughput(float(bps))
+            if self._last_throughput_text != text:
+                self.throughput_var.set(text)
+                self._last_throughput_text = text
 
     def handle_gcode_sent(self, idx: int) -> None:
         """Queue sent-line marker updates."""

@@ -115,7 +115,7 @@ def setup_logging() -> logging.Logger:
         serial_handler.setLevel(logging.DEBUG)
         serial_handler.setFormatter(
             logging.Formatter(
-                "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+                "%(asctime)s.%(msecs)0spatial [%(levelname)s] %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )

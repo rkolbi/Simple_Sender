@@ -1,17 +1,18 @@
 # Changelog
 
 All notable changes to this project are documented in this file.
+Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
 ## [Unreleased]
 
 ### Changed
 - Revision 2.0.0 loader architecture kickoff:
   - all file-based G-code loads now normalize through one disk-backed path (`FileGcodeSource` + temp-file offsets)
-  - preview-only behavior is now controlled by an explicit flag, decoupled from "source is file-backed", so non-preview jobs keep full stats/toolpath features
-  - load events now carry `preview_only` state to preserve existing UI gating semantics while enabling unified job source handling
+  - sample-only behavior is now controlled by an explicit flag, decoupled from "source is file-backed", so non-sample jobs keep full stats/pathview features
+  - load events now carry `sample_only` state to preserve existing UI gating semantics while enabling unified job source handling
   - `FileGcodeSource` now supports an `already_clean` fast-path for normalized temp sources, removing redundant per-line cleaning overhead in streaming reads
-  - non-preview file-backed jobs now explicitly re-prime GRBL worker in-memory send caches from the in-memory line list, preserving high-throughput stream behavior after the unified loader shift
-  - reconnect path now re-primes send caches for non-preview file-backed jobs when a source is restored
+  - non-sample file-backed jobs now explicitly re-prime GRBL worker in-memory send caches from the in-memory line list, preserving high-throughput stream behavior after the unified loader shift
+  - reconnect path now re-primes send caches for non-sample file-backed jobs when a source is restored
 - `run_tests.bat` now mirrors CI release gates by adding import stability (`import simple_sender.ui.settings`) and compileall syntax checks before tests.
 - WPos `Goto Zero` now executes a two-step absolute move sequence:
   - sends `G90 G0 X0 Y0`
@@ -23,9 +24,9 @@ All notable changes to this project are documented in this file.
 - Touch command feedback now acknowledges button/checkbutton taps by pulsing the control and writing `Touch received: <control>` in the status bar.
 - Disabled-control tooltip reasons now include clearer state context (connecting/disconnecting, handshake/status wait, stream running/paused, and deferred idle completion) for affected toolbar actions.
 - Logs viewer now includes `Clear Logs`, which truncates active `.log` files and removes rotated log files on a background worker.
-- 3D tab visibility now follows render enablement state: when 3D render is disabled, the `3D View` tab is hidden.
-- App Settings now includes a session-only `force 3D tab + render` override (not persisted; resets on restart).
-- Preview-only toolpath policy now honors the session-only 3D override so operators can force 3D preview for the current run.
+- Spatial tab visibility now follows render enablement state: when Spatial render is disabled, the `Spatial View` tab is hidden.
+- App Settings now includes a session-only `force Spatial tab + render` override (not persisted; resets on restart).
+- Sample-only pathview policy now honors the session-only Spatial override so operators can force Spatial sample for the current run.
 
 ### Documentation
 - README testing baseline was refreshed to the current local result (`942 passed, 3 skipped` on `python -m pytest -q`, validated 2026-03-03).
@@ -36,10 +37,10 @@ All notable changes to this project are documented in this file.
 - README Kasa section now documents bounded request timeout behavior.
 - README App Settings docs now include Search + `Basic`/`Advanced` global controls and touch command acknowledgment behavior.
 - README checklist docs now mention collapsible checklist titles in the Checklists tab.
-- README Jobs/Streaming docs now reflect the unified disk-backed load path and preview-only threshold semantics.
+- README Jobs/Streaming docs now reflect the unified disk-backed load path and sample-only threshold semantics.
 - README Diagnostics docs now include runtime performance profiling/leak-watch settings and the exit performance report fields.
 - README Logs/Diagnostics docs now include `Clear Logs`, `Export diagnostics bundle (Save ZIP)`, and `Save final performance report (Save to Logs)`.
-- README 3D docs now include automatic 3D-tab hide-when-disabled behavior and the session-only 3D override.
+- README Spatial docs now include automatic Spatial-tab hide-when-disabled behavior and the session-only Spatial override.
 - README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
 - `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
@@ -110,10 +111,10 @@ All notable changes to this project are documented in this file.
 - Legacy cleanup pass removed deprecated compatibility surfaces and duplicate module files:
   - removed `simple_sender/ui/widgets.py` compatibility shim
   - removed legacy single-file `simple_sender/ui/grbl_settings.py` in favor of `simple_sender/ui/grbl_settings/`
-  - removed duplicate flat toolpath modules in favor of `simple_sender/ui/toolpath/`
+  - removed duplicate flat pathview modules in favor of `simple_sender/ui/pathview/`
   - removed duplicate flat `autolevel_dialog`, `console`, and `dialogs` modules in favor of package implementations
   - removed remaining unused root UI duplicates and dead entrypoints:
-    - `simple_sender/ui/gcode_viewer.py`, `simple_sender/ui/preview_policy.py`, `simple_sender/ui/popup_utils.py`
+    - `simple_sender/ui/gcode_viewer.py`, `simple_sender/ui/sampling_policy.py`, `simple_sender/ui/popup_utils.py`
     - `simple_sender/ui/alarm_recovery_dialog.py`, `simple_sender/ui/macro_prompt_dialog.py`
     - `simple_sender/ui/autolevel_prefs.py`, `simple_sender/ui/gcode_tab.py`, `simple_sender/ui/gcode_view.py`
 - Removed backup macro artifacts from runtime macro directory:
@@ -167,7 +168,7 @@ All notable changes to this project are documented in this file.
 - Streaming completion behavior is now machine-state-safe:
   - after final line ACK, UI enters a deferred completion phase while GRBL is still moving
   - progress remains at `99%` until status reports `Idle`, then advances to `100%` and triggers completion notification
-  - run/manual/settings/toolpath locks stay engaged during the deferred phase and release only after `Idle`
+  - run/manual/settings/pathview locks stay engaged during the deferred phase and release only after `Idle`
 - README was updated for consistency with current behavior:
   - Python requirement text now matches the `3.11+` project baseline
   - Viewer "Current line highlight" docs now include `Machine (status/planner)`

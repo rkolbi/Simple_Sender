@@ -47,19 +47,6 @@ def _value_from_var(value: Any, default: Any = None) -> Any:
         return value
 
 
-def _tab_label(app) -> str:
-    nb = getattr(app, "notebook", None)
-    if nb is None:
-        return ""
-    try:
-        tab_id = nb.select()
-        if not tab_id:
-            return ""
-        return str(nb.tab(tab_id, "text") or "")
-    except Exception:
-        return ""
-
-
 def _has_loaded_job(app) -> bool:
     gview = getattr(app, "gview", None)
     if gview is not None:
@@ -141,24 +128,10 @@ def _set_widget_state(widget: Any, state: str) -> None:
 
 
 def _context_quick_visibility(app) -> dict[str, bool]:
-    label = _tab_label(app).strip().lower()
-    on_toolpath_tab = label in ("3d view", "top view")
     has_job = _has_loaded_job(app)
     connected = bool(getattr(app, "connected", False))
     alarm_locked = bool(getattr(app, "_alarm_locked", False))
     busy = _stream_busy(app)
-    force_override = False
-    checker = getattr(app, "_is_force_3d_override_enabled", None)
-    if callable(checker):
-        try:
-            force_override = bool(checker())
-        except Exception:
-            force_override = False
-    render_enabled = _bool_from_var(getattr(app, "render3d_enabled", None), True)
-    render_blocked = bool(getattr(app, "_render3d_blocked", False))
-    if force_override:
-        render_enabled = True
-        render_blocked = False
     autolevel_overlay_enabled = _bool_from_var(getattr(app, "show_autolevel_overlay", None), True)
     has_autolevel_grid = getattr(app, "_auto_level_grid", None) is not None
     linux_supported = bool(sys.platform.startswith("linux"))
@@ -167,8 +140,7 @@ def _context_quick_visibility(app) -> dict[str, bool]:
         "btn_toggle_tips": True,
         "btn_toggle_keybinds": True,
         "btn_release_checklist": connected and not busy and not alarm_locked,
-        "btn_toggle_3d": has_job and (on_toolpath_tab or (not render_enabled) or render_blocked),
-        "btn_toggle_autolevel_overlay": autolevel_overlay_enabled or (has_autolevel_grid and on_toolpath_tab),
+        "btn_toggle_autolevel_overlay": autolevel_overlay_enabled and has_job and has_autolevel_grid,
         "btn_toggle_kasa_vacuum": linux_supported,
         "btn_toggle_kasa_light": linux_supported,
     }
@@ -226,14 +198,6 @@ def build_status_bar(app, before):
     )
     set_kb_id(app.btn_toggle_tips, "toggle_tooltips")
     app.btn_toggle_tips.pack(side="right", padx=(8, 0))
-    app.btn_toggle_3d = ttk.Button(
-        status_bar,
-        text="3DR",
-        command=app._toggle_render_3d,
-    )
-    set_kb_id(app.btn_toggle_3d, "toggle_render_3d")
-    app.btn_toggle_3d.pack(side="right", padx=(8, 0))
-    apply_tooltip(app.btn_toggle_3d, "Toggle 3D toolpath rendering.")
     app.btn_toggle_keybinds = ttk.Button(
         status_bar,
         text="Keys",
@@ -251,7 +215,7 @@ def build_status_bar(app, before):
     app.btn_toggle_autolevel_overlay.pack(side="right", padx=(8, 0))
     apply_tooltip(
         app.btn_toggle_autolevel_overlay,
-        "Toggle auto-level overlay in the toolpath views.",
+        "Toggle auto-level overlay visibility where supported.",
     )
     app.btn_toggle_kasa_vacuum = ttk.Button(
         status_bar,
@@ -292,7 +256,6 @@ def build_status_bar(app, before):
     app.btn_screen_lock.pack(side="right", padx=(8, 0))
     apply_tooltip(app.btn_screen_lock, "Lock/unlock the screen. When locked, only this button accepts input.")
     app._refresh_tooltips_toggle_text()
-    app._refresh_render_3d_toggle_text()
     app._refresh_keybindings_toggle_text()
     app._refresh_autolevel_overlay_button()
     app._refresh_kasa_quick_toggle_text()
@@ -311,7 +274,6 @@ def build_status_bar(app, before):
 def update_quick_button_visibility(app):
     buttons = [
         ("btn_toggle_tips", app.show_quick_tips_button),
-        ("btn_toggle_3d", app.show_quick_3d_button),
         ("btn_toggle_keybinds", app.show_quick_keys_button),
         ("btn_toggle_autolevel_overlay", app.show_quick_alo_button),
         ("btn_toggle_kasa_vacuum", app.show_quick_vac_button),
@@ -359,7 +321,6 @@ def update_quick_button_visibility(app):
 
 def on_quick_button_visibility_change(app):
     app.settings["show_quick_tips_button"] = bool(app.show_quick_tips_button.get())
-    app.settings["show_quick_3d_button"] = bool(app.show_quick_3d_button.get())
     app.settings["show_quick_keys_button"] = bool(app.show_quick_keys_button.get())
     app.settings["show_quick_alo_button"] = bool(app.show_quick_alo_button.get())
     app.settings["show_quick_vac_button"] = bool(app.show_quick_vac_button.get())

@@ -26,7 +26,6 @@ This module centralizes all magic numbers, default values, and configuration
 constants used throughout the application.
 """
 
-import math
 import os
 import platform
 import re
@@ -103,8 +102,8 @@ RT_FO_MINUS_10 = b"\x92"
 
 # Spindle override commands
 RT_SO_RESET = b"\x99"
-RT_SO_PLUS_10 = b"\x9A"
-RT_SO_MINUS_10 = b"\x9B"
+RT_SO_PLUS_10 = b"\x9a"
+RT_SO_MINUS_10 = b"\x9b"
 
 # ============================================================================
 # UI CONSTANTS
@@ -174,7 +173,7 @@ GCODE_VIEWER_CHUNK_SIZE_LARGE = 1000
 """Chunk size for large files (>10000 lines)."""
 
 GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE = 300
-"""Chunk size for large load previews in the UI loader."""
+"""Chunk size for large load samples in the UI loader."""
 
 GCODE_VIEWER_CHUNK_LOAD_THRESHOLD = 2000
 """Line count threshold for using the larger loader chunk size."""
@@ -206,7 +205,7 @@ GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER = GCODE_VIEWER_LINE_CAP_LOW_POWER
 GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT = 2000
 """Number of lines rendered per virtualized G-code viewer window."""
 
-GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER = 800
+GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER = 320
 """Virtualized viewer window size for low-power profiles."""
 
 GCODE_VIEWER_SMALL_FILE_THRESHOLD = 1000
@@ -230,6 +229,12 @@ GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES = 256 * 1024 * 1024
 GCODE_STREAMING_LINE_THRESHOLD = 250_000
 """Cleaned line count above which streaming mode is used."""
 
+GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT = 20_000
+"""Maximum cleaned lines retained in RAM for non-sample UI workflows."""
+
+GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER = 10_000
+"""Lower in-RAM full-line cap for low-power profiles (Pi-class hardware)."""
+
 GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD = 50_000
 """Maximum line count for precomputing in-memory streaming send caches."""
 
@@ -251,11 +256,74 @@ GCODE_STATS_DEBOUNCE_MS = 75
 GCODE_STATS_CACHE_MAX_ENTRIES = 16
 """Maximum cached G-code stats entries kept in memory."""
 
-GCODE_STREAMING_PREVIEW_LINES = 2000
-"""Preview lines shown when streaming from disk."""
+GCODE_STATS_FULL_SCAN_DELAY_THRESHOLD_LINES = 50_000
+"""Line-count threshold for deferring heavy file-backed full-scan estimate work."""
 
-GCODE_TOP_VIEW_STREAMING_SEGMENT_LIMIT = 50000
-"""Maximum segments to keep for top view when streaming large files."""
+GCODE_STATS_FULL_SCAN_DELAY_LARGE_MS = 1200
+"""Launch delay (ms) for heavy file-backed full-scan estimate work."""
+
+GCODE_STATS_FULL_SCAN_THROTTLE_LINES = 1024
+"""Yield cadence (lines) for file-backed full-scan estimate parsing."""
+
+GCODE_STATS_FULL_SCAN_THROTTLE_SLEEP_S = 0.001
+"""Sleep duration (s) for periodic full-scan estimate yields."""
+
+GCODE_STATS_FULL_SCAN_BACKGROUND_TAB_SLEEP_S = 0.004
+"""Extra sleep duration (s) while parsing estimates away from the G-code tab."""
+
+GCODE_STATS_SAMPLE_QUICK_MAX_LINES = 1000
+"""Maximum sampled lines used for the immediate post-load baseline estimate pass."""
+
+GCODE_ESTIMATE_SAMPLE_MIN_EXECUTABLE_LINES = 2000
+"""Minimum sampled executable lines before trusting high-ratio sampled scaling."""
+
+GCODE_ESTIMATE_SAMPLE_MIN_MOTION_LINES = 500
+"""Minimum sampled motion lines before trusting sampled-motion scaling."""
+
+GCODE_ESTIMATE_SAMPLE_MAX_SCALE = 64.0
+"""Maximum allowed sampled estimate scale multiplier."""
+
+GCODE_STATS_COOPERATIVE_YIELD_LINES = 512
+"""Yield cadence (lines) for cooperative stats parsing to reduce UI-thread GIL contention."""
+
+GCODE_STATS_COOPERATIVE_YIELD_SLEEP_S = 0.0
+"""Yield sleep duration (s) for cooperative stats parsing (`0.0` yields the GIL)."""
+
+GCODE_STREAMING_SAMPLE_LINES = 2000
+"""Sample lines shown when streaming from disk."""
+
+GCODE_PREP_SAMPLE_HEAD_LINES = 1200
+"""Number of leading cleaned lines retained for sampled prepare-time analysis."""
+
+GCODE_PREP_SAMPLE_TAIL_LINES = 600
+"""Number of trailing cleaned lines retained for sampled prepare-time analysis."""
+
+GCODE_PREP_SAMPLE_INTERVAL_LINES = 250
+"""Periodic sampling stride (cleaned lines) for prepare-time analysis."""
+
+GCODE_PREP_SAMPLE_MAX_LINES = 5000
+"""Hard cap on sampled lines retained for prepare-time top-view/stats analysis."""
+
+GCODE_PREP_FAST_SCAN_MAX_LINES_DEFAULT = 50_000
+"""Default max raw lines scanned in fast prepare before background tasks."""
+
+GCODE_PREP_FAST_SCAN_MAX_LINES_LOW_POWER = 20_000
+"""Low-power max raw lines scanned in fast prepare before background tasks."""
+
+GCODE_PREP_STATS_SAMPLE_THRESHOLD_LINES = 100_000
+"""Line-count threshold above which prepare-time stats use sampled lines."""
+
+GCODE_OFFSET_INDEX_MAX_FILE_BYTES = 32 * 1024 * 1024
+"""Maximum file size for building a full line-offset index during load."""
+
+GCODE_OFFSET_INDEX_MAX_LINES = 250_000
+"""Maximum cleaned-line estimate for immediate full offset indexing policy."""
+
+GCODE_OFFSET_INDEX_SPARSE_MIN_LINES = 40_000
+"""Minimum cleaned-line estimate before sparse index mode is selected."""
+
+GCODE_OFFSET_INDEX_SPARSE_STRIDE_LINES = 256
+"""Stride (cleaned lines) for sparse offset anchors."""
 
 CLEAR_ICON = "X"
 """Icon/text for clear buttons."""
@@ -416,154 +484,6 @@ JOG_PANEL_ALL_STOP_OFFSET_IN = 0.7
 
 JOG_PANEL_ALL_STOP_OFFSET_FALLBACK_PX = 96
 """Fallback pixel offset when inch conversion fails."""
-
-# ============================================================================
-# 3D VISUALIZATION CONSTANTS
-# ============================================================================
-
-VIEW_3D_DEFAULT_AZIMUTH = math.radians(45)
-"""Default azimuth angle for 3D view."""
-
-VIEW_3D_DEFAULT_ELEVATION = math.radians(30)
-"""Default elevation angle for 3D view."""
-
-VIEW_3D_DEFAULT_ZOOM = 1.0
-"""Default zoom level for 3D view."""
-
-VIEW_3D_ZOOM_MIN = 0.2
-"""Minimum zoom level."""
-
-VIEW_3D_ZOOM_MAX = 5.0
-"""Maximum zoom level."""
-
-VIEW_3D_ZOOM_STEP = 1.1
-"""Zoom multiplier per scroll step."""
-
-VIEW_3D_ELEVATION_LIMIT = math.pi / 2 - 0.1
-"""Maximum elevation to prevent gimbal lock."""
-
-VIEW_3D_DRAG_SENSITIVITY = 0.01
-"""Mouse drag sensitivity for rotation."""
-
-VIEW_3D_RENDER_INTERVAL = 0.1
-"""Minimum time between renders (seconds)."""
-
-VIEW_3D_STREAMING_RENDER_INTERVAL_DEFAULT = 0.25
-"""Default render interval while streaming (seconds)."""
-
-VIEW_3D_STREAMING_RENDER_INTERVAL_MIN = 0.05
-"""Minimum render interval for streaming (seconds)."""
-
-VIEW_3D_STREAMING_RENDER_INTERVAL_MAX = 2.0
-"""Maximum render interval for streaming (seconds)."""
-
-VIEW_3D_FAST_MODE_DURATION = 0.3
-"""Duration to stay in fast mode after interaction (seconds)."""
-
-VIEW_3D_MAX_SEGMENTS_FULL = 30000
-"""Maximum segments to draw in full quality mode."""
-
-VIEW_3D_MAX_SEGMENTS_INTERACTIVE = 3500
-"""Maximum segments to draw during interaction."""
-
-VIEW_3D_PREVIEW_TARGET = 800
-"""Target segment count for preview mode."""
-
-VIEW_3D_LIGHTWEIGHT_PREVIEW_TARGET = 300
-"""Target segment count for lightweight preview mode."""
-
-VIEW_3D_FULL_PARSE_LIMIT = 20000
-"""Line count threshold to use full parsing."""
-
-# Arc step thresholds
-VIEW_3D_ARC_STEP_FAST_THRESHOLD = 5000
-"""Line count threshold for switching to the fast arc step."""
-
-# Arc detail levels
-VIEW_3D_ARC_STEP_DEFAULT = math.pi / 18
-VIEW_3D_ARC_STEP_FAST = math.pi / 12
-VIEW_3D_ARC_STEP_LARGE = math.pi / 8
-
-VIEW_3D_DRAW_PERCENT_DEFAULT = 50
-"""Default draw percent for toolpath rendering."""
-
-VIEW_3D_POSITION_MARKER_RADIUS = 4
-"""Radius of position marker circle."""
-
-VIEW_3D_PERF_LOG_THRESHOLD = 0.05
-"""Minimum duration (seconds) before logging toolpath timing."""
-
-TOOLPATH_CANVAS_MARGIN = 20
-"""Canvas margin (pixels) for toolpath views."""
-
-TOOLPATH_OVERLAY_TEXT_MARGIN = 12
-"""Overlay text margin (pixels) for toolpath views."""
-
-TOOLPATH_ORIGIN_CROSS_SIZE = 6
-"""Crosshair size (pixels) for origin marker."""
-
-TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT = 50000
-"""Maximum segments to keep when parsing job preview data for Top View."""
-
-TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT = 50000
-"""Maximum Top View segments to draw per render pass while not streaming."""
-
-TOOLPATH_TOP_VIEW_RENDER_SEGMENT_LIMIT_STREAMING = 35000
-"""Maximum Top View segments to draw per render pass while streaming."""
-
-TOOLPATH_TOP_VIEW_PROGRESSIVE_RENDER_THRESHOLD = 6000
-"""Drawn segment count above which Top View renders progressively in chunks."""
-
-TOOLPATH_TOP_VIEW_PROGRESSIVE_CHUNK_SIZE = 1200
-"""Segments drawn per progressive Top View render chunk."""
-
-TOOLPATH_GRID_MAX_POINTS = 800
-"""Maximum grid points to draw for auto-level overlay."""
-
-TOOLPATH_GRID_POINT_RADIUS = 2
-"""Radius (pixels) for auto-level grid points."""
-
-TOOLPATH_PERFORMANCE_DEFAULT = 50.0
-"""Default performance slider value (percent)."""
-
-TOOLPATH_PERF_LIGHTWEIGHT_THRESHOLD = 40.0
-"""Performance threshold below which lightweight mode is enabled."""
-
-TOOLPATH_DRAW_PERCENT_MIN = 5
-"""Minimum draw percent for toolpath rendering."""
-
-TOOLPATH_FULL_LIMIT_DEFAULT = VIEW_3D_MAX_SEGMENTS_FULL
-"""Default full render segment limit."""
-
-TOOLPATH_FULL_LIMIT_MIN = VIEW_3D_MAX_SEGMENTS_INTERACTIVE
-"""Minimum full render segment limit."""
-
-TOOLPATH_INTERACTIVE_LIMIT_DEFAULT = VIEW_3D_MAX_SEGMENTS_INTERACTIVE
-"""Default interactive render segment limit."""
-
-TOOLPATH_INTERACTIVE_LIMIT_MIN = VIEW_3D_PREVIEW_TARGET
-"""Minimum interactive render segment limit."""
-
-TOOLPATH_ARC_DETAIL_MIN_DEG = 1.0
-"""Minimum arc detail in degrees."""
-
-TOOLPATH_ARC_DETAIL_MAX_DEG = 45.0
-"""Maximum arc detail in degrees."""
-
-TOOLPATH_ARC_DETAIL_DEFAULT_DEG = math.degrees(VIEW_3D_ARC_STEP_DEFAULT)
-"""Default arc detail in degrees."""
-
-TOOLPATH_STREAMING_RENDER_INTERVAL_DEFAULT = VIEW_3D_STREAMING_RENDER_INTERVAL_DEFAULT
-"""Default streaming render interval (seconds)."""
-
-TOOLPATH_STREAMING_RENDER_INTERVAL_MIN = VIEW_3D_STREAMING_RENDER_INTERVAL_MIN
-"""Minimum streaming render interval (seconds)."""
-
-TOOLPATH_STREAMING_RENDER_INTERVAL_MAX = VIEW_3D_STREAMING_RENDER_INTERVAL_MAX
-"""Maximum streaming render interval (seconds)."""
-
-TOOLPATH_ARC_DETAIL_REPARSE_DELAY_MS = 300
-"""Delay before re-parsing toolpath after arc detail changes (ms)."""
 
 JOYSTICK_HOLD_MIN_DISTANCE = 0.01
 """Minimum jog distance for joystick hold moves."""
@@ -766,40 +686,40 @@ GRBL_SETTING_KEYS = sorted(GRBL_SETTING_DESC.keys())
 # ============================================================================
 
 GRBL_SETTING_LIMITS: Dict[int, Tuple[float, float]] = {
-    0: (1, 1000),      # step pulse us
-    1: (0, 255),       # step idle delay
-    2: (0, 255),       # step port invert
-    3: (0, 255),       # dir port invert
-    4: (0, 1),         # step enable invert
-    5: (0, 1),         # limit pins invert
-    6: (0, 1),         # probe pin invert
-    10: (0, 511),      # status report mask
-    11: (0, 5),        # junction deviation
-    12: (0, 5),        # arc tolerance
-    13: (0, 1),        # report inches
-    20: (0, 1),        # soft limits
-    21: (0, 1),        # hard limits
-    22: (0, 1),        # homing enable
-    23: (0, 255),      # homing dir invert
-    24: (0, 5000),     # homing feed
-    25: (0, 5000),     # homing seek
-    26: (0, 255),      # homing debounce
-    27: (0, 50),       # homing pull-off
-    30: (0, 100000),   # max spindle speed
-    31: (0, 100000),   # min spindle speed
-    32: (0, 1),        # laser mode
-    100: (0, 2000),    # X steps/mm
-    101: (0, 2000),    # Y steps/mm
-    102: (0, 2000),    # Z steps/mm
+    0: (1, 1000),  # step pulse us
+    1: (0, 255),  # step idle delay
+    2: (0, 255),  # step port invert
+    3: (0, 255),  # dir port invert
+    4: (0, 1),  # step enable invert
+    5: (0, 1),  # limit pins invert
+    6: (0, 1),  # probe pin invert
+    10: (0, 511),  # status report mask
+    11: (0, 5),  # junction deviation
+    12: (0, 5),  # arc tolerance
+    13: (0, 1),  # report inches
+    20: (0, 1),  # soft limits
+    21: (0, 1),  # hard limits
+    22: (0, 1),  # homing enable
+    23: (0, 255),  # homing dir invert
+    24: (0, 5000),  # homing feed
+    25: (0, 5000),  # homing seek
+    26: (0, 255),  # homing debounce
+    27: (0, 50),  # homing pull-off
+    30: (0, 100000),  # max spindle speed
+    31: (0, 100000),  # min spindle speed
+    32: (0, 1),  # laser mode
+    100: (0, 2000),  # X steps/mm
+    101: (0, 2000),  # Y steps/mm
+    102: (0, 2000),  # Z steps/mm
     110: (0, 200000),  # X max rate
     111: (0, 200000),  # Y max rate
     112: (0, 200000),  # Z max rate
-    120: (0, 20000),   # X accel
-    121: (0, 20000),   # Y accel
-    122: (0, 20000),   # Z accel
-    130: (0, 2000),    # X max travel
-    131: (0, 2000),    # Y max travel
-    132: (0, 2000),    # Z max travel
+    120: (0, 20000),  # X accel
+    121: (0, 20000),  # Y accel
+    122: (0, 20000),  # Z accel
+    130: (0, 2000),  # X max travel
+    131: (0, 2000),  # Y max travel
+    132: (0, 2000),  # Z max travel
 }
 
 GRBL_NON_NUMERIC_SETTINGS: Set[int] = set()
@@ -825,13 +745,13 @@ CURRENT_LINE_CHOICES = [
 # ============================================================================
 
 COLOR_RAPID = "#8a8a8a"
-"""Color for rapid moves in 3D view."""
+"""Color for rapid moves."""
 
 COLOR_FEED = "#2c6dd2"
-"""Color for feed moves in 3D view."""
+"""Color for feed moves."""
 
 COLOR_ARC = "#2aa876"
-"""Color for arc moves in 3D view."""
+"""Color for arc moves."""
 
 COLOR_POSITION_MARKER = "#d64545"
 """Color for current position marker."""

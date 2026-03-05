@@ -51,8 +51,6 @@ def update_tab_visibility(app, nb=None):
         app._app_settings_tab_active = (label == "App Settings")
     except Exception:
         pass
-    app.toolpath_panel.set_visible(label == "3D View")
-    app.toolpath_panel.set_top_view_visible(label == "Top View")
     if label == "G-code":
         gview = getattr(app, "gview", None)
         notify_visible = getattr(gview, "notify_tab_visible", None)
@@ -103,11 +101,16 @@ def build_gcode_tab(app, notebook):
     # Gcode tab
     gtab = ttk.Frame(nb, padding=6)
     nb.add(gtab, text="G-code")
-    set_tab_tooltip(nb, gtab, "Preview the loaded G-code and job stats.")
+    set_tab_tooltip(nb, gtab, "Sample the loaded G-code and job stats.")
     app.gcode_tab = gtab
     stats_row = ttk.Frame(gtab)
     stats_row.pack(fill="x", pady=(0, 6))
-    app.gcode_stats_label = ttk.Label(stats_row, textvariable=app.gcode_stats_var, anchor="w")
+    app.gcode_stats_label = ttk.Label(
+        stats_row,
+        textvariable=app.gcode_stats_var,
+        anchor="w",
+        justify="left",
+    )
     app.gcode_stats_label.pack(side="left", fill="x", expand=True)
     app.gview = GcodeViewer(gtab)
     def _gcode_tab_visible() -> bool:
@@ -152,7 +155,5 @@ def build_main_tabs(app, parent):
     # Checklists tab
     build_checklists_tab(app, nb)
 
-    # 3D tab
-    app.toolpath_panel.build_tab(nb)
     app._update_tab_visibility(nb)
 

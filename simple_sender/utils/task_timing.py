@@ -37,6 +37,8 @@ def record_task_timing(
         if not isinstance(metrics, dict):
             metrics = {}
             setattr(app, "_task_timing_metrics", metrics)
+        seq = int(getattr(app, "_task_timing_seq", 0) or 0) + 1
+        setattr(app, "_task_timing_seq", seq)
         key = str(task_name or "").strip()
         if not key:
             return
@@ -58,6 +60,7 @@ def record_task_timing(
         entry["total_ms"] = total_ms
         entry["max_ms"] = max_ms
         entry["last_ms"] = duration_ms
+        entry["last_seq"] = seq
         metrics[key] = entry
     except Exception:
         return
@@ -80,6 +83,7 @@ def snapshot_task_timings(app: Any) -> dict[str, dict[str, float | int]]:
         total_ms = max(0.0, float(entry.get("total_ms", 0.0) or 0.0))
         max_ms = max(0.0, float(entry.get("max_ms", 0.0) or 0.0))
         last_ms = max(0.0, float(entry.get("last_ms", 0.0) or 0.0))
+        last_seq = max(0, int(entry.get("last_seq", 0) or 0))
         avg_ms = (total_ms / float(count)) if count > 0 else 0.0
         snapshot[key] = {
             "count": count,
@@ -88,5 +92,6 @@ def snapshot_task_timings(app: Any) -> dict[str, dict[str, float | int]]:
             "avg_ms": avg_ms,
             "max_ms": max_ms,
             "last_ms": last_ms,
+            "last_seq": last_seq,
         }
     return snapshot

@@ -195,10 +195,10 @@ def _clear_log_files(paths: list[Path]) -> tuple[int, int]:
             failures.append(f"{path.name}: {exc}")
 
     if failures:
-        preview = "; ".join(failures[:3])
+        sample = "; ".join(failures[:3])
         if len(failures) > 3:
-            preview = f"{preview}; ..."
-        raise RuntimeError(f"Failed clearing one or more log files ({preview})")
+            sample = f"{sample}; ..."
+        raise RuntimeError(f"Failed clearing one or more log files ({sample})")
 
     return truncated, deleted
 

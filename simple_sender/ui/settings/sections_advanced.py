@@ -27,8 +27,6 @@ from tkinter import ttk
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import (
     AUTOLEVEL_LARGE_MIN_AREA_DEFAULT,
-    TOOLPATH_STREAMING_RENDER_INTERVAL_MAX,
-    TOOLPATH_STREAMING_RENDER_INTERVAL_MIN,
 )
 from simple_sender.ui.autolevel_dialog.prefs import pref_dict, pref_float, pref_interp
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
@@ -197,17 +195,6 @@ def _build_status_bar_button_visibility_row(app, interface_frame, row: int) -> i
     )
     app.quick_tips_check.pack(side="left")
     apply_tooltip(app.quick_tips_check, "Show or hide the Tips quick button in the status bar.")
-    app.quick_3d_check = ttk.Checkbutton(
-        quick_buttons_row,
-        text="3DR",
-        variable=app.show_quick_3d_button,
-        command=app._on_quick_button_visibility_change,
-    )
-    app.quick_3d_check.pack(side="left", padx=(12, 0))
-    apply_tooltip(
-        app.quick_3d_check,
-        "Show or hide the 3D Render quick button in the status bar.",
-    )
     app.quick_keys_check = ttk.Checkbutton(
         quick_buttons_row,
         text="Keys",
@@ -279,17 +266,6 @@ def _build_status_bar_quick_toggle_row(app, interface_frame, row: int) -> int:
         app.btn_toggle_tips_settings,
         "Toggle tooltips on/off (same as the Tips quick button).",
     )
-    app.btn_toggle_3d_settings = ttk.Button(
-        toggle_btn_row,
-        text="3DR",
-        command=app._toggle_render_3d,
-    )
-    set_kb_id(app.btn_toggle_3d_settings, "toggle_render_3d_settings")
-    app.btn_toggle_3d_settings.pack(side="left", padx=(8, 0))
-    apply_tooltip(
-        app.btn_toggle_3d_settings,
-        "Toggle the 3D render preview (same as the 3D Render quick button).",
-    )
     app.btn_toggle_keybinds_settings = ttk.Button(
         toggle_btn_row,
         text="Keys",
@@ -310,7 +286,7 @@ def _build_status_bar_quick_toggle_row(app, interface_frame, row: int) -> int:
     app.btn_toggle_autolevel_overlay_settings.pack(side="left", padx=(8, 0))
     apply_tooltip(
         app.btn_toggle_autolevel_overlay_settings,
-        "Toggle the Auto-Level overlay in the toolpath views (same as the Auto-Level Overlay quick button).",
+        "Toggle Auto-Level overlay state (same as the Auto-Level Overlay quick button).",
     )
     app.btn_toggle_kasa_vacuum_settings = ttk.Button(
         toggle_btn_row,
@@ -592,60 +568,3 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     return row + 1
 
 
-def build_toolpath_settings_section(app, parent: ttk.Frame, row: int) -> int:
-    toolpath_settings = ttk.LabelFrame(parent, text="3D View", padding=8)
-    toolpath_settings.grid(row=row, column=0, sticky="ew", pady=(8, 0))
-    toolpath_settings.grid_columnconfigure(1, weight=1)
-    if not hasattr(app, "force_3d_session_override"):
-        app.force_3d_session_override = tk.BooleanVar(master=parent, value=False)
-
-    apply_force_override = getattr(app, "_apply_force_3d_session_override", None)
-    if not callable(apply_force_override):
-        apply_force_override = lambda *_args, **_kwargs: None
-
-    app.force_3d_session_override_check = ttk.Checkbutton(
-        toolpath_settings,
-        text="Session override: force 3D tab + render (not saved)",
-        variable=app.force_3d_session_override,
-        command=apply_force_override,
-    )
-    app.force_3d_session_override_check.grid(
-        row=0,
-        column=0,
-        columnspan=2,
-        sticky="w",
-        pady=(0, 6),
-    )
-    apply_tooltip(
-        app.force_3d_session_override_check,
-        "Temporarily force-enable the 3D tab and render for this app session only. "
-        "This override resets after restart and is not saved to settings.",
-    )
-
-    ttk.Label(toolpath_settings, text="Streaming refresh (sec)").grid(
-        row=1, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    toolpath_interval_row = ttk.Frame(toolpath_settings)
-    toolpath_interval_row.grid(row=1, column=1, sticky="w", pady=4)
-    app.toolpath_streaming_interval_entry = ttk.Entry(
-        toolpath_interval_row,
-        textvariable=app.toolpath_streaming_render_interval,
-        width=10,
-    )
-    app.toolpath_streaming_interval_entry.pack(side="left")
-    attach_numeric_keypad(app.toolpath_streaming_interval_entry, allow_decimal=True)
-    app.toolpath_streaming_interval_entry.bind(
-        "<Return>", app._apply_toolpath_streaming_render_interval
-    )
-    app.toolpath_streaming_interval_entry.bind(
-        "<FocusOut>", app._apply_toolpath_streaming_render_interval
-    )
-    ttk.Label(
-        toolpath_interval_row,
-        text=f"({TOOLPATH_STREAMING_RENDER_INTERVAL_MIN:g} - {TOOLPATH_STREAMING_RENDER_INTERVAL_MAX:g})",
-    ).pack(side="left", padx=(6, 0))
-    apply_tooltip(
-        app.toolpath_streaming_interval_entry,
-        "Minimum time between 3D redraws while streaming.",
-    )
-    return row + 1

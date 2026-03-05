@@ -56,11 +56,21 @@ def _widget_state(widget) -> str | None:
         return None
 
 
-def _set_widget_state_if_needed(widget, state: str) -> None:
-    current = _widget_state(widget)
-    if current == state:
+def _set_widget_state_if_needed(app, widget, state: str) -> None:
+    cache = getattr(app, "_manual_control_state_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(app, "_manual_control_state_cache", cache)
+    cached_state = cache.get(widget)
+    if cached_state == state:
         return
+    if cached_state is None:
+        current = _widget_state(widget)
+        if current == state:
+            cache[widget] = state
+            return
     widget.config(state=state)
+    cache[widget] = state
 
 
 def set_manual_controls_enabled(app, enabled: bool):
@@ -71,15 +81,15 @@ def set_manual_controls_enabled(app, enabled: bool):
                 if w is getattr(app, "btn_all_stop", None):
                     continue
                 if w is getattr(app, "btn_home_mpos", None):
-                    _set_widget_state_if_needed(w, "normal")
+                    _set_widget_state_if_needed(app, w, "normal")
                     continue
                 if w is getattr(app, "btn_unlock_mpos", None):
-                    _set_widget_state_if_needed(w, "normal")
+                    _set_widget_state_if_needed(app, w, "normal")
                     continue
                 if w is getattr(app, "btn_unlock_top", None):
-                    _set_widget_state_if_needed(w, "normal")
+                    _set_widget_state_if_needed(app, w, "normal")
                     continue
-                _set_widget_state_if_needed(w, "disabled")
+                _set_widget_state_if_needed(app, w, "disabled")
             except tk.TclError as exc:
                 _log_suppressed("Failed disabling manual control while alarm lock active", exc)
         app._manual_controls_last_enabled = False
@@ -87,7 +97,7 @@ def set_manual_controls_enabled(app, enabled: bool):
     connected = bool(getattr(app, "connected", False))
     for w in app._manual_controls:
         try:
-            _set_widget_state_if_needed(w, _manual_control_state(app, w, enabled, connected))
+            _set_widget_state_if_needed(app, w, _manual_control_state(app, w, enabled, connected))
         except tk.TclError as exc:
             _log_suppressed("Failed setting manual control state", exc)
     now_enabled = bool(enabled and connected)

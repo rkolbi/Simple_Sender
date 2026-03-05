@@ -191,10 +191,15 @@ class ToolTip:
         try:
             self._timeout_after_id = self.widget.after(
                 int(duration * 1000),
-                self._hide,
+                self._hide_for_timeout,
             )
         except tk.TclError:
             self._timeout_after_id = None
+
+    def _hide_for_timeout(self) -> None:
+        # Do not immediately reopen while pointer remains parked on the widget.
+        self._suppress_until_leave = True
+        self._hide()
 
     def _hide(self, _event=None):
         if self._after_id is not None:
@@ -230,6 +235,7 @@ class _NotebookTabTooltips:
         self._pending_tab: str | None = None
         self._pending_text: str = ""
         self._pending_xy: tuple[int | None, int | None] = (None, None)
+        self._suppress_until_leave = False
         self._poll_after_id: Any | None = None
         self._poll_interval_active_ms = max(50, int(NOTEBOOK_TOOLTIP_POLL_INTERVAL_ACTIVE_MS))
         self._poll_interval_idle_ms = max(
@@ -313,10 +319,15 @@ class _NotebookTabTooltips:
         try:
             self._timeout_after_id = self.notebook.after(
                 int(duration * 1000),
-                self._hide_tip,
+                self._hide_tip_for_timeout,
             )
         except tk.TclError:
             self._timeout_after_id = None
+
+    def _hide_tip_for_timeout(self) -> None:
+        # Keep the tip suppressed until pointer exits the notebook region.
+        self._suppress_until_leave = True
+        self._hide_tip()
 
     def _show_tip(self, text: str, x_root: int | None, y_root: int | None) -> None:
         if not self._tooltips_enabled():
@@ -441,6 +452,7 @@ class _NotebookTabTooltips:
             self._tip = None
 
     def _on_leave(self, _event=None) -> None:
+        self._suppress_until_leave = False
         self._hide_tip()
         self._cancel_poll()
 
@@ -455,6 +467,12 @@ class _NotebookTabTooltips:
             if self._active_tab is not None:
                 self._hide_tip()
             return
+        if self._suppress_until_leave:
+            pointer_inside = self._pointer_over_notebook(int(x_root), int(y_root))
+            if not pointer_inside:
+                self._suppress_until_leave = False
+            else:
+                return
         tab_id = self._tab_id_at_root(int(x_root), int(y_root))
         if not tab_id:
             if self._active_tab is not None:

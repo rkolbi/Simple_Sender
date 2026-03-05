@@ -26,6 +26,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 
+from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import (
     UI_QUEUE_DRAIN_EVENT_LIMIT,
     UI_QUEUE_DRAIN_STALL_BUDGET_MS,
@@ -44,6 +45,27 @@ UI_QUEUE_DRAIN_INTERVAL_MS = 50
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _LOW_IMPACT_UI_EVENT_KINDS = frozenset({"buffer_fill", "log_rx", "log_tx", "status", "throughput"})
+_UI_DRAIN_OUTLIER_CAPTURE_MS = 100.0
+_UI_DRAIN_OUTLIER_LOG_MS = 200.0
+_UI_DRAIN_OUTLIER_MAX_HISTORY = 24
+_UI_DRAIN_SPECIAL_EVENT_KINDS = frozenset(
+    {
+        "ui_call",
+        "ui_post",
+        "settings_dump_done",
+        "gcode_loaded",
+        "gcode_loaded_stream",
+        "gcode_load_progress",
+        "gcode_load_error",
+    }
+)
+_UI_DRAIN_SPECIAL_TASK_PREFIXES = (
+    "backup_bundle.",
+    "diagnostics.",
+    "gcode.load.",
+    "log_viewer.",
+    "ui.maintenance.",
+)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -91,6 +113,162 @@ def _connected_quiet_idle(app: AppProtocol) -> bool:
         return True
     except Exception:
         return False
+
+
+def _task_timing_seq(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
+def _collect_outlier_special_ops(
+    app: AppProtocol,
+    *,
+    task_seq_start: int,
+    task_seq_end: int,
+    per_kind_counts: dict[str, int],
+) -> list[str]:
+    ops: list[str] = []
+    try:
+        metrics = getattr(app, "_task_timing_metrics", None)
+        if isinstance(metrics, dict) and task_seq_end > task_seq_start:
+            task_entries: list[tuple[int, str, float]] = []
+            for raw_name, raw_entry in metrics.items():
+                if not isinstance(raw_entry, dict):
+                    continue
+                name = str(raw_name or "").strip()
+                if not name:
+                    continue
+                seq = _task_timing_seq(raw_entry.get("last_seq", 0))
+                if seq <= task_seq_start or seq > task_seq_end:
+                    continue
+                last_ms = max(0.0, float(raw_entry.get("last_ms", 0.0) or 0.0))
+                if name.startswith(_UI_DRAIN_SPECIAL_TASK_PREFIXES):
+                    task_entries.append((seq, name, last_ms))
+            task_entries.sort(key=lambda item: item[0], reverse=True)
+            for _seq, name, last_ms in task_entries[:6]:
+                ops.append(f"{name}:{last_ms:.2f}ms")
+    except Exception as exc:
+        _log_suppressed("Failed collecting UI drain outlier task details", exc)
+    for kind in sorted(per_kind_counts.keys()):
+        if kind in _UI_DRAIN_SPECIAL_EVENT_KINDS:
+            ops.append(f"event:{kind}")
+    try:
+        if bool(getattr(app, "_file_dialog_active", False)):
+            ops.append("flag:file_dialog_active")
+        if bool(getattr(app, "_diagnostics_bundle_export_inflight", False)):
+            ops.append("flag:diagnostics_bundle_export")
+        if bool(getattr(app, "_backup_bundle_export_inflight", False)):
+            ops.append("flag:backup_bundle_export")
+        if bool(getattr(app, "_backup_bundle_import_inflight", False)):
+            ops.append("flag:backup_bundle_import")
+        logs_viewer = getattr(app, "logs_viewer", None)
+        if logs_viewer is not None:
+            if bool(getattr(logs_viewer, "_refresh_inflight", False)):
+                ops.append("flag:log_viewer_refresh")
+            if bool(getattr(logs_viewer, "_export_inflight", False)):
+                ops.append("flag:log_viewer_export")
+            if bool(getattr(logs_viewer, "_clear_inflight", False)):
+                ops.append("flag:log_viewer_clear")
+    except Exception as exc:
+        _log_suppressed("Failed collecting UI drain outlier flags", exc)
+    if len(ops) <= 10:
+        return ops
+    return ops[:10]
+
+
+def _record_ui_drain_outlier(app: AppProtocol, payload: dict[str, object]) -> None:
+    history_limit = _UI_DRAIN_OUTLIER_MAX_HISTORY
+    try:
+        configured_limit = int(
+            getattr(app, "_ui_queue_drain_outlier_history_limit", _UI_DRAIN_OUTLIER_MAX_HISTORY)
+        )
+        if configured_limit > 0:
+            history_limit = configured_limit
+    except Exception:
+        history_limit = _UI_DRAIN_OUTLIER_MAX_HISTORY
+    history = getattr(app, "_ui_queue_drain_outliers", None)
+    if isinstance(history, deque):
+        if history.maxlen != history_limit:
+            history = deque(history, maxlen=history_limit)
+            setattr(app, "_ui_queue_drain_outliers", history)
+    elif isinstance(history, list):
+        history = deque(history[-history_limit:], maxlen=history_limit)
+        setattr(app, "_ui_queue_drain_outliers", history)
+    else:
+        history = deque(maxlen=history_limit)
+        setattr(app, "_ui_queue_drain_outliers", history)
+    history.append(payload)
+    try:
+        app._ui_queue_drain_outlier_total = int(
+            getattr(app, "_ui_queue_drain_outlier_total", 0) or 0
+        ) + 1
+    except Exception:
+        pass
+
+
+def _log_ui_drain_outlier(payload: dict[str, object], *, severe: bool) -> None:
+    counts = payload.get("per_kind_counts", {})
+    counts_sample = ""
+    if isinstance(counts, dict):
+        count_parts = [f"{str(k)}={int(v)}" for k, v in list(counts.items())[:8]]
+        counts_sample = ", ".join(count_parts) if count_parts else "none"
+    top_kinds = payload.get("top_kind_timing", [])
+    top_sample = ""
+    if isinstance(top_kinds, list):
+        timing_parts: list[str] = []
+        for item in top_kinds[:5]:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind", "") or "unknown")
+            try:
+                ms = float(item.get("ms", 0.0) or 0.0)
+            except Exception:
+                ms = 0.0
+            timing_parts.append(f"{kind}={ms:.2f}ms")
+        top_sample = ", ".join(timing_parts) if timing_parts else "none"
+    special_ops = payload.get("special_ops", [])
+    special_sample = ""
+    if isinstance(special_ops, list):
+        special_sample = ", ".join(str(item) for item in special_ops if item) or "none"
+    log_fn = logger.warning if severe else logger.info
+    log_fn(
+        "[ui] Drain outlier: tick=%.2fms tab=%s events=%s pending=%s slowest=%s(%.2fms)",
+        float(payload.get("tick_ms", 0.0) or 0.0),
+        str(payload.get("active_tab", "") or "unknown"),
+        int(payload.get("events_drained", 0) or 0),
+        int(payload.get("pending_after_tick", 0) or 0),
+        str(payload.get("slowest_event_kind", "") or "unknown"),
+        float(payload.get("slowest_event_ms", 0.0) or 0.0),
+    )
+    log_fn(
+        "[ui] Drain outlier details: counts=%s | top_ms=%s | special=%s",
+        counts_sample,
+        top_sample,
+        special_sample,
+    )
+
+
+def _run_ui_maintenance_task(
+    app: AppProtocol,
+    *,
+    task_name: str,
+    callback,
+) -> None:
+    started = time.perf_counter()
+    ok = True
+    try:
+        callback()
+    except Exception as exc:
+        ok = False
+        if task_name == "tool_reference_sync":
+            app._log_exception("UI tool-reference sync error", exc)
+        else:
+            _log_suppressed(f"Failed running UI maintenance task {task_name}", exc)
+    finally:
+        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        record_task_timing(app, f"ui.maintenance.{task_name}", elapsed_ms, success=ok)
 
 
 class UiEventQueue:
@@ -349,9 +527,13 @@ class UiEventQueue:
 def drain_ui_queue(app: AppProtocol) -> None:
     processed = 0
     pending = 0
+    quiet_idle = False
     processed_low_impact_only = True
     max_event_elapsed_ms = 0.0
     max_event_kind = ""
+    per_kind_counts: dict[str, int] = {}
+    per_kind_elapsed_ms: dict[str, float] = {}
+    task_timing_seq_start = _task_timing_seq(getattr(app, "_task_timing_seq", 0))
     drain_start = time.perf_counter()
     try:
         event_limit = max(1, int(getattr(app, "_ui_queue_drain_event_limit", UI_QUEUE_DRAIN_EVENT_LIMIT)))
@@ -378,12 +560,15 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 evt_kind = str(evt[0] or "")
             if (not evt_kind) or (evt_kind not in _LOW_IMPACT_UI_EVENT_KINDS):
                 processed_low_impact_only = False
+            kind_key = evt_kind or "unknown"
+            per_kind_counts[kind_key] = int(per_kind_counts.get(kind_key, 0)) + 1
             evt_start = time.perf_counter()
             try:
                 app._handle_evt(evt)
             except Exception as exc:
                 app._log_exception("UI event error", exc)
             evt_elapsed_ms = max(0.0, (time.perf_counter() - evt_start) * 1000.0)
+            per_kind_elapsed_ms[kind_key] = float(per_kind_elapsed_ms.get(kind_key, 0.0)) + evt_elapsed_ms
             if evt_elapsed_ms > max_event_elapsed_ms:
                 max_event_elapsed_ms = evt_elapsed_ms
                 max_event_kind = evt_kind or "unknown"
@@ -452,21 +637,29 @@ def drain_ui_queue(app: AppProtocol) -> None:
             )
             if should_run_maintenance:
                 setattr(app, "_ui_maintenance_last_ts", now)
-                if hasattr(app, "_refresh_toolbar_action_focus"):
-                    try:
-                        app._refresh_toolbar_action_focus()
-                    except Exception as exc:
-                        _log_suppressed("Failed refreshing toolbar action focus", exc)
-                if hasattr(app, "_update_quick_button_visibility"):
-                    try:
-                        app._update_quick_button_visibility()
-                    except Exception as exc:
-                        _log_suppressed("Failed updating quick-button visibility", exc)
+                run_cosmetic_maintenance = bool(
+                    getattr(app, "_ui_maintenance_cosmetic_periodic", False)
+                )
+                # Toolbar focus + quick-button refreshes are event-driven and can be
+                # expensive on low-power devices; keep them opt-in for periodic runs.
+                if run_cosmetic_maintenance and hasattr(app, "_refresh_toolbar_action_focus"):
+                    _run_ui_maintenance_task(
+                        app,
+                        task_name="toolbar_focus",
+                        callback=app._refresh_toolbar_action_focus,
+                    )
+                if run_cosmetic_maintenance and hasattr(app, "_update_quick_button_visibility"):
+                    _run_ui_maintenance_task(
+                        app,
+                        task_name="quick_buttons",
+                        callback=app._update_quick_button_visibility,
+                    )
                 if hasattr(app, "_sync_tool_reference_label"):
-                    try:
-                        app._sync_tool_reference_label()
-                    except Exception as exc:
-                        app._log_exception("UI tool-reference sync error", exc)
+                    _run_ui_maintenance_task(
+                        app,
+                        task_name="tool_reference_sync",
+                        callback=app._sync_tool_reference_label,
+                    )
             if not bool(getattr(app, "connected", False)):
                 reconnect_interval_key = (
                     "_auto_reconnect_check_interval_s"
@@ -547,12 +740,79 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     app._ui_queue_drain_runtime_stall_count = int(
                         getattr(app, "_ui_queue_drain_runtime_stall_count", 0)
                     ) + 1
+            outlier_capture_ms = max(
+                1.0,
+                float(
+                    getattr(
+                        app,
+                        "_ui_queue_drain_outlier_capture_ms",
+                        _UI_DRAIN_OUTLIER_CAPTURE_MS,
+                    )
+                ),
+            )
+            outlier_log_ms = max(
+                outlier_capture_ms,
+                float(
+                    getattr(
+                        app,
+                        "_ui_queue_drain_outlier_log_ms",
+                        _UI_DRAIN_OUTLIER_LOG_MS,
+                    )
+                ),
+            )
+            if elapsed_ms >= outlier_capture_ms:
+                kind_counts_sorted = dict(
+                    sorted(
+                        per_kind_counts.items(),
+                        key=lambda item: (-int(item[1]), str(item[0])),
+                    )
+                )
+                top_kind_timing: list[dict[str, object]] = []
+                for kind, total_ms in sorted(
+                    per_kind_elapsed_ms.items(),
+                    key=lambda item: float(item[1]),
+                    reverse=True,
+                )[:5]:
+                    top_kind_timing.append(
+                        {
+                            "kind": str(kind),
+                            "ms": round(float(total_ms), 3),
+                            "count": int(per_kind_counts.get(kind, 0) or 0),
+                        }
+                    )
+                task_timing_seq_end = _task_timing_seq(getattr(app, "_task_timing_seq", 0))
+                special_ops = _collect_outlier_special_ops(
+                    app,
+                    task_seq_start=task_timing_seq_start,
+                    task_seq_end=task_timing_seq_end,
+                    per_kind_counts=kind_counts_sorted,
+                )
+                outlier_payload: dict[str, object] = {
+                    "ts": time.time(),
+                    "tick_ms": round(float(elapsed_ms), 3),
+                    "active_tab": str(getattr(app, "_active_tab_label", "") or "unknown"),
+                    "events_drained": int(processed),
+                    "pending_after_tick": int(pending),
+                    "per_kind_counts": kind_counts_sorted,
+                    "top_kind_timing": top_kind_timing,
+                    "slowest_event_kind": str(max_event_kind or "unknown"),
+                    "slowest_event_ms": round(float(max_event_elapsed_ms), 3),
+                    "special_ops": special_ops,
+                    "task_timing_seq_start": int(task_timing_seq_start),
+                    "task_timing_seq_end": int(task_timing_seq_end),
+                }
+                _record_ui_drain_outlier(app, outlier_payload)
+                _log_ui_drain_outlier(
+                    outlier_payload,
+                    severe=(elapsed_ms >= outlier_log_ms),
+                )
         except Exception:
             pass
         if app._closing:
             return
         next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
         stream_busy = _stream_ui_busy(app)
+        quiet_idle = (pending <= 0) and (not stream_busy) and _connected_quiet_idle(app)
         if pending > 0:
             try:
                 setattr(app, "_ui_queue_idle_streak", 0)
@@ -573,22 +833,29 @@ def drain_ui_queue(app: AppProtocol) -> None:
             try:
                 idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1
                 setattr(app, "_ui_queue_idle_streak", idle_streak)
+                idle_interval_attr = "_ui_queue_idle_interval_ms"
+                idle_max_attr = "_ui_queue_idle_max_interval_ms"
+                idle_step_attr = "_ui_queue_idle_backoff_step_ms"
+                if quiet_idle:
+                    idle_interval_attr = "_ui_queue_quiet_idle_interval_ms"
+                    idle_max_attr = "_ui_queue_quiet_idle_max_interval_ms"
+                    idle_step_attr = "_ui_queue_quiet_idle_backoff_step_ms"
                 idle_base_ms = int(
                     max(
                         UI_QUEUE_DRAIN_INTERVAL_MS,
-                        getattr(app, "_ui_queue_idle_interval_ms", UI_QUEUE_DRAIN_INTERVAL_MS),
+                        getattr(app, idle_interval_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
                     )
                 )
                 idle_max_ms = int(
                     max(
                         idle_base_ms,
-                        getattr(app, "_ui_queue_idle_max_interval_ms", idle_base_ms),
+                        getattr(app, idle_max_attr, idle_base_ms),
                     )
                 )
                 idle_backoff_step_ms = int(
                     max(
                         1,
-                        getattr(app, "_ui_queue_idle_backoff_step_ms", UI_QUEUE_DRAIN_INTERVAL_MS),
+                        getattr(app, idle_step_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
                     )
                 )
                 backoff_candidate_ms = UI_QUEUE_DRAIN_INTERVAL_MS + (

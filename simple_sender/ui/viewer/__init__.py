@@ -20,12 +20,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""G-code viewer and preview configuration helpers."""
+"""G-code viewer helpers."""
 
-from . import preview_policy
 from .gcode_viewer import GcodeViewer
 
 __all__ = [
     "GcodeViewer",
-    "preview_policy",
 ]

@@ -35,6 +35,9 @@ from typing import Any, Callable, Mapping, Protocol
 from simple_sender.utils.constants import KASA_TASK_QUEUE_MAXSIZE
 
 logger = logging.getLogger(__name__)
+_KASA_COMMAND_RETRY_MAX_ATTEMPTS = 3
+_KASA_COMMAND_RETRY_BASE_DELAY_S = 0.2
+_KASA_COMMAND_RETRY_MAX_DELAY_S = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +407,10 @@ class AccessoryRouter:
         self._worker = threading.Thread(target=self._worker_loop, name="kasa-worker", daemon=True)
         self._worker.start()
 
+    def _retry_delay_s(self, attempt_index: int) -> float:
+        delay = _KASA_COMMAND_RETRY_BASE_DELAY_S * (2**max(0, int(attempt_index)))
+        return min(_KASA_COMMAND_RETRY_MAX_DELAY_S, max(0.0, float(delay)))
+
     def _log_warning(self, message: str) -> None:
         if self._log is not None:
             try:
@@ -586,14 +593,35 @@ class AccessoryRouter:
             self._last_requested_by_outlet[state_key] = desired
 
         def _task() -> None:
-            try:
-                handle = self._device_handle_for_identifier(device_identifier)
-                self._controller.set_outlet_state(handle, outlet, desired)
-            except Exception:
-                with self._state_lock:
-                    self._last_requested_by_outlet.pop(state_key, None)
-                self._clear_device_cache()
-                raise
+            last_error: Exception | None = None
+            max_attempts = max(1, int(_KASA_COMMAND_RETRY_MAX_ATTEMPTS))
+            for attempt in range(max_attempts):
+                try:
+                    handle = self._device_handle_for_identifier(device_identifier)
+                    self._controller.set_outlet_state(handle, outlet, desired)
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    self._clear_device_cache()
+                    if attempt >= (max_attempts - 1):
+                        break
+                    retry_delay_s = self._retry_delay_s(attempt)
+                    logger.debug(
+                        "Kasa outlet command retry scheduled: outlet=%d on=%s source=%s attempt=%d/%d delay=%.2fs err=%s",
+                        int(outlet),
+                        bool(desired),
+                        str(source),
+                        int(attempt + 1),
+                        int(max_attempts),
+                        float(retry_delay_s),
+                        str(exc),
+                    )
+                    time.sleep(retry_delay_s)
+            with self._state_lock:
+                self._last_requested_by_outlet.pop(state_key, None)
+            if last_error is None:
+                raise RuntimeError("Kasa outlet command failed with unknown error.")
+            raise last_error
 
         def _on_success(_: Any) -> None:
             self._emit_command_result(

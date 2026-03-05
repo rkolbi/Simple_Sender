@@ -93,8 +93,12 @@ def _init_joystick_runtime_state(
     app._joystick_last_live_status_text = ""
     app._joystick_poll_idle_streak = 0
     app._joystick_poll_interval_default_ms = int(joystick_poll_interval_ms)
-    app._joystick_poll_idle_max_interval_default_ms = int(joystick_poll_idle_max_interval_ms)
-    app._joystick_poll_idle_backoff_step_default_ms = int(joystick_poll_idle_backoff_step_ms)
+    app._joystick_poll_idle_max_interval_default_ms = int(
+        joystick_poll_idle_max_interval_ms
+    )
+    app._joystick_poll_idle_backoff_step_default_ms = int(
+        joystick_poll_idle_backoff_step_ms
+    )
     app._joystick_poll_interval_ms = int(joystick_poll_interval_ms)
     app._joystick_poll_idle_max_interval_ms = int(joystick_poll_idle_max_interval_ms)
     app._joystick_poll_idle_backoff_step_ms = int(joystick_poll_idle_backoff_step_ms)
@@ -113,7 +117,9 @@ def _init_joystick_runtime_state(
     app._joystick_hold_last_ts = None
     app._joystick_hold_jog_sent = False
     raw_safety = app.settings.get("joystick_safety_binding")
-    app._joystick_safety_binding = dict(raw_safety) if isinstance(raw_safety, dict) else None
+    app._joystick_safety_binding = (
+        dict(raw_safety) if isinstance(raw_safety, dict) else None
+    )
     app._joystick_safety_active = False
     app.joystick_safety_status = tk.StringVar(value="Safety button: None")
     app.joystick_device_status = tk.StringVar(value="Hot-plug status: unknown")
@@ -183,6 +189,7 @@ def _init_kasa_runtime_state(app, tk) -> None:
     app._kasa_last_valid_outlets = (vacuum_outlet, light_outlet)
     app._kasa_last_stream_line_index = -1
     app._kasa_job_active_outlets = set()
+    app._kasa_job_running = False
     app._kasa_vacuum_quick_on = False
     app._kasa_light_quick_on = False
 
@@ -223,12 +230,20 @@ def _init_error_dialog_runtime_state(app, setting, tk) -> None:
     app._homing_start_ts = 0.0
     app._homing_timeout_s = 30.0
 
-    app._error_dialog_interval = _clamp_float_setting(setting, "error_dialog_interval", 2.0)
-    app._error_dialog_burst_window = _clamp_float_setting(setting, "error_dialog_burst_window", 30.0)
-    app._error_dialog_burst_limit = _clamp_int_setting(setting, "error_dialog_burst_limit", 3)
+    app._error_dialog_interval = _clamp_float_setting(
+        setting, "error_dialog_interval", 2.0
+    )
+    app._error_dialog_burst_window = _clamp_float_setting(
+        setting, "error_dialog_burst_window", 30.0
+    )
+    app._error_dialog_burst_limit = _clamp_int_setting(
+        setting, "error_dialog_burst_limit", 3
+    )
 
     app.error_dialog_interval_var = tk.DoubleVar(value=app._error_dialog_interval)
-    app.error_dialog_burst_window_var = tk.DoubleVar(value=app._error_dialog_burst_window)
+    app.error_dialog_burst_window_var = tk.DoubleVar(
+        value=app._error_dialog_burst_window
+    )
     app.error_dialog_burst_limit_var = tk.IntVar(value=app._error_dialog_burst_limit)
     app.error_dialog_status_var = tk.StringVar(value="")
 
@@ -268,23 +283,32 @@ def _init_worker_and_runtime_controllers(
     app.grbl.set_status_query_failure_limit(app.status_query_failure_limit.get())
     try:
         app.grbl.set_ui_rx_logging(
-            bool(app.settings.get("gui_logging_enabled", default_settings.get("gui_logging_enabled", True)))
+            bool(
+                app.settings.get(
+                    "gui_logging_enabled",
+                    default_settings.get("gui_logging_enabled", True),
+                )
+            )
         )
     except Exception as exc:
-        logger.debug("Failed applying initial UI RX logging state to worker: %s", exc, exc_info=exc)
+        logger.debug(
+            "Failed applying initial UI RX logging state to worker: %s",
+            exc,
+            exc_info=exc,
+        )
     try:
         app._on_homing_watchdog_change()
     except Exception as exc:
-        logger.debug("Failed applying initial homing watchdog settings: %s", exc, exc_info=exc)
+        logger.debug(
+            "Failed applying initial homing watchdog settings: %s", exc, exc_info=exc
+        )
 
     app.macro_executor = deps.MacroExecutor(app, macro_search_dirs=macro_search_dirs)
     app.probe_controller = deps.ProbeController(app)
     app.auto_level_runner = deps.AutoLevelProbeRunner(app)
     app.streaming_controller = deps.StreamingController(app)
     app.macro_panel = deps.MacroPanel(app)
-    app.toolpath_panel = deps.ToolpathPanel(app)
     app.settings_controller = deps.GRBLSettingsController(app)
-    app.spindle_command_detector = deps.SpindleCommandDetector()
     app.kasa_controller = deps.create_default_kasa_controller()
     app.accessory_router = deps.AccessoryRouter(
         controller=app.kasa_controller,
@@ -305,27 +329,47 @@ def _init_units_and_estimation_state(
     default_jog_feed_xy: float,
     default_jog_feed_z: float,
 ) -> None:
-    app.unit_mode = tk.StringVar(value=app.settings.get("unit_mode", default_settings.get("unit_mode", "mm")))
+    app.unit_mode = tk.StringVar(
+        value=app.settings.get("unit_mode", default_settings.get("unit_mode", "mm"))
+    )
     app._modal_units = app.unit_mode.get()
     app._report_units = None
     app.estimate_rate_x_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_x", default_settings.get("estimate_rate_x", "")))
+        value=str(
+            app.settings.get(
+                "estimate_rate_x", default_settings.get("estimate_rate_x", "")
+            )
+        )
     )
     app.estimate_rate_y_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_y", default_settings.get("estimate_rate_y", "")))
+        value=str(
+            app.settings.get(
+                "estimate_rate_y", default_settings.get("estimate_rate_y", "")
+            )
+        )
     )
     app.estimate_rate_z_var = tk.StringVar(
-        value=str(app.settings.get("estimate_rate_z", default_settings.get("estimate_rate_z", "")))
+        value=str(
+            app.settings.get(
+                "estimate_rate_z", default_settings.get("estimate_rate_z", "")
+            )
+        )
     )
-    app.step_xy = tk.DoubleVar(value=app.settings.get("step_xy", default_settings.get("step_xy", 1.0)))
-    app.step_z = tk.DoubleVar(value=app.settings.get("step_z", default_settings.get("step_z", 1.0)))
+    app.step_xy = tk.DoubleVar(
+        value=app.settings.get("step_xy", default_settings.get("step_xy", 1.0))
+    )
+    app.step_z = tk.DoubleVar(
+        value=app.settings.get("step_z", default_settings.get("step_z", 1.0))
+    )
     app.jog_feed_xy = tk.DoubleVar(value=default_jog_feed_xy)
     app.jog_feed_z = tk.DoubleVar(value=default_jog_feed_z)
 
 
 def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app.connected = False
-    app.current_port = tk.StringVar(value=app.settings.get("last_port", default_settings.get("last_port", "")))
+    app.current_port = tk.StringVar(
+        value=app.settings.get("last_port", default_settings.get("last_port", ""))
+    )
     app.tool_reference_var = tk.StringVar(value="")
     app._tool_reference_last = None
 
@@ -348,11 +392,43 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app._wpos_flash_last_ts = 0.0
 
 
-def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: dict) -> None:
+def _init_gcode_and_autolevel_state(
+    app, *, copy_module, tk, default_settings: dict
+) -> None:
     app._last_gcode_lines = []
     app._gcode_source = None
     app._gcode_streaming_mode = False
     app._gcode_total_lines = 0
+    app._gcode_storage_mode = "none"
+    app._gcode_retained_line_count = 0
+    app._gcode_source_offset_count = 0
+    app._gcode_source_offset_type = ""
+    app._gcode_offset_index_enabled = False
+    app._gcode_prepare_sample_line_count = 0
+    app._gcode_prepare_sample_head_lines = 0
+    app._gcode_prepare_sample_tail_lines = 0
+    app._gcode_prepare_sample_interval_lines = 0
+    app._gcode_prepare_sample_max_lines = 0
+    app._gcode_file_size_bytes = 0
+    app._gcode_file_line_count = 0
+    app._gcode_file_line_count_known = False
+    app._gcode_quick_scan_ms = 0.0
+    app._gcode_bounds_box = None
+    app._gcode_bounds_confidence = "rough"
+    app._gcode_dimensions_confidence = "rough"
+    app._gcode_dimensions_confidence_reasons = {}
+    app._gcode_estimated_job_time_sec = None
+    app._gcode_estimate_confidence = "provisional"
+    app._gcode_estimate_confidence_reasons = {}
+    app._gcode_estimate_replaced_quick = False
+    app._gcode_stats_compute_mode = ""
+    app._gcode_stats_sample_scale = 1.0
+    app._gcode_stats_sample_line_count = 0
+    app._gcode_stats_sample_total_lines = 0
+    app._gcode_full_line_cache_profile = ""
+    app._gcode_full_line_cache_cap_lines = 0
+    app._gcode_full_line_cache_cap_hit = False
+    app._gcode_sample_line_cap = 0
     app._last_gcode_path = None
     app._gcode_hash = None
     app._gcode_validation_report = None
@@ -362,15 +438,24 @@ def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: d
     app._auto_level_grid = None
     app._auto_level_height_map = None
     app._auto_level_bounds = None
+    app._auto_level_prereq_snapshot = {}
+    app._auto_level_job_source_path = None
+    app._auto_level_job_hash = None
+    app._auto_level_job_total_lines = 0
     app._auto_level_original_lines = None
     app._auto_level_original_path = None
+    app._auto_level_original_source_path = None
+    app._auto_level_original_hash = None
+    app._auto_level_original_total_lines = 0
     app._auto_level_leveled_lines = None
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
     app._auto_level_restore = None
     app.auto_level_settings = dict(
-        app.settings.get("auto_level_settings", default_settings.get("auto_level_settings", {}))
+        app.settings.get(
+            "auto_level_settings", default_settings.get("auto_level_settings", {})
+        )
         or {}
     )
 
@@ -381,7 +466,9 @@ def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: d
     if isinstance(raw_job_prefs, dict):
         app.auto_level_job_prefs = copy_module.deepcopy(raw_job_prefs)
     else:
-        app.auto_level_job_prefs = copy_module.deepcopy(default_settings.get("auto_level_job_prefs", {}))
+        app.auto_level_job_prefs = copy_module.deepcopy(
+            default_settings.get("auto_level_job_prefs", {})
+        )
 
     raw_presets = app.settings.get("auto_level_presets", {})
     app.auto_level_presets = dict(raw_presets) if isinstance(raw_presets, dict) else {}
@@ -390,6 +477,7 @@ def _init_gcode_and_autolevel_state(app, *, copy_module, tk, default_settings: d
     app._gcode_load_token = 0
     app._gcode_parse_token = 0
     app.gcode_stats_var = tk.StringVar(value="No file loaded")
+    app._gcode_status_last_text = "No file loaded"
     app.gcode_load_var = tk.StringVar(value="")
     app._gcode_load_popup = None
     app._gcode_load_popup_label = None
@@ -410,10 +498,14 @@ def _init_stream_and_override_state(
     app._rapid_rates = None
     app._rapid_rates_source = None
     app.fallback_rapid_rate = tk.StringVar(
-        value=app.settings.get("fallback_rapid_rate", default_settings.get("fallback_rapid_rate", ""))
+        value=app.settings.get(
+            "fallback_rapid_rate", default_settings.get("fallback_rapid_rate", "")
+        )
     )
     app.estimate_factor = tk.DoubleVar(
-        value=app.settings.get("estimate_factor", default_settings.get("estimate_factor", 1.0))
+        value=app.settings.get(
+            "estimate_factor", default_settings.get("estimate_factor", 1.0)
+        )
     )
     app._estimate_factor_label = tk.StringVar(value=f"{app.estimate_factor.get():.2f}x")
     app._accel_rates = None
@@ -424,19 +516,52 @@ def _init_stream_and_override_state(
     app._stats_after_id = None
     app._stats_pending_request = None
     app._stats_debounce_ms = 75
+    app._gcode_stats_chunk_max_ms = 0.0
+    app._gcode_stats_chunk_max_section = "unknown"
+    app._gcode_stats_chunk_yield_count = 0
+    app._gcode_stats_chunk_budget_ms = 40.0
+    app._gcode_loaded_stream_pending = None
+    app._gcode_loaded_stream_apply_after_id = None
+    app._gcode_loaded_stream_last_signature = None
+    app._gcode_loaded_stream_apply_generation = 0
+    app._gcode_loaded_stream_apply_last_metrics = {}
+    app._gcode_load_settling = False
+    app._gcode_load_settling_generation = 0
+    app._gcode_load_settling_after_id = None
+    app._gcode_load_settling_started_at = 0.0
+    app._gcode_load_settling_tail_ms = 1200
+    app._gcode_stats_settle_delay_ms = 1500
+    app._gcode_post_popup_background_tasks = "none"
+    app._streaming_validation_prompt_cache = {}
+    app._streaming_validation_prompt_dialog = None
+    app._stream_loaded_force_apply = False
+    app._stream_loaded_reconcile_after_id = None
+    app._stream_loaded_reconcile_generation = 0
+    app._stream_loaded_reconcile_signature = None
+    app._stream_loaded_reconcile_last_metrics = {}
+    app._streaming_lock_state = None
+    app._status_settling_last_state = ""
+    app._status_settling_last_apply_ts = 0.0
+    app._status_settling_drop_count = 0
     app._ui_maintenance_interval_s = ui_maintenance_interval_s
     app._ui_maintenance_idle_interval_s = ui_maintenance_idle_interval_s
     app._ui_maintenance_quiet_idle_interval_s = ui_maintenance_quiet_idle_interval_s
+    app._ui_maintenance_cosmetic_periodic = False
     app._ui_maintenance_last_ts = 0.0
     app._auto_reconnect_check_interval_s = auto_reconnect_check_interval_s
     app._auto_reconnect_check_idle_interval_s = auto_reconnect_check_idle_interval_s
     app._auto_reconnect_check_ts = 0.0
     app._live_estimate_min = None
     app._live_estimate_total_min = None
+    app._live_estimate_observed_total_min = None
     app._live_estimate_display_min = None
     app._live_estimate_display_ts = 0.0
+    app._loaded_estimate_total_min = None
+    app._loaded_estimate_source = ""
+    app._estimate_inputs_snapshot = {}
 
     app._stream_state = None
+    app._stream_loaded_signature = None
     app._stream_start_ts = None
     app._stream_pause_total = 0.0
     app._stream_paused_at = None
@@ -444,7 +569,6 @@ def _init_stream_and_override_state(
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None
-    app._toolpath_reparse_deferred = False
     app._job_started_at = None
     app._job_completion_notified = False
 
@@ -489,7 +613,9 @@ def _init_stream_and_override_state(
 
 
 def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
-    app._auto_reconnect_last_port = app.settings.get("last_port", default_settings.get("last_port", ""))
+    app._auto_reconnect_last_port = app.settings.get(
+        "last_port", default_settings.get("last_port", "")
+    )
     app._auto_reconnect_last_attempt = 0.0
     app._auto_reconnect_pending = False
     app._auto_reconnect_retry = 0
@@ -512,7 +638,9 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
             )
         )
     except Exception:
-        startup_delay_s = float(default_settings.get("startup_auto_connect_delay_s", 5.0))
+        startup_delay_s = float(
+            default_settings.get("startup_auto_connect_delay_s", 5.0)
+        )
     if startup_delay_s < 0.0:
         startup_delay_s = 0.0
     if startup_delay_s > 30.0:
@@ -524,10 +652,20 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._ui_queue_idle_interval_ms = 250
     app._ui_queue_idle_max_interval_ms = 700
     app._ui_queue_idle_backoff_step_ms = 50
+    app._ui_queue_quiet_idle_interval_ms = 350
+    app._ui_queue_quiet_idle_max_interval_ms = 1200
+    app._ui_queue_quiet_idle_backoff_step_ms = 100
     app._ui_queue_idle_streak = 0
     app._ui_queue_drain_event_limit = 100
     app._ui_queue_drain_time_budget_ms = 8.0
     app._ui_queue_drain_stall_budget_ms = 16.0
+    app._ui_queue_drain_outlier_capture_ms = 100.0
+    app._ui_queue_drain_outlier_log_ms = 200.0
+    app._ui_queue_drain_outlier_history_limit = 24
+    app._ui_queue_drain_outliers = deque(
+        maxlen=app._ui_queue_drain_outlier_history_limit
+    )
+    app._ui_queue_drain_outlier_total = 0
     app._ui_queue_drain_ticks = 0
     app._ui_queue_drain_events = 0
     app._ui_queue_drain_max_ms = 0.0
@@ -540,9 +678,17 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._ui_queue_drain_runtime_slowest_event_kind = ""
     app._status_last_non_idle_ts = 0.0
     app._status_perf_metrics: dict[str, dict[str, float | int]] = {}
-    app._status_perf_metrics_enabled = bool(app.settings.get("performance_profile_enabled", False))
+    app._status_perf_metrics_enabled = bool(
+        app.settings.get(
+            "performance_profile_enabled",
+            default_settings.get("performance_profile_enabled", True),
+        )
+    )
     app._manual_controls_last_enabled = False
+    app._manual_control_state_cache = {}
+    app._job_controls_last_ready = None
     app._task_timing_metrics: dict[str, dict[str, float | int]] = {}
+    app._task_timing_seq = 0
     app._settings_dump_deferred_pending = False
     app._deferred_stream_finalize_pending = False
     app._gcode_parsing_active = False
@@ -568,7 +714,9 @@ def init_runtime_state(
     default_settings = deps.DEFAULT_SETTINGS
     status_poll_default = deps.STATUS_POLL_DEFAULT
     ui_event_queue_maxsize = deps.UI_EVENT_QUEUE_MAXSIZE
-    ui_maintenance_interval_s = float(getattr(deps, "UI_QUEUE_MAINTENANCE_INTERVAL_S", 0.25))
+    ui_maintenance_interval_s = float(
+        getattr(deps, "UI_QUEUE_MAINTENANCE_INTERVAL_S", 0.25)
+    )
     ui_maintenance_idle_interval_s = float(
         getattr(deps, "UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S", 1.0)
     )
@@ -582,8 +730,12 @@ def init_runtime_state(
         getattr(deps, "UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S", 1.0)
     )
     joystick_poll_interval_ms = int(getattr(deps, "JOYSTICK_POLL_INTERVAL_MS", 50))
-    joystick_poll_idle_max_interval_ms = int(getattr(deps, "JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS", 200))
-    joystick_poll_idle_backoff_step_ms = int(getattr(deps, "JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS", 10))
+    joystick_poll_idle_max_interval_ms = int(
+        getattr(deps, "JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS", 200)
+    )
+    joystick_poll_idle_backoff_step_ms = int(
+        getattr(deps, "JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS", 10)
+    )
 
     def setting(key: str, fallback):
         return app.settings.get(key, default_settings.get(key, fallback))

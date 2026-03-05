@@ -67,11 +67,6 @@ def apply_stream_busy_state(
     except (AttributeError, TypeError) as exc:
         if log_hook is not None:
             log_hook("Failed updating settings streaming lock", exc)
-    try:
-        app.toolpath_panel.set_streaming(bool(stream_busy))
-    except (AttributeError, TypeError) as exc:
-        if log_hook is not None:
-            log_hook("Failed updating toolpath streaming mode", exc)
     if stream_busy:
         return
     _flush_deferred_when_idle(app, log_hook=log_hook)
@@ -90,14 +85,4 @@ def _flush_deferred_when_idle(app: Any, *, log_hook: LogHook | None = None) -> N
         except (AttributeError, TypeError, RuntimeError) as exc:
             if log_hook is not None:
                 log_hook("Failed requesting deferred settings dump", exc)
-    if (
-        app._toolpath_reparse_deferred
-        and app._last_gcode_lines
-        and not getattr(app, "_gcode_streaming_mode", False)
-    ):
-        app._toolpath_reparse_deferred = False
-        try:
-            app.toolpath_panel.reparse_lines(app._last_gcode_lines, lines_hash=app._gcode_hash)
-        except (AttributeError, TypeError, RuntimeError) as exc:
-            if log_hook is not None:
-                log_hook("Failed reparsing deferred toolpath lines", exc)
+    _ = log_hook

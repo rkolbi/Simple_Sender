@@ -84,7 +84,7 @@ def show_resume_dialog(app):
     def use_last_acked():
         if app._last_acked_index >= 0:
             line_var.set(str(min(total_lines, app._last_acked_index + 2)))
-            update_preview()
+            update_sample()
 
     ttk.Button(frm, text="Use last acked", command=use_last_acked).grid(
         row=0, column=2, sticky="w", padx=(8, 0), pady=4
@@ -92,34 +92,34 @@ def show_resume_dialog(app):
     sync_var = tk.BooleanVar(value=True)
     sync_chk = ttk.Checkbutton(frm, text="Send modal re-sync before resuming", variable=sync_var)
     sync_chk.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
-    preview_var = tk.StringVar(value="")
+    sample_var = tk.StringVar(value="")
     warning_var = tk.StringVar(value="")
-    preview_lbl = ttk.Label(frm, textvariable=preview_var, wraplength=460, justify="left")
-    preview_lbl.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 2))
+    sample_lbl = ttk.Label(frm, textvariable=sample_var, wraplength=460, justify="left")
+    sample_lbl.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 2))
     warning_lbl = ttk.Label(
         frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left"
     )
     warning_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
 
-    def update_preview():
+    def update_sample():
         try:
             line_no = int(line_var.get())
         except Exception:
-            preview_var.set("Enter a valid line number.")
+            sample_var.set("Enter a valid line number.")
             warning_var.set("")
             return
         if line_no < 1 or line_no > total_lines:
-            preview_var.set("Line number is out of range.")
+            sample_var.set("Line number is out of range.")
             warning_var.set("")
             return
         preamble, has_g92 = app._build_resume_preamble(app._last_gcode_lines, line_no - 1)
         if sync_var.get():
             if preamble:
-                preview_var.set("Modal re-sync: " + " ".join(preamble))
+                sample_var.set("Modal re-sync: " + " ".join(preamble))
             else:
-                preview_var.set("Modal re-sync: (none)")
+                sample_var.set("Modal re-sync: (none)")
         else:
-            preview_var.set("Modal re-sync: disabled")
+            sample_var.set("Modal re-sync: disabled")
         if has_g92:
             warning_var.set(
                 "Warning: G92 offsets appear before this line. Confirm work zero before resuming."
@@ -142,9 +142,9 @@ def show_resume_dialog(app):
         app._resume_from_line(line_no - 1, preamble)
         dlg.destroy()
 
-    update_preview()
-    line_entry.bind("<KeyRelease>", lambda _evt: update_preview())
-    sync_chk.config(command=update_preview)
+    update_sample()
+    line_entry.bind("<KeyRelease>", lambda _evt: update_sample())
+    sync_chk.config(command=update_sample)
 
     btn_row = ttk.Frame(frm)
     btn_row.grid(row=4, column=0, columnspan=3, sticky="w")

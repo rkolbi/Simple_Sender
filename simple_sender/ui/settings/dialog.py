@@ -750,8 +750,8 @@ def build_app_settings_tab(app, notebook):
         "Viewer",
         build_viewer_section,
         mode="basic",
-        description="Current-line highlight behavior and 3D streaming refresh.",
-        keywords=("gcode viewer", "line highlight", "3d"),
+        description="Current-line highlight behavior in the G-code viewer.",
+        keywords=("gcode viewer", "line highlight"),
     )
 
     _start_category(

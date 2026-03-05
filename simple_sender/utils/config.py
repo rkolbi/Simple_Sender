@@ -53,24 +53,6 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "3d_view_enabled": True,
-    "3d_view_settings": {
-        "azimuth": 0.7853981633974483,
-        "elevation": 0.5235987755982988,
-        "pan_x": 0.0,
-        "pan_y": 0.0,
-        "show_arc": False,
-        "show_feed": True,
-        "show_rapid": False,
-        "zoom": 1.0,
-    },
-    "view_3d": {
-        "azimuth": -5.87460183660256,
-        "elevation": -1.1307963267948968,
-        "pan_x": 0.0,
-        "pan_y": 0.0,
-        "zoom": 0.9999999999999998,
-    },
     "active_profile": "",
     "all_stop_mode": "stop_reset",
     "auto_reconnect": False,
@@ -119,13 +101,12 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "macro_probe_safety_margin": 3.0,
     "max_recent_files": 10,
     "performance_mode": True,
-    "performance_profile_enabled": False,
+    "performance_profile_enabled": True,
     "performance_profile_log_path": "",
     "performance_leak_watch_enabled": False,
     "recent_files": [],
     "reconnect_on_open": True,
     "startup_auto_connect_delay_s": 5.0,
-    "render3d_enabled": True,
     "show_recover_button": False,
     "show_resume_from_button": False,
     "show_endstop_indicator": True,
@@ -133,7 +114,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_hold_indicator": True,
     "auto_level_enabled": True,
     "show_quick_tips_button": True,
-    "show_quick_3d_button": True,
     "show_quick_keys_button": True,
     "show_quick_alo_button": True,
     "show_quick_vac_button": True,
@@ -150,20 +130,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "ui_scale": 1.5,
     "scrollbar_width": "wide",
     "touch_scroll_mode": "thumb_and_swipe",
-    "toolpath_arc_detail_deg": 9.031746031746032,
-    "toolpath_draw_percent": 70,
-    "toolpath_full_limit": 30000,
-    "toolpath_full_parse_limit": 0,
-    "toolpath_interactive_limit": 3500,
-    "toolpath_lightweight": False,
-    "toolpath_low_power": False,
-    "toolpath_performance": 60.0,
-    "toolpath_quality": 100.0,
-    "toolpath_renderer": "canvas",
-    "toolpath_show_arc": True,
-    "toolpath_show_feed": True,
-    "toolpath_show_rapid": False,
-    "toolpath_streaming_render_interval": 0.25,
     "tooltips_enabled": True,
     "tooltip_timeout_sec": 10.0,
     "numeric_keypad_enabled": True,
@@ -173,7 +139,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "vacuum_outlet": 1,
     "validate_streaming_gcode": True,
     "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,
-    "ultra_large_size_threshold_mb": max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
+    "ultra_large_size_threshold_mb": max(
+        0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)
+    ),
     "window_geometry": "1194x864+261+83",
     "zeroing_persistent": False,
     "show_autolevel_overlay": True,
@@ -211,7 +179,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_level_presets": {},
 }
 
-def _deep_merge_defaults(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
+
+def _deep_merge_defaults(
+    defaults: Dict[str, Any], loaded: Dict[str, Any]
+) -> Dict[str, Any]:
     merged: Dict[str, Any] = {}
     for key, default_val in defaults.items():
         if key in loaded:
@@ -252,24 +223,18 @@ def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
         estimate_factor = float(migrated.get("estimate_factor"))
     except (TypeError, ValueError):
         estimate_factor = None
-    if estimate_factor is not None and abs(estimate_factor - legacy_estimate_factor) <= 1e-9:
+    if (
+        estimate_factor is not None
+        and abs(estimate_factor - legacy_estimate_factor) <= 1e-9
+    ):
         migrated["estimate_factor"] = 1.0
-
-    # Rebalance legacy toolpath defaults so Top View keeps higher detail while
-    # 3D defaults remain responsive. Only rewrite known old-default values.
-    if migrated.get("toolpath_full_limit") == 33611:
-        migrated["toolpath_full_limit"] = 30000
-    if migrated.get("toolpath_interactive_limit") == 4270:
-        migrated["toolpath_interactive_limit"] = 3500
-    if migrated.get("toolpath_draw_percent") == 82:
-        migrated["toolpath_draw_percent"] = 70
-    if migrated.get("toolpath_performance") == 81.74603174603175:
-        migrated["toolpath_performance"] = 60.0
 
     return migrated
 
 
-def _repair_invalid_settings(merged: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+def _repair_invalid_settings(
+    merged: Dict[str, Any], defaults: Dict[str, Any]
+) -> Dict[str, Any]:
     """Repair known invalid values to defaults so load can continue safely."""
     repaired = copy.deepcopy(merged)
     repaired_keys: list[str] = []
@@ -292,7 +257,9 @@ def _repair_invalid_settings(merged: Dict[str, Any], defaults: Dict[str, Any]) -
 
     touch_scroll_mode = str(repaired.get("touch_scroll_mode", "") or "").strip().lower()
     if touch_scroll_mode not in {"thumb_only", "thumb_and_swipe"}:
-        repaired["touch_scroll_mode"] = defaults.get("touch_scroll_mode", "thumb_and_swipe")
+        repaired["touch_scroll_mode"] = defaults.get(
+            "touch_scroll_mode", "thumb_and_swipe"
+        )
         repaired_keys.append("touch_scroll_mode")
 
     if repaired_keys:
@@ -305,7 +272,7 @@ def _repair_invalid_settings(merged: Dict[str, Any], defaults: Dict[str, Any]) -
 
 def get_default_settings_dir() -> str:
     """Get default directory for settings storage.
-    
+
     Returns:
         Path to settings directory
     """
@@ -313,25 +280,25 @@ def get_default_settings_dir() -> str:
     env_dir = os.getenv("SIMPLE_SENDER_CONFIG_DIR")
     if env_dir:
         return env_dir
-    
+
     # Platform-specific defaults
     if sys.platform.startswith("win"):
         base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
     else:
         base = os.getenv("XDG_CONFIG_HOME")
-    
+
     if not base:
         base = os.path.expanduser("~")
-    
+
     return os.path.join(base, "SimpleSender")
 
 
 def get_settings_path() -> str:
     """Get path to settings file.
-    
+
     Creates directory if it doesn't exist.
     Falls back to home directory or current directory if creation fails.
-    
+
     Returns:
         Full path to settings file
     """
@@ -358,7 +325,9 @@ def get_settings_path() -> str:
         # Last resort - app directory (may still be read-only)
         base_dir = os.path.dirname(__file__)
         if not os.path.exists(base_dir) or not os.access(base_dir, os.W_OK):
-            logger.warning("Settings directory is not writable; using %s anyway", base_dir)
+            logger.warning(
+                "Settings directory is not writable; using %s anyway", base_dir
+            )
         chosen = base_dir
 
     return os.path.join(chosen, SETTINGS_FILENAME)
@@ -366,64 +335,64 @@ def get_settings_path() -> str:
 
 class Settings:
     """Application settings manager.
-    
+
     Handles loading, saving, and accessing application settings with
     atomic file operations and automatic backup.
-    
+
     Example:
         settings = Settings()
         settings.load()
         settings.set("last_port", "COM3")
         settings.save()
     """
-    
+
     def __init__(self, filepath: Optional[str] = None):
         """Initialize settings manager.
-        
+
         Args:
             filepath: Optional custom settings file path
         """
         self.filepath = filepath or get_settings_path()
         self.data: Dict[str, Any] = self._get_defaults()
         logger.info(f"Settings file: {self.filepath}")
-    
+
     def _get_defaults(self) -> Dict[str, Any]:
         """Get default settings values.
-        
+
         Returns:
             Dictionary of default settings
         """
         return copy.deepcopy(DEFAULT_SETTINGS)
-    
+
     def load(self) -> bool:
         """Load settings from file.
-        
+
         Returns:
             True if loaded successfully, False otherwise
-            
+
         Note:
             On failure, default settings are used
         """
         if not os.path.exists(self.filepath):
             logger.info("No settings file found, using defaults")
             return False
-        
+
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 loaded_data = json.load(f)
             if not isinstance(loaded_data, dict):
                 raise SettingsLoadError("Settings root must be a JSON object")
-            
+
             # Merge defaults, migrate legacy keys, and repair known invalid values.
             defaults = self._get_defaults()
             migrated = _migrate_legacy_settings(loaded_data)
             merged = _deep_merge_defaults(defaults, migrated)
             self.data = _repair_invalid_settings(merged, defaults)
             self.validate()
-            
+
             logger.info("Settings loaded successfully")
             return True
-            
+
         except SettingsValidationError as e:
             logger.error(f"Invalid settings values: {e}")
             raise SettingsLoadError(f"Invalid settings: {e}")
@@ -431,34 +400,34 @@ class Settings:
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in settings file: {e}")
             raise SettingsLoadError(f"Invalid JSON: {e}")
-            
+
         except IOError as e:
             logger.error(f"Failed to read settings file: {e}")
             raise SettingsLoadError(f"Failed to read file: {e}")
 
         except SettingsLoadError:
             raise
-            
+
         except Exception as e:
             logger.error(f"Unexpected error loading settings: {e}")
             raise SettingsLoadError(f"Unexpected error: {e}")
-    
+
     def save(self) -> None:
         """Save settings to file atomically.
-        
+
         Uses atomic file write with backup to prevent data loss.
-        
+
         Raises:
             SettingsSaveError: If save fails
         """
         filepath = Path(self.filepath)
         temp_path: Path | None = None
         backup_path = Path(str(filepath) + SETTINGS_BACKUP_SUFFIX)
-        
+
         try:
             # Ensure directory exists
             filepath.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Write to a unique temporary file first to avoid multi-instance collisions.
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -470,77 +439,85 @@ class Settings:
             ) as temp_file:
                 temp_path = Path(temp_file.name)
                 json.dump(self.data, temp_file, indent=2, sort_keys=True)
-            
+
             # Create backup of existing file
             if filepath.exists():
                 try:
                     shutil.copy2(filepath, backup_path)
                 except IOError as e:
                     logger.warning(f"Failed to create backup: {e}")
-            
+
             # Atomic rename
             assert temp_path is not None
             temp_path.replace(filepath)
-            
+
             logger.info("Settings saved successfully")
-            
+
         except IOError as e:
             logger.error(f"Failed to write settings: {e}")
-            
+
             # Try to restore backup
             if backup_path.exists():
                 try:
                     shutil.copy2(backup_path, filepath)
                     logger.info("Settings restored from backup")
                 except IOError as restore_exc:
-                    logger.debug("Failed restoring settings backup after save error: %s", restore_exc, exc_info=restore_exc)
-            
+                    logger.debug(
+                        "Failed restoring settings backup after save error: %s",
+                        restore_exc,
+                        exc_info=restore_exc,
+                    )
+
             raise SettingsSaveError(f"Failed to save: {e}")
-            
+
         except Exception as e:
             logger.error(f"Unexpected error saving settings: {e}")
             raise SettingsSaveError(f"Unexpected error: {e}")
-            
+
         finally:
             # Clean up temp file
             if temp_path is not None and temp_path.exists():
                 try:
                     temp_path.unlink()
                 except OSError as cleanup_exc:
-                    logger.debug("Failed deleting temporary settings file: %s", cleanup_exc, exc_info=cleanup_exc)
-    
+                    logger.debug(
+                        "Failed deleting temporary settings file: %s",
+                        cleanup_exc,
+                        exc_info=cleanup_exc,
+                    )
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get setting value.
-        
+
         Args:
             key: Setting key (supports dot notation for nested keys)
             default: Default value if key not found
-            
+
         Returns:
             Setting value or default
         """
-        # Support nested keys like "3d_view_settings.zoom"
+        # Support nested keys via dot notation.
         keys = key.split(".")
         value = self.data
-        
+
         for k in keys:
             if isinstance(value, dict) and k in value:
                 value = value[k]
             else:
                 return default
-        
+
         return value
-    
+
     def set(self, key: str, value: Any) -> None:
         """Set setting value.
-        
+
         Args:
             key: Setting key (supports dot notation for nested keys)
             value: Value to set
         """
-        # Support nested keys like "3d_view_settings.zoom"
+        # Support nested keys via dot notation.
         keys = key.split(".")
-        
+
         if len(keys) == 1:
             self.data[key] = value
         else:
@@ -551,89 +528,89 @@ class Settings:
                     current[k] = {}
                 current = current[k]
             current[keys[-1]] = value
-    
+
     def get_all(self) -> Dict[str, Any]:
         """Get all settings.
-        
+
         Returns:
             Copy of all settings
         """
         return self.data.copy()
-    
+
     def reset_to_defaults(self) -> None:
         """Reset all settings to defaults."""
         self.data = self._get_defaults()
         logger.info("Settings reset to defaults")
-    
+
     def validate(self) -> bool:
         """Validate current settings.
-        
+
         Returns:
             True if valid
-            
+
         Raises:
             SettingsValidationError: If validation fails
         """
         # Validate data types
         if not isinstance(self.data, dict):
             raise SettingsValidationError("Settings must be a dictionary")
-        
+
         # Validate specific settings
         if "baud_rate" in self.data:
             baud = self.data["baud_rate"]
             valid_bauds = [9600, 19200, 38400, 57600, 115200, 230400]
             if baud not in valid_bauds:
                 raise SettingsValidationError(f"Invalid baud rate: {baud}")
-        
+
         if "status_poll_interval" in self.data:
             interval = self.data["status_poll_interval"]
             if not isinstance(interval, (int, float)) or interval <= 0:
                 raise SettingsValidationError(f"Invalid poll interval: {interval}")
-        
+
         if "unit_mode" in self.data:
             mode = self.data["unit_mode"]
             if mode not in ("mm", "inch"):
                 raise SettingsValidationError(f"Invalid unit mode: {mode}")
-        
+
         return True
-    
+
     def add_recent_file(self, filepath: str) -> None:
         """Add file to recent files list.
-        
+
         Args:
             filepath: Path to add
         """
         recent = self.data.get("recent_files", [])
-        
+
         # Remove if already exists
         if filepath in recent:
             recent.remove(filepath)
-        
+
         # Add to beginning
         recent.insert(0, filepath)
-        
+
         # Trim to max length
         max_recent = self.data.get("max_recent_files", 10)
         recent = recent[:max_recent]
-        
+
         self.data["recent_files"] = recent
-    
+
     def get_recent_files(self) -> list:
         """Get list of recent files.
-        
+
         Returns:
             List of recent file paths (existing files only)
         """
         recent = self.data.get("recent_files", [])
         # Filter to only existing files
         return [f for f in recent if os.path.exists(f)]
-    
+
     def export_to_file(self, filepath: str) -> None:
         """Export settings to a different file.
-        
+
         Args:
             filepath: Target file path
-            
+
         Raises:
             SettingsSaveError: If export fails
         """
@@ -643,13 +620,13 @@ class Settings:
             logger.info(f"Settings exported to {filepath}")
         except IOError as e:
             raise SettingsSaveError(f"Failed to export: {e}")
-    
+
     def import_from_file(self, filepath: str) -> None:
         """Import settings from a file.
-        
+
         Args:
             filepath: Source file path
-            
+
         Raises:
             SettingsLoadError: If import fails
         """
@@ -658,16 +635,16 @@ class Settings:
                 imported_data = json.load(f)
             if not isinstance(imported_data, dict):
                 raise SettingsLoadError("Settings root must be a JSON object")
-            
+
             # Merge defaults, migrate legacy keys, and repair known invalid values.
             defaults = self._get_defaults()
             migrated = _migrate_legacy_settings(imported_data)
             merged = _deep_merge_defaults(defaults, migrated)
             self.data = _repair_invalid_settings(merged, defaults)
             self.validate()
-            
+
             logger.info(f"Settings imported from {filepath}")
-            
+
         except SettingsValidationError as e:
             raise SettingsLoadError(f"Invalid settings: {e}")
         except json.JSONDecodeError as e:

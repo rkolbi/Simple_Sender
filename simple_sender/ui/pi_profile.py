@@ -35,7 +35,6 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 PI_PROFILE_STATUS_POLL_INTERVAL = 1.25
 PI_PROFILE_STREAMING_LINE_THRESHOLD = 20_000
-PI_PROFILE_STREAMING_RENDER_INTERVAL = 0.5
 PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS = 320
 PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = 250
 PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS = 1000
@@ -194,18 +193,6 @@ def apply_pi_profile(
     _set_var(app, "streaming_line_threshold", PI_PROFILE_STREAMING_LINE_THRESHOLD)
     _set_var(app, "status_poll_interval", PI_PROFILE_STATUS_POLL_INTERVAL)
     _invoke_handler(app, "_on_status_interval_change")
-    _set_var(app, "toolpath_lightweight", True)
-    _invoke_handler(app, "_on_toolpath_lightweight_change")
-    _set_var(app, "toolpath_streaming_render_interval", PI_PROFILE_STREAMING_RENDER_INTERVAL)
-    _invoke_handler(app, "_apply_toolpath_streaming_render_interval")
-    _set_var(app, "render3d_enabled", False)
-    _invoke_handler(app, "_refresh_render_3d_toggle_text")
-    toolpath_panel = getattr(app, "toolpath_panel", None)
-    if toolpath_panel is not None:
-        try:
-            toolpath_panel.set_enabled(False)
-        except Exception as exc:
-            _log_suppressed("Failed disabling 3D toolpath panel for Pi profile", exc)
     _set_var(app, "show_autolevel_overlay", False)
     _invoke_handler(app, "_on_autolevel_overlay_change")
     if emit_status:

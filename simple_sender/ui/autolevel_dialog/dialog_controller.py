@@ -151,7 +151,7 @@ class AutoLevelDialogController:
         self.retract_var: tk.StringVar = cast(tk.StringVar, None)
         self.settle_var: tk.StringVar = cast(tk.StringVar, None)
         self.interp_var: tk.StringVar = cast(tk.StringVar, None)
-        self.preview_var: tk.StringVar = cast(tk.StringVar, None)
+        self.sample_var: tk.StringVar = cast(tk.StringVar, None)
         self.bounds_var: tk.StringVar = cast(tk.StringVar, None)
         self.status_var: tk.StringVar = cast(tk.StringVar, None)
         self.map_summary_var: tk.StringVar = cast(tk.StringVar, None)
@@ -206,19 +206,36 @@ class AutoLevelDialogController:
         self._init_variables()
         self._build_ui()
         self._hydrate_existing_state()
-        self.update_preview()
+        self.update_sample()
         self._poll_start_state()
         if self.dlg is not None:
             self.dlg.protocol("WM_DELETE_WINDOW", self.cancel_probe)
             self.deps.center_window_fn(self.dlg, self.app)
 
     def _resolve_bounds(self) -> Any:
+        snapshot = getattr(self.app, "_auto_level_prereq_snapshot", None)
+        if isinstance(snapshot, dict):
+            snapshot_bounds = snapshot.get("bounds")
+            if snapshot_bounds and isinstance(snapshot_bounds, tuple):
+                return snapshot_bounds
+        quick_bounds = getattr(self.app, "_gcode_bounds_box", None)
+        if isinstance(quick_bounds, dict):
+            try:
+                return (
+                    float(quick_bounds.get("min_x", 0.0) or 0.0),
+                    float(quick_bounds.get("max_x", 0.0) or 0.0),
+                    float(quick_bounds.get("min_y", 0.0) or 0.0),
+                    float(quick_bounds.get("max_y", 0.0) or 0.0),
+                    float(quick_bounds.get("min_z", 0.0) or 0.0),
+                    float(quick_bounds.get("max_z", 0.0) or 0.0),
+                )
+            except Exception:
+                pass
         parse_result = getattr(self.app, "_last_parse_result", None)
         bounds = getattr(parse_result, "bounds", None) if parse_result else None
         if bounds:
             return bounds
-        top_view = getattr(getattr(self.app, "toolpath_panel", None), "top_view", None)
-        return getattr(top_view, "bounds", None) if top_view else None
+        return None
 
     def _is_al_path(self, path: str) -> bool:
         base = os.path.splitext(os.path.basename(path))[0]
@@ -243,7 +260,7 @@ class AutoLevelDialogController:
             if self.streaming_mode:
                 self.deps.messagebox.showwarning(
                     "Auto-Level",
-                    "Bounds are not ready yet. Open the Top View or wait for parsing to finish.",
+                    "Bounds are not ready yet. Wait for Preparing Job to complete.",
                 )
             else:
                 self.deps.messagebox.showwarning(
@@ -339,7 +356,7 @@ class AutoLevelDialogController:
         self.retract_var = tk.StringVar(value=f"{run_defaults.retract_z:.2f}")
         self.settle_var = tk.StringVar(value=f"{run_defaults.settle_time:.2f}")
         self.interp_var = tk.StringVar(value=self._interp_default)
-        self.preview_var = tk.StringVar(value="")
+        self.sample_var = tk.StringVar(value="")
         self.bounds_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
         self.map_summary_var = tk.StringVar(value="")
@@ -396,7 +413,7 @@ class AutoLevelDialogController:
         spacing = pref_float(profile.get("spacing"), self.base_spacing_saved)
         self.base_spacing_var.set(f"{spacing:.2f}")
         self.interp_var.set(pref_interp(profile.get("interpolation"), self.interp_saved))
-        self.update_preview()
+        self.update_sample()
 
     def preset_snapshot(self) -> dict[str, Any]:
         return {
@@ -443,10 +460,10 @@ class AutoLevelDialogController:
         self.retract_var.set(f"{float(preset.get('retract_z', run_defaults.retract_z)):.2f}")
         self.settle_var.set(f"{float(preset.get('settle_time', run_defaults.settle_time)):.2f}")
         self.interp_var.set(str(preset.get("interpolation", self.interp_var.get())))
-        self.update_preview()
+        self.update_sample()
 
     def save_preset(self) -> None:
-        self.update_preview()
+        self.update_sample()
         if self.grid_state.get("grid") is None:
             self.deps.messagebox.showwarning("Save preset", "Fix the grid settings before saving.")
             return
@@ -545,7 +562,7 @@ class AutoLevelDialogController:
             self.avoidance_vars[row_index]["y"].set(f"{y_mm:.2f}")
         except Exception:
             return
-        self.update_preview()
+        self.update_sample()
 
     def set_start_state(self) -> None:
         if self.start_btn is None:
@@ -588,7 +605,7 @@ class AutoLevelDialogController:
         if self.status_var.get() == self.pending_g90_text:
             self.status_var.set("")
 
-    def update_preview(self) -> None:
+    def update_sample(self) -> None:
         if self.base_bounds is None:
             return
         try:
@@ -609,7 +626,7 @@ class AutoLevelDialogController:
             path_order = self._path_order_value(self.path_order_var.get())
             avoidance_areas = _parse_avoidance_areas(self.avoidance_vars)
         except ValueError as exc:
-            self.preview_var.set(str(exc))
+            self.sample_var.set(str(exc))
             self.bounds_var.set("")
             self.grid_state["grid"] = None
             self.grid_state["skipped_points"] = []
@@ -647,7 +664,7 @@ class AutoLevelDialogController:
         grid = build_adaptive_grid(self.base_bounds, spec, path_order=path_order)
         grid, skipped_points = _apply_avoidance(grid, avoidance_areas)
         if grid.point_count() == 0:
-            self.preview_var.set("Avoidance areas exclude all probe points.")
+            self.sample_var.set("Avoidance areas exclude all probe points.")
             self.bounds_var.set("")
             self.grid_state["grid"] = None
             self.grid_state["skipped_points"] = skipped_points
@@ -657,7 +674,7 @@ class AutoLevelDialogController:
 
         self.grid_state["grid"] = grid
         self.grid_state["skipped_points"] = skipped_points
-        self.preview_var.set(
+        self.sample_var.set(
             f"Grid: {len(grid.xs)} x {len(grid.ys)} ({grid.point_count()} points) "
             f"Spacing: {grid.spacing_x:.2f} x {grid.spacing_y:.2f} mm"
         )
@@ -671,7 +688,7 @@ class AutoLevelDialogController:
         self.set_start_state()
 
     def start_probe(self) -> None:
-        self.update_preview()
+        self.update_sample()
         try:
             _parse_avoidance_areas(self.avoidance_vars)
         except ValueError as exc:
@@ -765,14 +782,6 @@ class AutoLevelDialogController:
                     self.app._auto_level_grid = grid
                     self.app._auto_level_height_map = height_map
                     self.app._auto_level_bounds = grid.bounds
-                    try:
-                        show_overlay = bool(self.app.show_autolevel_overlay.get())
-                    except Exception:
-                        show_overlay = True
-                    try:
-                        self.app.toolpath_panel.set_autolevel_overlay(grid if show_overlay else None)
-                    except Exception as exc:
-                        _log_suppressed("Failed updating toolpath auto-level overlay after probe completion", exc)
                     self.apply_btn.config(state="normal")
                     if self.save_map_btn is not None:
                         self.save_map_btn.config(state="normal")
@@ -829,6 +838,33 @@ class AutoLevelDialogController:
             source_name = f"{source_name[: max_len - 3]}..."
         return [f"(Auto-Level from {source_name})"]
 
+    def _resolve_level_source(self, display_path: str) -> tuple[str, list[str] | None]:
+        source_path = str(getattr(self.app, "_auto_level_job_source_path", "") or "").strip()
+        if source_path:
+            try:
+                if os.path.isfile(source_path):
+                    return source_path, None
+            except Exception as exc:
+                _log_suppressed("Failed checking cached auto-level source path", exc)
+        source_obj = getattr(self.app, "_gcode_source", None)
+        source_obj_path = str(getattr(source_obj, "path", "") or "").strip()
+        if source_obj_path:
+            try:
+                if os.path.isfile(source_obj_path):
+                    return source_obj_path, None
+            except Exception as exc:
+                _log_suppressed("Failed checking active G-code source path for auto-level", exc)
+        if display_path:
+            try:
+                if os.path.isfile(display_path):
+                    return display_path, None
+            except Exception as exc:
+                _log_suppressed("Failed checking loaded G-code path for auto-level", exc)
+        lines = getattr(self.app, "_last_gcode_lines", None)
+        if isinstance(lines, list) and lines:
+            return display_path, lines
+        return display_path, None
+
     def apply_level(self) -> None:
         height_map = getattr(self.app, "_auto_level_height_map", None)
         if height_map is None or not height_map.is_complete():
@@ -846,12 +882,10 @@ class AutoLevelDialogController:
             return
 
         lines = getattr(self.app, "_last_gcode_lines", None) or []
+        source_path, source_lines = self._resolve_level_source(path)
         line_count = getattr(self.app, "_gcode_total_lines", None) or len(lines)
         arc_step = math.pi / 18
-        try:
-            arc_step = self.app.toolpath_panel.get_arc_step_rad(int(line_count or 0))
-        except Exception:
-            arc_step = math.pi / 18
+        _ = line_count
         method = self.interp_var.get().strip().lower()
 
         self.status_var.set("Applying height map to file...")
@@ -876,8 +910,8 @@ class AutoLevelDialogController:
                 log_fn = _log_fn
 
             result, is_temp, fallback_warning = self.deps.apply_auto_level_to_path_fn(
-                source_path=path,
-                source_lines=lines,
+                source_path=source_path,
+                source_lines=source_lines,
                 output_path=output_path,
                 temp_path_fn=self._make_temp_path,
                 height_map=height_map,
@@ -902,6 +936,22 @@ class AutoLevelDialogController:
                     self.app._auto_level_original_lines = list(lines)
                 if not getattr(self.app, "_auto_level_original_path", None):
                     self.app._auto_level_original_path = path
+                if not getattr(self.app, "_auto_level_original_source_path", None):
+                    self.app._auto_level_original_source_path = source_path or None
+                if not getattr(self.app, "_auto_level_original_hash", None):
+                    self.app._auto_level_original_hash = (
+                        getattr(self.app, "_auto_level_job_hash", None)
+                        or getattr(self.app, "_gcode_hash", None)
+                    )
+                if not int(getattr(self.app, "_auto_level_original_total_lines", 0) or 0):
+                    try:
+                        self.app._auto_level_original_total_lines = int(
+                            getattr(self.app, "_auto_level_job_total_lines", 0)
+                            or line_count
+                            or 0
+                        )
+                    except (TypeError, ValueError):
+                        self.app._auto_level_original_total_lines = 0
                 self.app._auto_level_leveled_lines = None
                 self.app._auto_level_leveled_path = result.output_path
                 self.app._auto_level_leveled_temp = is_temp
@@ -911,6 +961,9 @@ class AutoLevelDialogController:
                 self.app._auto_level_restore = {
                     "original_lines": getattr(self.app, "_auto_level_original_lines", None),
                     "original_path": getattr(self.app, "_auto_level_original_path", None),
+                    "original_source_path": getattr(self.app, "_auto_level_original_source_path", None),
+                    "original_hash": getattr(self.app, "_auto_level_original_hash", None),
+                    "original_total_lines": getattr(self.app, "_auto_level_original_total_lines", 0),
                     "leveled_lines": None,
                     "leveled_path": result.output_path,
                     "leveled_temp": is_temp,
@@ -935,7 +988,9 @@ class AutoLevelDialogController:
 
     def revert_job(self) -> None:
         orig_lines = getattr(self.app, "_auto_level_original_lines", None)
-        path = getattr(self.app, "_auto_level_original_path", None)
+        path = getattr(self.app, "_auto_level_original_path", None) or getattr(
+            self.app, "_auto_level_original_source_path", None
+        )
         if not orig_lines and not path:
             return
         name = os.path.basename(path) if path else "Original Job"
@@ -1031,7 +1086,7 @@ class AutoLevelDialogController:
         self._build_header_and_presets()
         self._build_settings_fields()
         self._build_status_and_actions()
-        self._bind_preview_fields()
+        self._bind_sample_fields()
 
     def _build_header_and_presets(self) -> None:
         header_row = ttk.Frame(self.settings_tab)
@@ -1115,7 +1170,7 @@ class AutoLevelDialogController:
             width=20,
         )
         self.path_order_combo.grid(row=7, column=1, sticky="w", pady=(4, 2))
-        self.path_order_combo.bind("<<ComboboxSelected>>", lambda _evt: self.update_preview())
+        self.path_order_combo.bind("<<ComboboxSelected>>", lambda _evt: self.update_sample())
 
         ttk.Separator(settings_tab, orient="horizontal").grid(
             row=8,
@@ -1149,15 +1204,15 @@ class AutoLevelDialogController:
             width=10,
         )
         self.interp_combo.grid(row=15, column=1, sticky="w", pady=(4, 2))
-        self.interp_combo.bind("<<ComboboxSelected>>", lambda _evt: self.update_preview())
+        self.interp_combo.bind("<<ComboboxSelected>>", lambda _evt: self.update_sample())
         self.avoidance_controls = build_avoidance_tab(
             avoidance_tab,
             self.avoidance_vars,
-            self.update_preview,
+            self.update_sample,
             self.set_avoidance_from_position,
         )
 
-        ttk.Label(settings_tab, textvariable=self.preview_var, wraplength=460, justify="left").grid(
+        ttk.Label(settings_tab, textvariable=self.sample_var, wraplength=460, justify="left").grid(
             row=16,
             column=0,
             columnspan=2,
@@ -1210,7 +1265,7 @@ class AutoLevelDialogController:
         self.close_btn = ttk.Button(btn_row, text="Close", command=self.cancel_probe)
         self.close_btn.pack(side="left")
 
-    def _bind_preview_fields(self) -> None:
+    def _bind_sample_fields(self) -> None:
         for entry in (
             self.margin_entry,
             self.base_spacing_entry,
@@ -1223,7 +1278,7 @@ class AutoLevelDialogController:
             self.retract_entry,
             self.settle_entry,
         ):
-            entry.bind("<KeyRelease>", lambda _evt: self.update_preview())
+            entry.bind("<KeyRelease>", lambda _evt: self.update_sample())
 
     def _hydrate_existing_state(self) -> None:
         if getattr(self.app, "_auto_level_height_map", None) is not None:

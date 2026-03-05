@@ -94,6 +94,7 @@ _REEXPORTED_REALTIME_CONSTANTS = (RT_RESUME, RT_JOG_CANCEL)
 TX_LINE_RATE_WINDOW_S = 5.0
 QUEUE_DEPTH_SNAPSHOT_MAX = 64
 QUEUE_DEPTH_SNAPSHOT_INTERVAL_S = 0.2
+SERIAL_ACTIVITY_HISTORY_MAX = 20000
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -272,6 +273,9 @@ class GrblWorker(
             maxlen=QUEUE_DEPTH_SNAPSHOT_MAX
         )
         self._last_queue_depth_snapshot_ts = 0.0
+        self._serial_activity_history: deque[tuple[float, str, str]] = deque(
+            maxlen=SERIAL_ACTIVITY_HISTORY_MAX
+        )
         
         # Command queue
         self._outgoing_q: queue.Queue[str] = queue.Queue(maxsize=MANUAL_COMMAND_QUEUE_MAXSIZE)
@@ -397,6 +401,7 @@ class GrblWorker(
     def _log_rx_line(self, line: str) -> None:
         if not line or (not self._should_log_rx_line(line)):
             return
+        self._record_serial_activity("RX", line)
         rx_logger = self._rx_logger
         if not rx_logger:
             return
@@ -422,6 +427,7 @@ class GrblWorker(
     def _log_tx_line(self, line: str) -> None:
         if not line or (not self._should_log_tx_line(line)):
             return
+        self._record_serial_activity("TX", line)
         rx_logger = self._rx_logger
         if not rx_logger:
             return
@@ -429,6 +435,55 @@ class GrblWorker(
             rx_logger.info("TX %s", line)
         except Exception as exc:
             _log_suppressed("Failed writing TX serial line to debug logger", exc)
+
+    def _record_serial_activity(self, direction: str, line: str) -> None:
+        try:
+            text = str(line or "").strip()
+            if not text:
+                return
+            self._serial_activity_history.append((time.time(), str(direction or "").upper(), text))
+        except Exception as exc:
+            _log_suppressed("Failed recording serial activity history entry", exc)
+
+    def get_serial_activity_history(
+        self,
+        *,
+        limit: int = 4000,
+        since_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
+        now = time.time()
+        try:
+            max_items = max(1, int(limit))
+        except Exception:
+            max_items = 4000
+        since_cutoff = None
+        if since_seconds is not None:
+            try:
+                since_value = float(since_seconds)
+                if since_value > 0:
+                    since_cutoff = now - since_value
+            except Exception:
+                since_cutoff = None
+        entries = list(self._serial_activity_history)
+        if since_cutoff is not None:
+            entries = [item for item in entries if float(item[0]) >= float(since_cutoff)]
+        if len(entries) > max_items:
+            entries = entries[-max_items:]
+        result: list[dict[str, Any]] = []
+        for ts, direction, text in entries:
+            try:
+                iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(float(ts)))
+            except Exception:
+                iso = ""
+            result.append(
+                {
+                    "ts": float(ts),
+                    "timestamp": iso,
+                    "dir": str(direction or ""),
+                    "line": str(text or ""),
+                }
+            )
+        return result
     
     # ========================================================================
     # CONTEXT MANAGER SUPPORT
@@ -656,6 +711,7 @@ class GrblWorker(
             }
             for ts, stream_depth, manual_depth, ui_depth in snapshots[-20:]
         ]
+        serial_activity_tail = self.get_serial_activity_history(limit=400, since_seconds=600.0)
         tx_loop_cycles = max(0, int(self._tx_loop_cycles))
         tx_loop_idle_cycles = max(0, int(self._tx_loop_idle_cycles))
         tx_loop_active_cycles = max(0, int(self._tx_loop_active_cycles))
@@ -674,6 +730,7 @@ class GrblWorker(
             "tx_loop_idle_ratio": tx_loop_idle_ratio,
             "queue_depth_last": queue_depth_last,
             "queue_depth_samples": queue_depth_samples,
+            "serial_activity_tail": serial_activity_tail,
         }
     
     def _encode_line_payload(self, line: str) -> bytes:

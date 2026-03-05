@@ -164,8 +164,8 @@ class ControlsMixin:
     def _set_manual_controls_enabled(self, enabled: bool) -> None:
         set_manual_controls_enabled(self, enabled)
 
-    def _set_streaming_lock(self, locked: bool) -> None:
-        set_streaming_lock(self, locked)
+    def _set_streaming_lock(self, locked: bool, *, defer_toolbar_refresh: bool = False) -> None:
+        set_streaming_lock(self, locked, defer_toolbar_refresh=defer_toolbar_refresh)
 
     def _format_alarm_message(self, message: str | None) -> str:
         return str(format_alarm_message(message))

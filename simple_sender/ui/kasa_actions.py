@@ -722,23 +722,11 @@ def handle_outgoing_gcode_line(
     *,
     line_index: int | None = None,
 ) -> None:
-    if not _kasa_supported():
-        return
-    if not hasattr(app, "accessory_router") or not hasattr(app, "spindle_command_detector"):
-        return
-    if not bool(app.kasa_enabled.get()):
-        return
-    source_name = str(source or "").strip().lower()
-    if source_name == "stream":
-        for detection_line in _iter_stream_detection_lines(app, str(line or ""), line_index):
-            state = app.spindle_command_detector.detect_state_change(detection_line)
-            if state is not None:
-                app.accessory_router.on_spindle_state_change(state)
-        return
-    detection_line = str(line or "")
-    state = app.spindle_command_detector.detect_state_change(detection_line)
-    if state is not None:
-        app.accessory_router.on_spindle_state_change(state)
+    # Kasa automation is lifecycle-driven (job start/stop), not spindle-command driven.
+    _ = app
+    _ = line
+    _ = source
+    _ = line_index
 
 
 def _selected_job_outlets(app) -> list[int]:
@@ -785,12 +773,15 @@ def start_job_accessories(app, *, source: str = "job_run") -> None:
         return
     if not hasattr(app, "accessory_router"):
         return
+    if bool(getattr(app, "_kasa_job_running", False)):
+        return
     outlets = _selected_job_outlets(app)
     active_outlets: set[int] = set()
     for outlet_id in outlets:
         _set_job_outlet_state(app, outlet_id, True, source=source)
         active_outlets.add(int(outlet_id))
     app._kasa_job_active_outlets = active_outlets
+    app._kasa_job_running = bool(active_outlets)
 
 
 def stop_job_accessories(app, *, source: str = "job_stop") -> None:
@@ -806,6 +797,7 @@ def stop_job_accessories(app, *, source: str = "job_stop") -> None:
     for outlet_id in outlet_ids:
         _set_job_outlet_state(app, outlet_id, False, source=source)
     app._kasa_job_active_outlets = set()
+    app._kasa_job_running = False
 
 
 def handle_stream_spindle_state(app, is_on: bool) -> None:

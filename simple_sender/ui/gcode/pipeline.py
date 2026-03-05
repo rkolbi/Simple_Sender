@@ -19,6 +19,7 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+# ruff: noqa: F401
 
 import logging
 import hashlib
@@ -45,12 +46,27 @@ from simple_sender.utils.hashing import hash_lines
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import (
     GCODE_LOAD_PROGRESS_INTERVAL,
-    GCODE_STREAMING_PREVIEW_LINES,
+    GCODE_STREAMING_SAMPLE_LINES,
     GCODE_STREAMING_SIZE_THRESHOLD,
+    GCODE_PREP_SAMPLE_HEAD_LINES,
+    GCODE_PREP_SAMPLE_TAIL_LINES,
+    GCODE_PREP_SAMPLE_INTERVAL_LINES,
+    GCODE_PREP_SAMPLE_MAX_LINES,
+    GCODE_PREP_FAST_SCAN_MAX_LINES_DEFAULT,
+    GCODE_PREP_FAST_SCAN_MAX_LINES_LOW_POWER,
+    GCODE_ESTIMATE_SAMPLE_MIN_EXECUTABLE_LINES,
+    GCODE_ESTIMATE_SAMPLE_MIN_MOTION_LINES,
+    GCODE_ESTIMATE_SAMPLE_MAX_SCALE,
+    GCODE_OFFSET_INDEX_MAX_FILE_BYTES,
+    GCODE_OFFSET_INDEX_MAX_LINES,
+    GCODE_OFFSET_INDEX_SPARSE_MIN_LINES,
+    GCODE_OFFSET_INDEX_SPARSE_STRIDE_LINES,
     GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
     GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER,
     GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES,
     GCODE_STREAMING_LINE_THRESHOLD,
+    GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT,
+    GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER,
     GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
     GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
     GCODE_VIEWER_CHUNK_SIZE_SMALL,
@@ -63,59 +79,18 @@ from simple_sender.utils.constants import (
     MAX_LINE_LENGTH,
     STREAMING_VALIDATION_PROMPT_TIMEOUT,
     STREAMING_VALIDATION_PROMPT_LINES,
-    TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT,
 )
 from simple_sender.utils.temp_paths import get_preferred_temp_dir
 from simple_sender.ui.job_controls import disable_job_controls
-from simple_sender.ui.viewer.preview_policy import configure_toolpath_preview, set_preview_streaming_state
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
 from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
-_PIPELINE_DEPS = (
-    hashlib,
-    queue,
-    tempfile,
-    shutil,
-    time,
-    array,
-    clean_gcode_line,
-    split_gcode_lines,
-    split_gcode_lines_stream,
-    validate_gcode_lines,
-    hash_lines,
-    GCODE_LOAD_PROGRESS_INTERVAL,
-    GCODE_STREAMING_PREVIEW_LINES,
-    GCODE_STREAMING_SIZE_THRESHOLD,
-    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
-    GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER,
-    GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES,
-    GCODE_STREAMING_LINE_THRESHOLD,
-    GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
-    GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
-    GCODE_VIEWER_CHUNK_SIZE_SMALL,
-    GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD,
-    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT,
-    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER,
-    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT,
-    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER,
-    TEMP_FILE_BUFFER_SIZE,
-    STREAMING_VALIDATION_PROMPT_TIMEOUT,
-    STREAMING_VALIDATION_PROMPT_LINES,
-    get_preferred_temp_dir,
-    configure_toolpath_preview,
-)
 
 
-def _preview_parse_segment_limit(app) -> int | None:
-    try:
-        limit = int(TOOLPATH_TOP_VIEW_PARSE_SEGMENT_LIMIT)
-    except Exception:
-        limit = 0
-    if limit <= 0:
-        return None
-    return max(2000, limit)
+def set_sample_streaming_state(app, streaming: bool) -> None:
+    app._gcode_streaming_mode = bool(streaming)
 
 
 def _lightweight_cached_parse_result(result):
@@ -192,7 +167,8 @@ def apply_loaded_gcode(
     validated: bool = False,
     streaming_source: FileGcodeSource | None = None,
     total_lines: int | None = None,
-    preview_only: bool = False,
+    sample_only: bool = False,
+    defer_viewer_stage_apply: bool = False,
 ):
     _apply_loaded_gcode(
         app,
@@ -202,7 +178,8 @@ def apply_loaded_gcode(
         validated=validated,
         streaming_source=streaming_source,
         total_lines=total_lines,
-        preview_only=preview_only,
+        sample_only=sample_only,
+        defer_viewer_stage_apply=defer_viewer_stage_apply,
         module=sys.modules[__name__],
     )
 
@@ -215,8 +192,8 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
         return
     app._gcode_parse_token += 1
     token = app._gcode_parse_token
-    arc_step = app.toolpath_panel.get_arc_step_rad(len(lines))
-    parse_limit = _preview_parse_segment_limit(app)
+    arc_step = 0.17453292519943295  # 10 degrees in radians
+    parse_limit = None
     app._gcode_parsing_active = True
 
     def _clear_parse_active_flag() -> None:
@@ -231,6 +208,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
         parse_success = False
         try:
             try:
+
                 def keep_running():
                     return token == app._gcode_parse_token
 
@@ -270,16 +248,19 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
                 try:
                     setattr(result, "_includes_moves", True)
                 except Exception as exc:
-                    _log_suppressed("Failed tagging parse result with include-moves marker", exc)
+                    _log_suppressed(
+                        "Failed tagging parse result with include-moves marker", exc
+                    )
                 app._last_parse_result = cached_result
                 app._last_parse_hash = lines_hash
-                app.toolpath_panel.apply_parse_result(lines, result, lines_hash=lines_hash)
                 app._update_gcode_stats(lines, parse_result=result)
 
             app.after(0, apply_result)
         finally:
             elapsed_ms = max(0.0, (time.perf_counter() - parse_started_at) * 1000.0)
-            record_task_timing(app, "gcode.parse.preview", elapsed_ms, success=parse_success)
+            record_task_timing(
+                app, "gcode.parse.sample", elapsed_ms, success=parse_success
+            )
 
     def _worker_wrapper() -> None:
         try:
@@ -292,7 +273,9 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
 
 def clear_gcode(app):
     if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before clearing the G-code file.")
+        messagebox.showwarning(
+            "Busy", "Stop the stream before clearing the G-code file."
+        )
         return
     macro_state_snapshot = _snapshot_macro_state(app)
     app._gcode_load_token += 1
@@ -308,7 +291,9 @@ def clear_gcode(app):
     try:
         app.grbl._clear_outgoing()
     except Exception as exc:
-        _log_suppressed("Failed clearing pending GRBL outgoing queue while clearing G-code", exc)
+        _log_suppressed(
+            "Failed clearing pending GRBL outgoing queue while clearing G-code", exc
+        )
     existing_source = getattr(app, "_gcode_source", None)
     if existing_source is not None:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
@@ -320,14 +305,60 @@ def clear_gcode(app):
             try:
                 os.remove(cleanup_path)
             except OSError as exc:
-                _log_suppressed("Failed removing temporary G-code cleanup file during clear", exc)
+                _log_suppressed(
+                    "Failed removing temporary G-code cleanup file during clear", exc
+                )
     app._gcode_source = None
-    set_preview_streaming_state(app, False)
+    set_sample_streaming_state(app, False)
     try:
         app._set_job_button_mode("read_job")
     except Exception as exc:
         _log_suppressed("Failed resetting job button mode after clear", exc)
     app._gcode_total_lines = 0
+    app._gcode_storage_mode = "none"
+    app._gcode_load_mode = ""
+    app._gcode_index_mode = "none"
+    app._gcode_source_line_count_known = True
+    app._gcode_time_to_stream_ready_ms = None
+    app._gcode_time_to_popup_close_ms = None
+    app._gcode_retained_line_count = 0
+    app._gcode_source_offset_count = 0
+    app._gcode_source_offset_type = ""
+    app._gcode_offset_index_enabled = False
+    app._gcode_prepare_sample_line_count = 0
+    app._gcode_prepare_sample_head_lines = 0
+    app._gcode_prepare_sample_tail_lines = 0
+    app._gcode_prepare_sample_interval_lines = 0
+    app._gcode_prepare_sample_max_lines = 0
+    app._gcode_file_size_bytes = 0
+    app._gcode_file_line_count = 0
+    app._gcode_file_line_count_known = False
+    app._gcode_quick_scan_ms = 0.0
+    app._gcode_bounds_box = None
+    app._gcode_bounds_confidence = "rough"
+    app._gcode_dimensions_confidence = "rough"
+    app._gcode_dimensions_confidence_reasons = {}
+    app._gcode_estimated_job_time_sec = None
+    app._gcode_estimate_confidence = "provisional"
+    app._gcode_estimate_confidence_reasons = {}
+    app._gcode_estimate_replaced_quick = False
+    app._gcode_prepare_executable_total_lines = 0
+    app._gcode_prepare_motion_total_lines = 0
+    app._gcode_prepare_sampled_executable_lines = 0
+    app._gcode_prepare_sampled_motion_lines = 0
+    app._gcode_stats_compute_mode = ""
+    app._gcode_stats_sample_scale = 1.0
+    app._gcode_stats_sample_line_count = 0
+    app._gcode_stats_sample_total_lines = 0
+    app._gcode_stats_sample_executable_lines = 0
+    app._gcode_stats_sample_motion_lines = 0
+    app._gcode_stats_executable_total_lines = 0
+    app._gcode_stats_motion_total_lines = 0
+    app._gcode_post_popup_background_tasks = "none"
+    app._gcode_full_line_cache_profile = ""
+    app._gcode_full_line_cache_cap_lines = 0
+    app._gcode_full_line_cache_cap_hit = False
+    app._gcode_sample_line_cap = 0
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None
@@ -342,10 +373,18 @@ def clear_gcode(app):
     app._gcode_validation_report = None
     app._last_parse_result = None
     app._last_parse_hash = None
+    app._auto_level_job_source_path = None
+    app._auto_level_job_hash = None
+    app._auto_level_job_total_lines = 0
     app._live_estimate_min = None
     app._live_estimate_total_min = None
+    app._live_estimate_observed_total_min = None
     app._live_estimate_display_min = None
     app._live_estimate_display_ts = 0.0
+    app._loaded_estimate_total_min = None
+    app._loaded_estimate_source = ""
+    app._estimate_confidence = "provisional"
+    app._estimate_inputs_snapshot = {}
     app._last_stats = None
     app._last_rate_source = None
     app._last_error_index = -1
@@ -357,7 +396,9 @@ def clear_gcode(app):
         try:
             app.after_cancel(after_id)
         except Exception as exc:
-            _log_suppressed("Failed canceling pending stats debounce timer during clear", exc)
+            _log_suppressed(
+                "Failed canceling pending stats debounce timer during clear", exc
+            )
     app._stats_after_id = None
     app._stats_pending_request = None
     app._stats_token += 1
@@ -365,16 +406,21 @@ def clear_gcode(app):
     app.grbl.load_gcode([])
     app.gview.set_lines([])
     app.gcode_stats_var.set("No file loaded")
+    app._gcode_status_last_text = "No file loaded"
     app.progress_pct.set(0)
     try:
         app.buffer_fill.set("Buffer: 0%")
         app.buffer_fill_pct.set(0)
     except Exception as exc:
-        _log_suppressed("Failed resetting buffer-fill UI state after clearing G-code", exc)
+        _log_suppressed(
+            "Failed resetting buffer-fill UI state after clearing G-code", exc
+        )
     try:
         app.throughput_var.set("TX: 0 B/s")
     except Exception as exc:
-        _log_suppressed("Failed resetting throughput UI state after clearing G-code", exc)
+        _log_suppressed(
+            "Failed resetting throughput UI state after clearing G-code", exc
+        )
     app.status.config(text="G-code cleared")
     disable_job_controls(app)
     try:
@@ -387,13 +433,14 @@ def clear_gcode(app):
         app._set_manual_controls_enabled(ready)
         app._set_streaming_lock(False)
     except Exception as exc:
-        _log_suppressed("Failed restoring control-state lock after clearing G-code", exc)
+        _log_suppressed(
+            "Failed restoring control-state lock after clearing G-code", exc
+        )
     try:
         app._refresh_toolbar_action_focus()
     except Exception as exc:
         _log_suppressed("Failed refreshing toolbar focus after clearing G-code", exc)
     _restore_macro_state(app, macro_state_snapshot)
-    app.toolpath_panel.clear()
     app._job_started_at = None
     app._job_completion_notified = False
 
@@ -418,20 +465,22 @@ def _reset_autolevel_state(app) -> None:
         try:
             os.remove(leveled_path)
         except OSError as exc:
-            _log_suppressed("Failed removing temporary auto-level output during reset", exc)
+            _log_suppressed(
+                "Failed removing temporary auto-level output during reset", exc
+            )
     app._auto_level_grid = None
     app._auto_level_height_map = None
     app._auto_level_bounds = None
+    app._auto_level_prereq_snapshot = {}
     app._auto_level_original_lines = None
     app._auto_level_original_path = None
+    app._auto_level_original_source_path = None
+    app._auto_level_original_hash = None
+    app._auto_level_original_total_lines = 0
     app._auto_level_leveled_lines = None
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
-    try:
-        app.toolpath_panel.set_autolevel_overlay(None)
-    except Exception as exc:
-        _log_suppressed("Failed clearing auto-level overlay during reset", exc)
 
 
 def _find_overlong_lines(

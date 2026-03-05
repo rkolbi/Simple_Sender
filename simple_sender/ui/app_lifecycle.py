@@ -106,6 +106,17 @@ def on_close(app):
         accessory_router = getattr(app, "accessory_router", None)
         if accessory_router is not None:
             try:
+                if hasattr(app, "_stop_job_accessories"):
+                    app._stop_job_accessories("app_exit")
+            except Exception as exc:
+                _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
+            try:
+                wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
+                if callable(wait_for_idle):
+                    wait_for_idle(timeout=1.0)
+            except Exception as exc:
+                _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
+            try:
                 accessory_router.shutdown(timeout=1.0)
             except Exception as exc:
                 _log_suppressed("Failed shutting down accessory router during app close", exc)

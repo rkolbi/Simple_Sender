@@ -520,11 +520,6 @@ def toggle_autolevel_overlay(app):
 
 def on_autolevel_overlay_change(app):
     show = bool(app.show_autolevel_overlay.get())
-    grid = app._auto_level_grid if show else None
-    try:
-        app.toolpath_panel.set_autolevel_overlay(grid)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-        _log_suppressed("Failed updating Auto-Level overlay visibility", exc)
     try:
         app.settings["show_autolevel_overlay"] = show
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
@@ -611,10 +606,12 @@ def _format_bytes(num_bytes: int | None) -> str:
 
 def _job_estimate_text(app) -> tuple[str, str, str]:
     stats = getattr(app, "_last_stats", None)
-    if not stats:
-        return "n/a", "n/a", "n/a"
-    time_min = stats.get("time_min")
-    rapid_min = stats.get("rapid_min")
+    if isinstance(stats, dict):
+        time_min = stats.get("time_min")
+        rapid_min = stats.get("rapid_min")
+    else:
+        time_min = None
+        rapid_min = None
     try:
         factor = app._estimate_factor_value()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
@@ -622,6 +619,12 @@ def _job_estimate_text(app) -> tuple[str, str, str]:
     feed_only = "n/a"
     total = "n/a"
     finish_at = "n/a"
+    fallback_total_min = None
+    if time_min is None:
+        try:
+            fallback_total_min = float(getattr(app, "_loaded_estimate_total_min", None))
+        except (TypeError, ValueError):
+            fallback_total_min = None
     if time_min is not None:
         seconds = int(round(time_min * factor * 60))
         feed_only = format_duration(seconds)
@@ -632,6 +635,11 @@ def _job_estimate_text(app) -> tuple[str, str, str]:
         rate_source = getattr(app, "_last_rate_source", None)
         if rate_source in ("fallback", "profile", "estimate"):
             total = f"{total} ({rate_source})"
+        finish_at = (datetime.now() + timedelta(minutes=total_min)).strftime("%Y-%m-%d %H:%M:%S")
+    elif fallback_total_min is not None and fallback_total_min > 0:
+        total_min = fallback_total_min * factor
+        total_seconds = int(round(total_min * 60))
+        total = format_duration(total_seconds)
         finish_at = (datetime.now() + timedelta(minutes=total_min)).strftime("%Y-%m-%d %H:%M:%S")
     return feed_only, total, finish_at
 

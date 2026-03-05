@@ -50,7 +50,7 @@ def grid_row(
 def build_avoidance_tab(
     parent: ttk.Frame,
     avoidance_vars: list[dict[str, Any]],
-    update_preview: Callable[[], None],
+    update_sample: Callable[[], None],
     set_avoidance_from_position: Callable[[int], None],
 ) -> list[Any]:
     avoidance_frame = ttk.Frame(parent, padding=6)
@@ -73,7 +73,7 @@ def build_avoidance_tab(
             avoidance_frame,
             text=f"Area {idx}",
             variable=enabled_var,
-            command=update_preview,
+            command=update_sample,
         )
         chk.grid(row=idx, column=0, sticky="w")
         note_entry = ttk.Entry(avoidance_frame, textvariable=note_var, width=16)
@@ -105,10 +105,10 @@ def build_avoidance_tab(
             [chk, note_entry, x_entry, y_entry, radius_entry, set_btn]
         )
 
-        def _refresh_preview(_event: tk.Event | None = None) -> None:
-            update_preview()
+        def _refresh_sample(_event: tk.Event | None = None) -> None:
+            update_sample()
 
         for entry in (note_entry, x_entry, y_entry, radius_entry):
-            entry.bind("<KeyRelease>", _refresh_preview)
+            entry.bind("<KeyRelease>", _refresh_sample)
 
     return avoidance_controls

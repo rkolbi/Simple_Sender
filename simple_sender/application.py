@@ -43,7 +43,6 @@ from simple_sender.application_layout import LayoutMixin
 from simple_sender.application_lifecycle import LifecycleMixin
 from simple_sender.application_status import StatusMixin
 from simple_sender.application_state_ui import StateUiMixin
-from simple_sender.application_toolpath import ToolpathMixin
 from simple_sender.application_ui_events import UiEventsMixin
 from simple_sender.application_ui_toggles import UiTogglesMixin
 from simple_sender.ui.app_init import (
@@ -59,7 +58,6 @@ from simple_sender.ui.pi_profile import (
     apply_pi_profile_from_state,
     offer_pi_profile_if_recommended,
 )
-from simple_sender.ui.toolpath.toolpath_settings import init_toolpath_settings
 from simple_sender.utils.perf_monitor import create_app_performance_monitor
 
 if TYPE_CHECKING:
@@ -140,7 +138,6 @@ _APP_MIXINS = (
     UiEventsMixin,
     LifecycleMixin,
     InputBindingsMixin,
-    ToolpathMixin,
     UiTogglesMixin,
     StateUiMixin,
 )
@@ -232,7 +229,6 @@ class App(tk.Tk):
             except tk.TclError as exc:
                 _log_suppressed("Failed enabling fullscreen on startup", exc)
         self._apply_ui_scale(self.settings.get("ui_scale", 1.5))
-        init_toolpath_settings(self)
         init_runtime_state(self, default_jog_feed_xy, default_jog_feed_z, _MACRO_SEARCH_DIRS)
         self._perf_monitor = create_app_performance_monitor(
             self,

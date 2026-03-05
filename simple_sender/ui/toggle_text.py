@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+
 def _ensure_toggle_button_styles(app) -> tuple[str, str]:
     style = app.style
     palette = getattr(app, "theme_palette", None) or {}
@@ -62,24 +63,6 @@ def refresh_tooltips_toggle_text(app):
             _apply_toggle_button_state(app, btn, enabled)
 
 
-def refresh_render_3d_toggle_text(app):
-    text = "3DR"
-    force_override = getattr(app, "_is_force_3d_override_enabled", None)
-    forced = False
-    if callable(force_override):
-        try:
-            forced = bool(force_override())
-        except Exception:
-            forced = False
-    blocked = bool(getattr(app, "_render3d_blocked", False))
-    enabled = forced or (app.render3d_enabled.get() and not blocked)
-    for attr in ("btn_toggle_3d", "btn_toggle_3d_settings"):
-        btn = getattr(app, attr, None)
-        if btn:
-            btn.config(text=text)
-            _apply_toggle_button_state(app, btn, enabled)
-
-
 def refresh_keybindings_toggle_text(app):
     text = "Keys"
     enabled = app.keyboard_bindings_enabled.get()
@@ -93,7 +76,10 @@ def refresh_keybindings_toggle_text(app):
 def refresh_autolevel_overlay_toggle_text(app):
     text = "ALO"
     enabled = app.show_autolevel_overlay.get()
-    for attr in ("btn_toggle_autolevel_overlay", "btn_toggle_autolevel_overlay_settings"):
+    for attr in (
+        "btn_toggle_autolevel_overlay",
+        "btn_toggle_autolevel_overlay_settings",
+    ):
         btn = getattr(app, attr, None)
         if btn:
             btn.config(text=text)
@@ -104,9 +90,13 @@ def refresh_kasa_quick_toggle_text(app):
     vac_btn = getattr(app, "btn_toggle_kasa_vacuum", None)
     if vac_btn is not None:
         vac_btn.config(text="Vac")
-        _apply_toggle_button_state(app, vac_btn, bool(getattr(app, "_kasa_vacuum_quick_on", False)))
+        _apply_toggle_button_state(
+            app, vac_btn, bool(getattr(app, "_kasa_vacuum_quick_on", False))
+        )
 
     light_btn = getattr(app, "btn_toggle_kasa_light", None)
     if light_btn is not None:
         light_btn.config(text="Light")
-        _apply_toggle_button_state(app, light_btn, bool(getattr(app, "_kasa_light_quick_on", False)))
+        _apply_toggle_button_state(
+            app, light_btn, bool(getattr(app, "_kasa_light_quick_on", False))
+        )

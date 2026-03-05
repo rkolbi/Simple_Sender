@@ -237,6 +237,39 @@ class _SnapshotEntry:
     snapshot: tracemalloc.Snapshot
 
 
+class _PhaseSampleStats:
+    """Per-phase CPU and RSS summaries with bounded CPU history."""
+
+    def __init__(self, *, maxlen: int) -> None:
+        self._cpu = _RollingCpuStats(maxlen=maxlen)
+        self._rss_start: int | None = None
+        self._rss_current: int | None = None
+        self._rss_peak: int | None = None
+
+    def add(self, cpu_pct: float, rss_bytes: int | None) -> None:
+        self._cpu.add(cpu_pct)
+        if rss_bytes is None:
+            return
+        rss = int(rss_bytes)
+        if self._rss_start is None:
+            self._rss_start = rss
+            self._rss_peak = rss
+        self._rss_current = rss
+        if self._rss_peak is None or rss > self._rss_peak:
+            self._rss_peak = rss
+
+    def snapshot(self) -> dict[str, float | int | None]:
+        cpu_avg, cpu_p95 = self._cpu.summary()
+        return {
+            "samples": len(self._cpu.samples),
+            "cpu_avg": cpu_avg,
+            "cpu_p95": cpu_p95,
+            "rss_start_bytes": self._rss_start,
+            "rss_current_bytes": self._rss_current,
+            "rss_peak_bytes": self._rss_peak,
+        }
+
+
 class AppPerformanceMonitor:
     """Low-overhead sampler for process CPU/RSS and optional tracemalloc milestones."""
 
@@ -283,6 +316,14 @@ class AppPerformanceMonitor:
         self._idle_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         self._quiet_idle_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         self._stream_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
+        self._phase_stats: dict[str, _PhaseSampleStats] = {
+            "idle_gcode_visible": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
+            "idle_gcode_hidden": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
+            "streaming": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
+        }
+        self._sample_trace: deque[dict[str, float | int | str | None]] = deque(
+            maxlen=self._cpu_sample_maxlen
+        )
         # Backward-compatible attributes used by diagnostics/tests.
         self._idle_cpu_samples = self._idle_cpu_stats.samples
         self._quiet_idle_cpu_samples = self._quiet_idle_cpu_stats.samples
@@ -424,6 +465,21 @@ class AppPerformanceMonitor:
         except Exception:
             return False
 
+    def _is_gcode_tab_visible(self) -> bool:
+        try:
+            label = str(getattr(self._app, "_active_tab_label", "") or "").strip().lower()
+        except Exception:
+            return False
+        if not label:
+            return False
+        return label in {"g-code", "gcode"}
+
+    def _phase_metrics_snapshot(self) -> dict[str, dict[str, float | int | None]]:
+        phase_metrics: dict[str, dict[str, float | int | None]] = {}
+        for phase_name, stats in self._phase_stats.items():
+            phase_metrics[phase_name] = stats.snapshot()
+        return phase_metrics
+
     def _sample_loop(self) -> None:
         while not self._stop_evt.wait(self._sample_interval_s):
             self._sample_once()
@@ -443,12 +499,27 @@ class AppPerformanceMonitor:
                 self._rss_current = rss
                 if rss > self._rss_peak:
                     self._rss_peak = rss
-            if self._connected_and_idle():
+            phase = "other"
+            connected_idle = self._connected_and_idle()
+            if connected_idle:
                 self._idle_cpu_stats.add(cpu_pct)
+                phase_key = "idle_gcode_visible" if self._is_gcode_tab_visible() else "idle_gcode_hidden"
+                self._phase_stats[phase_key].add(cpu_pct, rss)
+                phase = phase_key
             if self._connected_and_quiet_idle():
                 self._quiet_idle_cpu_stats.add(cpu_pct)
             if self._connected_and_streaming():
                 self._stream_cpu_stats.add(cpu_pct)
+                self._phase_stats["streaming"].add(cpu_pct, rss)
+                phase = "streaming"
+            self._sample_trace.append(
+                {
+                    "ts": float(time.time()),
+                    "cpu_pct": float(cpu_pct),
+                    "rss_bytes": int(rss) if rss is not None else None,
+                    "phase": phase,
+                }
+            )
 
             ready_at = self._app_ready_at or self._created_at
             elapsed_since_ready = max(0.0, now_wall - ready_at)
@@ -552,6 +623,7 @@ class AppPerformanceMonitor:
             quiet_idle_cpu_avg, quiet_idle_cpu_p95 = self._quiet_idle_cpu_stats.summary()
             quiet_idle_sample_count = len(self._quiet_idle_cpu_stats.samples)
             stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
+            phase_metrics = self._phase_metrics_snapshot()
             ui_ticks, ui_events, ui_max_ms, ui_stalls = self._ui_drain_metrics()
             rss_start = self._rss_start
             rss_current = self._rss_current
@@ -588,6 +660,26 @@ class AppPerformanceMonitor:
             lines.append("Streaming CPU avg/p95: n/a")
         else:
             lines.append(f"Streaming CPU avg/p95: {stream_cpu_avg:.2f}% / {stream_cpu_p95:.2f}%")
+        if phase_metrics:
+            lines.append("Phase CPU/RSS:")
+            for phase_name in ("idle_gcode_visible", "idle_gcode_hidden", "streaming"):
+                phase = phase_metrics.get(phase_name)
+                if not isinstance(phase, dict):
+                    continue
+                label = phase_name.replace("_", " ")
+                samples = int(phase.get("samples", 0) or 0)
+                cpu_avg = phase.get("cpu_avg")
+                cpu_p95 = phase.get("cpu_p95")
+                if cpu_avg is None or cpu_p95 is None:
+                    cpu_text = "n/a"
+                else:
+                    cpu_text = f"{float(cpu_avg):.2f}% / {float(cpu_p95):.2f}%"
+                lines.append(
+                    f"- {label}: cpu avg/p95={cpu_text}, samples={samples}, "
+                    f"rss start/current/peak={_format_mb(phase.get('rss_start_bytes'))} / "
+                    f"{_format_mb(phase.get('rss_current_bytes'))} / "
+                    f"{_format_mb(phase.get('rss_peak_bytes'))}"
+                )
         lines.append(f"RSS start: {_format_mb(rss_start)}")
         lines.append(f"RSS current: {_format_mb(rss_current)}")
         lines.append(f"RSS peak: {_format_mb(rss_peak)}")
@@ -639,6 +731,7 @@ class AppPerformanceMonitor:
             idle_cpu_avg, idle_cpu_p95 = self._idle_cpu_stats.summary()
             quiet_idle_cpu_avg, quiet_idle_cpu_p95 = self._quiet_idle_cpu_stats.summary()
             stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
+            phase_metrics = self._phase_metrics_snapshot()
             snapshot = {
                 "available": True,
                 "uptime_s": max(0.0, time.perf_counter() - self._created_at),
@@ -655,6 +748,8 @@ class AppPerformanceMonitor:
                 "rss_peak_bytes": self._rss_peak,
                 "rss_steady_state_bytes": self._rss_steady_state,
                 "steady_state_after_s": self._steady_state_after_s,
+                "phase_metrics": phase_metrics,
+                "sample_trace": list(self._sample_trace),
             }
         try:
             snapshot["ui_queue_drain_ticks"] = int(
@@ -684,6 +779,20 @@ class AppPerformanceMonitor:
                 getattr(self._app, "_ui_queue_drain_runtime_slowest_event_kind", "") or ""
             )
             snapshot["background_task_timings"] = snapshot_task_timings(self._app)
+            outliers = getattr(self._app, "_ui_queue_drain_outliers", None)
+            outlier_entries: list[dict[str, Any]] = []
+            if isinstance(outliers, deque):
+                for item in list(outliers):
+                    if isinstance(item, dict):
+                        outlier_entries.append(dict(item))
+            elif isinstance(outliers, list):
+                for item in outliers:
+                    if isinstance(item, dict):
+                        outlier_entries.append(dict(item))
+            snapshot["ui_queue_drain_outliers"] = outlier_entries
+            snapshot["ui_queue_drain_outlier_total"] = int(
+                getattr(self._app, "_ui_queue_drain_outlier_total", 0) or 0
+            )
         except Exception:
             pass
         return snapshot
@@ -714,7 +823,7 @@ def create_app_performance_monitor(
     enabled = _env_flag("SIMPLE_SENDER_PERF_PROFILE") or _safe_bool_setting(
         settings,
         "performance_profile_enabled",
-        default=False,
+        default=True,
     )
     if not enabled:
         return None

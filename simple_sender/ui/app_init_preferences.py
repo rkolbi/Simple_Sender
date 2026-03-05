@@ -97,7 +97,10 @@ def _init_behavior_preferences(
     )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
     app.performance_profile_enabled = tk.BooleanVar(
-        value=setting("performance_profile_enabled", False)
+        value=setting(
+            "performance_profile_enabled",
+            default_settings.get("performance_profile_enabled", True),
+        )
     )
     app.performance_leak_watch_enabled = tk.BooleanVar(
         value=setting("performance_leak_watch_enabled", False)
@@ -105,9 +108,6 @@ def _init_behavior_preferences(
     app.performance_profile_log_path = tk.StringVar(
         value=str(setting("performance_profile_log_path", "") or "").strip()
     )
-    app.render3d_enabled = tk.BooleanVar(value=setting("render3d_enabled", True))
-    app.force_3d_session_override = tk.BooleanVar(value=False)
-    app._render3d_blocked = False
     app.all_stop_mode = tk.StringVar(value=setting("all_stop_mode", "stop_reset"))
     app.training_wheels = tk.BooleanVar(value=setting("training_wheels", True))
     app.stop_hold_on_focus_loss = tk.BooleanVar(
@@ -307,7 +307,6 @@ def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
     app.auto_level_enabled = tk.BooleanVar(value=setting("auto_level_enabled", True))
     app.show_autolevel_overlay = tk.BooleanVar(value=setting("show_autolevel_overlay", True))
     app.show_quick_tips_button = tk.BooleanVar(value=setting("show_quick_tips_button", True))
-    app.show_quick_3d_button = tk.BooleanVar(value=setting("show_quick_3d_button", True))
     app.show_quick_keys_button = tk.BooleanVar(value=setting("show_quick_keys_button", True))
     app.show_quick_alo_button = tk.BooleanVar(value=setting("show_quick_alo_button", True))
     app.show_quick_vac_button = tk.BooleanVar(value=setting("show_quick_vac_button", True))

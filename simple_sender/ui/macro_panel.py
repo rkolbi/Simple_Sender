@@ -149,14 +149,14 @@ class MacroPanel:
         except Exception:
             return f"Macro {index}", "", None, None, 2
 
-    def _show_macro_preview(self, name: str, lines: list[str]) -> None:
+    def _show_macro_sample(self, name: str, lines: list[str]) -> None:
         _name, _tip, _color, _text_color, body_start = parse_macro_header(
             lines,
             color_validator=self._validate_macro_color,
         )
         body = "".join(lines[body_start:]) if len(lines) > body_start else ""
         dlg = tk.Toplevel(self.app)
-        dlg.title(f"Macro Preview - {name}")
+        dlg.title(f"Macro Sample - {name}")
         dlg.transient(self.app)
         dlg.grab_set()
         dlg.resizable(True, True)
@@ -174,7 +174,7 @@ class MacroPanel:
         center_window(dlg, self.app)
         dlg.wait_window()
 
-    def _preview_macro(self, index: int) -> None:
+    def _sample_macro(self, index: int) -> None:
         path = self._macro_path(index)
         if not path:
             return
@@ -185,7 +185,7 @@ class MacroPanel:
             messagebox.showerror("Macro error", str(e))
             return
         name = lines[0].strip() if lines else f"Macro {index}"
-        self._show_macro_preview(name, lines)
+        self._show_macro_sample(name, lines)
 
     def _run_macro(self, index: int) -> None:
         self.app.macro_executor.run_macro(index)
@@ -196,8 +196,8 @@ class MacroPanel:
         def _run_command(index: int) -> Callable[[], None]:
             return lambda: self._run_macro(index)
 
-        def _preview_bind(index: int) -> Callable[[tk.Event], None]:
-            return lambda _event: self._preview_macro(index)
+        def _sample_bind(index: int) -> Callable[[tk.Event], None]:
+            return lambda _event: self._sample_macro(index)
 
         if self._macro_buttons:
             self.app._manual_controls = [w for w in self.app._manual_controls if w not in self._macro_buttons]
@@ -246,7 +246,7 @@ class MacroPanel:
             padx = (0, 6) if col < total_buttons - 1 else 0
             btn.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", _preview_bind(idx))
+            btn.bind("<Button-3>", _sample_bind(idx))
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
         self.app._refresh_keyboard_table()

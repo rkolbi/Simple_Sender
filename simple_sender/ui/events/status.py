@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _WPOS_FLASH_MIN_INTERVAL_S = 0.25
 _DRO_DISPLAY_STEP = 0.001
+_STATUS_SETTLING_MIN_INTERVAL_S = 0.2
+_STATUS_SLOW_LOG_MS = 50.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -87,6 +89,79 @@ def _record_status_perf_metric(app, name: str, elapsed_ms: float) -> None:
         entry["max_ms"] = max(float(entry.get("max_ms", 0.0) or 0.0), max(0.0, float(elapsed_ms)))
     except Exception as exc:
         _log_suppressed("Failed recording status timing metric", exc)
+
+
+def _status_settling_active(app) -> bool:
+    return bool(getattr(app, "_gcode_load_settling", False))
+
+
+def _status_apply_interval_ok(app, state_token: str) -> bool:
+    if not _status_settling_active(app):
+        return True
+    now = time.monotonic()
+    last_state = str(getattr(app, "_status_settling_last_state", "") or "")
+    last_ts = float(getattr(app, "_status_settling_last_apply_ts", 0.0) or 0.0)
+    if state_token and state_token == last_state and (now - last_ts) < _STATUS_SETTLING_MIN_INTERVAL_S:
+        app._status_settling_drop_count = int(getattr(app, "_status_settling_drop_count", 0) or 0) + 1
+        return False
+    app._status_settling_last_state = state_token
+    app._status_settling_last_apply_ts = now
+    return True
+
+
+def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
+    state_lower = str(state or "").strip().lower()
+    app._machine_state_text = state
+    if state_lower.startswith("alarm"):
+        app._set_alarm_lock(True, state)
+    else:
+        if getattr(app, "_alarm_locked", False):
+            app._set_alarm_lock(False)
+        if not getattr(app, "_macro_status_active", False):
+            rendered_state = _render_machine_state_text(app, state, display_state)
+            _set_var_if_changed(app.machine_state, rendered_state)
+            try:
+                app._ensure_state_label_width(rendered_state)
+            except Exception as exc:
+                _log_suppressed("Failed adjusting machine-state width during settling", exc)
+            try:
+                app._update_state_highlight(display_state)
+            except Exception as exc:
+                _log_suppressed("Failed updating machine-state highlight during settling", exc)
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_vars["state"] = state
+            macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
+    except Exception as exc:
+        _log_suppressed("Failed updating macro state during settling status handling", exc)
+
+
+def _log_slow_status_event(
+    app,
+    *,
+    total_ms: float,
+    state: str,
+    parse_ms: float,
+    apply_ms: float,
+    positions_ms: float,
+    deferred_ms: float,
+    settling: bool,
+) -> None:
+    if total_ms <= _STATUS_SLOW_LOG_MS:
+        return
+    logger.info(
+        "[ui] Slow status event: total=%.2fms state=%s tab=%s settling=%s parse=%.2fms apply=%.2fms "
+        "positions=%.2fms deferred=%.2fms dropped_settling=%d",
+        total_ms,
+        str(state or "?"),
+        str(getattr(app, "_active_tab_label", "") or "unknown"),
+        bool(settling),
+        parse_ms,
+        apply_ms,
+        positions_ms,
+        deferred_ms,
+        int(getattr(app, "_status_settling_drop_count", 0) or 0),
+    )
 
 
 def _stream_active_or_finishing(app) -> bool:
@@ -374,6 +449,13 @@ def _render_machine_state_text(app, state: str, display_state: str) -> str:
 
 
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
+    prev_state = str(getattr(app, "_machine_state_text", "") or "")
+    prev_state_token = prev_state.strip().lower()
+    if "|" in prev_state_token:
+        prev_state_token = prev_state_token.split("|", 1)[0]
+    next_state_token = str(state or "").strip().lower()
+    if "|" in next_state_token:
+        next_state_token = next_state_token.split("|", 1)[0]
     state_lower = state.lower()
     app._machine_state_text = state
     if state_lower.startswith("alarm"):
@@ -400,19 +482,35 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
             return False
         app._pending_settings_refresh = False
         _schedule_request_settings_dump(app)
-    if (
+    controls_allowed = bool(
         app.connected
         and app._grbl_ready
         and app._status_seen
         and not app._alarm_locked
         and not _stream_active_or_finishing(app)
-    ):
-        app._set_manual_controls_enabled(True)
-        set_run_resume_from(app, job_controls_ready(app))
+    )
+    ready_now = job_controls_ready(app) if controls_allowed else False
+    if ready_now != bool(getattr(app, "_job_controls_last_ready", False)):
+        set_run_resume_from(app, ready_now)
+        app._job_controls_last_ready = bool(ready_now)
+    manual_last = bool(getattr(app, "_manual_controls_last_enabled", False))
+    if bool(controls_allowed) != manual_last:
+        app._set_manual_controls_enabled(bool(controls_allowed))
     with app.macro_executor.macro_vars() as macro_vars:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
     _signal_thread_event(app, "_status_update_event")
+    if next_state_token != prev_state_token:
+        try:
+            if hasattr(app, "_refresh_toolbar_action_focus"):
+                app._refresh_toolbar_action_focus()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing toolbar focus on machine-state transition", exc)
+        try:
+            if hasattr(app, "_update_quick_button_visibility"):
+                app._update_quick_button_visibility()
+        except Exception as exc:
+            _log_suppressed("Failed updating quick buttons on machine-state transition", exc)
     return True
 
 
@@ -688,14 +786,6 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
                 _set_var_if_changed(app.wpos_x, wpos_x)
                 _set_var_if_changed(app.wpos_y, wpos_y)
                 _set_var_if_changed(app.wpos_z, wpos_z)
-                try:
-                    app.toolpath_panel.set_position(
-                        to_mm(wpos_vals[0]),
-                        to_mm(wpos_vals[1]),
-                        to_mm(wpos_vals[2]),
-                    )
-                except Exception as exc:
-                    _log_suppressed("Failed updating toolpath position from WPos", exc)
             except Exception as exc:
                 _log_suppressed("Failed updating WPos DRO values", exc)
         macro_updates["wx"] = to_modal(wpos_vals[0])
@@ -719,14 +809,6 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
                 _set_var_if_changed(app.wpos_x, wpos_x)
                 _set_var_if_changed(app.wpos_y, wpos_y)
                 _set_var_if_changed(app.wpos_z, wpos_z)
-                try:
-                    app.toolpath_panel.set_position(
-                        to_mm(wpos_calc[0]),
-                        to_mm(wpos_calc[1]),
-                        to_mm(wpos_calc[2]),
-                    )
-                except Exception as exc:
-                    _log_suppressed("Failed updating toolpath position from computed WPos", exc)
             except Exception as exc:
                 _log_suppressed("Failed updating computed WPos DRO values", exc)
         macro_updates["wx"] = to_modal(wpos_calc[0])
@@ -821,6 +903,11 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
 
 def handle_status_event(app, raw: str):
     event_start = time.perf_counter()
+    parse_elapsed_ms = 0.0
+    apply_elapsed_ms = 0.0
+    positions_elapsed_ms = 0.0
+    deferred_elapsed_ms = 0.0
+    settling = _status_settling_active(app)
     _signal_thread_event(app, "_status_update_event")
     now_ts = time.time()
     app._last_status_ts = now_ts
@@ -848,6 +935,18 @@ def handle_status_event(app, raw: str):
             (time.perf_counter() - event_start) * 1000.0,
         )
         return
+    if not _status_apply_interval_ok(app, state_token):
+        _record_status_perf_metric(
+            app,
+            "settling_coalesced",
+            (time.perf_counter() - event_start) * 1000.0,
+        )
+        _record_status_perf_metric(
+            app,
+            "total",
+            (time.perf_counter() - event_start) * 1000.0,
+        )
+        return
     app._status_duplicate_count = 0
     history = getattr(app, "_status_history", None)
     if not isinstance(history, deque):
@@ -859,34 +958,71 @@ def handle_status_event(app, raw: str):
     history.append((now_ts, raw))
     parse_start = time.perf_counter()
     fields = _parse_status_fields(raw)
-    _record_status_perf_metric(app, "parse", (time.perf_counter() - parse_start) * 1000.0)
+    parse_elapsed_ms = (time.perf_counter() - parse_start) * 1000.0
+    _record_status_perf_metric(app, "parse", parse_elapsed_ms)
     app._status_seen = True
     app._last_status_pins = fields.pins
     display_state = _resolve_display_state(app, fields.state)
     apply_start = time.perf_counter()
-    if not _apply_machine_state(app, fields.state, display_state):
+    if settling:
+        _apply_machine_state_minimal(app, fields.state, display_state)
+    else:
+        if not _apply_machine_state(app, fields.state, display_state):
+            apply_elapsed_ms = (time.perf_counter() - apply_start) * 1000.0
+            _record_status_perf_metric(
+                app,
+                "apply_state",
+                apply_elapsed_ms,
+            )
+            total_ms = (time.perf_counter() - event_start) * 1000.0
+            _record_status_perf_metric(app, "total", total_ms)
+            _log_slow_status_event(
+                app,
+                total_ms=total_ms,
+                state=fields.state,
+                parse_ms=parse_elapsed_ms,
+                apply_ms=apply_elapsed_ms,
+                positions_ms=positions_elapsed_ms,
+                deferred_ms=deferred_elapsed_ms,
+                settling=settling,
+            )
+            return
+    apply_elapsed_ms = (time.perf_counter() - apply_start) * 1000.0
+    _record_status_perf_metric(app, "apply_state", apply_elapsed_ms)
+    if settling:
         _record_status_perf_metric(
             app,
-            "apply_state",
-            (time.perf_counter() - apply_start) * 1000.0,
+            "positions_macro",
+            0.0,
         )
-        _record_status_perf_metric(app, "total", (time.perf_counter() - event_start) * 1000.0)
-        return
-    _record_status_perf_metric(app, "apply_state", (time.perf_counter() - apply_start) * 1000.0)
-    update_start = time.perf_counter()
-    _update_positions_and_macro_state(app, fields)
-    _record_status_perf_metric(
-        app,
-        "positions_macro",
-        (time.perf_counter() - update_start) * 1000.0,
-    )
+    else:
+        update_start = time.perf_counter()
+        _update_positions_and_macro_state(app, fields)
+        positions_elapsed_ms = (time.perf_counter() - update_start) * 1000.0
+        _record_status_perf_metric(
+            app,
+            "positions_macro",
+            positions_elapsed_ms,
+        )
     finalize_start = time.perf_counter()
     _sync_deferred_stream_completion(app, fields.state)
+    deferred_elapsed_ms = (time.perf_counter() - finalize_start) * 1000.0
     _record_status_perf_metric(
         app,
         "deferred_completion",
-        (time.perf_counter() - finalize_start) * 1000.0,
+        deferred_elapsed_ms,
     )
-    _record_status_perf_metric(app, "total", (time.perf_counter() - event_start) * 1000.0)
+    total_ms = (time.perf_counter() - event_start) * 1000.0
+    _record_status_perf_metric(app, "total", total_ms)
+    _log_slow_status_event(
+        app,
+        total_ms=total_ms,
+        state=fields.state,
+        parse_ms=parse_elapsed_ms,
+        apply_ms=apply_elapsed_ms,
+        positions_ms=positions_elapsed_ms,
+        deferred_ms=deferred_elapsed_ms,
+        settling=settling,
+    )
 
 

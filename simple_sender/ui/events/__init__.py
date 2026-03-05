@@ -120,8 +120,8 @@ def handle_stream_interrupted(app, evt):
     return _router.handle_stream_interrupted(app, evt)
 
 
-def set_streaming_lock(app, locked: bool):
-    return _router.set_streaming_lock(app, locked)
+def set_streaming_lock(app, locked: bool, *, defer_toolbar_refresh: bool = False):
+    return _router.set_streaming_lock(app, locked, defer_toolbar_refresh=defer_toolbar_refresh)
 
 __all__ = [
     "handle_event",

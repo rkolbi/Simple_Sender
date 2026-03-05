@@ -103,7 +103,8 @@ class GcodeMixin:
         validated: bool = False,
         streaming_source=None,
         total_lines: int | None = None,
-        preview_only: bool = False,
+        sample_only: bool = False,
+        defer_viewer_stage_apply: bool = False,
     ):
         apply_loaded_gcode(
             self,
@@ -113,7 +114,8 @@ class GcodeMixin:
             validated=validated,
             streaming_source=streaming_source,
             total_lines=total_lines,
-            preview_only=preview_only,
+            sample_only=sample_only,
+            defer_viewer_stage_apply=defer_viewer_stage_apply,
         )
 
     def _clear_gcode(self):
@@ -151,13 +153,39 @@ class GcodeMixin:
 
     def _sync_tool_reference_label(self):
         app = cast(Any, self)
-        try:
-            with app.macro_executor.macro_vars() as macro_vars:
+        macro_executor = getattr(app, "macro_executor", None)
+        if macro_executor is None:
+            return
+        tool_ref = None
+        lock = getattr(macro_executor, "_macro_vars_lock", None)
+        macro_vars = getattr(macro_executor, "_macro_vars", None)
+        if lock is not None and hasattr(lock, "acquire") and hasattr(lock, "release") and isinstance(macro_vars, dict):
+            acquired = False
+            try:
+                acquired = bool(lock.acquire(blocking=False))
+            except Exception:
+                acquired = False
+            if not acquired:
+                return
+            try:
                 macro_ns = macro_vars.get("macro")
                 state = getattr(macro_ns, "state", None)
                 tool_ref = getattr(state, "TOOL_REFERENCE", None) if state is not None else None
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            return
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                return
+            finally:
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+        else:
+            try:
+                with macro_executor.macro_vars() as macro_vars_ctx:
+                    macro_ns = macro_vars_ctx.get("macro")
+                    state = getattr(macro_ns, "state", None)
+                    tool_ref = getattr(state, "TOOL_REFERENCE", None) if state is not None else None
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                return
         if tool_ref == getattr(app, "_tool_reference_last", None):
             return
         app._tool_reference_last = tool_ref
@@ -203,6 +231,17 @@ class GcodeMixin:
     ):
         return make_stats_cache_key(self, rapid_rates, accel_rates)
 
-    def _update_gcode_stats(self, lines: list[str], parse_result=None):
-        update_gcode_stats(self, lines, parse_result=parse_result)
+    def _update_gcode_stats(
+        self,
+        lines: list[str],
+        parse_result=None,
+        *,
+        force_full_scan: bool = False,
+    ):
+        update_gcode_stats(
+            self,
+            lines,
+            parse_result=parse_result,
+            force_full_scan=force_full_scan,
+        )
 

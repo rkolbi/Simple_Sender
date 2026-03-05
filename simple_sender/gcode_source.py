@@ -35,27 +35,71 @@ class FileGcodeSource:
     def __init__(
         self,
         path: str,
-        offsets: Iterable[int],
+        offsets: Iterable[int] | None,
         encoding: str = "utf-8",
         *,
         already_clean: bool = False,
+        total_lines: int | None = None,
+        line_count_known: bool | None = None,
+        sparse_offsets: Iterable[int] | None = None,
+        sparse_stride: int | None = None,
     ):
         self.path = path
-        if isinstance(offsets, array) and offsets.typecode == "Q":
+        if offsets is not None and isinstance(offsets, array) and offsets.typecode in {"Q", "I", "L"}:
             self._offsets = offsets
         else:
-            # Compact, contiguous offsets reduce memory for large streamed jobs.
-            self._offsets = array("Q", offsets)
+            # Compact, contiguous offsets reduce memory for indexed jobs.
+            self._offsets = array("Q", offsets) if offsets is not None else None
+        if sparse_offsets is not None and isinstance(sparse_offsets, array) and sparse_offsets.typecode in {"Q", "I", "L"}:
+            self._sparse_offsets = sparse_offsets
+        else:
+            self._sparse_offsets = array("Q", sparse_offsets) if sparse_offsets is not None else None
+        self._sparse_stride = max(2, int(sparse_stride or 0)) if sparse_stride else 0
         self._encoding = encoding
         self._already_clean = bool(already_clean)
         self._lock = threading.Lock()
         self._file: IO[str] | None = None
+        if total_lines is not None:
+            self._line_count = int(total_lines)
+        else:
+            self._line_count = int(len(self._offsets or ()))
+        if self._line_count < 0:
+            self._line_count = 0
+        if line_count_known is None:
+            self._line_count_known = bool(total_lines is not None or self._offsets is not None)
+        else:
+            self._line_count_known = bool(line_count_known)
+        # Sequential fallback cursor for non-indexed sources.
+        self._cursor_index = -1
 
     def __len__(self) -> int:
-        return len(self._offsets)
+        return self._line_count
 
     def __iter__(self) -> Iterator[str]:
-        for idx in range(len(self._offsets)):
+        if self._offsets is None:
+            emitted = 0
+            with open(
+                self.path,
+                "r",
+                encoding=self._encoding,
+                errors="replace",
+                newline="",
+            ) as handle:
+                while True:
+                    raw = handle.readline()
+                    if not raw:
+                        break
+                    line = self._clean_line(raw)
+                    if not line:
+                        continue
+                    emitted += 1
+                    yield line
+                    if self._line_count_known and emitted >= self._line_count:
+                        break
+            if not self._line_count_known:
+                self.set_line_count(emitted, known=True)
+            return
+        for idx in range(self._line_count):
             yield self._read_line_at(idx)
 
     @overload
@@ -66,13 +110,15 @@ class FileGcodeSource:
 
     def __getitem__(self, idx: int | slice):
         if isinstance(idx, slice):
-            start, stop, step = idx.indices(len(self._offsets))
+            start, stop, step = idx.indices(self._line_count)
             if step == 1:
                 return [self._read_line_at(i) for i in range(start, stop)]
             return [self._read_line_at(i) for i in range(start, stop, step)]
         if idx < 0:
-            idx += len(self._offsets)
-        if idx < 0 or idx >= len(self._offsets):
+            idx += self._line_count
+        if idx < 0:
+            raise IndexError("G-code index out of range")
+        if self._line_count_known and idx >= self._line_count:
             raise IndexError("G-code index out of range")
         return self._read_line_at(idx)
 
@@ -84,6 +130,57 @@ class FileGcodeSource:
                 except (OSError, ValueError):
                     pass
             self._file = None
+            self._cursor_index = -1
+
+    def clone(self) -> "FileGcodeSource":
+        return FileGcodeSource(
+            self.path,
+            self._offsets,
+            encoding=self._encoding,
+            already_clean=self._already_clean,
+            total_lines=self._line_count,
+            line_count_known=self._line_count_known,
+            sparse_offsets=self._sparse_offsets,
+            sparse_stride=self._sparse_stride,
+        )
+
+    def line_count_known(self) -> bool:
+        return bool(self._line_count_known)
+
+    def set_line_count(self, total_lines: int, *, known: bool = True) -> None:
+        with self._lock:
+            self._line_count = max(0, int(total_lines))
+            self._line_count_known = bool(known)
+
+    def set_full_offsets(self, offsets: Iterable[int], *, total_lines: int) -> None:
+        with self._lock:
+            self._offsets = offsets if isinstance(offsets, array) else array("Q", offsets)
+            self._line_count = max(0, int(total_lines))
+            self._line_count_known = True
+            self._cursor_index = -1
+            self._sparse_offsets = None
+            self._sparse_stride = 0
+
+    def set_sparse_offsets(
+        self,
+        offsets: Iterable[int],
+        *,
+        stride: int,
+        total_lines: int,
+    ) -> None:
+        with self._lock:
+            self._sparse_offsets = offsets if isinstance(offsets, array) else array("Q", offsets)
+            self._sparse_stride = max(2, int(stride))
+            self._line_count = max(0, int(total_lines))
+            self._line_count_known = True
+            self._cursor_index = -1
+
+    def index_mode(self) -> str:
+        if self._offsets is not None:
+            return "full"
+        if self._sparse_offsets is not None and self._sparse_stride > 1:
+            return "sparse"
+        return "none"
 
     def _open(self) -> IO[str]:
         if self._file is None or self._file.closed:
@@ -96,14 +193,50 @@ class FileGcodeSource:
             )
         return self._file
 
-    def _read_line_at(self, idx: int) -> str:
-        with self._lock:
-            f = self._open()
-            target_offset = self._offsets[idx]
-            # Streaming sends lines in sequence, so skip seek when already at target.
-            if f.tell() != target_offset:
-                f.seek(target_offset)
-            raw = f.readline()
+    def _clean_line(self, raw: str) -> str:
         if self._already_clean:
             return cast(str, raw.rstrip("\r\n"))
         return cast(str, clean_gcode_line(raw))
+
+    def _read_line_at(self, idx: int) -> str:
+        with self._lock:
+            f = self._open()
+            if self._offsets is not None:
+                target_offset = self._offsets[idx]
+                # Streaming sends lines in sequence, so skip seek when already at target.
+                if f.tell() != target_offset:
+                    f.seek(target_offset)
+                raw = f.readline()
+            else:
+                base_idx = 0
+                base_offset = 0
+                if self._sparse_offsets is not None and self._sparse_stride > 1 and idx >= self._sparse_stride:
+                    anchor_slot = min(
+                        int(idx // self._sparse_stride),
+                        max(0, len(self._sparse_offsets) - 1),
+                    )
+                    base_idx = int(anchor_slot * self._sparse_stride)
+                    base_offset = int(self._sparse_offsets[anchor_slot])
+                if idx <= self._cursor_index or self._cursor_index < base_idx:
+                    f.seek(base_offset)
+                    self._cursor_index = base_idx - 1
+                line = ""
+                while self._cursor_index < idx:
+                    raw = f.readline()
+                    if not raw:
+                        # EOF before requested index, lock in true cleaned-line count.
+                        self._line_count = max(0, self._cursor_index + 1)
+                        self._line_count_known = True
+                        raise IndexError("G-code index out of range")
+                    cleaned = self._clean_line(raw)
+                    if not cleaned:
+                        continue
+                    self._cursor_index += 1
+                    line = cleaned
+                return line
+        line = self._clean_line(raw)
+        if not line:
+            # Indexed sources should point to cleaned non-empty lines. Treat any
+            # mismatch as an out-of-range read instead of recursing indefinitely.
+            raise IndexError("G-code index out of range")
+        return line

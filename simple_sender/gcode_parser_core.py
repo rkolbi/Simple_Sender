@@ -24,7 +24,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, Set
+from typing import Any, Callable, Iterable, List, MutableMapping, Optional, Set
 
 logger = logging.getLogger(__name__)
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
@@ -53,6 +53,7 @@ SPLIT_ALLOWED_G_CODES = {
 @dataclass
 class GcodeMove:
     """Normalized move summary for stats/estimates."""
+
     start: tuple[float, float, float]
     end: tuple[float, float, float]
     motion: int
@@ -67,7 +68,8 @@ class GcodeMove:
 
 @dataclass
 class GcodeParseResult:
-    """Parsed segments, bounds, and move summaries for toolpath rendering."""
+    """Parsed segments, bounds, and move summaries for geometry/stat analysis."""
+
     segments: List[tuple[float, float, float, float, float, float, str]]
     bounds: tuple[float, float, float, float, float, float] | None
     moves: List[GcodeMove]
@@ -144,6 +146,15 @@ def _parse_words_and_collect_g_codes(
     return parsed_words, g_codes
 
 
+def _keep_running_allowed(keep_running: Optional[Callable], section: str) -> bool:
+    if keep_running is None:
+        return True
+    try:
+        return bool(keep_running(section))
+    except TypeError:
+        return bool(keep_running())
+
+
 def parse_gcode_lines(
     lines: Iterable[str],
     arc_step_rad: float = math.pi / 18,
@@ -152,11 +163,16 @@ def parse_gcode_lines(
     include_moves: bool = True,
     move_callback: Optional[Callable[[GcodeMove], None]] = None,
     move_values_callback: Optional[
-        Callable[[int, float | None, str, float, float, float, float, float | None], None]
+        Callable[
+            [int, float | None, str, float, float, float, float, float | None], None
+        ]
     ] = None,
+    segment_count_callback: Optional[Callable[[int], None]] = None,
     include_segments: bool = True,
+    stop_after_max_segments: bool = False,
+    parser_state: MutableMapping[str, Any] | None = None,
 ) -> Optional[GcodeParseResult]:
-    """Parse G-code into toolpath segments, bounds, and move summaries."""
+    """Parse G-code into segments, bounds, and move summaries."""
     arc_step_rad = max(1e-6, arc_step_rad)
     x = y = z = 0.0
     units = 1.0
@@ -169,16 +185,69 @@ def parse_gcode_lines(
     g92_offset = [0.0, 0.0, 0.0]
     g92_enabled = True
     last_motion = 1
+    if parser_state is not None:
+        try:
+            x = float(parser_state.get("x", 0.0) or 0.0)
+            y = float(parser_state.get("y", 0.0) or 0.0)
+            z = float(parser_state.get("z", 0.0) or 0.0)
+            units = float(parser_state.get("units", 1.0) or 1.0)
+            absolute = bool(parser_state.get("absolute", True))
+            plane = str(parser_state.get("plane", "G17") or "G17")
+            feed_mode = str(parser_state.get("feed_mode", "G94") or "G94")
+            arc_abs = bool(parser_state.get("arc_abs", False))
+            feed_raw_val = parser_state.get("feed_raw", None)
+            feed_mm_val = parser_state.get("feed_mm", None)
+            feed_raw = float(feed_raw_val) if feed_raw_val is not None else None
+            feed_mm = float(feed_mm_val) if feed_mm_val is not None else None
+            raw_g92 = parser_state.get("g92_offset", [0.0, 0.0, 0.0]) or [0.0, 0.0, 0.0]
+            if isinstance(raw_g92, (list, tuple)) and len(raw_g92) >= 3:
+                g92_offset = [
+                    float(raw_g92[0] or 0.0),
+                    float(raw_g92[1] or 0.0),
+                    float(raw_g92[2] or 0.0),
+                ]
+            g92_enabled = bool(parser_state.get("g92_enabled", True))
+            last_motion = int(parser_state.get("last_motion", 1) or 1)
+        except Exception:
+            pass
     max_segments = max_segments if max_segments and max_segments > 0 else None
+    stop_after_max_segments = bool(stop_after_max_segments and max_segments is not None)
     segments: List[tuple[float, float, float, float, float, float, str]] = []
     moves: List[GcodeMove] = []
     segment_stride = 1
     segment_total = 0
+    if parser_state is not None:
+        try:
+            segment_total = max(0, int(parser_state.get("segment_total", 0) or 0))
+        except Exception:
+            segment_total = 0
+    segment_limit_reached = False
 
-    def append_segment(segment: tuple[float, float, float, float, float, float, str]) -> None:
-        nonlocal segment_stride, segment_total, segments
+    segment_count_emit_stride = 1024
+
+    def _emit_segment_progress(force: bool = False) -> None:
+        if segment_count_callback is None:
+            return
+        if not force and (segment_total % segment_count_emit_stride) != 0:
+            return
+        try:
+            segment_count_callback(int(segment_total))
+        except Exception:
+            pass
+
+    def append_segment(
+        segment: tuple[float, float, float, float, float, float, str],
+    ) -> None:
+        nonlocal segment_stride, segment_total, segments, segment_limit_reached
         segment_total += 1
+        _emit_segment_progress()
         if not include_segments:
+            if (
+                stop_after_max_segments
+                and max_segments is not None
+                and segment_total >= max_segments
+            ):
+                segment_limit_reached = True
             return
         if max_segments is None or segment_total % segment_stride == 0:
             segments.append(segment)
@@ -186,12 +255,53 @@ def parse_gcode_lines(
                 # Downsample segments as the list grows to cap memory/CPU.
                 segments = segments[::2]
                 segment_stride *= 2
+        if (
+            stop_after_max_segments
+            and max_segments is not None
+            and segment_total >= max_segments
+        ):
+            segment_limit_reached = True
+
     minx: float | None = None
     miny: float | None = None
     minz: float | None = None
     maxx: float | None = None
     maxy: float | None = None
     maxz: float | None = None
+    if parser_state is not None:
+        try:
+            minx = (
+                float(parser_state.get("minx"))
+                if parser_state.get("minx", None) is not None
+                else None
+            )
+            miny = (
+                float(parser_state.get("miny"))
+                if parser_state.get("miny", None) is not None
+                else None
+            )
+            minz = (
+                float(parser_state.get("minz"))
+                if parser_state.get("minz", None) is not None
+                else None
+            )
+            maxx = (
+                float(parser_state.get("maxx"))
+                if parser_state.get("maxx", None) is not None
+                else None
+            )
+            maxy = (
+                float(parser_state.get("maxy"))
+                if parser_state.get("maxy", None) is not None
+                else None
+            )
+            maxz = (
+                float(parser_state.get("maxz"))
+                if parser_state.get("maxz", None) is not None
+                else None
+            )
+        except Exception:
+            minx = miny = minz = maxx = maxy = maxz = None
 
     def update_bounds(nx: float, ny: float, nz: float) -> None:
         nonlocal minx, maxx, miny, maxy, minz, maxz
@@ -220,7 +330,9 @@ def parse_gcode_lines(
             maxz = nz
 
     for raw in lines:
-        if keep_running and not keep_running():
+        if segment_limit_reached:
+            break
+        if not _keep_running_allowed(keep_running, "line_loop"):
             return None
         s = raw.strip().upper()
         if not s:
@@ -270,7 +382,11 @@ def parse_gcode_lines(
         has_y = False
         has_z = False
         i_val = j_val = k_val = r_val = None
-        for w, raw_val in parsed_words:
+        for word_idx, (w, raw_val) in enumerate(parsed_words, start=1):
+            if (word_idx % 16) == 0 and not _keep_running_allowed(
+                keep_running, "line_words"
+            ):
+                return None
             if w == "P":
                 continue
             fval = raw_val * units
@@ -407,6 +523,7 @@ def parse_gcode_lines(
                 u0, v0, u1, v1 = x, y, nx, ny
                 w0, w1 = z, nz
                 off1, off2 = i_val, j_val
+
                 def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
                     return u, v, w
             elif plane == "G18":
@@ -414,6 +531,7 @@ def parse_gcode_lines(
                 u0, v0, u1, v1 = x, z, nx, nz
                 w0, w1 = y, ny
                 off1, off2 = i_val, k_val
+
                 def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
                     return u, w, v
             else:
@@ -421,6 +539,7 @@ def parse_gcode_lines(
                 u0, v0, u1, v1 = y, z, ny, nz
                 w0, w1 = x, nx
                 off1, off2 = j_val, k_val
+
                 def to_xyz(u: float, v: float, w: float) -> tuple[float, float, float]:
                     return w, u, v
 
@@ -470,7 +589,11 @@ def parse_gcode_lines(
                     off2 = v0 if arc_abs else 0.0
                 cu = off1 if arc_abs else (u0 + off1)
                 cv = off2 if arc_abs else (v0 + off2)
-                sweep = 2 * math.pi if full_circle else _arc_sweep(u0, v0, u1, v1, cu, cv, cw)
+                sweep = (
+                    2 * math.pi
+                    if full_circle
+                    else _arc_sweep(u0, v0, u1, v1, cu, cv, cw)
+                )
                 r = math.hypot(u0 - cu, v0 - cv)
             if sweep == 0 or r == 0:
                 x, y, z = nx, ny, nz
@@ -480,6 +603,10 @@ def parse_gcode_lines(
             start_ang = math.atan2(v0 - cv, u0 - cu)
             px, py, pz = x, y, z
             for i in range(1, steps + 1):
+                if (i % 2) == 0 and not _keep_running_allowed(
+                    keep_running, "arc_subdivide"
+                ):
+                    return None
                 t = i / steps
                 ang = start_ang - sweep * t if cw else start_ang + sweep * t
                 u = cu + r * math.cos(ang)
@@ -488,6 +615,10 @@ def parse_gcode_lines(
                 qx, qy, qz = to_xyz(u, v, w_coord)
                 append_segment((px, py, pz, qx, qy, qz, "arc"))
                 px, py, pz = qx, qy, qz
+                if segment_limit_reached:
+                    break
+            if segment_limit_reached:
+                break
             dist = math.hypot(arc_len2d, w1 - w0)
             dx = nx - x
             dy = ny - y
@@ -525,10 +656,41 @@ def parse_gcode_lines(
             last_motion = motion
             continue
 
-    if minx is None or miny is None or minz is None or maxx is None or maxy is None or maxz is None:
+    if (
+        minx is None
+        or miny is None
+        or minz is None
+        or maxx is None
+        or maxy is None
+        or maxz is None
+    ):
         bounds = None
     else:
         bounds = (minx, maxx, miny, maxy, minz, maxz)
+    if parser_state is not None:
+        parser_state["x"] = float(x)
+        parser_state["y"] = float(y)
+        parser_state["z"] = float(z)
+        parser_state["units"] = float(units)
+        parser_state["absolute"] = bool(absolute)
+        parser_state["plane"] = str(plane)
+        parser_state["feed_mode"] = str(feed_mode)
+        parser_state["arc_abs"] = bool(arc_abs)
+        parser_state["feed_raw"] = float(feed_raw) if feed_raw is not None else None
+        parser_state["feed_mm"] = float(feed_mm) if feed_mm is not None else None
+        parser_state["g92_offset"] = [
+            float(g92_offset[0]),
+            float(g92_offset[1]),
+            float(g92_offset[2]),
+        ]
+        parser_state["g92_enabled"] = bool(g92_enabled)
+        parser_state["last_motion"] = int(last_motion)
+        parser_state["segment_total"] = int(segment_total)
+        parser_state["minx"] = minx
+        parser_state["miny"] = miny
+        parser_state["minz"] = minz
+        parser_state["maxx"] = maxx
+        parser_state["maxy"] = maxy
+        parser_state["maxz"] = maxz
+    _emit_segment_progress(force=True)
     return GcodeParseResult(segments=segments, bounds=bounds, moves=moves)
-
-

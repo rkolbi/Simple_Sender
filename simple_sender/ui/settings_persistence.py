@@ -116,7 +116,9 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
         "jog_feed_xy": _safe_float(
             app,
             app.jog_feed_xy,
-            app.settings.get("jog_feed_xy", DEFAULT_SETTINGS.get("jog_feed_xy", 4000.0)),
+            app.settings.get(
+                "jog_feed_xy", DEFAULT_SETTINGS.get("jog_feed_xy", 4000.0)
+            ),
             "jog feed XY",
         ),
         "jog_feed_z": _safe_float(
@@ -155,7 +157,6 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
             ),
             "homing watchdog timeout",
         ),
-        "view_3d": app.settings.get("view_3d"),
         "all_stop_mode": app.all_stop_mode.get(),
         "training_wheels": bool(app.training_wheels.get()),
         "stop_joystick_hold_on_focus_loss": bool(app.stop_hold_on_focus_loss.get()),
@@ -181,6 +182,11 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
         "reconnect_on_open": bool(app.reconnect_on_open.get()),
         "fullscreen_on_startup": bool(app.fullscreen_on_startup.get()),
     }
+
+
+def _prune_unknown_keys(data: dict[str, object]) -> dict[str, object]:
+    known_keys = set(DEFAULT_SETTINGS.keys())
+    return {key: value for key, value in data.items() if key in known_keys}
 
 
 def _build_ui_settings(
@@ -253,7 +259,6 @@ def _build_ui_settings(
                 DEFAULT_SETTINGS.get("performance_profile_log_path", ""),
             )
         ).strip(),
-        "render3d_enabled": bool(app.render3d_enabled.get()),
         "theme": app.selected_theme.get(),
         "ui_scale": (
             _safe_float(
@@ -272,7 +277,9 @@ def _build_ui_settings(
                 "scrollbar_width",
                 DEFAULT_SETTINGS.get("scrollbar_width", "wide"),
             )
-        ).strip().lower(),
+        )
+        .strip()
+        .lower(),
         "touch_scroll_mode": str(
             app.touch_scroll_mode.get()
             if hasattr(app, "touch_scroll_mode")
@@ -280,7 +287,9 @@ def _build_ui_settings(
                 "touch_scroll_mode",
                 DEFAULT_SETTINGS.get("touch_scroll_mode", "thumb_and_swipe"),
             )
-        ).strip().lower(),
+        )
+        .strip()
+        .lower(),
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
@@ -288,7 +297,6 @@ def _build_ui_settings(
         "show_probe_indicator": bool(app.show_probe_indicator.get()),
         "show_hold_indicator": bool(app.show_hold_indicator.get()),
         "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
-        "show_quick_3d_button": bool(app.show_quick_3d_button.get()),
         "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
         "show_quick_alo_button": bool(app.show_quick_alo_button.get()),
         "show_quick_vac_button": bool(app.show_quick_vac_button.get()),
@@ -308,7 +316,9 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         "estimate_factor": _safe_float(
             app,
             app.estimate_factor,
-            app.settings.get("estimate_factor", DEFAULT_SETTINGS.get("estimate_factor", 1.0)),
+            app.settings.get(
+                "estimate_factor", DEFAULT_SETTINGS.get("estimate_factor", 1.0)
+            ),
             "estimate factor",
         ),
         "estimate_rate_x": app.estimate_rate_x_var.get().strip(),
@@ -324,40 +334,6 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         ),
         "current_line_mode": app.current_line_mode.get(),
         "key_bindings": dict(app._key_bindings),
-    }
-
-
-def _build_toolpath_settings(
-    app,
-    *,
-    full_limit,
-    interactive_limit,
-    arc_detail_deg: float,
-    draw_percent: int,
-    performance: float,
-    show_rapid: bool,
-    show_feed: bool,
-    show_arc: bool,
-) -> dict[str, object]:
-    return {
-        "toolpath_full_limit": full_limit,
-        "toolpath_interactive_limit": interactive_limit,
-        "toolpath_arc_detail_deg": arc_detail_deg,
-        "toolpath_lightweight": bool(app.toolpath_lightweight.get()),
-        "toolpath_draw_percent": draw_percent,
-        "toolpath_performance": performance,
-        "toolpath_streaming_render_interval": _safe_float(
-            app,
-            app.toolpath_streaming_render_interval,
-            app.settings.get(
-                "toolpath_streaming_render_interval",
-                app._toolpath_streaming_render_interval_default,
-            ),
-            "3D streaming refresh interval",
-        ),
-        "toolpath_show_rapid": show_rapid,
-        "toolpath_show_feed": show_feed,
-        "toolpath_show_arc": show_arc,
     }
 
 
@@ -384,7 +360,9 @@ def _build_macro_and_autolevel_settings(
     }
 
 
-def _read_outlet_setting(app, *, attr_name: str, key: str, default: int, label: str) -> int:
+def _read_outlet_setting(
+    app, *, attr_name: str, key: str, default: int, label: str
+) -> int:
     var = getattr(app, attr_name, None)
     fallback = app.settings.get(key, DEFAULT_SETTINGS.get(key, default))
     if var is None:
@@ -413,7 +391,9 @@ def _build_kasa_settings(app) -> dict[str, object]:
         }
 
     kasa_enabled_var = getattr(app, "kasa_enabled", None)
-    kasa_enabled = bool(kasa_enabled_var.get()) if kasa_enabled_var is not None else False
+    kasa_enabled = (
+        bool(kasa_enabled_var.get()) if kasa_enabled_var is not None else False
+    )
     device_identifier_var = getattr(app, "kasa_device_identifier", None)
     device_identifier = (
         str(device_identifier_var.get() or "").strip()
@@ -421,9 +401,13 @@ def _build_kasa_settings(app) -> dict[str, object]:
         else str(app.settings.get("kasa_device_identifier", "") or "").strip()
     )
     vacuum_enabled_var = getattr(app, "vacuum_enabled", None)
-    vacuum_enabled = bool(vacuum_enabled_var.get()) if vacuum_enabled_var is not None else False
+    vacuum_enabled = (
+        bool(vacuum_enabled_var.get()) if vacuum_enabled_var is not None else False
+    )
     light_enabled_var = getattr(app, "light_enabled", None)
-    light_enabled = bool(light_enabled_var.get()) if light_enabled_var is not None else False
+    light_enabled = (
+        bool(light_enabled_var.get()) if light_enabled_var is not None else False
+    )
     vacuum_outlet = _read_outlet_setting(
         app,
         attr_name="vacuum_outlet",
@@ -446,7 +430,12 @@ def _build_kasa_settings(app) -> dict[str, object]:
     )
     if not valid:
         light_outlet = 1 if vacuum_outlet == 2 else 2
-        app.ui_q.put(("log", f"[settings] {message} Auto-adjusted Spindle Light to Outlet {light_outlet}."))
+        app.ui_q.put(
+            (
+                "log",
+                f"[settings] {message} Auto-adjusted Spindle Light to Outlet {light_outlet}.",
+            )
+        )
     return {
         "kasa_enabled": kasa_enabled,
         "kasa_device_identifier": device_identifier,
@@ -458,18 +447,6 @@ def _build_kasa_settings(app) -> dict[str, object]:
 
 
 def save_settings(app):
-    show_rapid, show_feed, show_arc = app.toolpath_panel.get_display_options()
-    draw_percent = app.toolpath_panel.get_draw_percent()
-    performance = app._clamp_toolpath_performance(app.toolpath_performance.get())
-    performance = min(90.0, performance)
-
-    full_limit = app._toolpath_limit_value(
-        app.toolpath_full_limit.get(), app._toolpath_full_limit_default
-    )
-    interactive_limit = app._toolpath_limit_value(
-        app.toolpath_interactive_limit.get(), app._toolpath_interactive_limit_default
-    )
-    arc_detail_deg = app._clamp_arc_detail(app.toolpath_arc_detail.get())
     app._apply_error_dialog_settings()
     app._on_status_failure_limit_change()
     app._on_homing_watchdog_change()
@@ -501,18 +478,22 @@ def save_settings(app):
         default=0.0,
         label="macro total timeout",
     )
-    macro_probe_z_value = _safe_float(
-        app,
-        getattr(app, "macro_probe_z_location", None),
-        app.settings.get(
-            "macro_probe_z_location",
-            DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
-        ),
-        "macro probe Z start",
-    ) if getattr(app, "macro_probe_z_location", None) is not None else float(
-        app.settings.get(
-            "macro_probe_z_location",
-            DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+    macro_probe_z_value = (
+        _safe_float(
+            app,
+            getattr(app, "macro_probe_z_location", None),
+            app.settings.get(
+                "macro_probe_z_location",
+                DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+            ),
+            "macro probe Z start",
+        )
+        if getattr(app, "macro_probe_z_location", None) is not None
+        else float(
+            app.settings.get(
+                "macro_probe_z_location",
+                DEFAULT_SETTINGS.get("macro_probe_z_location", -5.0),
+            )
         )
     )
     macro_probe_margin_value = _read_nonnegative_float_setting(
@@ -560,19 +541,6 @@ def save_settings(app):
     )
     data.update(_build_estimation_and_bindings_settings(app))
     data.update(
-        _build_toolpath_settings(
-            app,
-            full_limit=full_limit,
-            interactive_limit=interactive_limit,
-            arc_detail_deg=arc_detail_deg,
-            draw_percent=draw_percent,
-            performance=performance,
-            show_rapid=show_rapid,
-            show_feed=show_feed,
-            show_arc=show_arc,
-        )
-    )
-    data.update(
         _build_macro_and_autolevel_settings(
             app,
             macro_line_timeout_value=macro_line_timeout_value,
@@ -582,6 +550,7 @@ def save_settings(app):
         )
     )
     data.update(_build_kasa_settings(app))
+    data = _prune_unknown_keys(data)
     app.settings = data
     app._settings_store.data = app.settings
     try:
@@ -591,10 +560,15 @@ def save_settings(app):
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
             app.status.config(text="Settings save failed")
         except Exception as log_exc:
-            _log_suppressed("Failed reporting SettingsSaveError to UI queue/status", log_exc)
+            _log_suppressed(
+                "Failed reporting SettingsSaveError to UI queue/status", log_exc
+            )
     except Exception as exc:
         try:
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
             app.status.config(text="Settings save failed")
         except Exception as log_exc:
-            _log_suppressed("Failed reporting unexpected settings-save error to UI queue/status", log_exc)
+            _log_suppressed(
+                "Failed reporting unexpected settings-save error to UI queue/status",
+                log_exc,
+            )

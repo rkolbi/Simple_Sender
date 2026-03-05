@@ -33,18 +33,20 @@ from simple_sender.autolevel.probe_runner import AutoLevelProbeRunner
 from simple_sender.grbl_worker import GrblWorker
 from simple_sender.kasa_accessory import (
     AccessoryRouter,
-    SpindleCommandDetector,
     create_default_kasa_controller,
 )
 from simple_sender.macro_executor import MacroExecutor
 from simple_sender.streaming_controller import StreamingController
-from simple_sender.ui.app_init_preferences import init_basic_preferences as _init_basic_preferences
+from simple_sender.ui.app_init_preferences import (
+    init_basic_preferences as _init_basic_preferences,
+)
 from simple_sender.ui.app_init_runtime import init_runtime_state as _init_runtime_state
-from simple_sender.ui.app_init_settings import init_settings_store as _init_settings_store
+from simple_sender.ui.app_init_settings import (
+    init_settings_store as _init_settings_store,
+)
 from simple_sender.ui.bindings import PYGAME_AVAILABLE
 from simple_sender.ui.grbl_settings import GRBLSettingsController
 from simple_sender.ui.macro_panel import MacroPanel
-from simple_sender.ui.toolpath.toolpath_panel import ToolpathPanel
 from simple_sender.ui.ui_queue import UiEventQueue
 from simple_sender.utils.config import DEFAULT_SETTINGS, Settings, get_settings_path
 from simple_sender.utils.constants import (
@@ -72,11 +74,9 @@ _APP_INIT_DEPS = (
     MacroExecutor,
     StreamingController,
     AccessoryRouter,
-    SpindleCommandDetector,
     create_default_kasa_controller,
     GRBLSettingsController,
     MacroPanel,
-    ToolpathPanel,
     UiEventQueue,
     DEFAULT_SETTINGS,
     Settings,
@@ -115,4 +115,3 @@ def init_runtime_state(
         macro_search_dirs,
         module=sys.modules[__name__],
     )
-

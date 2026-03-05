@@ -171,7 +171,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         """Prime fast-send metadata from an in-memory line list.
 
         This is used when the active stream source is file-backed but the UI
-        already has a full in-memory line list for non-preview jobs.
+        already has a full in-memory line list for non-sample jobs.
         """
         self._prepare_in_memory_gcode_send_cache(lines)
     
@@ -452,7 +452,19 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return StreamPendingItem(line=self._resume_preamble[0], is_gcode=False, idx=None)
         if self._send_index >= len(self._gcode):
             return None
-        line = self._normalize_stream_line(self._gcode[self._send_index])
+        try:
+            raw_line = self._gcode[self._send_index]
+        except IndexError:
+            # File-backed sources may start with estimated line counts; clamp
+            # to exact totals once EOF is discovered.
+            setter = getattr(self._gcode, "set_line_count", None)
+            if callable(setter):
+                try:
+                    setter(self._send_index, known=True)
+                except Exception:
+                    pass
+            return None
+        line = self._normalize_stream_line(raw_line)
         return StreamPendingItem(
             line=line,
             is_gcode=True,
@@ -488,6 +500,16 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             cached_spindle_state if use_cached_spindle_state else self._detect_spindle_state(raw_line)
         )
         line = self._sanitize_stream_line(raw_line)
+        if item.is_gcode and line.startswith("$"):
+            msg = self._format_stream_error(
+                "GRBL system commands ($...) are not allowed inside jobs",
+                item.idx,
+                line,
+            )
+            self._pause_stream(reason="invalid system command")
+            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(("log", f"[stream error] {msg}"))
+            return None
         item = StreamPendingItem(line=line, is_gcode=item.is_gcode, idx=item.idx)
         if item.is_gcode and item.idx is not None and self._pause_after_idx is None:
             reason = (

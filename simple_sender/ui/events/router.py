@@ -23,8 +23,10 @@
 import os
 import queue
 import logging
+import time
 from typing import Any, cast
-from tkinter import messagebox, TclError
+import tkinter as tk
+from tkinter import messagebox, TclError, ttk
 
 from .status import (
     _parse_modal_units,
@@ -40,6 +42,8 @@ from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_e
 from simple_sender.types import UiEvent
 
 logger = logging.getLogger(__name__)
+_GCODE_LOADED_STREAM_APPLY_BUDGET_MS = 15.0
+_GCODE_LOADED_STREAM_APPLY_WARN_MS = 50.0
 
 
 _JOG_LIMIT_ERROR_HINT = (
@@ -50,6 +54,317 @@ _JOG_LIMIT_ERROR_HINT = (
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _cleanup_streaming_source(source: Any, *, context: str) -> None:
+    cleanup_path = getattr(source, "_cleanup_path", None) if source is not None else None
+    if source is not None:
+        try:
+            source.close()
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log_suppressed(f"{context}: failed closing streaming source", exc)
+    if cleanup_path:
+        try:
+            os.remove(cleanup_path)
+        except OSError as exc:
+            _log_suppressed(f"{context}: failed removing streamed temp file", exc)
+
+
+def _loaded_stream_signature(
+    *,
+    path: str,
+    lines_hash: str | None,
+    total_lines: int | None,
+    sample_only: bool,
+) -> tuple[str, str, int, bool]:
+    safe_total = 0
+    if total_lines is not None:
+        try:
+            safe_total = max(0, int(total_lines))
+        except Exception:
+            safe_total = 0
+    return (
+        str(path or ""),
+        str(lines_hash or ""),
+        safe_total,
+        bool(sample_only),
+    )
+
+
+def _loaded_stream_is_noop(app: Any, signature: tuple[str, str, int, bool]) -> bool:
+    if str(getattr(app, "_stream_state", "") or "").strip().lower() != "loaded":
+        return False
+    current = _loaded_stream_signature(
+        path=str(getattr(app, "_last_gcode_path", "") or ""),
+        lines_hash=str(getattr(app, "_gcode_hash", "") or ""),
+        total_lines=getattr(app, "_gcode_total_lines", 0),
+        sample_only=bool(getattr(app, "_gcode_streaming_mode", False)),
+    )
+    return current == signature
+
+
+def _cancel_load_settling_clear_timer(app: Any) -> None:
+    after_id = getattr(app, "_gcode_load_settling_after_id", None)
+    if after_id is None:
+        return
+    cancel_fn = getattr(app, "after_cancel", None)
+    if callable(cancel_fn):
+        try:
+            cancel_fn(after_id)
+        except Exception as exc:
+            _log_suppressed("Failed canceling load-settling clear timer", exc)
+    app._gcode_load_settling_after_id = None
+
+
+def _set_load_settling(app: Any, enabled: bool, *, generation: int | None = None) -> None:
+    if enabled:
+        _cancel_load_settling_clear_timer(app)
+        app._gcode_load_settling = True
+        app._gcode_load_settling_generation = int(generation or 0)
+        try:
+            app._gcode_load_settling_started_at = time.monotonic()
+        except Exception:
+            app._gcode_load_settling_started_at = 0.0
+        return
+    _cancel_load_settling_clear_timer(app)
+    app._gcode_load_settling = False
+    app._gcode_load_settling_generation = 0
+    app._status_settling_last_state = ""
+    app._status_settling_last_apply_ts = 0.0
+    app._status_settling_drop_count = 0
+
+
+def _schedule_load_settling_clear(app: Any, *, generation: int) -> None:
+    _cancel_load_settling_clear_timer(app)
+    try:
+        delay_ms = int(getattr(app, "_gcode_load_settling_tail_ms", 1200))
+    except Exception:
+        delay_ms = 1200
+    delay_ms = max(0, delay_ms)
+
+    def _clear_when_idle() -> None:
+        app._gcode_load_settling_after_id = None
+        if int(getattr(app, "_gcode_load_settling_generation", 0) or 0) != int(generation):
+            return
+        if getattr(app, "_gcode_loaded_stream_apply_after_id", None) is not None:
+            _schedule_load_settling_clear(app, generation=generation)
+            return
+        if getattr(app, "_gcode_loaded_stream_pending", None):
+            _schedule_load_settling_clear(app, generation=generation)
+            return
+        started_at = float(getattr(app, "_gcode_load_settling_started_at", 0.0) or 0.0)
+        duration_ms = 0.0
+        if started_at > 0.0:
+            try:
+                duration_ms = max(0.0, (time.monotonic() - started_at) * 1000.0)
+            except Exception:
+                duration_ms = 0.0
+        pending = 0
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None and hasattr(ui_q, "qsize"):
+            try:
+                pending = max(0, int(ui_q.qsize()))
+            except Exception:
+                pending = 0
+        logger.info(
+            "[ui] load_settling OFF gen=%d duration_ms=%.2f tab=%s pending=%d",
+            int(generation),
+            duration_ms,
+            str(getattr(app, "_active_tab_label", "") or "unknown"),
+            int(pending),
+        )
+        _set_load_settling(app, False)
+        if bool(getattr(app, "_stream_loaded_force_apply", False)):
+            try:
+                app.ui_q.put(("stream_state", "loaded", int(getattr(app, "_gcode_total_lines", 0) or 0)))
+            except Exception as exc:
+                _log_suppressed("Failed queueing loaded stream-state reconciliation after load settling", exc)
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            app._gcode_load_settling_after_id = after_fn(delay_ms, _clear_when_idle)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed scheduling load-settling clear callback", exc)
+    _clear_when_idle()
+
+
+def _schedule_loaded_stream_apply(app: Any) -> None:
+    if getattr(app, "_gcode_loaded_stream_apply_after_id", None) is not None:
+        return
+
+    def _run_pending() -> None:
+        app._gcode_loaded_stream_apply_after_id = None
+        payload = getattr(app, "_gcode_loaded_stream_pending", None)
+        app._gcode_loaded_stream_pending = None
+        if not payload:
+            return
+        (
+            generation,
+            signature,
+            path,
+            source,
+            sample_lines,
+            lines_hash,
+            total_lines,
+            report,
+            sample_only,
+        ) = payload
+        _set_load_settling(app, True, generation=generation)
+        started_at = time.perf_counter()
+        slice_count = 0
+        max_slice_ms = 0.0
+        slowest_phase = "none"
+        slowest_phase_ms = 0.0
+        source_consumed = False
+
+        def _finalize_metrics(*, aborted: bool, reason: str) -> None:
+            total_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+            app._gcode_loaded_stream_apply_last_metrics = {
+                "job": signature[0],
+                "hash": signature[1],
+                "generation": int(generation),
+                "slices": int(slice_count),
+                "total_ms": float(total_ms),
+                "max_slice_ms": float(max_slice_ms),
+                "slowest_phase": str(slowest_phase),
+                "slowest_phase_ms": float(slowest_phase_ms),
+                "aborted": bool(aborted),
+                "reason": str(reason),
+            }
+            logger.info(
+                "[ui] gcode_loaded_stream apply metrics: job=%s hash=%s gen=%d slices=%d total=%.2fms "
+                "max_slice=%.2fms slowest=%s(%.2fms) aborted=%s reason=%s",
+                signature[0] or "<none>",
+                signature[1] or "<none>",
+                int(generation),
+                int(slice_count),
+                total_ms,
+                max_slice_ms,
+                slowest_phase,
+                slowest_phase_ms,
+                bool(aborted),
+                reason,
+            )
+
+        def _phase_prepare() -> None:
+            app._gcode_validation_report = report
+
+        def _phase_apply() -> None:
+            nonlocal source_consumed
+            apply_fn = getattr(app, "_apply_loaded_gcode", None)
+            if not callable(apply_fn):
+                raise RuntimeError("Missing _apply_loaded_gcode handler")
+            try:
+                apply_fn(
+                    path,
+                    sample_lines,
+                    lines_hash=lines_hash,
+                    validated=True,
+                    streaming_source=source,
+                    total_lines=total_lines,
+                    sample_only=sample_only,
+                    defer_viewer_stage_apply=True,
+                )
+            except TypeError:
+                # Backward-compatible fallback for tests/mocks and older signatures.
+                apply_fn(
+                    path,
+                    sample_lines,
+                    lines_hash=lines_hash,
+                    validated=True,
+                    streaming_source=source,
+                    total_lines=total_lines,
+                    sample_only=sample_only,
+                )
+            source_consumed = True
+
+        def _phase_finalize() -> None:
+            app._gcode_loaded_stream_last_signature = signature
+            perf_monitor = getattr(app, "_perf_monitor", None)
+            if perf_monitor is not None:
+                try:
+                    perf_monitor.note_file_loaded()
+                except Exception as exc:
+                    _log_suppressed("Failed forwarding streamed-file milestone to performance monitor", exc)
+            _schedule_load_settling_clear(app, generation=generation)
+
+        phases: list[tuple[str, Any]] = [
+            ("prepare", _phase_prepare),
+            ("apply", _phase_apply),
+            ("finalize", _phase_finalize),
+        ]
+
+        def _run_phase(phase_index: int) -> None:
+            nonlocal slice_count, max_slice_ms, slowest_phase, slowest_phase_ms, source_consumed
+            app._gcode_loaded_stream_apply_after_id = None
+            current_generation = int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0)
+            if int(generation) != current_generation:
+                if not source_consumed:
+                    _cleanup_streaming_source(source, context="Canceled gcode_loaded_stream apply")
+                _finalize_metrics(aborted=True, reason="coalesced_by_newer_load")
+                if getattr(app, "_gcode_loaded_stream_pending", None):
+                    _schedule_loaded_stream_apply(app)
+                return
+            if phase_index >= len(phases):
+                _finalize_metrics(aborted=False, reason="ok")
+                if getattr(app, "_gcode_loaded_stream_pending", None):
+                    _schedule_loaded_stream_apply(app)
+                return
+            phase_name, phase_fn = phases[phase_index]
+            phase_started_at = time.perf_counter()
+            try:
+                phase_fn()
+            except Exception as exc:
+                _log_suppressed(f"Deferred gcode_loaded_stream {phase_name} phase failed", exc)
+                if not source_consumed:
+                    _cleanup_streaming_source(
+                        source,
+                        context=f"Deferred gcode_loaded_stream {phase_name} failure",
+                    )
+                _set_load_settling(app, False)
+                _finalize_metrics(aborted=True, reason=f"phase_failed:{phase_name}")
+                if getattr(app, "_gcode_loaded_stream_pending", None):
+                    _schedule_loaded_stream_apply(app)
+                return
+            phase_elapsed_ms = max(0.0, (time.perf_counter() - phase_started_at) * 1000.0)
+            slice_count += 1
+            if phase_elapsed_ms > max_slice_ms:
+                max_slice_ms = phase_elapsed_ms
+            if phase_elapsed_ms > slowest_phase_ms:
+                slowest_phase_ms = phase_elapsed_ms
+                slowest_phase = str(phase_name)
+            if phase_elapsed_ms > _GCODE_LOADED_STREAM_APPLY_BUDGET_MS:
+                level_log = logger.warning if phase_elapsed_ms >= _GCODE_LOADED_STREAM_APPLY_WARN_MS else logger.info
+                level_log(
+                    "[ui] gcode_loaded_stream slice exceeded %.1fms budget: phase=%s %.2fms",
+                    _GCODE_LOADED_STREAM_APPLY_BUDGET_MS,
+                    str(phase_name),
+                    phase_elapsed_ms,
+                )
+            after_fn = getattr(app, "after", None)
+            if callable(after_fn):
+                try:
+                    app._gcode_loaded_stream_apply_after_id = after_fn(
+                        0,
+                        lambda idx=phase_index + 1: _run_phase(idx),
+                    )
+                    return
+                except Exception as exc:
+                    _log_suppressed("Failed scheduling next gcode_loaded_stream apply slice", exc)
+            _run_phase(phase_index + 1)
+
+        _run_phase(0)
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            app._gcode_loaded_stream_apply_after_id = after_fn(0, _run_pending)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed scheduling deferred gcode_loaded_stream apply", exc)
+    _run_pending()
 
 
 def _is_error_15(message: str | None) -> bool:
@@ -194,7 +509,12 @@ def _handle_unknown_event(app: Any, evt: Any) -> None:
         _log_suppressed("Failed writing unhandled UI event to console", exc)
 
 
-def set_streaming_lock(app: Any, locked: bool):
+def set_streaming_lock(app: Any, locked: bool, *, defer_toolbar_refresh: bool = False):
+    locked = bool(locked)
+    prior_locked = getattr(app, "_streaming_lock_state", None)
+    if prior_locked is not None and bool(prior_locked) == locked:
+        return
+    app._streaming_lock_state = locked
     state = "disabled" if locked else "normal"
     try:
         app.btn_conn.config(state=state)
@@ -212,7 +532,7 @@ def set_streaming_lock(app: Any, locked: bool):
         app.btn_unit_toggle.config(state=state)
     except (AttributeError, TclError, RuntimeError) as exc:
         _log_suppressed("Failed to update unit toggle state", exc)
-    if hasattr(app, "_refresh_toolbar_action_focus"):
+    if not defer_toolbar_refresh and hasattr(app, "_refresh_toolbar_action_focus"):
         try:
             app._refresh_toolbar_action_focus()
         except (AttributeError, RuntimeError, TclError, TypeError, ValueError) as exc:
@@ -458,20 +778,132 @@ def handle_streaming_validation_prompt(
         except queue.Full as exc:
             _log_suppressed("Streaming validation prompt result queue was full for stale token", exc)
         return
-    msg = (
-        f"Validate G-code for '{name}'?\n\n"
-        f"Detected {cleaned_lines:,} non-empty lines (prompt at {threshold:,}).\n"
-        "Validation adds another full scan and can take a while on huge files."
+    prompt_key = (
+        str(name or "").strip().lower(),
+        max(0, int(cleaned_lines or 0)),
+        max(0, int(threshold or 0)),
     )
-    try:
-        allow = messagebox.askyesno("Validate large file?", msg)
-    except (RuntimeError, TclError) as exc:
-        _log_suppressed("Failed to show streaming validation prompt", exc)
-        allow = False
-    try:
-        result_q.put_nowait(allow)
-    except queue.Full as exc:
-        _log_suppressed("Streaming validation prompt result queue was full", exc)
+    remember_cache = getattr(app, "_streaming_validation_prompt_cache", None)
+    if not isinstance(remember_cache, dict):
+        remember_cache = {}
+        setattr(app, "_streaming_validation_prompt_cache", remember_cache)
+    cached_choice = remember_cache.get(prompt_key)
+    if isinstance(cached_choice, bool):
+        logger.info(
+            "[ui] streaming_validation_prompt cached answer: token=%s file=%s lines=%d threshold=%d allow=%s",
+            token,
+            str(name or ""),
+            int(cleaned_lines),
+            int(threshold),
+            bool(cached_choice),
+        )
+        try:
+            result_q.put_nowait(bool(cached_choice))
+        except queue.Full as exc:
+            _log_suppressed("Streaming validation prompt result queue was full for cached answer", exc)
+        return
+
+    logger.info(
+        "[ui] streaming_validation_prompt scheduled: token=%s file=%s lines=%d threshold=%d",
+        token,
+        str(name or ""),
+        int(cleaned_lines),
+        int(threshold),
+    )
+
+    def _show_prompt_async() -> None:
+        if token != app._gcode_load_token:
+            try:
+                result_q.put_nowait(False)
+            except queue.Full as exc:
+                _log_suppressed(
+                    "Streaming validation prompt result queue was full after token changed before show",
+                    exc,
+                )
+            return
+        try:
+            existing_dlg = getattr(app, "_streaming_validation_prompt_dialog", None)
+            if existing_dlg is not None:
+                try:
+                    existing_dlg.destroy()
+                except Exception as exc:
+                    _log_suppressed("Failed closing previous streaming validation prompt dialog", exc)
+            dlg = tk.Toplevel(app)
+            app._streaming_validation_prompt_dialog = dlg
+            dlg.title("Validate large file?")
+            dlg.transient(app)
+            dlg.resizable(False, False)
+            frame = ttk.Frame(dlg, padding=12)
+            frame.pack(fill="both", expand=True)
+            msg = (
+                f"Validate G-code for '{name}'?\n\n"
+                f"Detected {cleaned_lines:,} non-empty lines (prompt at {threshold:,}).\n"
+                "Validation adds another full scan and can take a while on huge files."
+            )
+            lbl = ttk.Label(frame, text=msg, wraplength=460, justify="left")
+            lbl.pack(fill="x", pady=(0, 10))
+            remember_var = tk.BooleanVar(master=dlg, value=False)
+            remember_cb = ttk.Checkbutton(
+                frame,
+                text="Remember my choice for this file/size condition",
+                variable=remember_var,
+            )
+            remember_cb.pack(anchor="w", pady=(0, 10))
+            btn_row = ttk.Frame(frame)
+            btn_row.pack(fill="x")
+
+            def _answer(allow: bool) -> None:
+                remember_choice = bool(remember_var.get())
+                if remember_choice:
+                    remember_cache[prompt_key] = bool(allow)
+                try:
+                    result_q.put_nowait(bool(allow))
+                except queue.Full as exc:
+                    _log_suppressed("Streaming validation prompt result queue was full on answer", exc)
+                logger.info(
+                    "[ui] streaming_validation_prompt answered: token=%s file=%s allow=%s remember=%s",
+                    token,
+                    str(name or ""),
+                    bool(allow),
+                    remember_choice,
+                )
+                try:
+                    if getattr(app, "_streaming_validation_prompt_dialog", None) is dlg:
+                        app._streaming_validation_prompt_dialog = None
+                    dlg.destroy()
+                except Exception as exc:
+                    _log_suppressed("Failed closing streaming validation prompt dialog", exc)
+
+            ttk.Button(btn_row, text="Validate", command=lambda: _answer(True)).pack(side="left", padx=(0, 6))
+            ttk.Button(btn_row, text="Skip", command=lambda: _answer(False)).pack(side="left")
+            dlg.protocol("WM_DELETE_WINDOW", lambda: _answer(False))
+            logger.info(
+                "[ui] streaming_validation_prompt shown: token=%s file=%s lines=%d threshold=%d",
+                token,
+                str(name or ""),
+                int(cleaned_lines),
+                int(threshold),
+            )
+        except Exception as exc:
+            _log_suppressed("Failed to show asynchronous streaming validation prompt", exc)
+            logger.info(
+                "[ui] streaming_validation_prompt fallback answer: token=%s file=%s allow=False reason=show_failed",
+                token,
+                str(name or ""),
+            )
+            try:
+                result_q.put_nowait(False)
+            except queue.Full as queue_exc:
+                _log_suppressed("Streaming validation prompt result queue was full on fallback answer", queue_exc)
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            after_fn(0, _show_prompt_async)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed scheduling asynchronous streaming validation prompt", exc)
+    _show_prompt_async()
 
 
 def handle_gcode_loaded(app, evt):
@@ -497,40 +929,54 @@ def handle_gcode_loaded_stream(app, evt):
     token = evt[1]
     if token != app._gcode_load_token:
         source = evt[3] if len(evt) > 3 else None
-        cleanup_path = getattr(source, "_cleanup_path", None) if source is not None else None
-        if cleanup_path and source is not None:
-            try:
-                source.close()
-            except (OSError, RuntimeError, ValueError) as exc:
-                _log_suppressed("Failed to close stale streaming source", exc)
-            try:
-                os.remove(cleanup_path)
-            except OSError as exc:
-                _log_suppressed("Failed to remove stale streamed temp file", exc)
+        _cleanup_streaming_source(source, context="Stale gcode_loaded_stream token")
         return
     path = evt[2]
     source = evt[3]
-    preview_lines = evt[4] if len(evt) > 4 else []
+    sample_lines = evt[4] if len(evt) > 4 else []
     lines_hash = evt[5] if len(evt) > 5 else None
     total_lines = evt[6] if len(evt) > 6 else None
     report = evt[7] if len(evt) > 7 else None
-    preview_only = bool(evt[8]) if len(evt) > 8 else True
-    app._gcode_validation_report = report
-    app._apply_loaded_gcode(
-        path,
-        preview_lines,
+    sample_only = bool(evt[8]) if len(evt) > 8 else True
+    signature = _loaded_stream_signature(
+        path=path,
         lines_hash=lines_hash,
-        validated=True,
-        streaming_source=source,
         total_lines=total_lines,
-        preview_only=preview_only,
+        sample_only=sample_only,
     )
-    perf_monitor = getattr(app, "_perf_monitor", None)
-    if perf_monitor is not None:
-        try:
-            perf_monitor.note_file_loaded()
-        except Exception as exc:
-            _log_suppressed("Failed forwarding streamed-file milestone to performance monitor", exc)
+    if _loaded_stream_is_noop(app, signature):
+        logger.info(
+            "[ui] gcode_loaded_stream idempotent skip: %s->loaded job=%s hash=%s reason=already_loaded_no_changes",
+            str(getattr(app, "_stream_state", "") or "").strip().lower() or "none",
+            signature[0] or "<none>",
+            signature[1] or "<none>",
+        )
+        _cleanup_streaming_source(source, context="Idempotent gcode_loaded_stream skip")
+        return
+    generation = int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0) + 1
+    app._gcode_loaded_stream_apply_generation = generation
+    pending = getattr(app, "_gcode_loaded_stream_pending", None)
+    if pending and isinstance(pending, tuple) and len(pending) >= 4:
+        stale_source = pending[3]
+        if stale_source is not source:
+            logger.info(
+                "[ui] gcode_loaded_stream coalesced: job=%s hash=%s reason=pending_apply_replaced",
+                signature[0] or "<none>",
+                signature[1] or "<none>",
+            )
+            _cleanup_streaming_source(stale_source, context="Coalesced gcode_loaded_stream apply")
+    app._gcode_loaded_stream_pending = (
+        generation,
+        signature,
+        path,
+        source,
+        sample_lines,
+        lines_hash,
+        total_lines,
+        report,
+        sample_only,
+    )
+    _schedule_loaded_stream_apply(app)
 
 
 def handle_gcode_load_invalid(

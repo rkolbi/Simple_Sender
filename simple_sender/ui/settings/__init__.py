@@ -50,7 +50,6 @@ from .sections import (
     build_safety_section,
     build_status_polling_section,
     build_theme_section,
-    build_toolpath_settings_section,
     build_zeroing_section,
 )
 
@@ -80,6 +79,5 @@ __all__ = [
     "build_safety_section",
     "build_status_polling_section",
     "build_theme_section",
-    "build_toolpath_settings_section",
     "build_zeroing_section",
 ]
