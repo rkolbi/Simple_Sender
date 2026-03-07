@@ -29,6 +29,11 @@ from simple_sender.ui.dialogs.error_dialogs_ui import apply_error_dialog_setting
 from simple_sender.ui.grbl_lifecycle import (
     apply_status_poll_profile,
     effective_status_poll_interval,
+    mark_manual_motion_activity,
+)
+from simple_sender.ui.events.status import (
+    start_manual_jog_prediction,
+    stop_manual_jog_prediction,
 )
 from simple_sender.ui.profiles.estimate_rates import (
     convert_estimate_rates,
@@ -65,6 +70,32 @@ class StatusMixin:
 
     def _apply_status_poll_profile(self):
         apply_status_poll_profile(self)
+
+    def _mark_manual_motion_activity(self, *, duration_s: float | None = None):
+        mark_manual_motion_activity(self, duration_s=duration_s)
+
+    def _start_manual_jog_prediction(
+        self,
+        *,
+        dx: float,
+        dy: float,
+        dz: float,
+        feed: float,
+        unit_mode: str,
+        source: str | None = None,
+    ) -> None:
+        start_manual_jog_prediction(
+            self,
+            dx=dx,
+            dy=dy,
+            dz=dz,
+            feed=feed,
+            unit_mode=unit_mode,
+            source=source,
+        )
+
+    def _stop_manual_jog_prediction(self, *, reason: str = "stop") -> None:
+        stop_manual_jog_prediction(self, reason=reason)
 
     def _update_estimate_rate_units_label(self):
         update_estimate_rate_units_label(self)

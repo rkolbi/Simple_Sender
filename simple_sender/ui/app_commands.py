@@ -29,7 +29,6 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
-from simple_sender.ui.dialogs.diagnostics import run_preflight_gate
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.utils.constants import BAUD_DEFAULT
@@ -124,6 +123,12 @@ def choose_gcode_path(app, initial_dir: str) -> str:
 
 def refresh_ports(app, auto_connect: bool = False):
     ports = app.grbl.list_ports()
+    try:
+        cached_ports = tuple(str(port).strip() for port in ports if str(port).strip())
+        setattr(app, "_auto_reconnect_ports_cache", cached_ports)
+        setattr(app, "_auto_reconnect_ports_cache_ts", float(time.time()))
+    except Exception as exc:
+        _log_suppressed("Failed updating auto-reconnect port cache during refresh", exc)
     last = ""
     try:
         last = getattr(app, "_auto_reconnect_last_port", "") or ""
@@ -247,6 +252,36 @@ def start_connect_worker(
     if app._connecting:
         _set_connection_controls_pending(app, "Connecting...")
         return
+    try:
+        if bool(app.grbl.is_connected()):
+            if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
+                _append_connection_timeline_event(
+                    app,
+                    "connect_worker_skip_already_connected",
+                    f"port={port}",
+                )
+                _sync_connection_controls(app)
+                return
+            _append_connection_timeline_event(
+                app,
+                "connect_worker_skip_worker_connected",
+                f"port={port}",
+            )
+            return
+    except Exception as exc:
+        _log_suppressed("Failed checking worker connection state before connect worker", exc)
+    try:
+        if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
+            if bool(app.grbl.is_connected()):
+                _append_connection_timeline_event(
+                    app,
+                    "connect_worker_skip_already_connected",
+                    f"port={port}",
+                )
+                _sync_connection_controls(app)
+                return
+    except Exception as exc:
+        _log_suppressed("Failed checking existing connected+ready state before connect worker", exc)
 
     def worker():
         connected_ok = False
@@ -294,7 +329,11 @@ def start_disconnect_worker(app):
     def worker():
         disconnected_ok = False
         try:
-            app.grbl.disconnect()
+            disconnect_fn = getattr(app.grbl, "disconnect")
+            try:
+                disconnect_fn(requested_by="ui", reason="Disconnect button")
+            except TypeError:
+                disconnect_fn()
             disconnected_ok = True
         except Exception as exc:
             app.ui_q.put(("log", f"[disconnect] {exc}"))
@@ -334,8 +373,6 @@ def open_gcode(app):
 def run_job(app):
     if not app._require_grbl_connection():
         return
-    if not run_preflight_gate(app):
-        return
     try:
         app._kasa_last_stream_line_index = -1
     except Exception as exc:
@@ -350,6 +387,24 @@ def run_job(app):
                 _log_suppressed("Failed resetting Kasa debounce state before run", exc)
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
     app._reset_gcode_view_for_run()
+    try:
+        app._stream_acked_byte_offset = 0
+        app._stream_progress_pct = 0.0
+        app._stream_progress_file_size_bytes = max(
+            0,
+            int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+        )
+    except Exception as exc:
+        _log_suppressed("Failed resetting stream byte-progress state before Run", exc)
+    try:
+        app.progress_pct.set(0)
+    except Exception as exc:
+        _log_suppressed("Failed resetting progress bar before Run", exc)
+    try:
+        if hasattr(app, "progress_text"):
+            app.progress_text.set("")
+    except Exception as exc:
+        _log_suppressed("Failed resetting progress label before Run", exc)
     app.grbl.start_stream()
     started = False
     try:

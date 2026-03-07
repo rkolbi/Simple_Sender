@@ -28,6 +28,13 @@ from dataclasses import dataclass
 
 from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from simple_sender.utils.constants import (
+    JOG_DRO_SMOOTHING_ALL_JOG,
+    JOG_DRO_SMOOTHING_CHOICES,
+    JOG_DRO_SMOOTHING_OFF,
+    JOG_DRO_SMOOTHING_UI_JOG_ONLY,
+    RT_STATUS,
+)
 from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,15 @@ _WPOS_FLASH_MIN_INTERVAL_S = 0.25
 _DRO_DISPLAY_STEP = 0.001
 _STATUS_SETTLING_MIN_INTERVAL_S = 0.2
 _STATUS_SLOW_LOG_MS = 50.0
+_JOG_DRO_PREDICT_TICK_MS = 60
+_JOG_DRO_PREDICT_DEFAULT_HORIZON_S = 1.25
+_JOG_DRO_PREDICT_MIN_HORIZON_S = 0.35
+_JOG_DRO_PREDICT_MAX_HORIZON_S = 2.5
+_JOG_DRO_PREDICT_SYNC_HORIZON_MULTIPLIER = 1.25
+_JOG_DRO_OBSERVED_VELOCITY_ALPHA = 0.35
+_JOG_DRO_STATIONARY_DISTANCE_EPS = 0.002
+_JOG_DRO_ZERO_FEED_EPS = 0.05
+_JOG_DRO_INTERP_UNSYNCED_MAX_DT_S = 0.2
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -99,6 +115,11 @@ def _status_apply_interval_ok(app, state_token: str) -> bool:
     if not _status_settling_active(app):
         return True
     now = time.monotonic()
+    state_lower = str(state_token or "").strip().lower()
+    if state_lower.startswith(("jog", "run", "hold", "home")):
+        app._status_settling_last_state = state_token
+        app._status_settling_last_apply_ts = now
+        return True
     last_state = str(getattr(app, "_status_settling_last_state", "") or "")
     last_ts = float(getattr(app, "_status_settling_last_apply_ts", 0.0) or 0.0)
     if state_token and state_token == last_state and (now - last_ts) < _STATUS_SETTLING_MIN_INTERVAL_S:
@@ -118,14 +139,15 @@ def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
         if getattr(app, "_alarm_locked", False):
             app._set_alarm_lock(False)
         if not getattr(app, "_macro_status_active", False):
-            rendered_state = _render_machine_state_text(app, state, display_state)
+            banner_state = _stream_latched_banner_state(app, state, display_state)
+            rendered_state = _render_machine_state_text(app, state, banner_state)
             _set_var_if_changed(app.machine_state, rendered_state)
             try:
                 app._ensure_state_label_width(rendered_state)
             except Exception as exc:
                 _log_suppressed("Failed adjusting machine-state width during settling", exc)
             try:
-                app._update_state_highlight(display_state)
+                app._update_state_highlight(banner_state)
             except Exception as exc:
                 _log_suppressed("Failed updating machine-state highlight during settling", exc)
     try:
@@ -414,38 +436,39 @@ def _format_hhmm(seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
-def _run_completion_eta_text(app) -> str | None:
-    remaining_min = getattr(app, "_live_estimate_display_min", None)
-    if remaining_min is None:
-        remaining_min = getattr(app, "_live_estimate_min", None)
+def _run_progress_text(app) -> str:
     try:
-        remaining_min = float(remaining_min)
+        file_size = int(
+            getattr(app, "_stream_progress_file_size_bytes", 0)
+            or getattr(app, "_gcode_file_size_bytes", 0)
+            or 0
+        )
     except Exception:
-        return None
-    if remaining_min < 0:
-        remaining_min = 0.0
+        file_size = 0
+    if file_size <= 0:
+        return "n/a"
+    try:
+        acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
+    except Exception:
+        acked = 0
+    acked = max(0, min(file_size, acked))
+    pct = max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
+    return f"{int(round(pct))}%"
 
-    factor = 1.0
-    getter = getattr(app, "_estimate_factor_value", None)
-    if callable(getter):
-        try:
-            factor = float(getter())
-        except Exception:
-            factor = 1.0
-    if factor <= 0:
-        factor = 1.0
 
-    remaining_seconds = int(round(remaining_min * factor * 60.0))
-    return _format_hhmm(remaining_seconds)
+def _stream_latched_banner_state(app, state: str, display_state: str) -> str:
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    if stream_state == "running" or bool(getattr(app, "_stream_done_pending_idle", False)):
+        return "Run"
+    return str(display_state or state or "")
 
 
 def _render_machine_state_text(app, state: str, display_state: str) -> str:
-    if not str(state or "").lower().startswith("run"):
-        return display_state
-    eta_text = _run_completion_eta_text(app)
-    if not eta_text:
-        return display_state
-    return f"{display_state}: {eta_text}"
+    state_lower = str(state or "").strip().lower()
+    display_lower = str(display_state or "").strip().lower()
+    if state_lower.startswith("run") or display_lower.startswith("run"):
+        return f"Run: {_run_progress_text(app)}"
+    return display_state
 
 
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
@@ -464,13 +487,14 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         if app._alarm_locked:
             app._set_alarm_lock(False)
         elif not getattr(app, "_macro_status_active", False):
-            rendered_state = _render_machine_state_text(app, state, display_state)
+            banner_state = _stream_latched_banner_state(app, state, display_state)
+            rendered_state = _render_machine_state_text(app, state, banner_state)
             app.machine_state.set(rendered_state)
             try:
                 app._ensure_state_label_width(rendered_state)
             except Exception as exc:
                 _log_suppressed("Failed adjusting machine state label width", exc)
-            app._update_state_highlight(display_state)
+            app._update_state_highlight(banner_state)
             try:
                 app._update_current_highlight()
             except Exception as exc:
@@ -552,6 +576,14 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
                 _log_suppressed("Failed finalizing manual controls after deferred completion", exc)
             apply_stream_busy_state(app, False, log_hook=_log_suppressed)
             try:
+                if hasattr(app, "_update_joystick_polling_state"):
+                    app._update_joystick_polling_state()
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed refreshing joystick polling after deferred completion",
+                    exc,
+                )
+            try:
                 app._apply_status_poll_profile()
             except Exception as exc:
                 _log_suppressed("Failed applying status poll profile after deferred completion", exc)
@@ -616,6 +648,694 @@ def _set_var_if_changed(var, value: str) -> bool:
         _log_suppressed("Failed writing UI variable value", exc)
         return False
     return True
+
+
+def _snap_dro_to_last_status_raw(app) -> None:
+    mpos_raw = getattr(app, "_mpos_raw", None)
+    if not (isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3):
+        return
+    try:
+        report_units = str(getattr(app, "_report_units", None) or app.unit_mode.get() or "mm")
+    except Exception:
+        report_units = "mm"
+    try:
+        modal_units = str(app.unit_mode.get() or "mm")
+    except Exception:
+        modal_units = report_units
+    try:
+        mpos = (float(mpos_raw[0]), float(mpos_raw[1]), float(mpos_raw[2]))
+    except Exception:
+        return
+    try:
+        _set_var_if_changed(app.mpos_x, format_dro_value(mpos[0], report_units, modal_units))
+        _set_var_if_changed(app.mpos_y, format_dro_value(mpos[1], report_units, modal_units))
+        _set_var_if_changed(app.mpos_z, format_dro_value(mpos[2], report_units, modal_units))
+    except Exception as exc:
+        _log_suppressed("Failed snapping MPos DRO values to last status raw coordinates", exc)
+    wco_raw = getattr(app, "_wco_raw", None)
+    if not (isinstance(wco_raw, (list, tuple)) and len(wco_raw) >= 3):
+        return
+    try:
+        wpos = (
+            float(mpos[0]) - float(wco_raw[0]),
+            float(mpos[1]) - float(wco_raw[1]),
+            float(mpos[2]) - float(wco_raw[2]),
+        )
+        _set_var_if_changed(app.wpos_x, format_dro_value(wpos[0], report_units, modal_units))
+        _set_var_if_changed(app.wpos_y, format_dro_value(wpos[1], report_units, modal_units))
+        _set_var_if_changed(app.wpos_z, format_dro_value(wpos[2], report_units, modal_units))
+    except Exception as exc:
+        _log_suppressed("Failed snapping WPos DRO values to last status raw coordinates", exc)
+
+
+def _request_stop_status_refresh(app) -> None:
+    try:
+        mark_manual_motion = getattr(app, "_mark_manual_motion_activity", None)
+        if callable(mark_manual_motion):
+            mark_manual_motion(duration_s=2.0)
+    except Exception as exc:
+        _log_suppressed("Failed extending fast status-poll profile after jog stop", exc)
+    grbl = getattr(app, "grbl", None)
+    send_rt = getattr(grbl, "send_realtime", None)
+    if not callable(send_rt):
+        return
+
+    def _send_status_query() -> None:
+        try:
+            send_rt(RT_STATUS)
+        except Exception as exc:
+            _log_suppressed("Failed sending immediate status query after jog stop", exc)
+
+    _send_status_query()
+    after_fn = getattr(app, "after", None)
+    if not callable(after_fn):
+        return
+    try:
+        after_fn(120, _send_status_query)
+    except Exception as exc:
+        _log_suppressed("Failed scheduling delayed status query after jog stop", exc)
+
+
+def _units_ratio(from_units: str, to_units: str) -> float:
+    from_scale = _unit_scale_cached(from_units)
+    to_scale = _unit_scale_cached(to_units)
+    if to_scale <= 0.0:
+        return 1.0
+    return float(from_scale) / float(to_scale)
+
+
+def _rounded_xyz(value: tuple[float, float, float] | None) -> list[float] | None:
+    if not isinstance(value, tuple) or len(value) < 3:
+        return None
+    try:
+        return [round(float(value[0]), 6), round(float(value[1]), 6), round(float(value[2]), 6)]
+    except Exception:
+        return None
+
+
+def _record_jog_dro_trace(app, kind: str, **payload: object) -> None:
+    history = getattr(app, "_jog_dro_trace", None)
+    if not isinstance(history, deque):
+        history = deque(maxlen=1200)
+        setattr(app, "_jog_dro_trace", history)
+    entry: dict[str, object] = {
+        "ts": round(float(time.time()), 6),
+        "kind": str(kind or "").strip() or "unknown",
+    }
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, tuple) and len(value) >= 3:
+            rounded = _rounded_xyz((float(value[0]), float(value[1]), float(value[2])))
+            if rounded is not None:
+                entry[str(key)] = rounded
+            continue
+        if isinstance(value, float):
+            entry[str(key)] = round(float(value), 6)
+            continue
+        entry[str(key)] = value
+    try:
+        history.append(entry)
+    except Exception as exc:
+        _log_suppressed("Failed appending jog DRO trace entry", exc)
+
+
+def _record_jog_dro_delta_stats(
+    app,
+    *,
+    dx: float,
+    dy: float,
+    dz: float,
+    sync_interval_s: float | None = None,
+    predict_horizon_s: float | None = None,
+) -> None:
+    stats = getattr(app, "_jog_dro_interp_stats", None)
+    if not isinstance(stats, dict):
+        stats = {
+            "status_sync_count": 0,
+            "delta_abs_avg_x": 0.0,
+            "delta_abs_avg_y": 0.0,
+            "delta_abs_avg_z": 0.0,
+            "delta_abs_max_x": 0.0,
+            "delta_abs_max_y": 0.0,
+            "delta_abs_max_z": 0.0,
+            "status_sync_interval_avg_s": 0.0,
+            "status_sync_interval_max_s": 0.0,
+            "predict_horizon_avg_s": 0.0,
+            "predict_horizon_max_s": 0.0,
+        }
+        setattr(app, "_jog_dro_interp_stats", stats)
+    count = int(stats.get("status_sync_count", 0) or 0) + 1
+    dx_abs = abs(float(dx))
+    dy_abs = abs(float(dy))
+    dz_abs = abs(float(dz))
+    prev_count = max(0, count - 1)
+    stats["status_sync_count"] = count
+    for axis, value_abs in (("x", dx_abs), ("y", dy_abs), ("z", dz_abs)):
+        avg_key = f"delta_abs_avg_{axis}"
+        max_key = f"delta_abs_max_{axis}"
+        prev_avg = float(stats.get(avg_key, 0.0) or 0.0)
+        next_avg = ((prev_avg * prev_count) + value_abs) / count
+        stats[avg_key] = float(next_avg)
+        stats[max_key] = max(float(stats.get(max_key, 0.0) or 0.0), value_abs)
+    if sync_interval_s is not None:
+        sync_value = max(0.0, float(sync_interval_s))
+        prev_avg = float(stats.get("status_sync_interval_avg_s", 0.0) or 0.0)
+        stats["status_sync_interval_avg_s"] = ((prev_avg * prev_count) + sync_value) / count
+        stats["status_sync_interval_max_s"] = max(
+            float(stats.get("status_sync_interval_max_s", 0.0) or 0.0),
+            sync_value,
+        )
+    if predict_horizon_s is not None:
+        horizon_value = max(0.0, float(predict_horizon_s))
+        prev_avg = float(stats.get("predict_horizon_avg_s", 0.0) or 0.0)
+        stats["predict_horizon_avg_s"] = ((prev_avg * prev_count) + horizon_value) / count
+        stats["predict_horizon_max_s"] = max(
+            float(stats.get("predict_horizon_max_s", 0.0) or 0.0),
+            horizon_value,
+        )
+
+
+def _manual_jog_prediction_horizon_s(state: dict) -> float:
+    try:
+        observed_sync_interval_s = float(state.get("status_sync_interval_s", 0.0) or 0.0)
+    except Exception:
+        observed_sync_interval_s = 0.0
+    if observed_sync_interval_s > 0.0:
+        horizon_s = observed_sync_interval_s * float(_JOG_DRO_PREDICT_SYNC_HORIZON_MULTIPLIER)
+    else:
+        horizon_s = float(_JOG_DRO_PREDICT_DEFAULT_HORIZON_S)
+    return max(
+        float(_JOG_DRO_PREDICT_MIN_HORIZON_S),
+        min(float(_JOG_DRO_PREDICT_MAX_HORIZON_S), float(horizon_s)),
+    )
+
+
+def _normalized_jog_prediction_source(source: str | None) -> str:
+    raw = str(source or "").strip().lower()
+    if not raw:
+        return "jog"
+    return raw
+
+
+def _is_joystick_jog_source(source: str | None) -> bool:
+    normalized = _normalized_jog_prediction_source(source)
+    return normalized.startswith("joystick") or normalized.startswith("jog_hold")
+
+
+def _normalized_jog_dro_smoothing_mode(app) -> str:
+    fallback = JOG_DRO_SMOOTHING_OFF
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        raw = str(settings.get("jog_dro_smoothing_mode", fallback) or "").strip().lower()
+        if raw in JOG_DRO_SMOOTHING_CHOICES:
+            fallback = raw
+    var = getattr(app, "jog_dro_smoothing_mode", None)
+    if var is not None:
+        try:
+            raw = str(var.get() or "").strip().lower()
+        except Exception:
+            raw = ""
+        if raw in JOG_DRO_SMOOTHING_CHOICES:
+            return raw
+    return fallback
+
+
+def _jog_prediction_enabled_for_source(app, source: str | None) -> bool:
+    mode = _normalized_jog_dro_smoothing_mode(app)
+    if mode == JOG_DRO_SMOOTHING_OFF:
+        return False
+    if mode == JOG_DRO_SMOOTHING_ALL_JOG:
+        return True
+    if mode == JOG_DRO_SMOOTHING_UI_JOG_ONLY:
+        return not _is_joystick_jog_source(source)
+    return False
+
+
+def _jog_prediction_should_run(app) -> bool:
+    state = getattr(app, "_manual_jog_predict_state", None)
+    source = None
+    if isinstance(state, dict):
+        source = str(state.get("source", "") or "").strip().lower() or None
+    if not _jog_prediction_enabled_for_source(app, source):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if not bool(getattr(app, "_grbl_ready", False)):
+        return False
+    if bool(getattr(app, "_alarm_locked", False)):
+        return False
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return False
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    if stream_state in {"running", "paused"}:
+        return False
+    state = str(getattr(app, "_machine_state_text", "") or "").strip().lower()
+    if state.startswith(("jog", "hold")):
+        return True
+    return bool(getattr(app, "_active_joystick_hold_binding", None))
+
+
+def _clear_manual_jog_prediction(app) -> None:
+    after_id = getattr(app, "_manual_jog_predict_after_id", None)
+    if after_id is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(after_id)
+        except Exception as exc:
+            _log_suppressed("Failed cancelling manual jog prediction timer", exc)
+    app._manual_jog_predict_after_id = None
+    app._manual_jog_predict_state = None
+    app._manual_jog_predict_last_est_mpos = None
+    app._manual_jog_predict_last_est_wpos = None
+
+
+def _schedule_manual_jog_prediction_tick(app) -> None:
+    if getattr(app, "_manual_jog_predict_after_id", None) is not None:
+        return
+    after_fn = getattr(app, "after", None)
+    if not callable(after_fn):
+        return
+    try:
+        app._manual_jog_predict_after_id = after_fn(
+            int(_JOG_DRO_PREDICT_TICK_MS), lambda: _run_manual_jog_prediction_tick(app)
+        )
+    except Exception as exc:
+        app._manual_jog_predict_after_id = None
+        _log_suppressed("Failed scheduling manual jog prediction tick", exc)
+
+
+def _run_manual_jog_prediction_tick(app) -> None:
+    app._manual_jog_predict_after_id = None
+    state = getattr(app, "_manual_jog_predict_state", None)
+    if not isinstance(state, dict):
+        return
+    if not _jog_prediction_should_run(app):
+        _clear_manual_jog_prediction(app)
+        return
+    try:
+        started_ts = float(state.get("start_ts", 0.0) or 0.0)
+        anchor_ts = float(state.get("anchor_ts", started_ts) or started_ts)
+        max_distance = max(0.0, float(state.get("max_distance_report", 0.0) or 0.0))
+        base_mpos = state.get("base_mpos_report")
+        velocity_report_s = state.get("velocity_report_s")
+        unit_vec = state.get("unit_vec")
+        speed_report_s = max(0.0, float(state.get("speed_report_s", 0.0) or 0.0))
+        report_units = str(state.get("report_units", "mm") or "mm")
+        freeze_interp = bool(state.get("freeze", False))
+    except Exception as exc:
+        _log_suppressed("Failed reading manual jog prediction state", exc)
+        _clear_manual_jog_prediction(app)
+        return
+    try:
+        modal_units = str(app.unit_mode.get())
+    except Exception:
+        modal_units = "mm"
+    if (
+        started_ts <= 0.0
+        or max_distance <= 0.0
+        or not isinstance(base_mpos, (list, tuple))
+        or len(base_mpos) < 3
+    ):
+        _clear_manual_jog_prediction(app)
+        return
+    if isinstance(velocity_report_s, (list, tuple)) and len(velocity_report_s) >= 3:
+        try:
+            velocity_vec = (
+                float(velocity_report_s[0]),
+                float(velocity_report_s[1]),
+                float(velocity_report_s[2]),
+            )
+        except Exception:
+            velocity_vec = (0.0, 0.0, 0.0)
+    elif isinstance(unit_vec, (list, tuple)) and len(unit_vec) >= 3 and speed_report_s > 0.0:
+        velocity_vec = (
+            float(unit_vec[0]) * float(speed_report_s),
+            float(unit_vec[1]) * float(speed_report_s),
+            float(unit_vec[2]) * float(speed_report_s),
+        )
+    else:
+        velocity_vec = (0.0, 0.0, 0.0)
+    prediction_horizon_s = _manual_jog_prediction_horizon_s(state)
+    elapsed_s = max(0.0, time.monotonic() - anchor_ts)
+    status_sync_interval_s = max(0.0, float(state.get("status_sync_interval_s", 0.0) or 0.0))
+    if status_sync_interval_s > 0.0:
+        elapsed_cap_s = min(float(prediction_horizon_s), status_sync_interval_s)
+    else:
+        elapsed_cap_s = min(float(prediction_horizon_s), float(_JOG_DRO_INTERP_UNSYNCED_MAX_DT_S))
+    elapsed_s = min(elapsed_s, max(0.0, float(elapsed_cap_s)))
+    feed_mm_min = abs(float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0))
+    feed_report_s = max(0.0, feed_mm_min / 60.0)
+    if freeze_interp:
+        traveled = 0.0
+        est_mpos = (
+            float(base_mpos[0]),
+            float(base_mpos[1]),
+            float(base_mpos[2]),
+        )
+    else:
+        est_mpos = (
+            float(base_mpos[0]) + float(velocity_vec[0]) * elapsed_s,
+            float(base_mpos[1]) + float(velocity_vec[1]) * elapsed_s,
+            float(base_mpos[2]) + float(velocity_vec[2]) * elapsed_s,
+        )
+        dx = float(est_mpos[0]) - float(base_mpos[0])
+        dy = float(est_mpos[1]) - float(base_mpos[1])
+        dz = float(est_mpos[2]) - float(base_mpos[2])
+        traveled = (dx * dx + dy * dy + dz * dz) ** 0.5
+        velocity_mag = (
+            (float(velocity_vec[0]) * float(velocity_vec[0]))
+            + (float(velocity_vec[1]) * float(velocity_vec[1]))
+            + (float(velocity_vec[2]) * float(velocity_vec[2]))
+        ) ** 0.5
+        speed_cap = max(float(feed_report_s), float(velocity_mag))
+        if speed_cap > 0.0:
+            max_by_speed = max(0.0, (speed_cap * float(elapsed_s)) * 1.1)
+        else:
+            max_by_speed = 0.0
+        if max_by_speed > 0.0 and traveled > max_by_speed and traveled > 1e-9:
+            scale = max_by_speed / traveled
+            est_mpos = (
+                float(base_mpos[0]) + (dx * scale),
+                float(base_mpos[1]) + (dy * scale),
+                float(base_mpos[2]) + (dz * scale),
+            )
+            dx = float(est_mpos[0]) - float(base_mpos[0])
+            dy = float(est_mpos[1]) - float(base_mpos[1])
+            dz = float(est_mpos[2]) - float(base_mpos[2])
+            traveled = (dx * dx + dy * dy + dz * dz) ** 0.5
+        if traveled > max_distance and traveled > 1e-9:
+            scale = max_distance / traveled
+            est_mpos = (
+                float(base_mpos[0]) + (dx * scale),
+                float(base_mpos[1]) + (dy * scale),
+                float(base_mpos[2]) + (dz * scale),
+            )
+            traveled = max_distance
+    if traveled <= 0.0 and freeze_interp:
+        _schedule_manual_jog_prediction_tick(app)
+        return
+    try:
+        est_wpos: tuple[float, float, float] | None = None
+        mpos_x = format_dro_value(est_mpos[0], report_units, modal_units)
+        mpos_y = format_dro_value(est_mpos[1], report_units, modal_units)
+        mpos_z = format_dro_value(est_mpos[2], report_units, modal_units)
+        _set_var_if_changed(app.mpos_x, mpos_x)
+        _set_var_if_changed(app.mpos_y, mpos_y)
+        _set_var_if_changed(app.mpos_z, mpos_z)
+        wco_raw = getattr(app, "_wco_raw", None)
+        if isinstance(wco_raw, (list, tuple)) and len(wco_raw) >= 3:
+            est_wpos = (
+                float(est_mpos[0]) - float(wco_raw[0]),
+                float(est_mpos[1]) - float(wco_raw[1]),
+                float(est_mpos[2]) - float(wco_raw[2]),
+            )
+            wpos_x = format_dro_value(est_wpos[0], report_units, modal_units)
+            wpos_y = format_dro_value(est_wpos[1], report_units, modal_units)
+            wpos_z = format_dro_value(est_wpos[2], report_units, modal_units)
+            _set_var_if_changed(app.wpos_x, wpos_x)
+            _set_var_if_changed(app.wpos_y, wpos_y)
+            _set_var_if_changed(app.wpos_z, wpos_z)
+        app._manual_jog_predict_last_est_mpos = (
+            float(est_mpos[0]),
+            float(est_mpos[1]),
+            float(est_mpos[2]),
+        )
+        app._manual_jog_predict_last_est_wpos = (
+            (float(est_wpos[0]), float(est_wpos[1]), float(est_wpos[2]))
+            if est_wpos is not None
+            else None
+        )
+        _record_jog_dro_trace(
+            app,
+            "interp",
+            elapsed_s=float(elapsed_s),
+            horizon_s=float(prediction_horizon_s),
+            traveled=float(traveled),
+            velocity_report_s=velocity_vec,
+            feed_report_s=float(feed_report_s),
+            freeze=bool(freeze_interp),
+            est_mpos=app._manual_jog_predict_last_est_mpos,
+            est_wpos=app._manual_jog_predict_last_est_wpos,
+        )
+    except Exception as exc:
+        _log_suppressed("Failed applying manual jog DRO interpolation", exc)
+        _clear_manual_jog_prediction(app)
+        return
+    _schedule_manual_jog_prediction_tick(app)
+
+
+def start_manual_jog_prediction(
+    app,
+    *,
+    dx: float,
+    dy: float,
+    dz: float,
+    feed: float,
+    unit_mode: str,
+    source: str | None = None,
+) -> None:
+    normalized_source = _normalized_jog_prediction_source(source)
+    if not _jog_prediction_enabled_for_source(app, normalized_source):
+        _clear_manual_jog_prediction(app)
+        return
+    try:
+        dx_val = float(dx)
+        dy_val = float(dy)
+        dz_val = float(dz)
+        feed_val = max(0.0, float(feed))
+    except Exception:
+        return
+    vector_len = (dx_val * dx_val + dy_val * dy_val + dz_val * dz_val) ** 0.5
+    if vector_len <= 0.0 or feed_val <= 0.0:
+        _clear_manual_jog_prediction(app)
+        return
+    report_units = str(getattr(app, "_report_units", None) or unit_mode or "mm")
+    ratio = _units_ratio(str(unit_mode or "mm"), report_units)
+    dx_report = dx_val * ratio
+    dy_report = dy_val * ratio
+    dz_report = dz_val * ratio
+    max_distance_report = (dx_report * dx_report + dy_report * dy_report + dz_report * dz_report) ** 0.5
+    if max_distance_report <= 0.0:
+        _clear_manual_jog_prediction(app)
+        return
+    speed_report_s = (feed_val * ratio) / 60.0
+    if speed_report_s <= 0.0:
+        _clear_manual_jog_prediction(app)
+        return
+    mpos_raw = getattr(app, "_mpos_raw", None)
+    if not (isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3):
+        return
+    app._manual_jog_predict_state = {
+        "start_ts": float(time.monotonic()),
+        "anchor_ts": float(time.monotonic()),
+        "source": normalized_source,
+        "base_mpos_report": (
+            float(mpos_raw[0]),
+            float(mpos_raw[1]),
+            float(mpos_raw[2]),
+        ),
+        "unit_vec": (
+            float(dx_report / max_distance_report),
+            float(dy_report / max_distance_report),
+            float(dz_report / max_distance_report),
+        ),
+        "speed_report_s": float(speed_report_s),
+        "velocity_report_s": (
+            float((dx_report / max_distance_report) * speed_report_s),
+            float((dy_report / max_distance_report) * speed_report_s),
+            float((dz_report / max_distance_report) * speed_report_s),
+        ),
+        "max_distance_report": float(max_distance_report),
+        "report_units": report_units,
+        "status_sync_interval_s": 0.0,
+        "status_sync_last_ts": 0.0,
+        "last_status_mpos_report": (
+            float(mpos_raw[0]),
+            float(mpos_raw[1]),
+            float(mpos_raw[2]),
+        ),
+        "freeze": False,
+    }
+    app._manual_jog_predict_last_est_mpos = (
+        float(mpos_raw[0]),
+        float(mpos_raw[1]),
+        float(mpos_raw[2]),
+    )
+    app._manual_jog_predict_last_est_wpos = None
+    _record_jog_dro_trace(
+        app,
+        "start",
+        dx=float(dx_val),
+        dy=float(dy_val),
+        dz=float(dz_val),
+        feed=float(feed_val),
+        unit_mode=str(unit_mode or ""),
+        source=normalized_source,
+        report_units=report_units,
+        base_mpos=app._manual_jog_predict_last_est_mpos,
+        max_distance_report=float(max_distance_report),
+        horizon_s=float(_manual_jog_prediction_horizon_s(app._manual_jog_predict_state)),
+    )
+    _schedule_manual_jog_prediction_tick(app)
+
+
+def sync_manual_jog_prediction_with_status(app) -> None:
+    state = getattr(app, "_manual_jog_predict_state", None)
+    if not isinstance(state, dict):
+        return
+    if not _jog_prediction_should_run(app):
+        _clear_manual_jog_prediction(app)
+        return
+    mpos_raw = getattr(app, "_mpos_raw", None)
+    if isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3:
+        try:
+            now_mono = float(time.monotonic())
+            sync_interval_s: float | None = None
+            last_sync_ts = float(state.get("status_sync_last_ts", 0.0) or 0.0)
+            prev_status_mpos = state.get("last_status_mpos_report")
+            if last_sync_ts > 0.0 and now_mono > last_sync_ts:
+                observed_interval_s = now_mono - last_sync_ts
+                prev_interval_s = float(state.get("status_sync_interval_s", 0.0) or 0.0)
+                if prev_interval_s > 0.0:
+                    sync_interval_s = (prev_interval_s * 0.7) + (observed_interval_s * 0.3)
+                else:
+                    sync_interval_s = observed_interval_s
+                state["status_sync_interval_s"] = float(sync_interval_s)
+            state["status_sync_last_ts"] = now_mono
+            prediction_horizon_s = _manual_jog_prediction_horizon_s(state)
+            actual_mpos = (
+                float(mpos_raw[0]),
+                float(mpos_raw[1]),
+                float(mpos_raw[2]),
+            )
+            est_mpos = getattr(app, "_manual_jog_predict_last_est_mpos", None)
+            if isinstance(est_mpos, tuple) and len(est_mpos) >= 3:
+                dx = float(actual_mpos[0]) - float(est_mpos[0])
+                dy = float(actual_mpos[1]) - float(est_mpos[1])
+                dz = float(actual_mpos[2]) - float(est_mpos[2])
+                _record_jog_dro_delta_stats(
+                    app,
+                    dx=dx,
+                    dy=dy,
+                    dz=dz,
+                    sync_interval_s=sync_interval_s,
+                    predict_horizon_s=prediction_horizon_s,
+                )
+                _record_jog_dro_trace(
+                    app,
+                    "status_sync",
+                    actual_mpos=actual_mpos,
+                    est_mpos=(
+                        float(est_mpos[0]),
+                        float(est_mpos[1]),
+                        float(est_mpos[2]),
+                    ),
+                    delta=(dx, dy, dz),
+                    sync_interval_s=sync_interval_s,
+                    horizon_s=float(prediction_horizon_s),
+                )
+            observed_velocity = None
+            observed_speed = 0.0
+            if (
+                isinstance(prev_status_mpos, (list, tuple))
+                and len(prev_status_mpos) >= 3
+                and last_sync_ts > 0.0
+                and now_mono > last_sync_ts
+            ):
+                dt_s = max(1e-6, float(now_mono - last_sync_ts))
+                observed_velocity = (
+                    (float(actual_mpos[0]) - float(prev_status_mpos[0])) / dt_s,
+                    (float(actual_mpos[1]) - float(prev_status_mpos[1])) / dt_s,
+                    (float(actual_mpos[2]) - float(prev_status_mpos[2])) / dt_s,
+                )
+                observed_speed = (
+                    (observed_velocity[0] * observed_velocity[0])
+                    + (observed_velocity[1] * observed_velocity[1])
+                    + (observed_velocity[2] * observed_velocity[2])
+                ) ** 0.5
+                last_feed = abs(float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0))
+                freeze_interp = bool(
+                    last_feed <= float(_JOG_DRO_ZERO_FEED_EPS)
+                    or observed_speed <= float(_JOG_DRO_STATIONARY_DISTANCE_EPS)
+                )
+                prev_velocity = state.get("velocity_report_s")
+                if freeze_interp:
+                    next_velocity = (0.0, 0.0, 0.0)
+                elif isinstance(prev_velocity, (list, tuple)) and len(prev_velocity) >= 3:
+                    alpha = float(_JOG_DRO_OBSERVED_VELOCITY_ALPHA)
+                    next_velocity = (
+                        (float(prev_velocity[0]) * (1.0 - alpha)) + (float(observed_velocity[0]) * alpha),
+                        (float(prev_velocity[1]) * (1.0 - alpha)) + (float(observed_velocity[1]) * alpha),
+                        (float(prev_velocity[2]) * (1.0 - alpha)) + (float(observed_velocity[2]) * alpha),
+                    )
+                else:
+                    next_velocity = (
+                        float(observed_velocity[0]),
+                        float(observed_velocity[1]),
+                        float(observed_velocity[2]),
+                    )
+                state["velocity_report_s"] = next_velocity
+                state["freeze"] = bool(freeze_interp)
+                _record_jog_dro_trace(
+                    app,
+                    "velocity_sync",
+                    observed_velocity=observed_velocity,
+                    filtered_velocity=next_velocity,
+                    observed_speed=float(observed_speed),
+                    feed=float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0),
+                    freeze=bool(freeze_interp),
+                )
+            state["base_mpos_report"] = (
+                float(actual_mpos[0]),
+                float(actual_mpos[1]),
+                float(actual_mpos[2]),
+            )
+            state["last_status_mpos_report"] = (
+                float(actual_mpos[0]),
+                float(actual_mpos[1]),
+                float(actual_mpos[2]),
+            )
+            state["start_ts"] = float(time.monotonic())
+            state["anchor_ts"] = float(time.monotonic())
+        except Exception as exc:
+            _log_suppressed("Failed syncing manual jog prediction anchor to status", exc)
+    _schedule_manual_jog_prediction_tick(app)
+
+
+def stop_manual_jog_prediction(app, *, reason: str = "stop") -> None:
+    est_mpos = getattr(app, "_manual_jog_predict_last_est_mpos", None)
+    actual_mpos = None
+    mpos_raw = getattr(app, "_mpos_raw", None)
+    if isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3:
+        try:
+            actual_mpos = (
+                float(mpos_raw[0]),
+                float(mpos_raw[1]),
+                float(mpos_raw[2]),
+            )
+        except Exception:
+            actual_mpos = None
+    delta = None
+    if isinstance(est_mpos, tuple) and len(est_mpos) >= 3 and isinstance(actual_mpos, tuple):
+        try:
+            delta = (
+                float(actual_mpos[0]) - float(est_mpos[0]),
+                float(actual_mpos[1]) - float(est_mpos[1]),
+                float(actual_mpos[2]) - float(est_mpos[2]),
+            )
+        except Exception:
+            delta = None
+    _record_jog_dro_trace(
+        app,
+        "stop",
+        reason=str(reason or "stop"),
+        est_mpos=est_mpos if isinstance(est_mpos, tuple) and len(est_mpos) >= 3 else None,
+        actual_mpos=actual_mpos,
+        delta=delta,
+    )
+    _clear_manual_jog_prediction(app)
+    _snap_dro_to_last_status_raw(app)
+    _request_stop_status_refresh(app)
 
 
 def _xyz_tuple_changed(
@@ -687,9 +1407,11 @@ def _flash_wpos_labels(app) -> None:
 
 
 def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
-    wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
+    reported_wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
     mpos_vals = _parse_xyz_triplet(fields.mpos) if fields.mpos else None
-    wpos_vals = _parse_xyz_triplet(fields.wpos) if fields.wpos else None
+    reported_wpos_vals = _parse_xyz_triplet(fields.wpos) if fields.wpos else None
+    wco_vals = list(reported_wco_vals) if reported_wco_vals else None
+    wpos_vals = list(reported_wpos_vals) if reported_wpos_vals else None
     if wco_vals:
         app._wco_raw = tuple(wco_vals)
     else:
@@ -704,6 +1426,84 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
     to_mm_factor = report_scale
     to_modal_factor = report_scale / modal_scale
     pos_deadband = _position_deadband_report_units(report_units, modal_units)
+
+    def _clear_zero_all_pending_latch() -> None:
+        app._zero_all_pending_active = False
+        app._zero_all_pending_expected_wco_raw = None
+        app._zero_all_pending_until_ts = 0.0
+        app._zero_all_pending_hard_until_ts = 0.0
+        app._zero_all_pending_post_timeout_wco_seen = False
+
+    zero_all_pending_active = bool(getattr(app, "_zero_all_pending_active", False))
+    expected_wco = getattr(app, "_zero_all_pending_expected_wco_raw", None)
+    expected_wco_tuple: tuple[float, float, float] | None = None
+    if zero_all_pending_active:
+        expected_wco_raw = (
+            expected_wco
+            if isinstance(expected_wco, (list, tuple)) and len(expected_wco) >= 3
+            else None
+        )
+        valid_expected = expected_wco_raw is not None
+        if expected_wco_raw is not None:
+            try:
+                expected_wco_tuple = (
+                    float(expected_wco_raw[0]),
+                    float(expected_wco_raw[1]),
+                    float(expected_wco_raw[2]),
+                )
+            except Exception:
+                valid_expected = False
+        if not valid_expected or expected_wco_tuple is None:
+            _clear_zero_all_pending_latch()
+            zero_all_pending_active = False
+        else:
+            expected_wco_live = expected_wco_tuple
+            now_mono = time.monotonic()
+            soft_until = float(getattr(app, "_zero_all_pending_until_ts", 0.0) or 0.0)
+            hard_until = float(getattr(app, "_zero_all_pending_hard_until_ts", 0.0) or 0.0)
+            soft_expired = soft_until > 0.0 and now_mono >= soft_until
+            hard_expired = hard_until > 0.0 and now_mono >= hard_until
+            zero_confirmed = False
+            if reported_wpos_vals and len(reported_wpos_vals) >= 3:
+                zero_confirmed = all(abs(float(val)) <= pos_deadband for val in reported_wpos_vals[:3])
+            if not zero_confirmed and mpos_vals and reported_wco_vals:
+                zero_confirmed = all(
+                    abs(float(mpos_vals[idx]) - float(reported_wco_vals[idx])) <= pos_deadband
+                    for idx in range(3)
+                )
+            if not zero_confirmed and reported_wco_vals:
+                zero_confirmed = all(
+                    abs(float(reported_wco_vals[idx]) - float(expected_wco_live[idx])) <= pos_deadband
+                    for idx in range(3)
+                )
+            if hard_expired or zero_confirmed:
+                _clear_zero_all_pending_latch()
+                zero_all_pending_active = False
+            else:
+                # Keep WPos stable during zero-all settling even when WCO is
+                # temporarily missing or stale in status reports.
+                wco_vals = [
+                    float(expected_wco_live[0]),
+                    float(expected_wco_live[1]),
+                    float(expected_wco_live[2]),
+                ]
+                app._wco_raw = (
+                    float(expected_wco_live[0]),
+                    float(expected_wco_live[1]),
+                    float(expected_wco_live[2]),
+                )
+                if mpos_vals is not None:
+                    wpos_vals = None
+                else:
+                    wpos_vals = [0.0, 0.0, 0.0]
+                if soft_expired and reported_wco_vals:
+                    if bool(getattr(app, "_zero_all_pending_post_timeout_wco_seen", False)):
+                        _clear_zero_all_pending_latch()
+                        zero_all_pending_active = False
+                        wco_vals = list(reported_wco_vals)
+                        wpos_vals = list(reported_wpos_vals) if reported_wpos_vals else None
+                    else:
+                        app._zero_all_pending_post_timeout_wco_seen = True
 
     def to_mm(value: float) -> float:
         return value * to_mm_factor
@@ -914,6 +1714,10 @@ def handle_status_event(app, raw: str):
     previous_raw = str(getattr(app, "_last_status_raw", "") or "")
     app._last_status_raw = raw
     state_token = _status_state_token(raw)
+    state_lower = str(state_token or "").strip().lower()
+    live_updates_during_settling = bool(
+        settling and state_lower.startswith(("jog", "run", "hold"))
+    )
     if state_token and not str(state_token).lower().startswith("idle"):
         try:
             app._status_last_non_idle_ts = time.monotonic()
@@ -958,13 +1762,18 @@ def handle_status_event(app, raw: str):
     history.append((now_ts, raw))
     parse_start = time.perf_counter()
     fields = _parse_status_fields(raw)
+    if fields.feed is not None:
+        try:
+            app._last_status_feed_raw = float(fields.feed)
+        except Exception:
+            pass
     parse_elapsed_ms = (time.perf_counter() - parse_start) * 1000.0
     _record_status_perf_metric(app, "parse", parse_elapsed_ms)
     app._status_seen = True
     app._last_status_pins = fields.pins
     display_state = _resolve_display_state(app, fields.state)
     apply_start = time.perf_counter()
-    if settling:
+    if settling and not live_updates_during_settling:
         _apply_machine_state_minimal(app, fields.state, display_state)
     else:
         if not _apply_machine_state(app, fields.state, display_state):
@@ -989,7 +1798,7 @@ def handle_status_event(app, raw: str):
             return
     apply_elapsed_ms = (time.perf_counter() - apply_start) * 1000.0
     _record_status_perf_metric(app, "apply_state", apply_elapsed_ms)
-    if settling:
+    if settling and not live_updates_during_settling:
         _record_status_perf_metric(
             app,
             "positions_macro",
@@ -998,6 +1807,7 @@ def handle_status_event(app, raw: str):
     else:
         update_start = time.perf_counter()
         _update_positions_and_macro_state(app, fields)
+        sync_manual_jog_prediction_with_status(app)
         positions_elapsed_ms = (time.perf_counter() - update_start) * 1000.0
         _record_status_perf_metric(
             app,

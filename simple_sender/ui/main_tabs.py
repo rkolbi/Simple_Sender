@@ -30,6 +30,7 @@ from simple_sender.ui.console import build_console_tab
 from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
+from simple_sender.ui.file_info_tab import build_file_info_tab
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 logger = logging.getLogger(__name__)
@@ -49,16 +50,12 @@ def update_tab_visibility(app, nb=None):
     try:
         app._active_tab_label = str(label)
         app._app_settings_tab_active = (label == "App Settings")
+        if app._app_settings_tab_active:
+            note_interaction = getattr(app, "_note_app_settings_interaction", None)
+            if callable(note_interaction):
+                note_interaction()
     except Exception:
         pass
-    if label == "G-code":
-        gview = getattr(app, "gview", None)
-        notify_visible = getattr(gview, "notify_tab_visible", None)
-        if callable(notify_visible):
-            try:
-                notify_visible()
-            except Exception as exc:
-                logger.debug("Failed notifying G-code viewer tab visibility", exc_info=exc)
     try:
         app._update_quick_button_visibility()
     except Exception as exc:
@@ -101,8 +98,17 @@ def build_gcode_tab(app, notebook):
     # Gcode tab
     gtab = ttk.Frame(nb, padding=6)
     nb.add(gtab, text="G-code")
-    set_tab_tooltip(nb, gtab, "Sample the loaded G-code and job stats.")
+    set_tab_tooltip(nb, gtab, "Live Past/Current/Next G-code window and job stats.")
     app.gcode_tab = gtab
+    live_row = ttk.Frame(gtab)
+    live_row.pack(fill="x", pady=(0, 4))
+    app.gcode_live_header_label = ttk.Label(
+        live_row,
+        textvariable=app.gcode_live_header_var,
+        anchor="w",
+        justify="left",
+    )
+    app.gcode_live_header_label.pack(side="left", fill="x", expand=True)
     stats_row = ttk.Frame(gtab)
     stats_row.pack(fill="x", pady=(0, 6))
     app.gcode_stats_label = ttk.Label(
@@ -113,13 +119,6 @@ def build_gcode_tab(app, notebook):
     )
     app.gcode_stats_label.pack(side="left", fill="x", expand=True)
     app.gview = GcodeViewer(gtab)
-    def _gcode_tab_visible() -> bool:
-        try:
-            selected = notebook.select()
-            return bool(selected and str(selected) == str(gtab))
-        except Exception:
-            return str(getattr(app, "_active_tab_label", "")) == "G-code"
-    app.gview.set_chunk_insert_visibility_callback(_gcode_tab_visible)
     app.gview.pack(fill="both", expand=True)
 
 
@@ -132,6 +131,9 @@ def build_main_tabs(app, parent):
 
     # Gcode tab
     build_gcode_tab(app, nb)
+
+    # File Info tab
+    build_file_info_tab(app, nb)
 
     # Console tab
     build_console_tab(app, nb)
@@ -156,4 +158,3 @@ def build_main_tabs(app, parent):
     build_checklists_tab(app, nb)
 
     app._update_tab_visibility(nb)
-

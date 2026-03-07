@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 import re
-from typing import Callable
+from typing import Any, Callable
 
 from simple_sender.gcode_parser import parse_gcode_lines
 from simple_sender.gcode_source import FileGcodeSource
@@ -77,7 +77,15 @@ def _confidence_badge(raw: str | None) -> str:
 
 def _set_gcode_status_text_if_changed(app, text: str) -> None:
     normalized = str(text or "")
-    if normalized == str(getattr(app, "_gcode_status_last_text", "") or ""):
+    last = str(getattr(app, "_gcode_status_last_text", "") or "")
+    current = ""
+    getter = getattr(getattr(app, "gcode_stats_var", None), "get", None)
+    if callable(getter):
+        try:
+            current = str(getter() or "")
+        except Exception:
+            current = ""
+    if normalized == last and normalized == current:
         return
     app._gcode_status_last_text = normalized
     app.gcode_stats_var.set(normalized)
@@ -417,14 +425,18 @@ def _compute_stats_from_moves(
 def _build_move_stats_accumulator(
     rapid_rates: tuple[float, float, float] | None = None,
     accel_rates: tuple[float, float, float] | None = None,
-):
+) -> tuple[
+    Callable[[Any], None],
+    Callable[[int, float | None, str, float, float, float, float, float | None], None],
+    Callable[[Any], dict[str, Any]],
+]:
     total_time_min = 0.0
     has_time = False
     total_rapid_min = 0.0
     has_rapid = False
     last_f = None
 
-    def axis_limits(dx: float, dy: float, dz: float):
+    def axis_limits(dx: float, dy: float, dz: float) -> tuple[float | None, float | None]:
         max_feed = None
         min_accel = None
         if rapid_rates:
@@ -454,7 +466,7 @@ def _build_move_stats_accumulator(
         feed_mm_min: float | None,
         min_accel: float | None,
         last_feed: float | None,
-    ):
+    ) -> tuple[float | None, float | None]:
         if dist <= 0:
             return 0.0, last_feed
         if feed_mm_min is None or feed_mm_min <= 0:
@@ -510,7 +522,7 @@ def _build_move_stats_accumulator(
                         total_time_min += t_sec / 60.0
                 has_time = True
 
-    def consume_move(move) -> None:
+    def consume_move(move: Any) -> None:
         consume_values(
             int(move.motion),
             move.feed,
@@ -522,7 +534,7 @@ def _build_move_stats_accumulator(
             getattr(move, "arc_len", None),
         )
 
-    def finalize(bounds) -> dict:
+    def finalize(bounds: Any) -> dict[str, Any]:
         return {
             "bounds": bounds,
             "time_min": total_time_min if has_time else None,
@@ -589,6 +601,34 @@ def _streaming_estimated_job_seconds(app) -> int | None:
     return None
 
 
+def _stream_progress_pct_from_bytes(app) -> float | None:
+    try:
+        file_size = int(
+            getattr(app, "_stream_progress_file_size_bytes", 0)
+            or getattr(app, "_gcode_file_size_bytes", 0)
+            or 0
+        )
+    except Exception:
+        file_size = 0
+    if file_size <= 0:
+        return None
+    try:
+        acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
+    except Exception:
+        acked = 0
+    acked = max(0, min(file_size, acked))
+    return max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
+
+
+def _run_prefix_text(app) -> str:
+    if not _is_stream_job_in_progress(app):
+        return ""
+    progress_pct = _stream_progress_pct_from_bytes(app)
+    if progress_pct is None:
+        return "Run: n/a / "
+    return f"Run: {int(round(progress_pct))}% / "
+
+
 def format_streaming_estimate_text(app) -> str:
     estimated_seconds = _streaming_estimated_job_seconds(app)
     confidence = str(
@@ -600,7 +640,7 @@ def format_streaming_estimate_text(app) -> str:
     else:
         estimate_txt = format_duration(estimated_seconds)
     text = f"Estimated Job Time: {estimate_txt} [{_confidence_badge(confidence)}]"
-    return f"{text} / {_format_dimensions_block(app)}"
+    return f"{_run_prefix_text(app)}{text} / {_format_dimensions_block(app)}"
 
 
 def _remaining_estimate_for_display_min(app) -> float | None:
@@ -660,19 +700,28 @@ def estimate_factor_value(app) -> float:
 
 
 def refresh_gcode_stats_display(app):
+    file_info_refresher = getattr(app, "_refresh_file_info_tab", None)
     if not _job_loaded_for_status(app):
         _set_gcode_status_text_if_changed(app, "")
+        if callable(file_info_refresher):
+            file_info_refresher()
         return
     if getattr(app, "_gcode_streaming_mode", False):
         _set_gcode_status_text_if_changed(app, format_streaming_estimate_text(app))
+        if callable(file_info_refresher):
+            file_info_refresher()
         return
     if not app._last_stats:
         _set_gcode_status_text_if_changed(app, format_streaming_estimate_text(app))
+        if callable(file_info_refresher):
+            file_info_refresher()
         return
     _set_gcode_status_text_if_changed(
         app,
         format_gcode_stats_text(app, app._last_stats, app._last_rate_source),
     )
+    if callable(file_info_refresher):
+        file_info_refresher()
 
 
 def on_estimate_factor_change(app, _value=None):
@@ -1022,6 +1071,7 @@ def update_gcode_stats(
             if source is not None
             else None
         )
+        sampled_lines = list(sample_lines) if isinstance(sample_lines, list) else []
         loaded_sample_lines = lines if isinstance(lines, list) else []
         total_lines = _line_count_or_zero(source)
         source_offset_count = 0
@@ -1046,7 +1096,7 @@ def update_gcode_stats(
         if executable_total_lines <= 0:
             executable_total_lines = int(effective_total_lines)
         sample_threshold = max(0, int(GCODE_PREP_STATS_SAMPLE_THRESHOLD_LINES))
-        has_sample_lines = isinstance(sample_lines, list) and len(sample_lines) > 0
+        has_sample_lines = len(sampled_lines) > 0
         if force_full_scan:
             cloned_source = _clone_streaming_source_for_stats(app)
             if cloned_source is not None:
@@ -1054,21 +1104,21 @@ def update_gcode_stats(
                 cleanup_stats_source = cloned_source
                 stats_mode = "full_scan_forced"
             elif has_sample_lines:
-                stats_lines = list(sample_lines)
+                stats_lines = list(sampled_lines)
                 stats_mode = "sampled_force_fallback"
             else:
                 stats_lines = list(loaded_sample_lines)
                 stats_mode = "sample_force_fallback"
-            if isinstance(sample_lines, list):
+            if sampled_lines:
                 sample_executable_lines, sample_motion_lines = (
-                    _sample_line_characteristics(sample_lines)
+                    _sample_line_characteristics(sampled_lines)
                 )
         else:
             # Lean sender policy: never auto-full-scan file-backed streaming jobs.
             # Use sampled prepare data when available; otherwise fall back to the
             # bounded sample lines already retained for the viewer.
             if has_sample_lines:
-                stats_lines = list(sample_lines)
+                stats_lines = list(sampled_lines)
             else:
                 allow_small_auto_full_scan = bool(
                     source is not None

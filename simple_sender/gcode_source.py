@@ -45,13 +45,15 @@ class FileGcodeSource:
         sparse_stride: int | None = None,
     ):
         self.path = path
+        self._offsets: array[int] | None
+        self._sparse_offsets: array[int] | None
         if offsets is not None and isinstance(offsets, array) and offsets.typecode in {"Q", "I", "L"}:
-            self._offsets = offsets
+            self._offsets = cast(array[int], offsets)
         else:
             # Compact, contiguous offsets reduce memory for indexed jobs.
             self._offsets = array("Q", offsets) if offsets is not None else None
         if sparse_offsets is not None and isinstance(sparse_offsets, array) and sparse_offsets.typecode in {"Q", "I", "L"}:
-            self._sparse_offsets = sparse_offsets
+            self._sparse_offsets = cast(array[int], sparse_offsets)
         else:
             self._sparse_offsets = array("Q", sparse_offsets) if sparse_offsets is not None else None
         self._sparse_stride = max(2, int(sparse_stride or 0)) if sparse_stride else 0
@@ -122,6 +124,21 @@ class FileGcodeSource:
             raise IndexError("G-code index out of range")
         return self._read_line_at(idx)
 
+    def read_line_with_offsets(self, idx: int) -> tuple[str, int | None, int | None]:
+        """Read a cleaned line plus its raw-file byte span.
+
+        Returns:
+            (line, start_offset, end_offset), where offsets are byte positions
+            in the original file. Offsets may be None when unavailable.
+        """
+        if idx < 0:
+            idx += self._line_count
+        if idx < 0:
+            raise IndexError("G-code index out of range")
+        if self._line_count_known and idx >= self._line_count:
+            raise IndexError("G-code index out of range")
+        return self._read_line_with_offsets_at(idx)
+
     def close(self) -> None:
         with self._lock:
             if self._file and not self._file.closed:
@@ -154,7 +171,9 @@ class FileGcodeSource:
 
     def set_full_offsets(self, offsets: Iterable[int], *, total_lines: int) -> None:
         with self._lock:
-            self._offsets = offsets if isinstance(offsets, array) else array("Q", offsets)
+            self._offsets = (
+                cast(array[int], offsets) if isinstance(offsets, array) else array("Q", offsets)
+            )
             self._line_count = max(0, int(total_lines))
             self._line_count_known = True
             self._cursor_index = -1
@@ -169,7 +188,9 @@ class FileGcodeSource:
         total_lines: int,
     ) -> None:
         with self._lock:
-            self._sparse_offsets = offsets if isinstance(offsets, array) else array("Q", offsets)
+            self._sparse_offsets = (
+                cast(array[int], offsets) if isinstance(offsets, array) else array("Q", offsets)
+            )
             self._sparse_stride = max(2, int(stride))
             self._line_count = max(0, int(total_lines))
             self._line_count_known = True
@@ -199,6 +220,10 @@ class FileGcodeSource:
         return cast(str, clean_gcode_line(raw))
 
     def _read_line_at(self, idx: int) -> str:
+        line, _start, _end = self._read_line_with_offsets_at(idx)
+        return line
+
+    def _read_line_with_offsets_at(self, idx: int) -> tuple[str, int | None, int | None]:
         with self._lock:
             f = self._open()
             if self._offsets is not None:
@@ -207,6 +232,8 @@ class FileGcodeSource:
                 if f.tell() != target_offset:
                     f.seek(target_offset)
                 raw = f.readline()
+                start_offset = int(target_offset)
+                end_offset = int(f.tell())
             else:
                 base_idx = 0
                 base_offset = 0
@@ -221,8 +248,12 @@ class FileGcodeSource:
                     f.seek(base_offset)
                     self._cursor_index = base_idx - 1
                 line = ""
+                line_start_offset: int | None = None
+                line_end_offset: int | None = None
                 while self._cursor_index < idx:
+                    raw_start_offset = int(f.tell())
                     raw = f.readline()
+                    raw_end_offset = int(f.tell())
                     if not raw:
                         # EOF before requested index, lock in true cleaned-line count.
                         self._line_count = max(0, self._cursor_index + 1)
@@ -233,10 +264,12 @@ class FileGcodeSource:
                         continue
                     self._cursor_index += 1
                     line = cleaned
-                return line
+                    line_start_offset = raw_start_offset
+                    line_end_offset = raw_end_offset
+                return line, line_start_offset, line_end_offset
         line = self._clean_line(raw)
         if not line:
             # Indexed sources should point to cleaned non-empty lines. Treat any
             # mismatch as an out-of-range read instead of recursing indefinitely.
             raise IndexError("G-code index out of range")
-        return line
+        return line, start_offset, end_offset

@@ -44,6 +44,8 @@ from .utils.validation import validate_interval
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _WATCHDOG_READY_ARM_GRACE_S = float(WATCHDOG_READY_ARM_GRACE)
+_MANUAL_MOTION_STATUS_INTERVAL_S = 0.1
+_STATUS_INTERVAL_WAKE_SLICE_S = 0.1
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -61,6 +63,88 @@ def _annotate_alarm(message: str) -> str:
 
 
 class GrblWorkerStatusMixin(GrblWorkerState):
+    def _manual_motion_status_active(
+        self,
+        *,
+        now: float | None = None,
+        state_token: str | None = None,
+    ) -> bool:
+        if self._streaming or self._paused:
+            return False
+        token = str(
+            state_token
+            if state_token is not None
+            else getattr(self, "_last_status_state_token", "")
+            or ""
+        ).strip().lower()
+        if token.startswith(("jog", "hold")):
+            return True
+        busy_fn = getattr(self, "manual_queue_busy", None)
+        if callable(busy_fn):
+            try:
+                if bool(busy_fn()):
+                    return True
+            except Exception as exc:
+                _log_suppressed("Failed checking manual queue busy state", exc)
+        if now is None:
+            now = time.time()
+        try:
+            until_ts = float(getattr(self, "_manual_motion_status_grace_until_ts", 0.0) or 0.0)
+        except Exception:
+            until_ts = 0.0
+        return until_ts > float(now)
+
+    def _record_manual_motion_query_interval(self, now: float) -> None:
+        prev_ts = float(getattr(self, "_manual_motion_status_query_last_ts", 0.0) or 0.0)
+        self._manual_motion_status_query_last_ts = float(now)
+        if prev_ts <= 0.0 or now <= prev_ts:
+            return
+        interval_ms = max(0.0, (float(now) - prev_ts) * 1000.0)
+        sample_count = int(getattr(self, "_manual_motion_status_query_count", 0) or 0) + 1
+        prev_avg = float(getattr(self, "_manual_motion_status_query_interval_avg_ms", 0.0) or 0.0)
+        self._manual_motion_status_query_count = sample_count
+        self._manual_motion_status_query_interval_avg_ms = (
+            ((prev_avg * max(0, sample_count - 1)) + interval_ms) / float(sample_count)
+        )
+        self._manual_motion_status_query_interval_max_ms = max(
+            float(getattr(self, "_manual_motion_status_query_interval_max_ms", 0.0) or 0.0),
+            interval_ms,
+        )
+
+    def _record_manual_motion_rx_interval(self, now: float) -> None:
+        prev_ts = float(getattr(self, "_manual_motion_status_rx_last_ts", 0.0) or 0.0)
+        self._manual_motion_status_rx_last_ts = float(now)
+        if prev_ts <= 0.0 or now <= prev_ts:
+            return
+        interval_ms = max(0.0, (float(now) - prev_ts) * 1000.0)
+        sample_count = int(getattr(self, "_manual_motion_status_rx_count", 0) or 0) + 1
+        prev_avg = float(getattr(self, "_manual_motion_status_rx_interval_avg_ms", 0.0) or 0.0)
+        self._manual_motion_status_rx_count = sample_count
+        self._manual_motion_status_rx_interval_avg_ms = (
+            ((prev_avg * max(0, sample_count - 1)) + interval_ms) / float(sample_count)
+        )
+        self._manual_motion_status_rx_interval_max_ms = max(
+            float(getattr(self, "_manual_motion_status_rx_interval_max_ms", 0.0) or 0.0),
+            interval_ms,
+        )
+
+    def _wait_status_interval(self, stop_evt: threading.Event, interval_s: float) -> bool:
+        interval = max(0.0, float(interval_s))
+        changed_evt = getattr(self, "_status_interval_changed_evt", None)
+        if not isinstance(changed_evt, threading.Event) or interval <= 0.25:
+            return bool(stop_evt.wait(interval))
+        deadline = time.monotonic() + interval
+        while not stop_evt.is_set():
+            if changed_evt.is_set():
+                changed_evt.clear()
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return False
+            if stop_evt.wait(min(_STATUS_INTERVAL_WAKE_SLICE_S, remaining)):
+                return True
+        return True
+
     def set_status_poll_interval(self, interval: float) -> None:
         """Set status polling interval.
         
@@ -80,6 +164,12 @@ class GrblWorkerStatusMixin(GrblWorkerState):
 
         if changed:
             logger.debug(f"Status poll interval set to {interval}s")
+            changed_evt = getattr(self, "_status_interval_changed_evt", None)
+            if isinstance(changed_evt, threading.Event):
+                try:
+                    changed_evt.set()
+                except Exception as exc:
+                    _log_suppressed("Failed signaling status interval change event", exc)
 
     def set_status_query_failure_limit(self, limit: int) -> None:
         """Set the number of consecutive status failures before disconnect.
@@ -118,7 +208,10 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         ready_ts = float(getattr(self, "_watchdog_ready_ts", 0.0) or 0.0)
         if ready_ts <= 0.0:
             return True
-        return (now - ready_ts) >= _WATCHDOG_READY_ARM_GRACE_S
+        if (now - ready_ts) < _WATCHDOG_READY_ARM_GRACE_S:
+            return False
+        self._watchdog_ready_armed = True
+        return True
     
     def _safe_ui_put(self, *args, context: str = "operation") -> None:
         """Safely put item on UI queue with error logging.
@@ -329,6 +422,9 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 self.clear_watchdog_ignore("settings_dump")
             ack_index = None
             ack_line_idx = None
+            ack_line_text = None
+            ack_byte_offset = None
+            stream_file_size_bytes = 0
             err_idx = None
             err_line = None
             err_source = None
@@ -347,6 +443,19 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         self._ack_index += 1
                         ack_index = self._ack_index
                         ack_line_idx = queued_item.idx
+                        ack_line_text = queued_item.line
+                        queued_end_offset = getattr(queued_item, "file_end_offset", None)
+                        if queued_end_offset is not None:
+                            try:
+                                queued_end = max(0, int(queued_end_offset))
+                            except Exception:
+                                queued_end = 0
+                            if queued_end > int(getattr(self, "_ack_byte_offset", 0) or 0):
+                                self._ack_byte_offset = queued_end
+                            ack_byte_offset = int(getattr(self, "_ack_byte_offset", 0) or 0)
+                            stream_file_size_bytes = int(
+                                getattr(self, "_stream_file_size_bytes", 0) or 0
+                            )
                         if line_lower.startswith("error"):
                             err_idx = queued_item.idx
                             err_line = queued_item.line
@@ -363,6 +472,24 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             if ack_index is not None:
                 self.ui_q.put(("gcode_acked", ack_index))
                 self.ui_q.put(("progress", ack_index + 1, len(self._gcode)))
+                if ack_line_idx is not None:
+                    try:
+                        ack_idx_int = int(ack_line_idx)
+                    except Exception:
+                        ack_idx_int = None
+                    if ack_idx_int is not None:
+                        ack_text = str(ack_line_text or "")
+                        self._live_current_acked = (ack_idx_int, ack_text)
+                        self._live_acked_ring.append((ack_idx_int, ack_text))
+                if ack_byte_offset is not None and stream_file_size_bytes > 0:
+                    self.ui_q.put(
+                        (
+                            "progress_bytes",
+                            min(int(ack_byte_offset), int(stream_file_size_bytes)),
+                            int(stream_file_size_bytes),
+                        )
+                    )
+                self._emit_live_gcode_window(force=False)
             
             if line_lower == "ok":
                 if ack_line_idx is not None:
@@ -386,10 +513,16 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         # Status report
         if is_status:
             self._mark_ready()
-            if self._ready and not bool(getattr(self, "_watchdog_ready_armed", False)):
-                self._watchdog_ready_armed = True
             parts = line.strip("<>").split("|")
             state = parts[0] if parts else ""
+            self._last_status_state_token = str(state or "")
+            if self._manual_motion_status_active(now=now, state_token=state):
+                self._record_manual_motion_rx_interval(now)
+            else:
+                self._manual_motion_status_grace_until_ts = 0.0
+            state_lower = str(state or "").strip().lower()
+            if not state_lower.startswith(("jog", "hold")):
+                self._jog_cancel_inflight = False
             
             # Check for alarm in status
             if state.lower().startswith("alarm"):
@@ -437,15 +570,18 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         
         try:
             while not stop_evt.is_set():
-                if self.is_connected():
-                    now = time.time()
+                # Snapshot connection state/time once per loop to avoid races
+                # between repeated is_connected() checks in the same iteration.
+                now = time.time()
+                connected = bool(self.is_connected())
+                if connected:
                     connect_started_ts = float(getattr(self, "_connect_started_ts", 0.0))
                     if (
                         connect_started_ts
                         and (not self._ready)
                         and (now - connect_started_ts) >= GRBL_STARTUP_TIMEOUT
                     ):
-                        self._signal_disconnect("No GRBL greeting received")
+                        self._signal_disconnect("[status/startup] No GRBL greeting received")
                         stop_evt.set()
                         break
                     watchdog_ignore_until = float(getattr(self, "_watchdog_ignore_until", 0.0))
@@ -459,7 +595,9 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             and watchdog_enforced
                             and not watchdog_ignored
                         ):
-                            self._signal_disconnect("Connection watchdog timeout (alarm)")
+                            self._signal_disconnect(
+                                "[status/watchdog-alarm] Connection watchdog timeout (alarm)"
+                            )
                             stop_evt.set()
                             break
                     else:
@@ -484,17 +622,29 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             and watchdog_enforced
                             and not watchdog_ignored
                         ):
-                            self._signal_disconnect("Connection watchdog timeout")
+                            self._signal_disconnect("[status/watchdog] Connection watchdog timeout")
                             stop_evt.set()
                             break
-                if self.is_connected():
+                if connected:
                     try:
+                        manual_motion_active = self._manual_motion_status_active(now=now)
+                        if manual_motion_active:
+                            self._record_manual_motion_query_interval(now)
                         self.send_realtime(RT_STATUS)
                         self._status_query_failures = 0
                     except Exception as e:
                         logger.error(f"Status query error: {e}")
                         self.ui_q.put(("log", f"[status query error] {e}"))
                         self._emit_exception("Status query error", e)
+                        ready = bool(getattr(self, "_ready", False))
+                        if not ready:
+                            # During startup handshake GRBL can briefly reject writes while the
+                            # controller is still resetting. Let the startup timeout decide
+                            # disconnects instead of flapping the UI connection state.
+                            self._status_query_failures = 0
+                            if stop_evt.wait(self._status_query_backoff_base):
+                                break
+                            continue
                         self._status_query_failures += 1
                         try:
                             self.ui_q.put((
@@ -504,7 +654,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         except Exception as exc:
                             _log_suppressed("Failed queueing status-query failure log message", exc)
                         if self._status_query_failures >= self._status_query_failure_limit:
-                            self._signal_disconnect(f"Status query error: {e}")
+                            self._signal_disconnect(f"[status/query] Status query error: {e}")
                             stop_evt.set()
                             break
                         backoff = min(
@@ -517,15 +667,19 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 # Get current interval
                 with self._status_interval_lock:
                     interval = self._status_poll_interval
+                if self._manual_motion_status_active():
+                    interval = min(float(interval), float(_MANUAL_MOTION_STATUS_INTERVAL_S))
+                if bool(getattr(self, "_live_window_dirty", False)):
+                    self._emit_live_gcode_window(force=False)
                 
                 # Wait for interval or stop signal
-                if stop_evt.wait(interval):
+                if self._wait_status_interval(stop_evt, interval):
                     break
         
         except Exception as e:
             logger.error(f"Status thread error: {e}", exc_info=True)
             self._emit_exception("Status thread error", e)
-            self._signal_disconnect(f"Status thread error: {e}")
+            self._signal_disconnect(f"[status/thread] Status thread error: {e}")
             stop_evt.set()
         
         finally:

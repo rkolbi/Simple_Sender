@@ -26,6 +26,7 @@ import os
 import platform
 import sys
 import threading
+import time
 import zipfile
 from collections import deque
 from datetime import datetime
@@ -44,6 +45,7 @@ from simple_sender.utils.constants import (
     GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER,
 )
 from simple_sender.utils.logging_config import get_log_dir
+from simple_sender.utils.task_timing import record_task_timing
 from .popup_utils import center_window
 
 CHECKLIST_ITEMS = [
@@ -66,11 +68,11 @@ RUN_CHECKLIST_ITEMS = [
 ]
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
-PREFLIGHT_DECISION_HISTORY_LIMIT = 100
 RUNTIME_TELEMETRY_REFRESH_MS = 1000
 PERF_TEST_STATUS_POLL_INTERVAL = max(1.0, float(PI_PROFILE_STATUS_POLL_INTERVAL))
 DIAG_BUNDLE_LOG_MAX_FILES = 12
 DIAG_BUNDLE_LOG_TAIL_MAX_BYTES = 512_000
+DIAG_BUNDLE_IO_CHUNK_BYTES = 64 * 1024
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -141,15 +143,6 @@ def _resolved_settings_path(app: Any) -> Path | None:
     return path
 
 
-def _safe_job_hash(app: Any) -> str:
-    raw_hash = (
-        getattr(app, "_gcode_hash", None)
-        or getattr(app, "_last_parse_hash", None)
-        or ""
-    )
-    return str(raw_hash).strip()
-
-
 def _format_mb(value_bytes: Any) -> str:
     try:
         if value_bytes is None:
@@ -196,16 +189,24 @@ def _viewer_window_line_count(gview: Any) -> int:
     if gview is None:
         return 0
     try:
-        if bool(getattr(gview, "_virtual_enabled", False)):
-            start = int(getattr(gview, "_virtual_window_start", 0) or 0)
-            end = int(getattr(gview, "_virtual_window_end", 0) or 0)
-            return max(0, end - start)
-    except Exception:
-        return 0
-    try:
         return int(getattr(gview, "lines_count", 0) or 0)
     except Exception:
         return 0
+
+
+def _bounded_ssmeta(ssmeta: Any) -> dict[str, str]:
+    if not isinstance(ssmeta, dict):
+        return {}
+    out: dict[str, str] = {}
+    for raw_key in sorted(ssmeta.keys())[:64]:
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        value = str(ssmeta.get(raw_key, "") or "").strip()
+        if len(value) > 256:
+            value = f"{value[:253]}..."
+        out[key] = value
+    return out
 
 
 def _runtime_metrics(app: Any) -> dict[str, Any]:
@@ -224,6 +225,9 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         kasa_line = ""
     if kasa_line:
         metrics["kasa_status_line"] = kasa_line
+    last_validation_run = getattr(app, "_last_validation_run", None)
+    if isinstance(last_validation_run, dict):
+        metrics["last_validation_run"] = dict(last_validation_run)
     grbl = getattr(app, "grbl", None)
     getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
     if callable(getter):
@@ -317,52 +321,81 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
             }
         if status_perf:
             metrics["status_perf_metrics"] = status_perf
-    viewer_mode = str(getattr(app, "_gcode_viewer_mode", "") or "").strip()
-    if viewer_mode:
-        metrics["viewer_mode"] = viewer_mode
-    policy_lines = getattr(app, "_gcode_viewer_policy_line_count", None)
-    sample_lines = getattr(app, "_gcode_viewer_sample_line_count", None)
-    threshold = getattr(app, "_gcode_viewer_virtualization_threshold", None)
-    window = getattr(app, "_gcode_viewer_virtual_window", None)
-    chunk_size = getattr(app, "_gcode_viewer_chunk_size", None)
-    sample_only = getattr(app, "_gcode_viewer_sample_only", None)
-    if policy_lines is not None:
-        metrics["viewer_policy_line_count"] = int(policy_lines)
-    if sample_lines is not None:
-        metrics["viewer_sample_line_count"] = int(sample_lines)
-    if threshold is not None:
-        metrics["viewer_virtualization_threshold"] = int(threshold)
-    if window is not None:
-        metrics["viewer_virtual_window_size"] = int(window)
-    if chunk_size is not None:
-        metrics["viewer_chunk_size"] = int(chunk_size)
-    if sample_only is not None:
-        metrics["viewer_sample_only"] = bool(sample_only)
     gview = getattr(app, "gview", None)
     if gview is not None:
-        for attr_name, metric_name in (
-            ("_insert_hidden_delay_ms", "viewer_hidden_insert_delay_ms"),
-            ("_insert_hidden_max_chunks_per_tick", "viewer_hidden_max_chunks_per_tick"),
-            ("_insert_hidden_chunk_size", "viewer_hidden_chunk_size"),
-        ):
-            raw_value = getattr(gview, attr_name, None)
-            if raw_value is None:
-                continue
-            try:
-                metrics[metric_name] = int(raw_value)
-            except (TypeError, ValueError):
-                continue
         try:
             metrics["viewer_window_line_count"] = _viewer_window_line_count(gview)
         except Exception:
             metrics["viewer_window_line_count"] = 0
+    metrics["live_gcode_past_count"] = int(
+        getattr(app, "_live_gcode_past_count", 0) or 0
+    )
+    metrics["live_gcode_current_count"] = int(
+        getattr(app, "_live_gcode_current_count", 0) or 0
+    )
+    metrics["live_gcode_next_count"] = int(
+        getattr(app, "_live_gcode_next_count", 0) or 0
+    )
+    metrics["live_gcode_pending_depth"] = int(
+        getattr(app, "_live_gcode_pending_depth", 0) or 0
+    )
+    metrics["live_gcode_last_acked_index"] = int(
+        getattr(app, "_live_gcode_last_acked_index", -1) or -1
+    )
+    metrics["live_gcode_last_acked_byte_offset"] = int(
+        getattr(app, "_live_gcode_last_acked_byte_offset", 0) or 0
+    )
+    metrics["last_stream_error_message"] = str(
+        getattr(app, "_last_stream_error_message", "") or ""
+    )
+    metrics["last_stream_error_file_name"] = str(
+        getattr(app, "_last_stream_error_file_name", "") or ""
+    )
+    metrics["last_stream_error_line_index"] = int(
+        getattr(app, "_last_stream_error_line_index", -1) or -1
+    )
+    metrics["last_stream_error_line_number"] = int(
+        getattr(app, "_last_stream_error_line_number", 0) or 0
+    )
+    metrics["last_stream_error_line_text"] = str(
+        getattr(app, "_last_stream_error_line_text", "") or ""
+    )
+    metrics["last_stream_error_hint"] = str(
+        getattr(app, "_last_stream_error_hint", "") or ""
+    )
+    jog_dro_trace = getattr(app, "_jog_dro_trace", None)
+    if isinstance(jog_dro_trace, deque):
+        trace_tail = list(jog_dro_trace)[-400:]
+        metrics["jog_dro_trace_count"] = int(len(jog_dro_trace))
+        metrics["jog_dro_trace_tail"] = trace_tail
+    elif isinstance(jog_dro_trace, list):
+        trace_tail = list(jog_dro_trace)[-400:]
+        metrics["jog_dro_trace_count"] = int(len(jog_dro_trace))
+        metrics["jog_dro_trace_tail"] = trace_tail
+    else:
+        metrics["jog_dro_trace_count"] = 0
+    jog_interp_stats = getattr(app, "_jog_dro_interp_stats", None)
+    if isinstance(jog_interp_stats, dict):
+        metrics["jog_dro_interp_stats"] = dict(jog_interp_stats)
+    jog_mode = "off"
+    jog_mode_var = getattr(app, "jog_dro_smoothing_mode", None)
+    if jog_mode_var is not None:
         try:
-            insert_lines = getattr(gview, "_insert_lines", None)
-            metrics["viewer_insert_pending_lines"] = (
-                int(len(insert_lines)) if insert_lines is not None else 0
-            )
+            jog_mode = str(jog_mode_var.get() or "").strip().lower() or "off"
         except Exception:
-            metrics["viewer_insert_pending_lines"] = 0
+            jog_mode = "off"
+    elif isinstance(getattr(app, "settings", None), dict):
+        jog_mode = str(getattr(app, "settings", {}).get("jog_dro_smoothing_mode", "off") or "").strip().lower() or "off"
+    metrics["jog_dro_interp_mode"] = jog_mode
+    jog_state = getattr(app, "_manual_jog_predict_state", None)
+    jog_source = ""
+    if isinstance(jog_state, dict):
+        jog_source = str(jog_state.get("source", "") or "").strip().lower()
+    jog_source_is_joystick = jog_source.startswith("joystick") or jog_source.startswith("jog_hold")
+    jog_mode_allows_source = bool(
+        jog_mode == "all_jog" or (jog_mode == "ui_jog_only" and not jog_source_is_joystick)
+    )
+    metrics["jog_dro_interp_active"] = bool(jog_state and jog_mode_allows_source)
 
     storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip() or "none"
     gcode_source = getattr(app, "_gcode_source", None)
@@ -502,21 +535,75 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
     total_line_count = int(file_line_count)
     total_line_count_known = bool(file_line_count_known)
     metrics["gcode_file_size_bytes"] = int(file_size_bytes)
+    stream_file_size_bytes = int(
+        getattr(
+            app,
+            "_stream_progress_file_size_bytes",
+            metrics.get("stream_file_size_bytes", 0),
+        )
+        or 0
+    )
+    if stream_file_size_bytes <= 0:
+        stream_file_size_bytes = int(file_size_bytes)
+    acked_byte_offset = int(
+        getattr(
+            app,
+            "_stream_acked_byte_offset",
+            metrics.get("acked_byte_offset", 0),
+        )
+        or 0
+    )
+    if stream_file_size_bytes > 0:
+        acked_byte_offset = min(max(0, acked_byte_offset), stream_file_size_bytes)
+    else:
+        acked_byte_offset = max(0, acked_byte_offset)
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    stream_done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
+    if (
+        stream_state == "done"
+        and not stream_done_pending_idle
+        and stream_file_size_bytes > 0
+    ):
+        acked_byte_offset = int(stream_file_size_bytes)
+    stream_progress_pct = float(
+        getattr(
+            app,
+            "_stream_progress_pct",
+            metrics.get("stream_progress_pct", 0.0),
+        )
+        or 0.0
+    )
+    if stream_file_size_bytes > 0:
+        stream_progress_pct = max(
+            0.0,
+            min(
+                100.0,
+                (float(acked_byte_offset) / float(stream_file_size_bytes)) * 100.0,
+            ),
+        )
+        if stream_state == "done" and not stream_done_pending_idle:
+            stream_progress_pct = 100.0
+    else:
+        stream_progress_pct = max(0.0, min(100.0, stream_progress_pct))
+    metrics["stream_progress_pct"] = float(stream_progress_pct)
+    metrics["acked_byte_offset"] = int(acked_byte_offset)
+    metrics["stream_file_size_bytes"] = int(stream_file_size_bytes)
+    metrics["file_size_bytes"] = int(stream_file_size_bytes if stream_file_size_bytes > 0 else file_size_bytes)
     metrics["gcode_total_lines"] = int(total_line_count)
     metrics["gcode_total_lines_known"] = bool(total_line_count_known)
+    metrics["gcode_total_lines_estimated"] = bool(
+        total_line_count > 0 and (not total_line_count_known)
+    )
     metrics["gcode_executable_lines"] = int(executable_line_count)
     metrics["gcode_executable_lines_known"] = bool(executable_line_count_known)
+    metrics["gcode_executable_lines_estimated"] = bool(
+        executable_line_count > 0 and (not executable_line_count_known)
+    )
     metrics["gcode_motion_lines"] = int(motion_line_count)
     metrics["gcode_motion_lines_known"] = bool(motion_line_count_known)
-    # Backward-compatible aliases.
-    metrics["total_lines"] = int(total_line_count)
-    metrics["total_lines_known"] = bool(total_line_count_known)
-    metrics["executable_lines"] = int(executable_line_count)
-    metrics["executable_lines_known"] = bool(executable_line_count_known)
-    metrics["motion_lines"] = int(motion_line_count)
-    metrics["motion_lines_known"] = bool(motion_line_count_known)
-    metrics["gcode_file_line_count"] = int(total_line_count)
-    metrics["gcode_file_line_count_known"] = bool(total_line_count_known)
+    metrics["gcode_motion_lines_estimated"] = bool(
+        motion_line_count > 0 and (not motion_line_count_known)
+    )
     metrics["gcode_prepare_executable_total_lines"] = int(
         getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0
     )
@@ -573,6 +660,15 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         metrics["dimensions_confidence_reasons"] = {
             str(k): bool(v) for k, v in dim_reasons.items()
         }
+    metrics["ssmeta_present"] = bool(getattr(app, "_gcode_ssmeta_present", False))
+    metrics["gcode_ssmeta"] = _bounded_ssmeta(getattr(app, "_gcode_ssmeta", None))
+    metrics["dimensions_source"] = str(
+        getattr(app, "_gcode_dimensions_source", "scan") or "scan"
+    )
+    metrics["units_source"] = str(getattr(app, "_gcode_units_source", "scan") or "scan")
+    metrics["ssmeta_scan_reduced"] = bool(
+        getattr(app, "_gcode_ssmeta_scan_reduced", False)
+    )
     metrics["post_popup_background_tasks"] = "none"
     metrics["time_to_popup_close_ms"] = metrics.get("gcode_time_to_popup_close_ms")
     metrics["time_to_stream_ready_ms"] = metrics.get("gcode_time_to_stream_ready_ms")
@@ -895,6 +991,20 @@ def _format_runtime_metrics(
     phase_sampling_note = str(metrics.get("perf_phase_sampling_note", "") or "").strip()
     if phase_sampling_note:
         lines.append(f"- Phase sampling: {phase_sampling_note}")
+    hidden_contributors = metrics.get("perf_hidden_idle_contributors")
+    if isinstance(hidden_contributors, list) and hidden_contributors:
+        lines.append("- Hidden idle contributors (top):")
+        for entry in hidden_contributors[:5]:
+            if not isinstance(entry, dict):
+                continue
+            lines.append(
+                "  "
+                f"{str(entry.get('source', '') or 'unknown')}: "
+                f"samples={int(entry.get('active_samples', 0) or 0)}, "
+                f"cpu_ms={float(entry.get('active_cpu_ms', 0.0) or 0.0):.2f}, "
+                f"events={int(entry.get('task_count', 0) or 0)}, "
+                f"task_ms={float(entry.get('task_ms', 0.0) or 0.0):.2f}"
+            )
     outlier_total = metrics.get("perf_ui_queue_drain_outlier_total")
     outlier_entries = metrics.get("perf_ui_queue_drain_outliers")
     if isinstance(outlier_total, (int, float)) or (
@@ -982,45 +1092,6 @@ def _format_runtime_metrics(
                 f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
                 f"max={float(entry.get('max_ms', 0.0) or 0.0):.2f} ms"
             )
-    viewer_mode = str(metrics.get("viewer_mode", "") or "").strip()
-    if viewer_mode:
-        details: list[str] = [f"mode={viewer_mode}"]
-        policy_lines = metrics.get("viewer_policy_line_count")
-        sample_lines = metrics.get("viewer_sample_line_count")
-        threshold = metrics.get("viewer_virtualization_threshold")
-        sample_only = metrics.get("viewer_sample_only")
-        window_size = metrics.get("viewer_virtual_window_size")
-        chunk_size = metrics.get("viewer_chunk_size")
-        if policy_lines is not None:
-            details.append(f"policy_lines={int(policy_lines):,}")
-        if sample_lines is not None:
-            details.append(f"sample_lines={int(sample_lines):,}")
-        if threshold is not None:
-            details.append(f"threshold={int(threshold):,}")
-        if sample_only is not None:
-            details.append(f"sample_only={bool(sample_only)}")
-        if window_size is not None:
-            details.append(f"window={int(window_size):,}")
-        if chunk_size is not None:
-            details.append(f"chunk={int(chunk_size):,}")
-        lines.append("- G-code viewer load policy: " + ", ".join(details))
-    hidden_delay = metrics.get("viewer_hidden_insert_delay_ms")
-    hidden_chunks = metrics.get("viewer_hidden_max_chunks_per_tick")
-    hidden_chunk_size = metrics.get("viewer_hidden_chunk_size")
-    if (
-        hidden_delay is not None
-        or hidden_chunks is not None
-        or hidden_chunk_size is not None
-    ):
-        details: list[str] = []
-        if hidden_delay is not None:
-            details.append(f"delay={int(hidden_delay)} ms")
-        if hidden_chunks is not None:
-            details.append(f"max_chunks={int(hidden_chunks)}")
-        if hidden_chunk_size is not None:
-            details.append(f"chunk_size={int(hidden_chunk_size)}")
-        if details:
-            lines.append("- G-code viewer hidden-tab throttle: " + ", ".join(details))
     storage_mode = str(metrics.get("gcode_storage_mode", "") or "").strip()
     load_mode = str(metrics.get("gcode_load_mode", "") or "").strip() or "n/a"
     index_mode = str(metrics.get("gcode_index_mode", "") or "").strip() or "n/a"
@@ -1062,18 +1133,102 @@ def _format_runtime_metrics(
     )
     estimated_job_time_sec = metrics.get("estimated_job_time_sec")
     file_size_bytes = int(metrics.get("gcode_file_size_bytes", 0) or 0)
-    file_line_count = int(metrics.get("gcode_file_line_count", 0) or 0)
-    file_line_count_known = bool(metrics.get("gcode_file_line_count_known", False))
+    total_lines = int(metrics.get("gcode_total_lines", 0) or 0)
+    total_lines_known = bool(metrics.get("gcode_total_lines_known", False))
+    executable_lines = int(metrics.get("gcode_executable_lines", 0) or 0)
+    executable_lines_known = bool(metrics.get("gcode_executable_lines_known", False))
+    motion_lines = int(metrics.get("gcode_motion_lines", 0) or 0)
+    motion_lines_known = bool(metrics.get("gcode_motion_lines_known", False))
+    ssmeta_present = bool(metrics.get("ssmeta_present", False))
+    dimensions_source = str(metrics.get("dimensions_source", "scan") or "scan")
+    units_source = str(metrics.get("units_source", "scan") or "scan")
+    ssmeta_scan_reduced = bool(metrics.get("ssmeta_scan_reduced", False))
     lines.append(
         "- Quick Assessment: "
         f"quick_scan_ms={quick_scan_ms:.2f}, "
         f"file_size_bytes={file_size_bytes:,}, "
-        f"file_line_count={file_line_count:,} ({'known' if file_line_count_known else 'estimated'}), "
+        f"line_count={total_lines:,} ({'known' if total_lines_known else 'estimated'}), "
         f"estimated_job_time_sec={int(estimated_job_time_sec) if estimated_job_time_sec is not None else 'n/a'}, "
         f"estimate_confidence={estimate_confidence}, "
         f"dimensions_confidence={dimensions_confidence}, "
         f"bounds_confidence={bounds_confidence}"
     )
+    lines.append(
+        "- SSMETA: "
+        f"{'present' if ssmeta_present else 'not_found'}, "
+        f"dimensions_source={dimensions_source}, "
+        f"units_source={units_source}, "
+        f"scan_reduced={ssmeta_scan_reduced}"
+    )
+    lines.append(
+        "- Line counters: "
+        f"total={total_lines:,} ({'known' if total_lines_known else 'estimated'}), "
+        f"executable={executable_lines:,} ({'known' if executable_lines_known else 'estimated'}), "
+        f"motion={motion_lines:,} ({'known' if motion_lines_known else 'estimated'})"
+    )
+    stream_file_size_bytes = int(metrics.get("stream_file_size_bytes", 0) or 0)
+    acked_byte_offset = int(metrics.get("acked_byte_offset", 0) or 0)
+    stream_progress_pct = float(metrics.get("stream_progress_pct", 0.0) or 0.0)
+    lines.append(
+        "- Stream byte progress: "
+        f"stream_progress_pct={stream_progress_pct:.1f}, "
+        f"acked_byte_offset={acked_byte_offset:,}, "
+        f"file_size_bytes={stream_file_size_bytes:,}"
+    )
+    live_past = int(metrics.get("live_gcode_past_count", 0) or 0)
+    live_current = int(metrics.get("live_gcode_current_count", 0) or 0)
+    live_next = int(metrics.get("live_gcode_next_count", 0) or 0)
+    live_pending = int(metrics.get("live_gcode_pending_depth", 0) or 0)
+    live_last_idx = int(metrics.get("live_gcode_last_acked_index", -1) or -1)
+    live_last_offset = int(metrics.get("live_gcode_last_acked_byte_offset", 0) or 0)
+    lines.append(
+        "- Live G-code window: "
+        f"past={live_past}, current={live_current}, next={live_next}, "
+        f"pending_depth={live_pending}, last_acked_index={live_last_idx}, "
+        f"last_acked_byte_offset={live_last_offset:,}"
+    )
+    jog_trace_count = int(metrics.get("jog_dro_trace_count", 0) or 0)
+    jog_active = bool(metrics.get("jog_dro_interp_active", False))
+    jog_stats = metrics.get("jog_dro_interp_stats")
+    if isinstance(jog_stats, dict):
+        sync_interval_avg_s = float(jog_stats.get("status_sync_interval_avg_s", 0.0) or 0.0)
+        sync_interval_max_s = float(jog_stats.get("status_sync_interval_max_s", 0.0) or 0.0)
+        horizon_avg_s = float(jog_stats.get("predict_horizon_avg_s", 0.0) or 0.0)
+        horizon_max_s = float(jog_stats.get("predict_horizon_max_s", 0.0) or 0.0)
+        lines.append(
+            "- Jog DRO interpolation: "
+            f"active={jog_active}, trace_samples={jog_trace_count}, "
+            f"status_sync={int(jog_stats.get('status_sync_count', 0) or 0)}, "
+            f"delta_abs_avg=({float(jog_stats.get('delta_abs_avg_x', 0.0) or 0.0):.4f},"
+            f"{float(jog_stats.get('delta_abs_avg_y', 0.0) or 0.0):.4f},"
+            f"{float(jog_stats.get('delta_abs_avg_z', 0.0) or 0.0):.4f}), "
+            f"delta_abs_max=({float(jog_stats.get('delta_abs_max_x', 0.0) or 0.0):.4f},"
+            f"{float(jog_stats.get('delta_abs_max_y', 0.0) or 0.0):.4f},"
+            f"{float(jog_stats.get('delta_abs_max_z', 0.0) or 0.0):.4f}), "
+            f"sync_interval_avg_s={sync_interval_avg_s:.3f}, "
+            f"sync_interval_max_s={sync_interval_max_s:.3f}, "
+            f"horizon_avg_s={horizon_avg_s:.3f}, "
+            f"horizon_max_s={horizon_max_s:.3f}"
+        )
+    elif jog_trace_count > 0 or jog_active:
+        lines.append(
+            "- Jog DRO interpolation: "
+            f"active={jog_active}, trace_samples={jog_trace_count}"
+        )
+    query_interval_avg = float(metrics.get("manual_motion_status_query_interval_avg_ms", 0.0) or 0.0)
+    query_interval_max = float(metrics.get("manual_motion_status_query_interval_max_ms", 0.0) or 0.0)
+    query_count = int(metrics.get("manual_motion_status_query_count", 0) or 0)
+    rx_interval_avg = float(metrics.get("manual_motion_status_rx_interval_avg_ms", 0.0) or 0.0)
+    rx_interval_max = float(metrics.get("manual_motion_status_rx_interval_max_ms", 0.0) or 0.0)
+    rx_count = int(metrics.get("manual_motion_status_rx_count", 0) or 0)
+    if query_count > 0 or rx_count > 0:
+        lines.append(
+            "- Manual-motion status cadence: "
+            f"tx_status_query_interval_ms(avg/max)={query_interval_avg:.2f}/{query_interval_max:.2f} "
+            f"(samples={query_count}), "
+            f"rx_status_interval_ms(avg/max)={rx_interval_avg:.2f}/{rx_interval_max:.2f} "
+            f"(samples={rx_count})"
+        )
     bounds_box = metrics.get("gcode_bounds_box")
     if isinstance(bounds_box, dict):
         try:
@@ -1105,14 +1260,11 @@ def _format_runtime_metrics(
         lines.append("- G-code line-cache policy: " + detail)
     retained = metrics.get("gcode_retained_line_count")
     viewer_window = metrics.get("viewer_window_line_count")
-    viewer_pending = metrics.get("viewer_insert_pending_lines")
     retention_parts: list[str] = []
     if retained is not None:
         retention_parts.append(f"retained_lines={int(retained):,}")
     if viewer_window is not None:
         retention_parts.append(f"viewer_window_lines={int(viewer_window):,}")
-    if viewer_pending is not None:
-        retention_parts.append(f"viewer_insert_pending={int(viewer_pending):,}")
     if retention_parts:
         lines.append("- G-code retained footprint: " + ", ".join(retention_parts))
     source_offsets = metrics.get("gcode_source_offset_count")
@@ -1369,11 +1521,12 @@ def open_runtime_telemetry(app) -> None:
     text = tk.Text(container, wrap="none", height=14, font=("TkFixedFont", 10))
     text.pack(fill="both", expand=True)
     text.configure(state="disabled")
-    last_rendered = {"text": None}
+    last_rendered: dict[str, str | None] = {"text": None}
     btn_row = ttk.Frame(container)
     btn_row.pack(fill="x", pady=(10, 0))
 
     def _render() -> None:
+        started = time.perf_counter()
         metrics = _runtime_metrics(app)
         if metrics:
             lines = _format_runtime_metrics(
@@ -1389,6 +1542,13 @@ def open_runtime_telemetry(app) -> None:
         text.delete("1.0", "end")
         text.insert("end", body)
         text.configure(state="disabled")
+        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        record_task_timing(
+            app,
+            "diagnostics.runtime_telemetry_refresh",
+            elapsed_ms,
+            success=True,
+        )
 
     def _schedule_refresh() -> None:
         if getattr(app, "_runtime_telemetry_window", None) is not win:
@@ -1429,40 +1589,6 @@ def open_runtime_telemetry(app) -> None:
     _render()
     _schedule_refresh()
     center_window(win, app)
-
-
-def _record_preflight_decision(
-    app: Any,
-    *,
-    decision: str,
-    failures: list[str],
-    warnings: list[str],
-) -> None:
-    job_path = str(getattr(app, "_last_gcode_path", "") or "")
-    record = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "decision": str(decision),
-        "job_path": job_path,
-        "job_name": os.path.basename(job_path) if job_path else "",
-        "job_hash": _safe_job_hash(app),
-        "stream_state": str(getattr(app, "_stream_state", "") or ""),
-        "streaming_mode": bool(getattr(app, "_gcode_streaming_mode", False)),
-        "failure_count": int(len(failures)),
-        "warning_count": int(len(warnings)),
-        "failures": list(failures),
-        "warnings": list(warnings),
-    }
-    try:
-        history = getattr(app, "_preflight_run_decisions", None)
-        if not isinstance(history, list):
-            history = []
-            setattr(app, "_preflight_run_decisions", history)
-        history.append(record)
-        overflow = len(history) - PREFLIGHT_DECISION_HISTORY_LIMIT
-        if overflow > 0:
-            del history[:overflow]
-    except Exception as exc:
-        _log_suppressed("Failed recording preflight run decision", exc)
 
 
 def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
@@ -1654,40 +1780,6 @@ def _get_travel_limits(app: Any) -> dict[str, float]:
     return out
 
 
-def _is_incremental_hazard_only(report: Any) -> bool:
-    if report is None:
-        return False
-    if int(getattr(report, "line_issue_count", 0)) <= 0:
-        return False
-    if int(getattr(report, "long_line_count", 0)) > 0:
-        return False
-    if getattr(report, "unsupported_axes", None):
-        return False
-    if getattr(report, "unsupported_words", None):
-        return False
-    if getattr(report, "unsupported_g_codes", None):
-        return False
-    if getattr(report, "unsupported_m_codes", None):
-        return False
-    if getattr(report, "grbl_warnings", None):
-        return False
-    hazards = set(getattr(report, "modal_hazards", set()) or set())
-    expected = {"G91 (incremental distance mode)"}
-    if hazards != expected:
-        return False
-    line_issues = list(getattr(report, "line_issues", []) or [])
-    if not line_issues:
-        return False
-    for issue in line_issues:
-        line_text = str(getattr(issue, "line", "")).strip().upper()
-        if line_text != "G91":
-            return False
-        issue_texts = tuple(str(text) for text in getattr(issue, "issues", tuple()))
-        if issue_texts != ("Modal hazard: G91 (incremental distance mode)",):
-            return False
-    return True
-
-
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
     failures: list[str] = []
     warnings: list[str] = []
@@ -1736,112 +1828,7 @@ def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
         else:
             warnings.append("Machine travel settings ($130/$131/$132) are unavailable.")
 
-    streaming_mode = bool(getattr(app, "_gcode_streaming_mode", False))
-    validate_streaming = False
-    try:
-        validate_streaming = bool(app.validate_streaming_gcode.get())
-    except Exception:
-        validate_streaming = False
-    if streaming_mode and not validate_streaming:
-        failures.append("Streaming validation is disabled for this large file.")
-
-    report = getattr(app, "_gcode_validation_report", None)
-    if report is None:
-        if streaming_mode:
-            if validate_streaming:
-                failures.append(
-                    "Validation report is unavailable (streaming validation failed/skipped)."
-                )
-        else:
-            failures.append("Validation report is unavailable.")
-    else:
-        if _is_incremental_hazard_only(report):
-            warnings.append(
-                "Validation note: incremental mode (G91) is used; confirm this is intentional."
-            )
-        elif getattr(report, "line_issue_count", 0) > 0:
-            failures.append(
-                f"Validation found issues on {int(getattr(report, 'line_issue_count', 0))} line(s)."
-            )
-        if getattr(report, "grbl_warnings", None):
-            failures.append("Validation reported GRBL incompatibility warnings.")
     return failures, warnings
-
-
-def run_preflight_gate(app: Any) -> bool:
-    failures, warnings = evaluate_run_preflight(app)
-    if failures:
-        message = "Run blocked by preflight safety gate:\n" + "\n".join(
-            f"- {item}" for item in failures
-        )
-        if warnings:
-            message += "\n\nWarnings:\n" + "\n".join(f"- {item}" for item in warnings)
-        proceed = bool(
-            messagebox.askyesno(
-                "Preflight gate",
-                message
-                + "\n\nContinue anyway?\n"
-                + "Choose Yes to override the preflight gate and start the job.",
-            )
-        )
-        if proceed:
-            _record_preflight_decision(
-                app,
-                decision="override",
-                failures=failures,
-                warnings=warnings,
-            )
-            try:
-                app.ui_q.put(
-                    (
-                        "log",
-                        "[preflight] Override accepted; starting despite gate failures.",
-                    )
-                )
-                for item in failures:
-                    app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
-                for item in warnings:
-                    app.ui_q.put(("log", f"[preflight] warning: {item}"))
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed writing preflight override details to UI log queue", exc
-                )
-            try:
-                app.status.config(text="Preflight overridden: starting job")
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed updating status text after preflight override", exc
-                )
-            return True
-        _record_preflight_decision(
-            app,
-            decision="blocked",
-            failures=failures,
-            warnings=warnings,
-        )
-        try:
-            app.ui_q.put(("log", "[preflight] Override declined; run canceled."))
-            for item in failures:
-                app.ui_q.put(("log", f"[preflight] blocked-check: {item}"))
-            for item in warnings:
-                app.ui_q.put(("log", f"[preflight] warning: {item}"))
-        except Exception as exc:
-            _log_suppressed(
-                "Failed writing preflight blocked decision details to UI log queue", exc
-            )
-        try:
-            app.status.config(text="Run blocked: preflight gate failed")
-        except Exception as exc:
-            _log_suppressed(
-                "Failed updating status text when preflight blocks run", exc
-            )
-        return False
-    if warnings:
-        try:
-            app.ui_q.put(("log", "[preflight] " + "; ".join(warnings)))
-        except Exception as exc:
-            _log_suppressed("Failed writing preflight warnings to UI log queue", exc)
-    return True
 
 
 def run_preflight_check(app) -> None:
@@ -2009,6 +1996,84 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
     lines.append(f"Port: {getattr(app, '_connected_port', '')}")
     lines.append(f"Streaming: {getattr(app, '_stream_state', '')}")
     lines.append(f"G-code path: {getattr(app, '_last_gcode_path', '')}")
+    last_stream_error_message = str(
+        getattr(app, "_last_stream_error_message", "") or ""
+    ).strip()
+    if last_stream_error_message:
+        last_stream_error_file = str(
+            getattr(app, "_last_stream_error_file_name", "") or ""
+        ).strip()
+        last_stream_error_line = int(
+            getattr(app, "_last_stream_error_line_number", 0) or 0
+        )
+        last_stream_error_line_text = str(
+            getattr(app, "_last_stream_error_line_text", "") or ""
+        ).strip()
+        lines.append("Last stream error: " + last_stream_error_message)
+        if last_stream_error_line > 0:
+            location = (
+                f"{last_stream_error_file} line {last_stream_error_line}"
+                if last_stream_error_file
+                else f"line {last_stream_error_line}"
+            )
+            lines.append(f"Last stream error location: {location}")
+        if last_stream_error_line_text:
+            lines.append(f"Last stream error line text: {last_stream_error_line_text}")
+        last_stream_error_hint = str(
+            getattr(app, "_last_stream_error_hint", "") or ""
+        ).strip()
+        if last_stream_error_hint:
+            lines.append(f"Last stream error hint: {last_stream_error_hint}")
+    jog_interp_stats = getattr(app, "_jog_dro_interp_stats", None)
+    if isinstance(jog_interp_stats, dict):
+        sync_count = int(jog_interp_stats.get("status_sync_count", 0) or 0)
+        jog_trace = getattr(app, "_jog_dro_trace", None)
+        jog_mode = "off"
+        jog_mode_var = getattr(app, "jog_dro_smoothing_mode", None)
+        if jog_mode_var is not None and hasattr(jog_mode_var, "get"):
+            try:
+                jog_mode = str(jog_mode_var.get() or "").strip().lower() or "off"
+            except Exception:
+                jog_mode = "off"
+        elif isinstance(getattr(app, "settings", None), dict):
+            jog_mode = str(getattr(app, "settings", {}).get("jog_dro_smoothing_mode", "off") or "").strip().lower() or "off"
+        jog_state = getattr(app, "_manual_jog_predict_state", None)
+        jog_source = ""
+        if isinstance(jog_state, dict):
+            jog_source = str(jog_state.get("source", "") or "").strip().lower()
+        jog_source_is_joystick = jog_source.startswith("joystick") or jog_source.startswith("jog_hold")
+        jog_mode_allows_source = bool(
+            jog_mode == "all_jog" or (jog_mode == "ui_jog_only" and not jog_source_is_joystick)
+        )
+        try:
+            jog_trace_count = int(len(jog_trace)) if isinstance(jog_trace, (deque, list)) else 0
+        except Exception:
+            jog_trace_count = 0
+        lines.append(
+            "Jog DRO interpolation: "
+            f"mode={jog_mode}, "
+            f"active={bool(jog_state and jog_mode_allows_source)}, "
+            f"samples={jog_trace_count}, "
+            f"status_sync={sync_count}"
+        )
+        if sync_count > 0:
+            lines.append(
+                "Jog DRO delta abs (report units): "
+                f"avg=({float(jog_interp_stats.get('delta_abs_avg_x', 0.0) or 0.0):.4f}, "
+                f"{float(jog_interp_stats.get('delta_abs_avg_y', 0.0) or 0.0):.4f}, "
+                f"{float(jog_interp_stats.get('delta_abs_avg_z', 0.0) or 0.0):.4f}), "
+                f"max=({float(jog_interp_stats.get('delta_abs_max_x', 0.0) or 0.0):.4f}, "
+                f"{float(jog_interp_stats.get('delta_abs_max_y', 0.0) or 0.0):.4f}, "
+                f"{float(jog_interp_stats.get('delta_abs_max_z', 0.0) or 0.0):.4f})"
+            )
+            lines.append(
+                "Jog DRO sync cadence (s): "
+                f"avg={float(jog_interp_stats.get('status_sync_interval_avg_s', 0.0) or 0.0):.3f}, "
+                f"max={float(jog_interp_stats.get('status_sync_interval_max_s', 0.0) or 0.0):.3f}; "
+                "prediction horizon (s): "
+                f"avg={float(jog_interp_stats.get('predict_horizon_avg_s', 0.0) or 0.0):.3f}, "
+                f"max={float(jog_interp_stats.get('predict_horizon_max_s', 0.0) or 0.0):.3f}"
+            )
     try:
         lines.append(f"Kasa status: {format_kasa_status_line(app)}")
     except Exception as exc:
@@ -2062,34 +2127,13 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
         f"executable={exec_lines:,} ({'known' if exec_known else 'estimated'}), "
         f"motion={motion_lines:,} ({'known' if motion_known else 'estimated'})"
     )
-    viewer_mode = str(getattr(app, "_gcode_viewer_mode", "") or "").strip()
-    if viewer_mode:
-        lines.append(f"G-code viewer mode: {viewer_mode}")
-        lines.append(
-            "G-code viewer policy lines: "
-            f"{int(getattr(app, '_gcode_viewer_policy_line_count', 0) or 0)}"
-        )
-        lines.append(
-            "G-code viewer sample lines: "
-            f"{int(getattr(app, '_gcode_viewer_sample_line_count', 0) or 0)}"
-        )
-        lines.append(
-            "G-code viewer virtualization threshold: "
-            f"{int(getattr(app, '_gcode_viewer_virtualization_threshold', 0) or 0)}"
-        )
-        lines.append(
-            "G-code viewer virtual window: "
-            f"{int(getattr(app, '_gcode_viewer_virtual_window', 0) or 0)}"
-        )
-        chunk_size = getattr(app, "_gcode_viewer_chunk_size", None)
-        lines.append(
-            "G-code viewer chunk size: "
-            + ("n/a" if chunk_size is None else str(int(chunk_size)))
-        )
-        lines.append(
-            "G-code viewer sample_only: "
-            f"{bool(getattr(app, '_gcode_viewer_sample_only', False))}"
-        )
+    lines.append(
+        "SSMETA: "
+        f"{'present' if bool(getattr(app, '_gcode_ssmeta_present', False)) else 'not_found'}, "
+        f"dimensions_source={str(getattr(app, '_gcode_dimensions_source', 'scan') or 'scan')}, "
+        f"units_source={str(getattr(app, '_gcode_units_source', 'scan') or 'scan')}, "
+        f"scan_reduced={bool(getattr(app, '_gcode_ssmeta_scan_reduced', False))}"
+    )
     storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip() or "none"
     load_mode = str(getattr(app, "_gcode_load_mode", "") or "").strip() or "n/a"
     index_mode = str(getattr(app, "_gcode_index_mode", "") or "").strip() or "n/a"
@@ -2220,35 +2264,6 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
             _format_runtime_metrics(metrics, include_samples=True, sample_limit=20)
         )
         lines.append("")
-    decisions = getattr(app, "_preflight_run_decisions", None)
-    if isinstance(decisions, list) and decisions:
-        lines.append("Preflight run decisions:")
-        for entry in decisions[-50:]:
-            if not isinstance(entry, dict):
-                continue
-            stamp = str(entry.get("timestamp", "") or "")
-            decision = str(entry.get("decision", "") or "")
-            job_name = str(entry.get("job_name", "") or "")
-            job_hash = str(entry.get("job_hash", "") or "")
-            failure_count = int(entry.get("failure_count", 0) or 0)
-            warning_count = int(entry.get("warning_count", 0) or 0)
-            summary = (
-                f"- {stamp} | decision={decision or 'unknown'}"
-                f" | job={job_name or '<unknown>'}"
-                f" | hash={job_hash or 'n/a'}"
-                f" | failures={failure_count}"
-                f" | warnings={warning_count}"
-            )
-            lines.append(summary)
-            failures = entry.get("failures", [])
-            if isinstance(failures, list):
-                for item in failures:
-                    lines.append(f"  FAIL: {item}")
-            warnings = entry.get("warnings", [])
-            if isinstance(warnings, list):
-                for item in warnings:
-                    lines.append(f"  WARN: {item}")
-        lines.append("")
     last_status = getattr(app, "_last_status_raw", "")
     if last_status:
         lines.append("Last status:")
@@ -2271,7 +2286,13 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
                 continue
             ts = entry.get("ts")
             try:
-                stamp = datetime.fromtimestamp(float(ts)).isoformat(timespec="seconds")
+                if isinstance(ts, (int, float)):
+                    stamp_ts = float(ts)
+                elif isinstance(ts, (str, bytes, bytearray)):
+                    stamp_ts = float(ts)
+                else:
+                    raise TypeError("unsupported timestamp type")
+                stamp = datetime.fromtimestamp(stamp_ts).isoformat(timespec="seconds")
             except Exception:
                 stamp = str(ts or "n/a")
             event = str(entry.get("event", "") or "unknown")
@@ -2313,36 +2334,60 @@ def _find_named_log(log_files: list[Path], filename: str) -> Path | None:
     return None
 
 
-def _read_log_tail_text(path: Path, *, max_bytes: int) -> str:
+def _write_bounded_log_tail_chunked(
+    archive: zipfile.ZipFile,
+    *,
+    arcname: str,
+    path: Path,
+    max_bytes: int,
+    chunk_bytes: int = DIAG_BUNDLE_IO_CHUNK_BYTES,
+) -> None:
     cap = max(1, int(max_bytes))
+    chunk_size = max(4096, int(chunk_bytes))
     try:
         size = int(path.stat().st_size)
     except Exception:
-        return ""
+        with archive.open(arcname, "w") as out_file:
+            out_file.write(b"")
+        return
     if size <= 0:
-        return ""
+        with archive.open(arcname, "w") as out_file:
+            out_file.write(b"")
+        return
     start = max(0, size - cap)
-    try:
-        with open(path, "rb") as handle:
-            handle.seek(start)
-            raw = handle.read(size - start)
-    except Exception as exc:
-        _log_suppressed("Failed reading bounded log tail for diagnostics bundle", exc)
-        return ""
-    if not raw:
-        return ""
-    if start > 0:
-        newline_idx = raw.find(b"\n")
-        if newline_idx >= 0:
-            raw = raw[newline_idx + 1 :]
-    text = raw.decode("utf-8", errors="replace")
-    if start <= 0:
-        return text
-    return (
-        f"# BOUNDED TAIL EXPORT (last {cap:,} bytes)\n"
-        f"# Source: {path}\n"
-        f"# Total file size: {size:,} bytes\n\n" + text
-    )
+    header_written = start > 0
+    header_bytes = b""
+    if header_written:
+        header_text = (
+            f"# BOUNDED TAIL EXPORT (last {cap:,} bytes)\n"
+            f"# Source: {path}\n"
+            f"# Total file size: {size:,} bytes\n\n"
+        )
+        header_bytes = header_text.encode("utf-8", errors="replace")
+    with archive.open(arcname, "w") as out_file:
+        if header_bytes:
+            out_file.write(header_bytes)
+        try:
+            with open(path, "rb") as in_file:
+                in_file.seek(start)
+                skip_partial_line = start > 0
+                while True:
+                    chunk = in_file.read(chunk_size)
+                    if not chunk:
+                        break
+                    if skip_partial_line:
+                        newline_idx = chunk.find(b"\n")
+                        if newline_idx < 0:
+                            continue
+                        chunk = chunk[newline_idx + 1 :]
+                        skip_partial_line = False
+                    if chunk:
+                        out_file.write(chunk)
+        except Exception as exc:
+            _log_suppressed(
+                "Failed reading/writing bounded log tail during diagnostics bundle export",
+                exc,
+            )
 
 
 def _parse_serial_log_timestamp(line: str) -> datetime | None:
@@ -2435,6 +2480,29 @@ def _collect_streaming_bundle_artifacts(
     if isinstance(perf_sample_trace, list) and perf_sample_trace:
         artifacts["streaming/perf_sample_trace.json"] = (
             _json_dump(perf_sample_trace) + "\n"
+        )
+    jog_dro_trace = runtime_metrics.get("jog_dro_trace_tail")
+    if isinstance(jog_dro_trace, list) and jog_dro_trace:
+        artifacts["streaming/jog_dro_trace_tail.json"] = (
+            _json_dump(jog_dro_trace) + "\n"
+        )
+        trace_lines = ["# Jog DRO trace tail", ""]
+        for row in jog_dro_trace:
+            if not isinstance(row, dict):
+                continue
+            ts = str(row.get("ts", "") or "")
+            kind = str(row.get("kind", "") or "")
+            actual = row.get("actual_mpos")
+            est = row.get("est_mpos")
+            delta = row.get("delta")
+            trace_lines.append(
+                f"{ts} [{kind}] actual={actual} est={est} delta={delta}"
+            )
+        artifacts["streaming/jog_dro_trace_tail.log"] = "\n".join(trace_lines) + "\n"
+    jog_dro_stats = runtime_metrics.get("jog_dro_interp_stats")
+    if isinstance(jog_dro_stats, dict) and jog_dro_stats:
+        artifacts["streaming/jog_dro_interp_stats.json"] = (
+            _json_dump(jog_dro_stats) + "\n"
         )
     return artifacts
 
@@ -2552,10 +2620,12 @@ def _write_diagnostics_bundle_archive(out_path: Path, payload: dict[str, Any]) -
         log_added = 0
         for log_path in log_files:
             try:
-                bounded_text = _read_log_tail_text(
-                    log_path, max_bytes=DIAG_BUNDLE_LOG_TAIL_MAX_BYTES
+                _write_bounded_log_tail_chunked(
+                    archive,
+                    arcname=f"logs/{log_path.name}",
+                    path=log_path,
+                    max_bytes=DIAG_BUNDLE_LOG_TAIL_MAX_BYTES,
                 )
-                archive.writestr(f"logs/{log_path.name}", bounded_text)
                 log_added += 1
             except Exception as exc:
                 _log_suppressed("Failed adding log file to diagnostics bundle", exc)
@@ -2588,24 +2658,6 @@ def export_diagnostics_bundle(app) -> None:
     if not path:
         return
     out_path = Path(path)
-    if out_path.parent:
-        try:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            _log_suppressed(
-                "Failed creating export directory for diagnostics bundle", exc
-            )
-
-    saver = getattr(app, "_save_settings", None)
-    if callable(saver):
-        try:
-            saver()
-        except Exception as exc:
-            _log_suppressed(
-                "Failed saving settings before diagnostics-bundle export", exc
-            )
-
-    payload = _collect_diagnostics_bundle_payload(app)
     use_background_export = bool(getattr(app, "_diagnostics_bundle_async_export", True))
     if use_background_export and callable(getattr(app, "after", None)):
         if bool(getattr(app, "_diagnostics_bundle_export_inflight", False)):
@@ -2636,8 +2688,12 @@ def export_diagnostics_bundle(app) -> None:
         def _export_worker() -> None:
             error: Exception | None = None
             try:
+                if out_path.parent:
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                payload = _collect_diagnostics_bundle_payload(app)
                 _write_diagnostics_bundle_archive(out_path, payload)
             except Exception as exc:
+                _log_suppressed("Failed exporting diagnostics bundle in background worker", exc)
                 error = exc
             try:
                 after(0, lambda: _complete_export(error))
@@ -2660,6 +2716,9 @@ def export_diagnostics_bundle(app) -> None:
             _log_suppressed("Failed starting diagnostics bundle export thread", exc)
 
     try:
+        if out_path.parent:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = _collect_diagnostics_bundle_payload(app)
         _write_diagnostics_bundle_archive(out_path, payload)
         messagebox.showinfo("Export diagnostics bundle", f"Saved to:\n{out_path}")
     except Exception as exc:
@@ -2681,19 +2740,76 @@ def export_session_diagnostics(app) -> None:
     )
     if not path:
         return
-    lines = _build_session_diagnostics_lines(app)
-    dir_name = os.path.dirname(path)
-    if dir_name:
-        try:
-            os.makedirs(dir_name, exist_ok=True)
-        except Exception as exc:
-            _log_suppressed(
-                "Failed creating export directory for diagnostics report", exc
+    out_path = str(path)
+
+    def _write_report_text(lines: list[str]) -> None:
+        dir_name = os.path.dirname(out_path)
+        if dir_name:
+            try:
+                os.makedirs(dir_name, exist_ok=True)
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed creating export directory for diagnostics report", exc
+                )
+        text = "\n".join(lines)
+        with open(out_path, "w", encoding="utf-8", newline="\n") as outfile:
+            for start in range(0, len(text), 16_384):
+                outfile.write(text[start : start + 16_384])
+
+    use_background_export = bool(
+        getattr(app, "_diagnostics_report_async_export", True)
+    )
+    after = getattr(app, "after", None)
+    if use_background_export and callable(after):
+        if bool(getattr(app, "_diagnostics_report_export_inflight", False)):
+            messagebox.showinfo(
+                "Export diagnostics",
+                "A diagnostics report export is already running.",
             )
+            return
+        app._diagnostics_report_export_inflight = True
+
+        def _complete_export(error: Exception | None = None) -> None:
+            app._diagnostics_report_export_inflight = False
+            if error is None:
+                messagebox.showinfo("Export diagnostics", f"Saved to:\n{out_path}")
+                return
+            messagebox.showerror(
+                "Export diagnostics", f"Failed to write diagnostics:\n{error}"
+            )
+
+        def _export_worker() -> None:
+            error: Exception | None = None
+            try:
+                _write_report_text(_build_session_diagnostics_lines(app))
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed exporting diagnostics report in background worker", exc
+                )
+                error = exc
+            try:
+                after(0, lambda: _complete_export(error))
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed posting diagnostics report completion callback", exc
+                )
+                _complete_export(error)
+
+        try:
+            worker = threading.Thread(
+                target=_export_worker,
+                name="diagnostics-report-export",
+                daemon=True,
+            )
+            worker.start()
+            return
+        except Exception as exc:
+            app._diagnostics_report_export_inflight = False
+            _log_suppressed("Failed starting diagnostics report export thread", exc)
+
     try:
-        with open(path, "w", encoding="utf-8", newline="\n") as outfile:
-            outfile.write("\n".join(lines))
-        messagebox.showinfo("Export diagnostics", f"Saved to:\n{path}")
+        _write_report_text(_build_session_diagnostics_lines(app))
+        messagebox.showinfo("Export diagnostics", f"Saved to:\n{out_path}")
     except Exception as exc:
         messagebox.showerror(
             "Export diagnostics", f"Failed to write diagnostics:\n{exc}"

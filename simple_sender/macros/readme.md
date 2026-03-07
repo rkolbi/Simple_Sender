@@ -2,7 +2,7 @@
 
 This folder contains the default sample macros shipped with Simple Sender.
 
-The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names and optional `.txt` extensions) from:
+The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported) from:
 - `simple_sender/macros/`
 - `macros/` beside `main.py`
 - the directory that contains `main.py`
@@ -64,7 +64,7 @@ The app loads `Macro-1` through `Macro-8` (also supports legacy `Maccro-*` names
 
 ## Quick Troubleshooting
 
-- Button missing: ensure file name is `Macro-1`..`Macro-8` (or legacy `Maccro-*`) in a discovered macros directory.
+- Button missing: ensure file name is `Macro-1`..`Macro-8` in a discovered macros directory.
 - Macro blocked: streaming/alarm/disconnected states prevent execution by design.
 - Stale coordinates: insert `%update` before using `wx/wy/wz`.
 - Appears complete too early: keep Current Line mode on `Machine` and watch for final `Idle`.

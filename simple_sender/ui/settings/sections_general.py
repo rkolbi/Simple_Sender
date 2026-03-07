@@ -169,7 +169,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.validate_streaming_check = ttk.Checkbutton(
         diagnostics_frame,
-        text="Validate streaming (large) G-code files",
+        text="Overdrive validation strict by default",
         variable=app.validate_streaming_gcode,
     )
     app.validate_streaming_check.grid(
@@ -177,7 +177,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         app.validate_streaming_check,
-        "Validate large files while loading; adds an extra scan but improves preflight checks.",
+        "Default mode for Overdrive > Validate Loaded Job. Off = quick scan, On = full scan.",
     )
     ttk.Label(diagnostics_frame, text="Sample-only threshold (lines)").grid(
         row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)

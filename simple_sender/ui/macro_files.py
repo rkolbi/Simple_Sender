@@ -153,7 +153,6 @@ def discover_macro_assets(app: Any) -> list[tuple[str, str]]:
             continue
         patterns = [
             os.path.join(macro_dir, "Macro-*"),
-            os.path.join(macro_dir, "Maccro-*"),
             os.path.join(macro_dir, f"{CHECKLIST_PREFIX}*{CHECKLIST_EXT}"),
         ]
         for pattern in patterns:

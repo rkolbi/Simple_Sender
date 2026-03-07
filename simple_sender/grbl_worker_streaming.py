@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import os
 import queue
 import re
 import threading
@@ -44,6 +45,7 @@ from .utils.constants import (
     RX_BUFFER_SAFETY,
 )
 from .utils.exceptions import SerialWriteError
+from .gcode_source import FileGcodeSource
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +67,33 @@ def _annotate_stream_error(raw_error: str) -> str:
     return cast(str, grbl_worker_mod.annotate_grbl_error(raw_error))
 
 
+class _StreamSourceReadError(RuntimeError):
+    """Raised when file-backed source reads fail during streaming."""
+
+    def __init__(self, *, idx: int, source_path: str, error: Exception):
+        self.idx = int(idx)
+        self.source_path = str(source_path or "")
+        self.error = error
+        super().__init__(str(error) or "source read failed")
+
+
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    def _resolve_stream_file_size_bytes(self, lines: Sequence[str]) -> int:
+        try:
+            prepared = int(getattr(lines, "_prepare_file_size_bytes", 0) or 0)
+        except Exception:
+            prepared = 0
+        if prepared > 0:
+            return prepared
+        if isinstance(lines, FileGcodeSource):
+            path = str(getattr(lines, "path", "") or "").strip()
+            if path:
+                try:
+                    return max(0, int(os.path.getsize(path)))
+                except Exception:
+                    return 0
+        return 0
+
     def _signal_tx_activity(self) -> None:
         evt = getattr(self, "_tx_activity_evt", None)
         if evt is None:
@@ -189,8 +217,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._paused = False
         self._send_index = 0
         self._ack_index = -1
+        self._ack_byte_offset = 0
+        self._stream_file_size_bytes = self._resolve_stream_file_size_bytes(lines)
         self._reset_stream_buffer()
         self.ui_q.put(("stream_state", "loaded", len(lines)))
+        self._emit_live_gcode_window(force=True)
         logger.info(f"Loaded {len(lines)} lines of G-code")
     
     def start_stream(self) -> None:
@@ -210,11 +241,15 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._paused = False
         self._abort_writes.clear()
         self._reset_stream_buffer()
+        self._ack_byte_offset = 0
         self._emit_buffer_fill()
+        if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
+            self.ui_q.put(("progress_bytes", 0, int(self._stream_file_size_bytes)))
         self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("stream_state", "running", None))
+        self._emit_live_gcode_window(force=True)
         logger.info("Started G-code streaming")
     
     def start_stream_from(
@@ -235,9 +270,20 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if not self._gcode:
             logger.warning("Cannot resume stream - no G-code loaded")
             return
-        
+
         start_index = max(0, min(start_index, len(self._gcode) - 1))
-        
+        initial_ack_byte_offset = 0
+        if start_index > 0:
+            source = getattr(self, "_gcode_source", None)
+            reader = getattr(source, "read_line_with_offsets", None)
+            if callable(reader):
+                try:
+                    _line, _start_offset, end_offset = reader(start_index - 1)
+                    if end_offset is not None:
+                        initial_ack_byte_offset = max(0, int(end_offset))
+                except Exception:
+                    initial_ack_byte_offset = 0
+
         self._clear_outgoing()
         with self._stream_lock:
             self._stream_token += 1
@@ -249,17 +295,30 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         with self._stream_lock:
             self._send_index = start_index
             self._ack_index = start_index - 1
+            self._ack_byte_offset = int(initial_ack_byte_offset)
             
             if preamble:
                 cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
                 self._resume_preamble = deque(cleaned)
-        
+
         self._emit_buffer_fill()
+        if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
+            self.ui_q.put(
+                (
+                    "progress_bytes",
+                    min(
+                        int(getattr(self, "_ack_byte_offset", 0) or 0),
+                        int(self._stream_file_size_bytes),
+                    ),
+                    int(self._stream_file_size_bytes),
+                )
+            )
         self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("progress", start_index, len(self._gcode)))
         self.ui_q.put(("stream_state", "running", None))
+        self._emit_live_gcode_window(force=True)
         logger.info(f"Resumed streaming from line {start_index}")
     
     def pause_stream(self) -> None:
@@ -434,7 +493,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         except Exception as e:
             logger.error(f"TX thread error: {e}", exc_info=True)
             self._emit_exception("TX thread error", e)
-            self._signal_disconnect(f"TX thread error: {e}")
+            self._signal_disconnect(f"[tx/thread] TX thread error: {e}")
             stop_evt.set()
         
         finally:
@@ -452,8 +511,16 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return StreamPendingItem(line=self._resume_preamble[0], is_gcode=False, idx=None)
         if self._send_index >= len(self._gcode):
             return None
+        line_end_offset: int | None = None
+        source_path = ""
         try:
-            raw_line = self._gcode[self._send_index]
+            source = self._gcode
+            source_path = str(getattr(source, "path", "") or "").strip()
+            reader = getattr(source, "read_line_with_offsets", None)
+            if callable(reader):
+                raw_line, _line_start_offset, line_end_offset = reader(self._send_index)
+            else:
+                raw_line = self._gcode[self._send_index]
         except IndexError:
             # File-backed sources may start with estimated line counts; clamp
             # to exact totals once EOF is discovered.
@@ -464,12 +531,42 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 except Exception:
                     pass
             return None
+        except Exception as exc:
+            raise _StreamSourceReadError(
+                idx=int(self._send_index),
+                source_path=source_path,
+                error=exc,
+            ) from exc
         line = self._normalize_stream_line(raw_line)
         return StreamPendingItem(
             line=line,
             is_gcode=True,
             idx=self._send_index,
+            file_end_offset=line_end_offset,
         )
+
+    def _handle_stream_source_read_failure(self, failure: _StreamSourceReadError) -> None:
+        source_name = ""
+        if failure.source_path:
+            source_name = os.path.basename(failure.source_path) or failure.source_path
+        detail = str(failure.error or "").strip() or "unknown I/O error"
+        line_label = max(1, int(failure.idx) + 1)
+        if source_name:
+            message = (
+                f"File read failed during streaming ({source_name}, line {line_label}): {detail}"
+            )
+        else:
+            message = f"File read failed during streaming (line {line_label}): {detail}"
+        logger.warning("Stream source read failed: %s", message, exc_info=failure.error)
+        with self._stream_lock:
+            self._streaming = False
+            self._paused = False
+            self._stream_pending_item = None
+            self._resume_preamble.clear()
+        self._emit_buffer_fill()
+        self.ui_q.put(("stream_error", message, failure.idx, None, self._gcode_name))
+        self.ui_q.put(("log", f"[stream error] {message}"))
+        self.ui_q.put(("stream_state", "error", "File read failed"))
 
     def _validate_stream_item_locked(
         self,
@@ -510,7 +607,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
             self.ui_q.put(("log", f"[stream error] {msg}"))
             return None
-        item = StreamPendingItem(line=line, is_gcode=item.is_gcode, idx=item.idx)
+        item = StreamPendingItem(
+            line=line,
+            is_gcode=item.is_gcode,
+            idx=item.idx,
+            file_end_offset=item.file_end_offset,
+        )
         if item.is_gcode and item.idx is not None and self._pause_after_idx is None:
             reason = (
                 cached_pause_reason if use_cached_pause_reason else self._pause_reason_for_line(line)
@@ -571,6 +673,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             idx=idx,
             line=item.line,
             queued_ts=time.time(),
+            file_end_offset=item.file_end_offset,
         )
         self._stream_buf_used += line_len
         self._stream_line_queue.append(queue_item)
@@ -601,12 +704,24 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         while True:
             if self._stream_loop_blocked():
                 break
+            read_failure: _StreamSourceReadError | None = None
 
             with self._stream_lock:
                 if self._stream_loop_blocked():
                     break
                 stream_token = self._stream_token
-                item = self._next_stream_item_locked()
+                try:
+                    item = self._next_stream_item_locked()
+                except _StreamSourceReadError as exc:
+                    read_failure = exc
+                    item = None
+            if read_failure is not None:
+                self._handle_stream_source_read_failure(read_failure)
+                break
+            with self._stream_lock:
+                if self._stream_loop_blocked():
+                    break
+                stream_token = self._stream_token
                 if item is None:
                     break
 
@@ -651,6 +766,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self.ui_q.put(("spindle_state", bool(spindle_state), queue_item.idx))
             if queue_item.is_gcode:
                 self.ui_q.put(("gcode_sent", queue_item.idx, queue_item.line))
+                self._emit_live_gcode_window(force=False)
 
         with self._stream_lock:
             send_index = self._send_index
@@ -665,8 +781,18 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             not pending and
             send_index >= len(self._gcode) and
             ack_index >= len(self._gcode) - 1):
+            stream_file_size = max(
+                0, int(getattr(self, "_stream_file_size_bytes", 0) or 0)
+            )
+            if stream_file_size > 0:
+                with self._stream_lock:
+                    self._ack_byte_offset = int(stream_file_size)
+                self.ui_q.put(
+                    ("progress_bytes", int(stream_file_size), int(stream_file_size))
+                )
             self._streaming = False
             self.ui_q.put(("stream_state", "done", None))
+            self._emit_live_gcode_window(force=True)
             logger.info("Streaming complete")
 
     def _purge_pending_jogs(self) -> None:

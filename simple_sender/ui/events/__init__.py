@@ -58,13 +58,6 @@ def handle_gcode_load_progress(app, token, done, total, label):
     return _router.handle_gcode_load_progress(app, token, done, total, label)
 
 
-def handle_streaming_validation_prompt(app, token, name, cleaned_lines, threshold, result_q):
-    _router.messagebox = messagebox
-    return _router.handle_streaming_validation_prompt(
-        app, token, name, cleaned_lines, threshold, result_q
-    )
-
-
 def handle_gcode_loaded(app, evt):
     return _router.handle_gcode_loaded(app, evt)
 
@@ -135,7 +128,6 @@ __all__ = [
     "handle_status_event",
     "handle_stream_interrupted",
     "handle_stream_state_event",
-    "handle_streaming_validation_prompt",
     "handle_ui_call",
     "handle_ui_post",
     "job_controls_ready",

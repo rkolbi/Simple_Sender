@@ -171,6 +171,9 @@ def on_app_settings_mousewheel(app, event):
         return
     if getattr(app, "_app_settings_mousewheel_enabled", True) is False:
         return
+    note_interaction = getattr(app, "_note_app_settings_interaction", None)
+    if callable(note_interaction):
+        note_interaction()
     widget = getattr(event, "widget", None)
     inner = getattr(app, "_app_settings_inner", None)
     canvas = getattr(app, "app_settings_canvas", None)
@@ -231,6 +234,9 @@ def on_app_settings_touch_start(app, event):
         app._app_settings_touch_active = False
         app._app_settings_touch_moved = False
         return
+    note_interaction = getattr(app, "_note_app_settings_interaction", None)
+    if callable(note_interaction):
+        note_interaction()
     canvas = app.app_settings_canvas
     x = canvas.winfo_pointerx() - canvas.winfo_rootx()
     y = canvas.winfo_pointery() - canvas.winfo_rooty()
@@ -267,6 +273,9 @@ def on_app_settings_touch_move(app, event):
         return "break"
     canvas.scan_dragto(x, y, gain=1)
     app._app_settings_touch_last = (x, y)
+    note_interaction = getattr(app, "_note_app_settings_interaction", None)
+    if callable(note_interaction):
+        note_interaction()
     return "break"
 
 

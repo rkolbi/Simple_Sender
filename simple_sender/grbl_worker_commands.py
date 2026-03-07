@@ -21,6 +21,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import threading
+import time
 
 from simple_sender.types import GrblWorkerState
 
@@ -50,6 +52,26 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 class GrblWorkerCommandMixin(GrblWorkerState):
+    def _mark_manual_motion_status_grace(self, duration_s: float = 2.0) -> None:
+        try:
+            duration = max(0.1, float(duration_s))
+        except Exception:
+            duration = 2.0
+        now = time.time()
+        until_ts = now + duration
+        try:
+            current_until = float(getattr(self, "_manual_motion_status_grace_until_ts", 0.0) or 0.0)
+        except Exception:
+            current_until = 0.0
+        if until_ts > current_until:
+            self._manual_motion_status_grace_until_ts = float(until_ts)
+        changed_evt = getattr(self, "_status_interval_changed_evt", None)
+        if isinstance(changed_evt, threading.Event):
+            try:
+                changed_evt.set()
+            except Exception as exc:
+                _log_suppressed("Failed signaling status thread after manual-motion grace update", exc)
+
     def send_immediate(self, command: str, *, source: str | None = None) -> None:
         """Send command immediately (bypasses streaming).
         
@@ -80,6 +102,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         if not command:
             return
         cmd_upper = command.upper()
+        if cmd_upper.startswith("$J="):
+            self._mark_manual_motion_status_grace()
 
         # During alarm, only allow unlock and home commands
         if self._alarm_active:
@@ -142,6 +166,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         # Reset local state
         self._ready = False
         self._alarm_active = False
+        self._jog_cancel_inflight = False
+        self._jog_cancel_last_sent_ts = 0.0
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
@@ -165,10 +191,12 @@ class GrblWorkerCommandMixin(GrblWorkerState):
     
     def hold(self) -> None:
         """Send feed hold command (!) to pause motion."""
+        self._mark_manual_motion_status_grace(duration_s=2.5)
         self.send_realtime(RT_HOLD)
     
     def resume(self) -> None:
         """Send cycle start command (~) to resume motion."""
+        self._mark_manual_motion_status_grace(duration_s=1.5)
         self.send_realtime(RT_RESUME)
     
     def spindle_on(self, rpm: int = DEFAULT_SPINDLE_RPM) -> None:
@@ -189,7 +217,19 @@ class GrblWorkerCommandMixin(GrblWorkerState):
     
     def jog_cancel(self) -> None:
         """Cancel active jog command."""
+        now = time.time()
+        inflight = bool(getattr(self, "_jog_cancel_inflight", False))
+        last_sent = float(getattr(self, "_jog_cancel_last_sent_ts", 0.0) or 0.0)
+        resend_after = max(0.1, float(getattr(self, "_jog_cancel_retry_timeout_s", 1.5) or 1.5))
+        debounce_s = max(0.05, float(getattr(self, "_jog_cancel_debounce_s", 0.6) or 0.6))
+        if inflight and (now - last_sent) < debounce_s:
+            return
+        if inflight and (now - last_sent) < resend_after:
+            return
+        self._mark_manual_motion_status_grace(duration_s=1.5)
         self.send_realtime(RT_JOG_CANCEL)
+        self._jog_cancel_inflight = True
+        self._jog_cancel_last_sent_ts = float(now)
 
     def cancel_pending_jogs(self) -> None:
         """Remove queued jog commands from the manual queue."""
@@ -243,6 +283,18 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         
         gunit = "G21" if unit_mode == "mm" else "G20"
         cmd = f"$J={gunit} G91 X{dx:.4f} Y{dy:.4f} Z{dz:.4f} F{feed:.1f}"
+        # Keep fast status polling active through the expected duration of this jog.
+        try:
+            travel = (
+                (float(dx) * float(dx))
+                + (float(dy) * float(dy))
+                + (float(dz) * float(dz))
+            ) ** 0.5
+            expected_s = (travel / float(feed)) * 60.0 if feed > 0.0 else 0.0
+        except Exception:
+            expected_s = 0.0
+        grace_s = max(2.0, min(180.0, float(expected_s) + 2.0))
+        self._mark_manual_motion_status_grace(duration_s=grace_s)
         cmd_source = source if source else "jog"
         self.send_immediate(cmd, source=cmd_source)
     

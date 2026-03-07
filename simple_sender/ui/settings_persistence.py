@@ -42,10 +42,33 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 def load_settings(app) -> dict:
+    settings_path = str(
+        getattr(app, "settings_path", "")
+        or getattr(getattr(app, "_settings_store", None), "filepath", "")
+    )
+    file_exists = False
+    file_size = 0
+    if settings_path:
+        try:
+            file_exists = os.path.exists(settings_path)
+            file_size = os.path.getsize(settings_path) if file_exists else 0
+        except Exception as exc:
+            _log_suppressed("Failed reading settings file metadata before load", exc)
+    logger.info(
+        "Settings load begin: path=%s exists=%s size_bytes=%s",
+        settings_path or "<unknown>",
+        file_exists,
+        file_size,
+    )
     try:
         loaded = app._settings_store.load()
         if not loaded:
             logger.info("No settings file found; using defaults.")
+        logger.info(
+            "Settings load complete: path=%s parse_success=%s",
+            settings_path or "<unknown>",
+            bool(loaded),
+        )
         app._settings_store.validate()
     except SettingsLoadError as exc:
         logger.error(f"Failed to load settings: {exc}")
@@ -97,7 +120,39 @@ def _read_nonnegative_float_setting(
     return max(0.0, float(value))
 
 
+def _read_choice_setting(
+    app,
+    *,
+    attr_name: str,
+    key: str,
+    default: str,
+    allowed: tuple[str, ...],
+) -> str:
+    fallback = str(app.settings.get(key, DEFAULT_SETTINGS.get(key, default)) or "").strip().lower()
+    if fallback not in allowed:
+        fallback = str(default).strip().lower()
+    value = fallback
+    var = getattr(app, attr_name, None)
+    if var is not None:
+        try:
+            value = str(var.get() or "").strip().lower()
+        except Exception:
+            value = fallback
+    if value not in allowed:
+        value = fallback
+    if value not in allowed and allowed:
+        value = str(allowed[0])
+    return str(value)
+
+
 def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, object]:
+    jog_dro_smoothing_mode = _read_choice_setting(
+        app,
+        attr_name="jog_dro_smoothing_mode",
+        key="jog_dro_smoothing_mode",
+        default="off",
+        allowed=("off", "ui_jog_only", "all_jog"),
+    )
     return {
         "last_port": str(last_port or ""),
         "unit_mode": app.unit_mode.get(),
@@ -127,6 +182,7 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
             app.settings.get("jog_feed_z", DEFAULT_SETTINGS.get("jog_feed_z", 500.0)),
             "jog feed Z",
         ),
+        "jog_dro_smoothing_mode": jog_dro_smoothing_mode,
         "last_gcode_dir": app.settings.get("last_gcode_dir", ""),
         "window_geometry": app.geometry(),
         "status_poll_interval": _safe_float(
@@ -161,6 +217,14 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
         "training_wheels": bool(app.training_wheels.get()),
         "stop_joystick_hold_on_focus_loss": bool(app.stop_hold_on_focus_loss.get()),
         "validate_streaming_gcode": bool(app.validate_streaming_gcode.get()),
+        "overdrive_validation_stop_on_first_error": bool(
+            app.overdrive_validation_stop_on_first_error.get()
+            if hasattr(app, "overdrive_validation_stop_on_first_error")
+            else app.settings.get(
+                "overdrive_validation_stop_on_first_error",
+                DEFAULT_SETTINGS.get("overdrive_validation_stop_on_first_error", True),
+            )
+        ),
         "streaming_line_threshold": _safe_int(
             app,
             app.streaming_line_threshold,
@@ -311,6 +375,24 @@ def _build_ui_settings(
 
 
 def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
+    hold_miss_var = getattr(app, "joystick_hold_miss_limit", None)
+    hold_miss_fallback = app.settings.get(
+        "joystick_hold_miss_limit",
+        DEFAULT_SETTINGS.get("joystick_hold_miss_limit", 2),
+    )
+    if hold_miss_var is None:
+        hold_miss_limit = int(hold_miss_fallback)
+    else:
+        hold_miss_limit = _safe_int(
+            app,
+            hold_miss_var,
+            hold_miss_fallback,
+            "joystick hold release sensitivity",
+        )
+    if hold_miss_limit < 1:
+        hold_miss_limit = 1
+    if hold_miss_limit > 8:
+        hold_miss_limit = 8
     return {
         "fallback_rapid_rate": app.fallback_rapid_rate.get().strip(),
         "estimate_factor": _safe_float(
@@ -327,6 +409,7 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         "keyboard_bindings_enabled": bool(app.keyboard_bindings_enabled.get()),
         "joystick_bindings_enabled": bool(app.joystick_bindings_enabled.get()),
         "joystick_safety_enabled": bool(app.joystick_safety_enabled.get()),
+        "joystick_hold_miss_limit": int(hold_miss_limit),
         "dry_run_sanitize_stream": bool(app.dry_run_sanitize_stream.get()),
         "joystick_bindings": dict(app._joystick_bindings),
         "joystick_safety_binding": (
@@ -555,6 +638,22 @@ def save_settings(app):
     app._settings_store.data = app.settings
     try:
         app._settings_store.save()
+        settings_path = str(
+            getattr(app, "settings_path", "")
+            or getattr(getattr(app, "_settings_store", None), "filepath", "")
+        )
+        file_mtime = None
+        if settings_path:
+            try:
+                file_mtime = os.path.getmtime(settings_path)
+            except Exception as exc:
+                _log_suppressed("Failed reading settings mtime after save", exc)
+        logger.info(
+            "Settings save complete: path=%s keys=%s mtime=%s",
+            settings_path or "<unknown>",
+            len(data),
+            file_mtime if file_mtime is not None else "n/a",
+        )
     except SettingsSaveError as exc:
         try:
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))

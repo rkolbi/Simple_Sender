@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
+import time
 from tkinter import ttk
 from typing import Any, Callable
 
@@ -43,12 +44,14 @@ from .sections import (
     build_zeroing_section,
 )
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
+from simple_sender.utils.task_timing import record_task_timing
 
 _APP_SETTINGS_VIEW_BASIC = "Basic"
 _APP_SETTINGS_VIEW_ADVANCED = "Advanced"
 _NO_MATCHING_SETTINGS_TEXT = "No matching settings"
-_APP_SETTINGS_STICKY_UPDATE_MS = 50
+_APP_SETTINGS_STICKY_UPDATE_MS = 180
 _APP_SETTINGS_FILTER_DEBOUNCE_MS = 120
+_APP_SETTINGS_VIEW_SAVE_DEBOUNCE_MS = 250
 _APP_SETTINGS_LAZY_BUILD_SLICE_MS = 8
 _LAZY_SECTION_TITLES = frozenset(
     {
@@ -75,6 +78,29 @@ def _build_category_header(
         "title_widget": title_label,
         "widgets": (title_label, desc_label, separator),
     }
+
+
+def _note_app_settings_interaction(app) -> None:
+    try:
+        app._app_settings_last_interaction_ts = float(time.monotonic())
+    except Exception:
+        return
+
+
+def _app_settings_interaction_recent(app, now: float | None = None) -> bool:
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        return False
+    ts = float(getattr(app, "_app_settings_last_interaction_ts", 0.0) or 0.0)
+    if ts <= 0.0:
+        return True
+    if now is None:
+        now = time.monotonic()
+    window_s = float(
+        getattr(app, "_app_settings_interaction_active_window_s", 4.0) or 4.0
+    )
+    if window_s <= 0.0:
+        window_s = 4.0
+    return (float(now) - ts) <= window_s
 
 
 def _normalize_filter_tokens(value: str) -> list[str]:
@@ -196,6 +222,7 @@ def _ensure_section_built(app, entry: dict[str, Any]) -> bool:
 
 
 def _drain_app_settings_lazy_build_queue(app) -> None:
+    started = time.perf_counter()
     try:
         app._app_settings_lazy_build_after_id = None
     except Exception:
@@ -229,6 +256,13 @@ def _drain_app_settings_lazy_build_queue(app) -> None:
         _schedule_app_settings_sticky_header(app, force=False)
 
     _schedule_app_settings_lazy_build(app)
+    elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+    record_task_timing(
+        app,
+        "app_settings.lazy_build_slice",
+        elapsed_ms,
+        success=True,
+    )
 
 
 def _schedule_app_settings_lazy_build(app) -> None:
@@ -337,9 +371,15 @@ def _schedule_app_settings_sticky_header(app, *, force: bool = False) -> None:
     if not callable(after):
         _flush_app_settings_sticky_header(app)
         return
+    delay_ms = int(_APP_SETTINGS_STICKY_UPDATE_MS)
+    if not _app_settings_interaction_recent(app):
+        delay_ms = max(
+            delay_ms,
+            int(getattr(app, "_app_settings_sticky_idle_update_ms", 1200) or 1200),
+        )
     try:
         app._app_settings_sticky_after_id = after(
-            _APP_SETTINGS_STICKY_UPDATE_MS,
+            delay_ms,
             lambda: _flush_app_settings_sticky_header(app),
         )
     except Exception:
@@ -389,12 +429,20 @@ def _apply_app_settings_filters(app, *, reset_scroll: bool = False) -> None:
         except Exception:
             mode = _APP_SETTINGS_VIEW_BASIC
 
+    selected_mode = (
+        "advanced"
+        if str(mode).strip().lower() == _APP_SETTINGS_VIEW_ADVANCED.lower()
+        else "basic"
+    )
+    mode_changed = False
     try:
-        app.settings["app_settings_view_mode"] = (
-            "advanced" if str(mode).strip().lower() == _APP_SETTINGS_VIEW_ADVANCED.lower() else "basic"
-        )
+        previous_mode = str(app.settings.get("app_settings_view_mode", "basic")).strip().lower()
+        app.settings["app_settings_view_mode"] = selected_mode
+        mode_changed = previous_mode != selected_mode
     except Exception:
-        pass
+        mode_changed = False
+    if mode_changed:
+        _schedule_app_settings_view_mode_persist(app)
 
     visible_section_count = 0
     layout_changed = False
@@ -487,6 +535,7 @@ def _schedule_app_settings_filter_change(app, *, reset_scroll: bool) -> None:
 
 
 def _on_app_settings_filter_change(app, *_args, debounce: bool = True) -> None:
+    _note_app_settings_interaction(app)
     if debounce:
         _schedule_app_settings_filter_change(app, reset_scroll=True)
         return
@@ -495,16 +544,56 @@ def _on_app_settings_filter_change(app, *_args, debounce: bool = True) -> None:
     _run_app_settings_filter_change(app)
 
 
+def _persist_app_settings_view_mode(app) -> None:
+    app._app_settings_view_mode_save_after_id = None
+    saver = getattr(app, "_save_settings", None)
+    if not callable(saver):
+        return
+    try:
+        saver()
+    except Exception:
+        pass
+
+
+def _schedule_app_settings_view_mode_persist(app) -> None:
+    if getattr(app, "_app_settings_view_mode_save_after_id", None) is not None:
+        return
+    after = getattr(app, "after", None)
+    if not callable(after):
+        _persist_app_settings_view_mode(app)
+        return
+    try:
+        app._app_settings_view_mode_save_after_id = after(
+            _APP_SETTINGS_VIEW_SAVE_DEBOUNCE_MS,
+            lambda: _persist_app_settings_view_mode(app),
+        )
+    except Exception:
+        _persist_app_settings_view_mode(app)
+
+
 def _update_app_settings_sticky_header(app, *_args) -> None:
+    started = time.perf_counter()
     headers = getattr(app, "app_settings_section_headers", None)
     sticky_var = getattr(app, "app_settings_sticky_var", None)
     canvas = getattr(app, "app_settings_canvas", None)
     if not headers or sticky_var is None or canvas is None:
+        record_task_timing(
+            app,
+            "app_settings.sticky_header",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=True,
+        )
         return
 
     try:
         visible_top = float(canvas.canvasy(0))
     except Exception:
+        record_task_timing(
+            app,
+            "app_settings.sticky_header",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=False,
+        )
         return
 
     cache_dirty = bool(getattr(app, "_app_settings_header_cache_dirty", True))
@@ -516,18 +605,32 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
     if not positions:
         active_title = str(headers[0][0])
         try:
-            sticky_var.set(active_title)
+            if str(sticky_var.get() or "") != active_title:
+                sticky_var.set(active_title)
         except Exception:
             pass
+        record_task_timing(
+            app,
+            "app_settings.sticky_header",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=True,
+        )
         return
 
     y_values = [round(y, 3) for _title, y in positions]
     if len(set(y_values)) == 1:
         active_title = str(positions[0][0])
         try:
-            sticky_var.set(active_title)
+            if str(sticky_var.get() or "") != active_title:
+                sticky_var.set(active_title)
         except Exception:
             pass
+        record_task_timing(
+            app,
+            "app_settings.sticky_header",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=True,
+        )
         return
 
     active_title = ""
@@ -542,9 +645,16 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
     if not active_title:
         active_title = str(headers[0][0])
     try:
-        sticky_var.set(active_title)
+        if str(sticky_var.get() or "") != active_title:
+            sticky_var.set(active_title)
     except Exception:
         pass
+    record_task_timing(
+        app,
+        "app_settings.sticky_header",
+        max(0.0, (time.perf_counter() - started) * 1000.0),
+        success=True,
+    )
 
 
 def build_app_settings_tab(app, notebook):
@@ -606,16 +716,17 @@ def build_app_settings_tab(app, notebook):
     app._app_settings_sticky_after_id = None
     app._app_settings_filter_after_id = None
     app._app_settings_filter_reset_scroll = False
-    app._app_settings_header_positions: list[tuple[str, float]] = []
+    app._app_settings_header_positions = []
     app._app_settings_header_cache_dirty = True
-    app._app_settings_lazy_build_queue: list[dict[str, Any]] = []
-    app._app_settings_lazy_build_ids: set[int] = set()
+    app._app_settings_lazy_build_queue = []
+    app._app_settings_lazy_build_ids = set()
     app._app_settings_lazy_build_after_id = None
     app._refresh_app_settings_sticky_header = lambda force=False: _schedule_app_settings_sticky_header(
         app,
         force=bool(force),
     )
     app._resume_app_settings_lazy_build = lambda: _schedule_app_settings_lazy_build(app)
+    app._note_app_settings_interaction = lambda: _note_app_settings_interaction(app)
 
     app.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
     app.app_settings_canvas.grid(row=1, column=0, sticky="nsew")
@@ -627,6 +738,7 @@ def build_app_settings_tab(app, notebook):
     app.app_settings_scroll.grid(row=1, column=1, sticky="ns")
 
     def _on_canvas_yview(first: str, last: str) -> None:
+        _note_app_settings_interaction(app)
         app.app_settings_scroll.set(first, last)
         _schedule_app_settings_sticky_header(app, force=False)
 
@@ -762,8 +874,8 @@ def build_app_settings_tab(app, notebook):
         "Jogging",
         build_jogging_section,
         mode="basic",
-        description="Default jog feed rates and quick safe-mode profile.",
-        keywords=("feed", "jog", "safe mode"),
+        description="Default jog feed rates, jog DRO smoothing mode, and quick safe-mode profile.",
+        keywords=("feed", "jog", "smoothing", "safe mode"),
     )
     _add_section(
         "Zeroing",

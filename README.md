@@ -1,12 +1,12 @@
 ﻿# Simple Sender - Full Manual
-![Release: 2.0.0](https://img.shields.io/badge/release-2.0.0-blue)
+![Release: 2.2.0](https://img.shields.io/badge/release-2.2.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 ### Work in progress (beta). Please run a few dry-run validations before real cuts.
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-> **Current runtime model (v2 lean path):** Top View and Spatial View are disabled. Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
+> **Current runtime model (v2.2 lean path):** Top View and Spatial View are disabled. Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
 
 > **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
 
@@ -50,6 +50,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read Job) with an in-app touch-friendly browser (plus optional system-picker fallback), clear/unload button, inline status/progress.
+- Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in a dedicated File Info tab.
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
 - Resume From... dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present).
@@ -57,7 +58,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
 - Overdrive tab: spindle control, Spoilboard Generator, and feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
 - Idle status spam suppressed in console; filters for alarms/errors.
-- Run preflight safety gate checks readiness/bounds/validation before streaming, with explicit operator override.
+- Preflight check tool summarizes readiness/bounds/validation on demand from App Settings.
 - Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
 - Macros: left-click to run, right-click to sample, with in-app Macro Manager for edit/duplicate/reorder.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
@@ -103,8 +104,8 @@ This is a practical, end-to-end flow with rationale for key options.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read Job** to open the in-app touch-friendly file browser (large rows and buttons). Use **Use System Picker** inside that dialog if you want the OS-native file chooser; on Linux, the app applies temporary Tk scaling and a minimum picker size so dialogs stay readable. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, chunked if large, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
-   - Check the G-code viewer highlights and the job dimensions/estimate block for bounds sanity.
+   - Click **Read Job** to open the in-app touch-friendly file browser (large rows and buttons). Use **Use System Picker** inside that dialog if you want the OS-native file chooser; on Linux, the app applies temporary Tk scaling and a minimum picker size so dialogs stay readable. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level** for quick access; **Clear Job** returns it to **Read Job**.
+   - Check the Live G-code window plus the job dimensions/estimate block for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
    - Use **Resume From...** to start at a specific line with modal re-sync if you need to continue a job.
@@ -119,8 +120,8 @@ This is a practical, end-to-end flow with rationale for key options.
      - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
      - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
   7) **Start and monitor**
-     - Click **Run** (Training Wheels may prompt). Before streaming starts, a preflight safety gate checks job/controller readiness and bounds; when failures are present, operators can choose to stop or explicitly override and continue.
-     - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. The Run confirmation includes a G-code validation report (unsupported codes, GRBL warnings, long lines, modal hazards). For large streaming files, validation only appears when "Validate streaming (large) G-code files" is enabled in App Settings; otherwise the report is unavailable.
+     - Click **Run** (Training Wheels may prompt). Streaming starts immediately and keeps run-path checks lean; use preflight and deep validation tools from App Settings/Overdrive when you want extra review before cutting.
+     - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. Optional deep validation is now manual via **Overdrive -> Validate Loaded Job** (quick or strict), so Start/Run never blocks on a pre-run validation pass.
      - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
@@ -148,9 +149,11 @@ This is a practical, end-to-end flow with rationale for key options.
 
 - **Tabs:**
   
-  **G-code viewer:** Highlights sent/acked/current lines with subtle colors so you can track what has been queued, is in progress, and has already been acked.
+  **G-code viewer:** Bounded Live G-code window (`500 past / current / 500 next`) fed from worker ack/pending queues so the tab stays responsive on large jobs.
   
   ![](pics/g-codetab.jpg)
+
+  **File Info:** Read-only, scrollable file/metadata summary. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and auto-level prereq snapshot summary).
   
   **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
@@ -172,7 +175,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
   ![-](pics/grblsettingstab.JPG)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check/gate tools, session report export, backup bundle import/export, streaming validation + threshold), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
   ![](pics/appsettingstab.JPG)
   
@@ -198,7 +201,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
-- **Diagnostics:** Preflight check summarizes bounds/validation, Run enforces the preflight safety gate (with operator override prompt), diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
+- **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
@@ -207,6 +210,8 @@ This is a practical, end-to-end flow with rationale for key options.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**.
+- **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
+- **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (viewer window + sampled metadata).
@@ -216,7 +221,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From...:** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line.
-- **Progress:** Sent/acked/current highlighting (Processing highlights the line currently executing, i.e., the next line queued after the last ack; Sent shows the most recently queued line); status/progress bar; live estimate while running.
+- **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; Live G-code window updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 
 ### Line length limitations and CAM guidance
@@ -251,7 +256,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
-Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (legacy `Maccro-*` names and optional `.txt` extensions remain supported).
+Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (optional `.txt` extensions are supported).
 
 Macro file header format:
 - Line 1: button label.
@@ -426,7 +431,7 @@ Use this checklist when creating job-critical macros:
 ### Macro troubleshooting
 | Symptom | Likely cause | Recommended fix |
 | --- | --- | --- |
-| Macro button does not appear | File is not named `Macro-1`..`Macro-8` (or legacy `Maccro-*`) in a discovered macro directory. | Verify filename and location (`simple_sender/macros`, `macros/` beside `main.py`, or script directory). |
+| Macro button does not appear | File is not named `Macro-1`..`Macro-8` in a discovered macro directory. | Verify filename and location (`simple_sender/macros`, `macros/` beside `main.py`, or script directory). |
 | Button appears but macro does not run | App is streaming, in alarm, disconnected, or blocked by Training Wheels confirmation. | Stop stream / clear alarm / reconnect, then retry and confirm prompts. |
 | Coordinates used by the macro are stale | Macro reads `wx/wy/wz` or modal values before a fresh status report. | Insert `%update` before using live variables. |
 | Macro reaches 100% too early or appears "done" before motion settles | Controller accepted final lines but machine has not reported fresh `Idle` yet. | Keep `Machine` current-line mode selected; prefer `%wait` at sequence boundaries and watch for final `Idle` in status/logs. |
@@ -439,6 +444,7 @@ Use this checklist when creating job-critical macros:
   - `Estimated Job Time: HH:MM [CONFIDENT|ROUGH]`
   - `Job Dimensions: X,Y,Z mm / X,Y,Z in [CONFIDENT|ROUGH]`
 - Confidence is derived from available machine settings and scan coverage.
+- If header `SSMETA` includes complete extents and units, dimensions are sourced from metadata and reported as confident; estimate confidence still depends on machine settings/live observations.
 - No Top View/Spatial render stage runs during load in the lean sender runtime.
 
 ## Auto-Leveling
@@ -704,7 +710,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on March 3, 2026): `942 passed, 3 skipped` on `python -m pytest -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current baseline in this repository (validated on March 6, 2026): `1006 passed, 2 skipped` on `python -m pytest -q`; skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -743,7 +749,7 @@ You can also use the resilient launcher helper: `python tools/run_ruff.py check 
 
 Validate mypy target manifest and README count note:
 ```powershell
-python tools/check_mypy_targets.py --expected-count 150
+python tools/check_mypy_targets.py --expected-count 138
 ```
 
 One-command local gate:
@@ -772,9 +778,10 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
-- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI) imported and installed onto `App`; these helpers now import UI dependencies directly (legacy `ui/app_exports.py` compatibility routing has been removed).
+- `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI) imported and installed onto `App`.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, input bindings, dialogs).
-- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/Console/Logs/Overdrive/App Settings/Checklists).
+- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/File Info/Console/Logs/Overdrive/App Settings/Checklists).
+- `simple_sender/ui/file_info_tab.py`: scrollable read-only File Info tab renderer (SSMETA + quick-scan metrics).
 - `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
@@ -869,7 +876,6 @@ python tools/perf_microbench.py
 - Homing watchdog grace period is configurable to avoid disconnects during long homing cycles.
 - GRBL settings capture is more resilient: queued refresh after streaming, console `$$` routes through the refresh path, and Raw $$ always completes on the final `ok`.
 - Status history is stored for diagnostics export; console logging is throttled in performance mode.
-- Run now enforces a preflight safety gate before streaming and presents an operator override prompt when blocking failures are detected.
 - App Settings > Diagnostics now supports backup bundle export/import for settings, macros, and checklists.
 - App Settings > Macros now includes a built-in Macro Manager and probe safety inputs (Probe Z start and safety margin) used by touch-plate/tool-reference macros.
 - Console Save now pre-fills a timestamped filename for touch-first workflows.
@@ -877,7 +883,7 @@ python tools/perf_microbench.py
 - Settings load/import now validates and auto-repairs invalid core values (baud/poll interval/unit mode), and save writes through unique temp files to avoid multi-instance temp-path collisions.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
-- Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py` (no package-level compatibility wrappers).
+- Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py`.
 - Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 - Parser/split hot paths were optimized (reduced modal/bounds overhead in parse and lighter word matching in split) for lower CPU cost on large files.
 - Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
@@ -887,7 +893,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 150 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-02-28), and local/CI hooks now enforce `--expected-count 150`.
+5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-06), and local/CI hooks now enforce `--expected-count 138`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -1036,7 +1042,11 @@ Macro UI is included below along with the rest of the interface.
 
 ### G-code Tab
 - Estimate/Bounds label: read-only summary of parsed bounds and time estimates; updates with settings and GRBL rates.
-- G-code viewer: read-only text view with line numbers and sent/acked/current highlights.
+- Live G-code header: `Live G-code (500 past / current / 500 next) - Run: XX%`.
+- G-code viewer: read-only bounded window sourced from worker state:
+  - Past: last 500 acked lines
+  - Current: current acked line
+  - Next: up to 500 queued lines
 
 ### Console Tab
 - Console log: read-only GRBL traffic log with filters.
@@ -1187,19 +1197,18 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Diagnostics
 - Preflight check (Run check): scans the loaded job for bounds/validation warnings.
-- Run preflight gate: Run now enforces the same checks and shows an operator override prompt on blocking failures.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip.
-- Validate streaming (large) G-code files: enables validation pass for large files.
-- Sample-only threshold (lines): cleaned line count that switches large jobs to sample-only mode (set `0` to disable line-count-based sample-only switching).
+- Overdrive validation strict by default: sets default mode for **Overdrive -> Validate Loaded Job** (`Off=quick`, `On=full scan`).
+- Sample-only threshold (lines): cleaned line count threshold for aggressive sampled prepare behavior (set `0` to disable line-based trigger).
 - Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (sample-only + skip full validation); set `0` to disable.
 - Ultra-large threshold info: shows the computed trigger in GiB/bytes for the current MB value.
 - Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit (enabled by default for new settings).
 - Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
 - Performance report log path: optional destination file to append exit reports.
-- Recommendation: keep streaming validation enabled for normal large jobs if you rely on warnings; ultra-large jobs (`>=200 MB`) auto-skip that pass to protect responsiveness/stability on Pi-class hardware.
+- Recommendation: keep Run path lean; use **Overdrive -> Validate Loaded Job** when you want deep validation before cutting.
 
 ### Baseline Capture (Lean Mode)
 - Idle (no file loaded): let the app sit connected/ready for 5 minutes.

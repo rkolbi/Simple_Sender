@@ -78,10 +78,31 @@ class GcodeParseResult:
 def clean_gcode_line(line: str) -> str:
     """Strip comments/whitespace and return a safe, normalized line."""
     line = line.replace("\ufeff", "")
-    line = PAREN_COMMENT_PAT.sub("", line)
-    if ";" in line:
-        line = line.split(";", 1)[0]
-    line = line.strip()
+    out_chars: list[str] = []
+    paren_depth = 0
+    bracket_depth = 0
+    for ch in line:
+        if ch == ";" and paren_depth <= 0 and bracket_depth <= 0:
+            break
+        if ch == "(":
+            paren_depth += 1
+            continue
+        if ch == ")" and paren_depth > 0:
+            paren_depth -= 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            continue
+        if ch == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+            continue
+        if paren_depth > 0 or bracket_depth > 0:
+            continue
+        # Unmatched closing comment markers are noise in GRBL jobs.
+        if ch in (")", "]"):
+            continue
+        out_chars.append(ch)
+    line = "".join(out_chars).strip()
     if line.startswith("%"):
         return ""
     if not line:
@@ -269,37 +290,19 @@ def parse_gcode_lines(
     maxy: float | None = None
     maxz: float | None = None
     if parser_state is not None:
+        def _state_float(key: str) -> float | None:
+            raw = parser_state.get(key, None)
+            if raw is None:
+                return None
+            return float(raw)
+
         try:
-            minx = (
-                float(parser_state.get("minx"))
-                if parser_state.get("minx", None) is not None
-                else None
-            )
-            miny = (
-                float(parser_state.get("miny"))
-                if parser_state.get("miny", None) is not None
-                else None
-            )
-            minz = (
-                float(parser_state.get("minz"))
-                if parser_state.get("minz", None) is not None
-                else None
-            )
-            maxx = (
-                float(parser_state.get("maxx"))
-                if parser_state.get("maxx", None) is not None
-                else None
-            )
-            maxy = (
-                float(parser_state.get("maxy"))
-                if parser_state.get("maxy", None) is not None
-                else None
-            )
-            maxz = (
-                float(parser_state.get("maxz"))
-                if parser_state.get("maxz", None) is not None
-                else None
-            )
+            minx = _state_float("minx")
+            miny = _state_float("miny")
+            minz = _state_float("minz")
+            maxx = _state_float("maxx")
+            maxy = _state_float("maxy")
+            maxz = _state_float("maxz")
         except Exception:
             minx = miny = minz = maxx = maxy = maxz = None
 

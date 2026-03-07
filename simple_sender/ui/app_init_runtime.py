@@ -22,11 +22,35 @@
 
 import logging
 import threading
+import time
 from collections import deque
 from typing import Any, cast
 
 
 logger = logging.getLogger(__name__)
+
+
+def _queue_settings_path_log(app) -> None:
+    if bool(getattr(app, "_settings_path_ui_log_emitted", False)):
+        return
+    settings_path = str(
+        getattr(app, "settings_path", "")
+        or getattr(getattr(app, "_settings_store", None), "filepath", "")
+    ).strip()
+    if not settings_path:
+        return
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is None:
+        return
+    try:
+        ui_q.put(("log", f"[settings] Using settings file: {settings_path}"))
+        app._settings_path_ui_log_emitted = True
+    except Exception as exc:
+        logger.debug(
+            "Failed queueing settings-path startup log to UI queue: %s",
+            exc,
+            exc_info=exc,
+        )
 
 
 def _normalize_key_bindings(app) -> None:
@@ -117,6 +141,18 @@ def _init_joystick_runtime_state(
     app._joystick_hold_missed_polls = 0
     app._joystick_hold_last_ts = None
     app._joystick_hold_jog_sent = False
+    hold_miss_limit = 2
+    hold_miss_var = getattr(app, "joystick_hold_miss_limit", None)
+    if hold_miss_var is not None:
+        try:
+            hold_miss_limit = int(hold_miss_var.get())
+        except Exception:
+            hold_miss_limit = 2
+    if hold_miss_limit < 1:
+        hold_miss_limit = 1
+    if hold_miss_limit > 8:
+        hold_miss_limit = 8
+    app._joystick_hold_miss_limit = int(hold_miss_limit)
     raw_safety = app.settings.get("joystick_safety_binding")
     app._joystick_safety_binding = (
         dict(raw_safety) if isinstance(raw_safety, dict) else None
@@ -386,6 +422,11 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app._wpos_raw = (0.0, 0.0, 0.0)
     app._mpos_raw = (0.0, 0.0, 0.0)
     app._wco_raw = None
+    app._zero_all_pending_active = False
+    app._zero_all_pending_expected_wco_raw = None
+    app._zero_all_pending_until_ts = 0.0
+    app._zero_all_pending_hard_until_ts = 0.0
+    app._zero_all_pending_post_timeout_wco_seen = False
     app._planner_blocks_available = 15
     app._planner_blocks_capacity = 15
     app._wpos_value_labels = {}
@@ -425,10 +466,15 @@ def _init_gcode_and_autolevel_state(
     app._gcode_bounds_confidence = "rough"
     app._gcode_dimensions_confidence = "rough"
     app._gcode_dimensions_confidence_reasons = {}
+    app._gcode_dimensions_source = "scan"
     app._gcode_estimated_job_time_sec = None
     app._gcode_estimate_confidence = "provisional"
     app._gcode_estimate_confidence_reasons = {}
     app._gcode_estimate_replaced_quick = False
+    app._gcode_units_source = "scan"
+    app._gcode_ssmeta_present = False
+    app._gcode_ssmeta = {}
+    app._gcode_ssmeta_scan_reduced = False
     app._gcode_stats_compute_mode = ""
     app._gcode_stats_sample_scale = 1.0
     app._gcode_stats_sample_line_count = 0
@@ -486,6 +532,9 @@ def _init_gcode_and_autolevel_state(
     app._gcode_parse_token = 0
     app.gcode_stats_var = tk.StringVar(value="")
     app._gcode_status_last_text = ""
+    app.gcode_live_header_var = tk.StringVar(value="")
+    app.file_info_var = tk.StringVar(value="")
+    app._file_info_last_text = ""
     app.gcode_load_var = tk.StringVar(value="")
     app._gcode_load_popup = None
     app._gcode_load_popup_label = None
@@ -540,8 +589,14 @@ def _init_stream_and_override_state(
     app._gcode_load_settling_tail_ms = 1200
     app._gcode_stats_settle_delay_ms = 1500
     app._gcode_post_popup_background_tasks = "none"
-    app._streaming_validation_prompt_cache = {}
-    app._streaming_validation_prompt_dialog = None
+    app._overdrive_validation_run_id = 0
+    app._overdrive_validation_running = False
+    app._overdrive_validation_cancel_event = None
+    app._overdrive_validation_worker = None
+    app._overdrive_validation_last_result = None
+    app._overdrive_validation_last_report_text = ""
+    app._overdrive_validation_last_progress_pct = -1.0
+    app._last_validation_run = None
     app._stream_loaded_force_apply = False
     app._stream_loaded_reconcile_after_id = None
     app._stream_loaded_reconcile_generation = 0
@@ -587,12 +642,36 @@ def _init_stream_and_override_state(
     app._connected_port = None
     app._status_seen = False
     app._status_history = deque(maxlen=200)
+    app._jog_dro_trace = deque(maxlen=1200)
+    app._jog_dro_interp_stats = {
+        "status_sync_count": 0,
+        "delta_abs_avg_x": 0.0,
+        "delta_abs_avg_y": 0.0,
+        "delta_abs_avg_z": 0.0,
+        "delta_abs_max_x": 0.0,
+        "delta_abs_max_y": 0.0,
+        "delta_abs_max_z": 0.0,
+        "status_sync_interval_avg_s": 0.0,
+        "status_sync_interval_max_s": 0.0,
+        "predict_horizon_avg_s": 0.0,
+        "predict_horizon_max_s": 0.0,
+    }
     app._connection_timeline = deque(maxlen=200)
 
     app.progress_pct = tk.IntVar(value=0)
+    app.progress_text = tk.StringVar(value="")
     app.buffer_fill = tk.StringVar(value="Buffer: 0%")
     app.throughput_var = tk.StringVar(value="TX: 0 B/s")
     app.buffer_fill_pct = tk.IntVar(value=0)
+    app._stream_progress_pct = 0.0
+    app._stream_acked_byte_offset = 0
+    app._stream_progress_file_size_bytes = 0
+    app._live_gcode_past_count = 0
+    app._live_gcode_current_count = 0
+    app._live_gcode_next_count = 0
+    app._live_gcode_pending_depth = 0
+    app._live_gcode_last_acked_index = -1
+    app._live_gcode_last_acked_byte_offset = 0
 
     app._manual_controls = []
     app._offline_controls = set()
@@ -615,6 +694,12 @@ def _init_stream_and_override_state(
     app._last_sent_index = -1
     app._last_acked_index = -1
     app._last_error_index = -1
+    app._last_stream_error_message = ""
+    app._last_stream_error_file_name = ""
+    app._last_stream_error_line_index = -1
+    app._last_stream_error_line_number = 0
+    app._last_stream_error_line_text = ""
+    app._last_stream_error_hint = ""
     app._manual_queue_drop_total = 0
     app._confirm_last_time = {}
     app._confirm_debounce_sec = 0.8
@@ -685,7 +770,7 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._ui_queue_drain_runtime_slowest_event_ms = 0.0
     app._ui_queue_drain_runtime_slowest_event_kind = ""
     app._status_last_non_idle_ts = 0.0
-    app._status_perf_metrics: dict[str, dict[str, float | int]] = {}
+    app._status_perf_metrics = cast(dict[str, dict[str, float | int]], {})
     app._status_perf_metrics_enabled = bool(
         app.settings.get(
             "performance_profile_enabled",
@@ -695,7 +780,7 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._manual_controls_last_enabled = False
     app._manual_control_state_cache = {}
     app._job_controls_last_ready = None
-    app._task_timing_metrics: dict[str, dict[str, float | int]] = {}
+    app._task_timing_metrics = cast(dict[str, dict[str, float | int]], {})
     app._task_timing_seq = 0
     app._settings_dump_deferred_pending = False
     app._deferred_stream_finalize_pending = False
@@ -706,6 +791,21 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._state_default_bg = None
     app._app_settings_tab_active = False
     app._active_tab_label = ""
+    app._app_settings_last_interaction_ts = float(time.monotonic())
+    app._app_settings_interaction_active_window_s = 4.0
+    app._app_settings_sticky_idle_update_ms = 1800
+    app._joystick_poll_app_settings_idle_interval_ms = 1800
+    app._joystick_poll_noninteractive_tab_interval_ms = 1500
+    app._joystick_poll_manual_ready_interval_ms = 80
+    app._manual_error_ui_after_id = None
+    app._manual_error_ui_payload = None
+    app._manual_error_last_key = None
+    app._manual_error_last_ts = 0.0
+    app._manual_error_repeat_count = 0
+    app._manual_motion_fast_poll_until_ts = 0.0
+    app._manual_motion_fast_poll_after_id = None
+    app._manual_jog_predict_state = None
+    app._manual_jog_predict_after_id = None
 
 
 def init_runtime_state(
@@ -797,3 +897,4 @@ def init_runtime_state(
         auto_reconnect_check_idle_interval_s=auto_reconnect_check_idle_interval_s,
     )
     _init_reconnect_and_ui_state(app, default_settings=default_settings)
+    _queue_settings_path_log(app)

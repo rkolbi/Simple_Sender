@@ -121,7 +121,11 @@ def on_close(app):
             except Exception as exc:
                 _log_suppressed("Failed shutting down accessory router during app close", exc)
         app._save_settings()
-        app.grbl.disconnect()
+        disconnect_fn = getattr(app.grbl, "disconnect")
+        try:
+            disconnect_fn(requested_by="shutdown", reason="Application close")
+        except TypeError:
+            disconnect_fn()
     except Exception as exc:
         app._log_exception("Shutdown failed", exc)
     source = getattr(app, "_gcode_source", None)

@@ -23,22 +23,7 @@
     Simple Sender - GRBL 1.1h CNC Controller
 """
 
-# Standard library imports
 from simple_sender.ui.controls.toolbar import build_toolbar
-from simple_sender.ui.dialogs.backup_bundle import (
-    export_backup_bundle,
-    import_backup_bundle,
-)
-from simple_sender.ui.dialogs.diagnostics import (
-    apply_performance_test_preset,
-    export_diagnostics_bundle,
-    export_session_diagnostics,
-    open_release_checklist,
-    open_runtime_telemetry,
-    open_run_checklist,
-    run_preflight_check,
-    save_performance_report_to_logs,
-)
 from simple_sender.ui.dialogs.logs import show_logs_dialog
 from simple_sender.ui.dialogs.macro_manager import show_macro_manager
 from simple_sender.ui.main_layout import build_main_layout
@@ -46,6 +31,20 @@ from simple_sender.ui.widgets_tooltips import ensure_tooltips
 from simple_sender.ui.all_stop import position_all_stop_offset
 
 class LayoutMixin:
+    @staticmethod
+    def _diagnostics_module():
+        # Lazy import keeps startup lighter; diagnostics tooling is invoked on demand.
+        from simple_sender.ui.dialogs import diagnostics
+
+        return diagnostics
+
+    @staticmethod
+    def _backup_bundle_module():
+        # Lazy import keeps startup lighter; backup tooling is invoked on demand.
+        from simple_sender.ui.dialogs import backup_bundle
+
+        return backup_bundle
+
     def _build_toolbar(self):
         build_toolbar(self)
 
@@ -54,34 +53,34 @@ class LayoutMixin:
         self._ensure_tooltips()
 
     def _show_release_checklist(self):
-        open_release_checklist(self)
+        self._diagnostics_module().open_release_checklist(self)
 
     def _show_run_checklist(self):
-        open_run_checklist(self)
+        self._diagnostics_module().open_run_checklist(self)
 
     def _run_preflight_check(self):
-        run_preflight_check(self)
+        self._diagnostics_module().run_preflight_check(self)
 
     def _export_session_diagnostics(self):
-        export_session_diagnostics(self)
+        self._diagnostics_module().export_session_diagnostics(self)
 
     def _export_diagnostics_bundle(self):
-        export_diagnostics_bundle(self)
+        self._diagnostics_module().export_diagnostics_bundle(self)
 
     def _open_runtime_telemetry(self):
-        open_runtime_telemetry(self)
+        self._diagnostics_module().open_runtime_telemetry(self)
 
     def _save_performance_report_to_logs(self):
-        save_performance_report_to_logs(self)
+        self._diagnostics_module().save_performance_report_to_logs(self)
 
     def _apply_performance_test_preset(self):
-        apply_performance_test_preset(self)
+        self._diagnostics_module().apply_performance_test_preset(self)
 
     def _export_backup_bundle(self):
-        export_backup_bundle(self)
+        self._backup_bundle_module().export_backup_bundle(self)
 
     def _import_backup_bundle(self):
-        import_backup_bundle(self)
+        self._backup_bundle_module().import_backup_bundle(self)
 
     def _open_macro_manager(self):
         show_macro_manager(self)

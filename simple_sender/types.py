@@ -95,6 +95,7 @@ class StreamQueueItem:
     line: str
     manual_source: str | None = None
     queued_ts: float = 0.0
+    file_end_offset: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +103,7 @@ class StreamPendingItem:
     line: str
     is_gcode: bool
     idx: int | None
+    file_end_offset: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,11 +124,19 @@ class GrblWorkerState:
     _stream_line_queue: deque[StreamQueueItem]
     _stream_pending_item: StreamPendingItem | None
     _manual_pending_item: ManualPendingItem | None
+    _live_acked_ring: deque[tuple[int, str]]
+    _live_current_acked: tuple[int, str] | None
+    _live_pending_window: deque[tuple[int, str]]
+    _live_window_refresh_s: float
+    _live_window_last_emit_ts: float
+    _live_window_dirty: bool
     _resume_preamble: deque[str]
     _pause_after_idx: int | None
     _pause_after_reason: str | None
     _send_index: int
     _ack_index: int
+    _ack_byte_offset: int
+    _stream_file_size_bytes: int
     _stream_buf_used: int
     _rx_window: int
 
@@ -210,6 +220,9 @@ class GrblWorkerState:
     def _emit_buffer_fill(self) -> None:
         raise NotImplementedError
 
+    def _emit_live_gcode_window(self, *, force: bool = False) -> None:
+        raise NotImplementedError
+
     def _enqueue_manual_command(self, command: str, source: str | None) -> bool:
         raise NotImplementedError
 
@@ -217,6 +230,9 @@ class GrblWorkerState:
         raise NotImplementedError
 
     def _signal_disconnect(self, reason: str | None = None) -> None:
+        raise NotImplementedError
+
+    def clear_watchdog_ignore(self, reason: str | None = None) -> None:
         raise NotImplementedError
 
     def _log_rx_line(self, line: str) -> None:
@@ -331,7 +347,6 @@ class MacroExecutorState:
 UiCallResultQueue: TypeAlias = queue.Queue[tuple[bool, Any]]
 UiCallCancelToken: TypeAlias = threading.Event
 UiPromptResultQueue: TypeAlias = queue.Queue[str]
-UiValidationResultQueue: TypeAlias = queue.Queue[bool]
 
 UiEvent = (
     tuple[Literal["conn"], bool, str | None]
@@ -347,7 +362,6 @@ UiEvent = (
     | tuple[Literal["ui_post"], Callable[..., Any], tuple[Any, ...], dict[str, Any]]
     | tuple[Literal["macro_prompt"], str, str, list[str], str, UiPromptResultQueue]
     | tuple[Literal["gcode_load_progress"], int, int, int, str]
-    | tuple[Literal["streaming_validation_prompt"], int, str, int, int, UiValidationResultQueue]
     | tuple[Literal["gcode_loaded"], int, str, list[str], str | None, bool, Any | None]
     | tuple[
         Literal["gcode_loaded_stream"],
@@ -399,5 +413,10 @@ UiEvent = (
     | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]
     | tuple[Literal["gcode_acked"], int]
+    | tuple[
+        Literal["live_gcode_window"],
+        dict[str, Any],
+    ]
     | tuple[Literal["progress"], int, int]
+    | tuple[Literal["progress_bytes"], int, int]
 )

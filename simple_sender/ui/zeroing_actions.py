@@ -21,9 +21,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import time
 
+from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode
+from simple_sender.utils.constants import RT_STATUS
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -48,6 +51,8 @@ _WCS_TO_P = {
     "G59.2": 8,
     "G59.3": 9,
 }
+_ZERO_ALL_PENDING_SOFT_TIMEOUT_S = 3.0
+_ZERO_ALL_PENDING_HARD_TIMEOUT_S = 12.0
 
 
 def _zeroing_persistent_enabled(app) -> bool:
@@ -70,6 +75,103 @@ def _current_wcs(app) -> str:
 
 def _wcs_to_p(wcs: str) -> int:
     return _WCS_TO_P.get(wcs, 1)
+
+
+def _refresh_status_after_zero(app) -> None:
+    grbl = getattr(app, "grbl", None)
+    if grbl is None:
+        return
+    sender = getattr(grbl, "send_realtime", None)
+    if not callable(sender):
+        return
+    try:
+        sender(RT_STATUS)
+    except Exception as exc:
+        _log_suppressed("Failed requesting immediate status refresh after zero command", exc)
+
+
+def _mark_zero_manual_activity(app) -> None:
+    marker = getattr(app, "_mark_manual_motion_activity", None)
+    if not callable(marker):
+        return
+    try:
+        marker(duration_s=1.0)
+    except Exception as exc:
+        _log_suppressed("Failed marking manual motion activity after zero command", exc)
+
+
+def _apply_local_wpos_zero(app, axes: str) -> None:
+    normalized = {axis for axis in str(axes or "").upper() if axis in {"X", "Y", "Z"}}
+    if not normalized:
+        return
+    wpos_raw = getattr(app, "_wpos_raw", None)
+    if isinstance(wpos_raw, (list, tuple)) and len(wpos_raw) >= 3:
+        try:
+            next_raw = [float(wpos_raw[0]), float(wpos_raw[1]), float(wpos_raw[2])]
+        except Exception:
+            next_raw = [0.0, 0.0, 0.0]
+    else:
+        next_raw = [0.0, 0.0, 0.0]
+    axis_idx = {"X": 0, "Y": 1, "Z": 2}
+    for axis in normalized:
+        next_raw[axis_idx[axis]] = 0.0
+    app._wpos_raw = (float(next_raw[0]), float(next_raw[1]), float(next_raw[2]))
+    try:
+        report_units = str(getattr(app, "_report_units", None) or app.unit_mode.get() or "mm")
+    except Exception:
+        report_units = "mm"
+    try:
+        modal_units = str(app.unit_mode.get() or "mm")
+    except Exception:
+        modal_units = "mm"
+    value_map = {
+        "X": format_dro_value(float(app._wpos_raw[0]), report_units, modal_units),
+        "Y": format_dro_value(float(app._wpos_raw[1]), report_units, modal_units),
+        "Z": format_dro_value(float(app._wpos_raw[2]), report_units, modal_units),
+    }
+    for axis, attr in (("X", "wpos_x"), ("Y", "wpos_y"), ("Z", "wpos_z")):
+        if axis not in normalized:
+            continue
+        var = getattr(app, attr, None)
+        if var is None or not hasattr(var, "set"):
+            continue
+        try:
+            var.set(value_map[axis])
+        except Exception as exc:
+            _log_suppressed(f"Failed applying local {attr} update after zero command", exc)
+
+
+def _clear_zero_all_pending_latch(app) -> None:
+    app._zero_all_pending_active = False
+    app._zero_all_pending_expected_wco_raw = None
+    app._zero_all_pending_until_ts = 0.0
+    app._zero_all_pending_hard_until_ts = 0.0
+    app._zero_all_pending_post_timeout_wco_seen = False
+
+
+def _set_zero_all_pending_latch(app) -> None:
+    mpos_raw = getattr(app, "_mpos_raw", None)
+    if isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3:
+        try:
+            expected_wco = (
+                float(mpos_raw[0]),
+                float(mpos_raw[1]),
+                float(mpos_raw[2]),
+            )
+        except Exception:
+            expected_wco = (0.0, 0.0, 0.0)
+    else:
+        expected_wco = (0.0, 0.0, 0.0)
+    now = time.monotonic()
+    app._zero_all_pending_active = True
+    app._zero_all_pending_expected_wco_raw = expected_wco
+    app._zero_all_pending_until_ts = now + float(_ZERO_ALL_PENDING_SOFT_TIMEOUT_S)
+    app._zero_all_pending_hard_until_ts = now + float(_ZERO_ALL_PENDING_HARD_TIMEOUT_S)
+    app._zero_all_pending_post_timeout_wco_seen = False
+    try:
+        app._wco_raw = expected_wco
+    except Exception as exc:
+        _log_suppressed("Failed setting expected WCO latch for Zero All", exc)
 
 
 def zeroing_gcode(app, axes: str) -> str:
@@ -123,7 +225,11 @@ def zero_x(app):
         return
     cmd = zeroing_gcode(app, "X")
     if cmd:
+        _clear_zero_all_pending_latch(app)
+        _mark_zero_manual_activity(app)
         app._send_manual(cmd, "zero")
+        _apply_local_wpos_zero(app, "X")
+        _refresh_status_after_zero(app)
 
 
 def zero_y(app):
@@ -131,7 +237,11 @@ def zero_y(app):
         return
     cmd = zeroing_gcode(app, "Y")
     if cmd:
+        _clear_zero_all_pending_latch(app)
+        _mark_zero_manual_activity(app)
         app._send_manual(cmd, "zero")
+        _apply_local_wpos_zero(app, "Y")
+        _refresh_status_after_zero(app)
 
 
 def zero_z(app):
@@ -139,7 +249,11 @@ def zero_z(app):
         return
     cmd = zeroing_gcode(app, "Z")
     if cmd:
+        _clear_zero_all_pending_latch(app)
+        _mark_zero_manual_activity(app)
         app._send_manual(cmd, "zero")
+        _apply_local_wpos_zero(app, "Z")
+        _refresh_status_after_zero(app)
 
 
 def zero_all(app):
@@ -147,7 +261,11 @@ def zero_all(app):
         return
     cmd = zeroing_gcode(app, "XYZ")
     if cmd:
+        _set_zero_all_pending_latch(app)
+        _mark_zero_manual_activity(app)
         app._send_manual(cmd, "zero")
+        _apply_local_wpos_zero(app, "XYZ")
+        _refresh_status_after_zero(app)
 
 
 def goto_zero(app):

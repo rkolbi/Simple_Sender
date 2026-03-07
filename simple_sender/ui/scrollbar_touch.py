@@ -73,19 +73,6 @@ def _scrollbar_extent(widget: Any, orient: str) -> float:
     return max(1.0, value)
 
 
-def _pointer_fraction(widget: Any, event: Any, orient: str) -> float:
-    extent = _scrollbar_extent(widget, orient)
-    try:
-        coord = float(event.x if orient == "horizontal" else event.y)
-    except Exception:
-        coord = 0.0
-    if coord <= 0:
-        return 0.0
-    if coord >= extent:
-        return 1.0
-    return coord / extent
-
-
 def _pointer_fraction_from_widget_pointer(widget: Any, orient: str) -> float:
     extent = _scrollbar_extent(widget, orient)
     try:

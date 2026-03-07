@@ -45,6 +45,9 @@ _STATUS_POLL_PERF_QUIET_IDLE_FLOOR = 3.0
 _STATUS_POLL_QUIET_IDLE_MIN_SECONDS = 15.0
 _STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR = 4.0
 _STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS = 60.0
+_STATUS_POLL_MANUAL_ACTIVE = 0.1
+_STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
+_STATUS_POLL_MANUAL_GRACE_S = 2.0
 _CONNECTION_TIMELINE_LIMIT = 200
 
 
@@ -124,6 +127,103 @@ def _performance_mode_enabled(app) -> bool:
         except Exception:
             return False
     return False
+
+
+def _manual_motion_fast_poll_active(app) -> bool:
+    if _stream_running_or_paused(app):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if not bool(getattr(app, "_grbl_ready", False)):
+        return False
+    if bool(getattr(app, "_alarm_locked", False)):
+        return False
+    state = _normalize_status_state(app)
+    if state.startswith("jog") or state.startswith("hold"):
+        return True
+    if bool(getattr(app, "_active_joystick_hold_binding", None)):
+        return True
+    grbl = getattr(app, "grbl", None)
+    busy_fn = getattr(grbl, "manual_queue_busy", None)
+    if callable(busy_fn):
+        try:
+            if bool(busy_fn()):
+                return True
+        except Exception as exc:
+            _log_suppressed("Failed checking manual-queue busy state for poll profile", exc)
+    try:
+        until_ts = float(getattr(app, "_manual_motion_fast_poll_until_ts", 0.0) or 0.0)
+    except Exception:
+        until_ts = 0.0
+    if until_ts > time.monotonic():
+        return True
+    return False
+
+
+def _manual_ready_fast_poll_active(app) -> bool:
+    if _performance_mode_enabled(app):
+        return False
+    if _stream_running_or_paused(app):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if not bool(getattr(app, "_grbl_ready", False)):
+        return False
+    if bool(getattr(app, "_alarm_locked", False)):
+        return False
+    return _normalize_status_state(app).startswith("idle")
+
+
+def mark_manual_motion_activity(app, *, duration_s: float | None = None) -> None:
+    now = time.monotonic()
+    try:
+        duration = float(duration_s) if duration_s is not None else float(_STATUS_POLL_MANUAL_GRACE_S)
+    except Exception:
+        duration = float(_STATUS_POLL_MANUAL_GRACE_S)
+    duration = max(0.1, duration)
+    until_ts = now + duration
+    current_until_ts = float(getattr(app, "_manual_motion_fast_poll_until_ts", 0.0) or 0.0)
+    if until_ts > current_until_ts:
+        app._manual_motion_fast_poll_until_ts = until_ts
+    try:
+        apply_status_poll_profile(app)
+    except Exception as exc:
+        _log_suppressed("Failed applying fast manual-motion status poll profile", exc)
+    after_fn = getattr(app, "after", None)
+    if not callable(after_fn):
+        return
+    pending_after_id = getattr(app, "_manual_motion_fast_poll_after_id", None)
+    if pending_after_id is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(pending_after_id)
+        except Exception as exc:
+            _log_suppressed("Failed cancelling manual-motion poll restore timer", exc)
+    app._manual_motion_fast_poll_after_id = None
+
+    def _restore_profile() -> None:
+        app._manual_motion_fast_poll_after_id = None
+        remaining_s = float(getattr(app, "_manual_motion_fast_poll_until_ts", 0.0) or 0.0) - time.monotonic()
+        if remaining_s > 0.05:
+            try:
+                app._manual_motion_fast_poll_after_id = after_fn(
+                    max(50, int(remaining_s * 1000.0) + 25),
+                    _restore_profile,
+                )
+                return
+            except Exception as exc:
+                _log_suppressed("Failed rescheduling manual-motion poll restore timer", exc)
+        try:
+            apply_status_poll_profile(app)
+        except Exception as exc:
+            _log_suppressed("Failed restoring status poll profile after manual-motion boost", exc)
+
+    try:
+        app._manual_motion_fast_poll_after_id = after_fn(
+            max(50, int(duration * 1000.0) + 25),
+            _restore_profile,
+        )
+    except Exception as exc:
+        _log_suppressed("Failed scheduling manual-motion poll restore timer", exc)
 
 
 def _ensure_auto_reconnect_scan_queue(app):
@@ -276,6 +376,11 @@ def handle_connection_event(app, is_on: bool, port):
         app._auto_reconnect_blocked = False
         app._auto_reconnect_port_scan_inflight = False
         app._report_units = None
+        app._zero_all_pending_active = False
+        app._zero_all_pending_expected_wco_raw = None
+        app._zero_all_pending_until_ts = 0.0
+        app._zero_all_pending_hard_until_ts = 0.0
+        app._zero_all_pending_post_timeout_wco_seen = False
         try:
             app._update_unit_toggle_display()
         except Exception as exc:
@@ -350,6 +455,11 @@ def handle_connection_event(app, is_on: bool, port):
         app._pending_settings_refresh = False
         app._status_seen = False
         app._report_units = None
+        app._zero_all_pending_active = False
+        app._zero_all_pending_expected_wco_raw = None
+        app._zero_all_pending_until_ts = 0.0
+        app._zero_all_pending_hard_until_ts = 0.0
+        app._zero_all_pending_post_timeout_wco_seen = False
         try:
             app._update_unit_toggle_display()
         except Exception as exc:
@@ -441,10 +551,14 @@ def handle_ready_event(app, ready):
 
 def maybe_auto_reconnect(app):
     if app.connected or app._closing or (not app._auto_reconnect_pending):
+        if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
+            app._auto_reconnect_pending = False
         return
     # Prevent duplicate connect attempts while the worker already has an
     # open serial connection and the UI is still processing conn events.
     if _worker_reports_connected(app):
+        if bool(getattr(app, "_grbl_ready", False)):
+            app._auto_reconnect_pending = False
         return
     if getattr(app, "_user_disconnect", False):
         return
@@ -461,16 +575,28 @@ def maybe_auto_reconnect(app):
     except Exception as exc:
         _log_suppressed("Failed reading reconnect-on-open setting during auto-reconnect", exc)
     now = time.time()
-    startup_gate_ts = float(getattr(app, "_auto_reconnect_startup_gate_ts", 0.0) or 0.0)
-    if startup_gate_ts > 0.0 and now < startup_gate_ts:
-        if app._auto_reconnect_next_ts < startup_gate_ts:
-            app._auto_reconnect_next_ts = startup_gate_ts
-        return
-    if now < app._auto_reconnect_next_ts:
-        return
     _drain_auto_reconnect_port_scan_results(app)
     cached_ports = tuple(getattr(app, "_auto_reconnect_ports_cache", ()) or ())
     cache_age = _auto_reconnect_cache_age_s(app, now)
+    startup_gate_ts = float(getattr(app, "_auto_reconnect_startup_gate_ts", 0.0) or 0.0)
+    if startup_gate_ts > 0.0 and now < startup_gate_ts:
+        if app._auto_reconnect_last_port in cached_ports:
+            app._auto_reconnect_startup_gate_ts = 0.0
+            _record_connection_timeline(
+                app,
+                "startup_autoconnect_gate_bypassed",
+                f"port={app._auto_reconnect_last_port}",
+            )
+        else:
+            if cache_age == float("inf") or app._auto_reconnect_last_port not in cached_ports:
+                _start_auto_reconnect_port_scan(app, now)
+            app._auto_reconnect_next_ts = min(
+                startup_gate_ts,
+                now + min(1.0, float(app._auto_reconnect_delay)),
+            )
+            return
+    if now < app._auto_reconnect_next_ts:
+        return
     if cache_age == float("inf"):
         _start_auto_reconnect_port_scan(app, now)
         app._auto_reconnect_next_ts = now + min(1.0, app._auto_reconnect_delay)
@@ -533,6 +659,10 @@ def effective_status_poll_interval(app) -> float:
         base = STATUS_POLL_DEFAULT
     if base <= 0:
         base = STATUS_POLL_DEFAULT
+    if _manual_motion_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
+    if _manual_ready_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
     if _status_poll_should_use_running_profile(app):
         return min(base, float(STATUS_POLL_RUNNING))
     if _performance_mode_enabled(app):

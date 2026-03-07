@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import time
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable, cast
@@ -32,6 +33,7 @@ from simple_sender.utils.constants import (
     TOOLTIP_DELAY_MS,
     TOOLTIP_TIMEOUT_DEFAULT,
 )
+from simple_sender.utils.task_timing import record_task_timing
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -504,7 +506,13 @@ class _NotebookTabTooltips:
         x_root = getattr(event, "x_root", None)
         y_root = getattr(event, "y_root", None)
         self._process_hover(x_root, y_root)
-        self._schedule_poll(delay_ms=self._poll_interval_idle_ms)
+        active = bool(
+            self._tip is not None or self._active_tab is not None or self._pending_tab is not None
+        )
+        if active:
+            self._schedule_poll(delay_ms=self._poll_interval_active_ms)
+        else:
+            self._cancel_poll()
 
     def _on_motion(self, event) -> None:
         if self._stream_busy():
@@ -514,9 +522,11 @@ class _NotebookTabTooltips:
         x_root = getattr(event, "x_root", None)
         y_root = getattr(event, "y_root", None)
         self._process_hover(x_root, y_root)
-        active = bool(self._tip is not None or self._active_tab is not None or self._pending_tab is not None)
-        if active or self._pointer_over_notebook(x_root, y_root):
-            next_delay = self._poll_interval_active_ms if active else self._poll_interval_idle_ms
+        active = bool(
+            self._tip is not None or self._active_tab is not None or self._pending_tab is not None
+        )
+        if active:
+            next_delay = self._poll_interval_active_ms
             self._schedule_poll(delay_ms=next_delay)
             return
         self._cancel_poll()
@@ -528,7 +538,7 @@ class _NotebookTabTooltips:
         if self._poll_after_id is not None:
             return
         if delay_ms is None:
-            delay_ms = self._poll_interval_idle_ms
+            delay_ms = self._effective_idle_poll_interval_ms()
         try:
             self._poll_after_id = self.notebook.after(int(delay_ms), self._poll)
         except tk.TclError:
@@ -545,6 +555,7 @@ class _NotebookTabTooltips:
         self._poll_after_id = None
 
     def _poll(self) -> None:
+        started = time.perf_counter()
         self._poll_after_id = None
         try:
             if not self.notebook.winfo_exists():
@@ -555,19 +566,43 @@ class _NotebookTabTooltips:
             self._hide_tip()
             return
         self._process_hover()
-        pointer_inside = False
-        try:
-            pointer_inside = self._pointer_over_notebook(
-                self.notebook.winfo_pointerx(),
-                self.notebook.winfo_pointery(),
-            )
-        except tk.TclError:
-            pointer_inside = False
         active = bool(self._tip is not None or self._active_tab is not None or self._pending_tab is not None)
-        if (not active) and (not pointer_inside):
+        if not active:
             return
-        next_delay = self._poll_interval_active_ms if active else self._poll_interval_idle_ms
+        next_delay = (
+            self._poll_interval_active_ms
+            if active
+            else self._effective_idle_poll_interval_ms()
+        )
         self._schedule_poll(delay_ms=next_delay)
+        owner = _resolve_owner(self.notebook, "_app_settings_tab_active")
+        if owner is not None and bool(getattr(owner, "_app_settings_tab_active", False)):
+            elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+            record_task_timing(
+                owner,
+                "tooltip.notebook_poll",
+                elapsed_ms,
+                success=True,
+            )
+
+    def _effective_idle_poll_interval_ms(self) -> int:
+        delay_ms = int(self._poll_interval_idle_ms)
+        owner = _resolve_owner(self.notebook, "_app_settings_tab_active")
+        if owner is None:
+            return delay_ms
+        if not bool(getattr(owner, "_app_settings_tab_active", False)):
+            return delay_ms
+        ts = float(getattr(owner, "_app_settings_last_interaction_ts", 0.0) or 0.0)
+        if ts <= 0.0:
+            return delay_ms
+        window_s = float(
+            getattr(owner, "_app_settings_interaction_active_window_s", 4.0) or 4.0
+        )
+        if window_s <= 0.0:
+            window_s = 4.0
+        if (time.monotonic() - ts) <= window_s:
+            return delay_ms
+        return max(delay_ms, 1000)
 
 
 def apply_tooltip(widget, text: str):

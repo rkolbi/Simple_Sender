@@ -175,6 +175,7 @@ class App(tk.Tk):
     fullscreen_on_startup: tk.BooleanVar
     stop_hold_on_focus_loss: tk.BooleanVar
     validate_streaming_gcode: tk.BooleanVar
+    overdrive_validation_stop_on_first_error: tk.BooleanVar
     streaming_controller: Any
     tool_reference_var: tk.StringVar
     machine_state: tk.StringVar

@@ -70,6 +70,7 @@ from simple_sender.utils.constants import (
     JOYSTICK_DISCOVERY_INTERVAL_MS,
     JOYSTICK_LIVE_STATUS_INTERVAL_MS,
 )
+from simple_sender.utils.task_timing import record_task_timing
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -192,6 +193,22 @@ def _joystick_live_status_visible(app) -> bool:
     return bool(getattr(app, "_app_settings_tab_active", False))
 
 
+def _app_settings_interaction_recent(app, now: float | None = None) -> bool:
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        return False
+    ts = float(getattr(app, "_app_settings_last_interaction_ts", 0.0) or 0.0)
+    if ts <= 0.0:
+        return True
+    if now is None:
+        now = time.monotonic()
+    window_s = float(
+        getattr(app, "_app_settings_interaction_active_window_s", 4.0) or 4.0
+    )
+    if window_s <= 0.0:
+        window_s = 4.0
+    return (float(now) - ts) <= window_s
+
+
 def _joystick_live_status_interval_s(app) -> float:
     if bool(getattr(app, "_joystick_capture_state", None)):
         interval_ms = int(JOYSTICK_LIVE_STATUS_INTERVAL_MS)
@@ -310,15 +327,24 @@ def update_joystick_device_status(app, count: int, reason: str | None = None) ->
     app.joystick_device_status.set(msg)
 
 def update_joystick_live_status(app, py) -> None:
+    started = time.perf_counter()
+    record_live_status = False
     if not hasattr(app, "joystick_live_status"):
         return
     if not _joystick_live_status_visible(app):
         return
     now = time.monotonic()
+    if (
+        bool(getattr(app, "_app_settings_tab_active", False))
+        and (not bool(getattr(app, "_joystick_capture_state", None)))
+        and (not _app_settings_interaction_recent(app, now))
+    ):
+        return
     last = getattr(app, "_joystick_last_live_status", 0.0)
     if (now - last) < _joystick_live_status_interval_s(app):
         return
     app._joystick_last_live_status = now
+    record_live_status = True
     if not app._joystick_instances:
         text = "Joystick state: none detected."
         if text != str(getattr(app, "_joystick_last_live_status_text", "")):
@@ -353,9 +379,21 @@ def update_joystick_live_status(app, py) -> None:
         lines = ["Joystick state: unavailable."]
     text = "\n".join(lines)
     if text == str(getattr(app, "_joystick_last_live_status_text", "")):
+        record_task_timing(
+            app,
+            "joystick.live_status",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=record_live_status,
+        )
         return
     app.joystick_live_status.set(text)
     app._joystick_last_live_status_text = text
+    record_task_timing(
+        app,
+        "joystick.live_status",
+        max(0.0, (time.perf_counter() - started) * 1000.0),
+        success=record_live_status,
+    )
 
 def refresh_joystick_test_info(app):
     if not hasattr(app, "joystick_test_status"):
@@ -427,6 +465,7 @@ def maybe_refresh_joystick_devices(
     force: bool = False,
     reason: str | None = None,
 ) -> bool:
+    started = time.perf_counter()
     now = time.monotonic()
     last_check = getattr(app, "_joystick_last_discovery", 0.0)
     last_count = getattr(app, "_joystick_device_count", None)
@@ -444,6 +483,12 @@ def maybe_refresh_joystick_devices(
     try:
         count = py.joystick.get_count()
     except error_types as exc:
+        record_task_timing(
+            app,
+            "joystick.discovery",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=False,
+        )
         logger.exception("Joystick discovery failed: %s", exc)
         return False
     if not force:
@@ -454,6 +499,12 @@ def maybe_refresh_joystick_devices(
     app._joystick_device_count = count
     update_joystick_test_status(app, count, names)
     update_joystick_device_status(app, count, reason=reason)
+    record_task_timing(
+        app,
+        "joystick.discovery",
+        max(0.0, (time.perf_counter() - started) * 1000.0),
+        success=True,
+    )
     return True
 
 def start_joystick_polling(app):

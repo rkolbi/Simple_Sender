@@ -614,6 +614,12 @@ def _apply_separator_styles(app, sep_mpos, sep_wpos, sep_jog_line) -> str:
 
 def _build_z_and_stop_controls(app, align, j, jog_cmd, pad_bg: str) -> int:
     def cancel_jog():
+        try:
+            stop_predict = getattr(app, "_stop_manual_jog_prediction", None)
+            if callable(stop_predict):
+                stop_predict(reason="jog_cancel")
+        except Exception as exc:
+            _log_suppressed("Failed stopping manual jog DRO interpolation", exc)
         app._stop_joystick_hold()
         app.grbl.jog_cancel()
         try:
@@ -689,8 +695,27 @@ def build_jog_panel(app, parent):
         if not app.grbl.is_connected():
             app.streaming_controller.log("Jog ignored - GRBL is not connected.")
             return
+        try:
+            mark_manual_motion = getattr(app, "_mark_manual_motion_activity", None)
+            if callable(mark_manual_motion):
+                mark_manual_motion()
+        except Exception as exc:
+            _log_suppressed("Failed marking manual motion activity for status poll boost", exc)
         feed = _jog_feed_for_move(dx, dy, dz)
         source_tag = source or getattr(app, "_manual_input_source", None) or "jog"
+        try:
+            start_predict = getattr(app, "_start_manual_jog_prediction", None)
+            if callable(start_predict):
+                start_predict(
+                    dx=float(dx),
+                    dy=float(dy),
+                    dz=float(dz),
+                    feed=float(feed),
+                    unit_mode=str(app.unit_mode.get()),
+                    source=str(source_tag),
+                )
+        except Exception as exc:
+            _log_suppressed("Failed starting manual jog DRO interpolation", exc)
         app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source_tag)
 
     def jog_cmd(dx, dy, dz):

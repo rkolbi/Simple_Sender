@@ -39,6 +39,9 @@ from pathlib import Path
 from .constants import (
     GCODE_STREAMING_LINE_THRESHOLD,
     GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
+    JOG_DRO_SMOOTHING_CHOICES,
+    JOG_DRO_SMOOTHING_OFF,
+    JOYSTICK_HOLD_MISS_LIMIT,
     SETTINGS_FILENAME,
     SETTINGS_BACKUP_SUFFIX,
     SETTINGS_TEMP_SUFFIX,
@@ -55,7 +58,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "active_profile": "",
     "all_stop_mode": "stop_reset",
-    "auto_reconnect": False,
     "baud_rate": 115200,
     "console_positions_enabled": False,
     "current_line_mode": "machine",
@@ -82,11 +84,14 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "job_completion_popup": True,
     "joystick_safety_binding": None,
     "joystick_safety_enabled": False,
+    "joystick_bindings_enabled": False,
+    "joystick_bindings": {},
+    "joystick_hold_miss_limit": int(JOYSTICK_HOLD_MISS_LIMIT),
+    "jog_dro_smoothing_mode": JOG_DRO_SMOOTHING_OFF,
     "kasa_device_identifier": "",
     "kasa_enabled": False,
     "jog_feed_xy": 4000.0,
     "jog_feed_z": 500.0,
-    "jog_step": 1.0,
     "key_bindings": {},
     "keyboard_bindings_enabled": True,
     "last_gcode_dir": "",
@@ -132,12 +137,14 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "touch_scroll_mode": "thumb_and_swipe",
     "tooltips_enabled": True,
     "tooltip_timeout_sec": 10.0,
+    "app_settings_view_mode": "basic",
     "numeric_keypad_enabled": True,
     "training_wheels": True,
     "unit_mode": "mm",
     "vacuum_enabled": False,
     "vacuum_outlet": 1,
-    "validate_streaming_gcode": True,
+    "validate_streaming_gcode": False,
+    "overdrive_validation_stop_on_first_error": True,
     "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,
     "ultra_large_size_threshold_mb": max(
         0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)
@@ -199,39 +206,6 @@ def _deep_merge_defaults(
     return merged
 
 
-def _migrate_legacy_settings(loaded: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply lightweight key migrations from older settings schemas."""
-    migrated = copy.deepcopy(loaded)
-
-    if "jog_step" in migrated:
-        legacy_raw = migrated.get("jog_step")
-        try:
-            legacy_step = None if legacy_raw is None else float(legacy_raw)
-        except (TypeError, ValueError):
-            legacy_step = None
-        if legacy_step is not None:
-            migrated.setdefault("step_xy", legacy_step)
-            migrated.setdefault("step_z", legacy_step)
-
-    if "auto_reconnect" in migrated and "reconnect_on_open" not in migrated:
-        migrated["reconnect_on_open"] = bool(migrated.get("auto_reconnect"))
-
-    # Legacy builds shipped with an inflated estimate-factor default. Normalize
-    # that exact historical default to neutral unless the user chose another value.
-    legacy_estimate_factor = 1.1257575757575757
-    try:
-        estimate_factor = float(migrated.get("estimate_factor"))
-    except (TypeError, ValueError):
-        estimate_factor = None
-    if (
-        estimate_factor is not None
-        and abs(estimate_factor - legacy_estimate_factor) <= 1e-9
-    ):
-        migrated["estimate_factor"] = 1.0
-
-    return migrated
-
-
 def _repair_invalid_settings(
     merged: Dict[str, Any], defaults: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -254,6 +228,14 @@ def _repair_invalid_settings(
     if mode not in ("mm", "inch"):
         repaired["unit_mode"] = defaults["unit_mode"]
         repaired_keys.append("unit_mode")
+
+    jog_dro_smoothing_mode = str(repaired.get("jog_dro_smoothing_mode", "") or "").strip().lower()
+    if jog_dro_smoothing_mode not in JOG_DRO_SMOOTHING_CHOICES:
+        repaired["jog_dro_smoothing_mode"] = defaults.get(
+            "jog_dro_smoothing_mode",
+            JOG_DRO_SMOOTHING_OFF,
+        )
+        repaired_keys.append("jog_dro_smoothing_mode")
 
     touch_scroll_mode = str(repaired.get("touch_scroll_mode", "") or "").strip().lower()
     if touch_scroll_mode not in {"thumb_only", "thumb_and_swipe"}:
@@ -383,10 +365,9 @@ class Settings:
             if not isinstance(loaded_data, dict):
                 raise SettingsLoadError("Settings root must be a JSON object")
 
-            # Merge defaults, migrate legacy keys, and repair known invalid values.
+            # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
-            migrated = _migrate_legacy_settings(loaded_data)
-            merged = _deep_merge_defaults(defaults, migrated)
+            merged = _deep_merge_defaults(defaults, loaded_data)
             self.data = _repair_invalid_settings(merged, defaults)
             self.validate()
 
@@ -439,6 +420,8 @@ class Settings:
             ) as temp_file:
                 temp_path = Path(temp_file.name)
                 json.dump(self.data, temp_file, indent=2, sort_keys=True)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
 
             # Create backup of existing file
             if filepath.exists():
@@ -450,6 +433,19 @@ class Settings:
             # Atomic rename
             assert temp_path is not None
             temp_path.replace(filepath)
+            if os.name != "nt":
+                try:
+                    dir_fd = os.open(str(filepath.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except Exception as fsync_exc:
+                    logger.debug(
+                        "Directory fsync skipped/failed for settings save: %s",
+                        fsync_exc,
+                        exc_info=fsync_exc,
+                    )
 
             logger.info("Settings saved successfully")
 
@@ -636,10 +632,9 @@ class Settings:
             if not isinstance(imported_data, dict):
                 raise SettingsLoadError("Settings root must be a JSON object")
 
-            # Merge defaults, migrate legacy keys, and repair known invalid values.
+            # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
-            migrated = _migrate_legacy_settings(imported_data)
-            merged = _deep_merge_defaults(defaults, migrated)
+            merged = _deep_merge_defaults(defaults, imported_data)
             self.data = _repair_invalid_settings(merged, defaults)
             self.validate()
 

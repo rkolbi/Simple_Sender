@@ -622,7 +622,11 @@ def _job_estimate_text(app) -> tuple[str, str, str]:
     fallback_total_min = None
     if time_min is None:
         try:
-            fallback_total_min = float(getattr(app, "_loaded_estimate_total_min", None))
+            raw_fallback_total = getattr(app, "_loaded_estimate_total_min", None)
+            if isinstance(raw_fallback_total, (int, float)):
+                fallback_total_min = float(raw_fallback_total)
+            elif isinstance(raw_fallback_total, (str, bytes, bytearray)):
+                fallback_total_min = float(raw_fallback_total)
         except (TypeError, ValueError):
             fallback_total_min = None
     if time_min is not None:

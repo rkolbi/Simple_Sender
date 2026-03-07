@@ -25,8 +25,7 @@ import queue
 import logging
 import time
 from typing import Any, cast
-import tkinter as tk
-from tkinter import messagebox, TclError, ttk
+from tkinter import messagebox, TclError
 
 from .status import (
     _parse_modal_units,
@@ -37,6 +36,7 @@ from . import streaming as _event_router_streaming
 from simple_sender.ui.grbl_lifecycle import handle_connection_event, handle_ready_event
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.dialogs.error_dialogs_ui import show_grbl_code_popup
+from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 from simple_sender.types import UiEvent
@@ -44,6 +44,13 @@ from simple_sender.types import UiEvent
 logger = logging.getLogger(__name__)
 _GCODE_LOADED_STREAM_APPLY_BUDGET_MS = 15.0
 _GCODE_LOADED_STREAM_APPLY_WARN_MS = 50.0
+_MANUAL_ERROR_HANDLER_BUDGET_MS = 15.0
+_MANUAL_ERROR_COALESCE_WINDOW_S = 0.75
+_STREAM_ERROR_LINE_TEXT_MAX_CHARS = 240
+_STREAM_ERROR_33_HINT = (
+    "Likely arc precision/tolerance issue (error:33). "
+    "Increase VCarve inch-post X/Y and I/J precision (1.4-1.5) or output arcs as segments."
+)
 
 
 _JOG_LIMIT_ERROR_HINT = (
@@ -256,28 +263,16 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
             apply_fn = getattr(app, "_apply_loaded_gcode", None)
             if not callable(apply_fn):
                 raise RuntimeError("Missing _apply_loaded_gcode handler")
-            try:
-                apply_fn(
-                    path,
-                    sample_lines,
-                    lines_hash=lines_hash,
-                    validated=True,
-                    streaming_source=source,
-                    total_lines=total_lines,
-                    sample_only=sample_only,
-                    defer_viewer_stage_apply=True,
-                )
-            except TypeError:
-                # Backward-compatible fallback for tests/mocks and older signatures.
-                apply_fn(
-                    path,
-                    sample_lines,
-                    lines_hash=lines_hash,
-                    validated=True,
-                    streaming_source=source,
-                    total_lines=total_lines,
-                    sample_only=sample_only,
-                )
+            apply_fn(
+                path,
+                sample_lines,
+                lines_hash=lines_hash,
+                validated=True,
+                streaming_source=source,
+                total_lines=total_lines,
+                sample_only=sample_only,
+                defer_viewer_stage_apply=True,
+            )
             source_consumed = True
 
         def _phase_finalize() -> None:
@@ -380,6 +375,22 @@ def _is_jog_source(source: str | None) -> bool:
     return normalized in {"joystick", "jog", "jog_hold", "jog_button"}
 
 
+def _truncate_stream_error_line_text(text: str, *, max_chars: int = _STREAM_ERROR_LINE_TEXT_MAX_CHARS) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= int(max_chars):
+        return cleaned
+    if int(max_chars) <= 3:
+        return cleaned[: max(0, int(max_chars))]
+    return cleaned[: int(max_chars) - 3] + "..."
+
+
+def _stream_error_hint(message: str, line_text: str) -> str:
+    haystack = f"{message} {line_text}".lower()
+    if "error:33" in haystack:
+        return _STREAM_ERROR_33_HINT
+    return ""
+
+
 def _safe_status_update(app: Any, text: str, *, context: str) -> None:
     try:
         app.status.config(text=text)
@@ -416,31 +427,117 @@ def _handle_log_rx_event(app: Any, raw: str) -> None:
 
 
 def _handle_manual_error_event(app: Any, msg: str, source: str | None) -> None:
+    started = time.perf_counter()
+    try:
+        stop_predict = getattr(app, "_stop_manual_jog_prediction", None)
+        if callable(stop_predict):
+            stop_predict(reason="manual_error")
+    except Exception as exc:
+        _log_suppressed("Failed stopping jog DRO interpolation after manual error", exc)
     raw_msg = str(msg)
     annotated = annotate_grbl_error(raw_msg)
     label = str(source).strip() if source else ""
-    prefix = f"GRBL error ({label})" if label else "GRBL error"
     show_jog_limit_hint = _is_jog_source(label) and (_is_error_15(raw_msg) or _is_error_15(annotated))
+    key = (label.lower(), str(annotated), bool(show_jog_limit_hint))
+    now = time.monotonic()
+    last_key = getattr(app, "_manual_error_last_key", None)
+    last_ts = float(getattr(app, "_manual_error_last_ts", 0.0) or 0.0)
+    if key == last_key and (now - last_ts) <= _MANUAL_ERROR_COALESCE_WINDOW_S:
+        app._manual_error_repeat_count = int(
+            getattr(app, "_manual_error_repeat_count", 0) or 0
+        ) + 1
+        app._manual_error_last_ts = now
+        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        record_task_timing(app, "ui.manual_error", elapsed_ms, success=True)
+        logger.info(
+            "[ui] manual_error coalesced: source=%s repeats=%d window_s=%.2f",
+            key[0] or "manual",
+            int(getattr(app, "_manual_error_repeat_count", 0) or 0),
+            float(_MANUAL_ERROR_COALESCE_WINDOW_S),
+        )
+        return
+    app._manual_error_last_key = key
+    app._manual_error_last_ts = now
+    app._manual_error_repeat_count = 0
     _clear_homing_watchdog(app, "Failed clearing homing watchdog ignore after manual error")
-    if show_jog_limit_hint:
-        _safe_status_update(app, _JOG_LIMIT_ERROR_HINT, context="Failed to update status for jog limit hint")
-    else:
-        _safe_status_update(app, f"{prefix}: {annotated}", context="Failed to update status for manual error")
-    if show_jog_limit_hint and label.lower().startswith("joystick"):
+    prefix = f"GRBL error ({label})" if label else "GRBL error"
+    status_text = (
+        _JOG_LIMIT_ERROR_HINT
+        if show_jog_limit_hint
+        else f"{prefix}: {annotated}"
+    )
+    src_tag = f" ({label})" if label else ""
+    log_text = f"[ERROR{src_tag}] {annotated}"
+    app._manual_error_ui_payload = (
+        status_text,
+        bool(show_jog_limit_hint and label.lower().startswith("joystick")),
+        log_text,
+    )
+    if getattr(app, "_manual_error_ui_after_id", None) is not None:
+        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+        record_task_timing(app, "ui.manual_error", elapsed_ms, success=True)
+        return
+
+    def _apply_manual_error_ui() -> None:
+        apply_started = time.perf_counter()
+        app._manual_error_ui_after_id = None
+        payload = getattr(app, "_manual_error_ui_payload", None)
+        if not payload or len(payload) != 3:
+            return
+        status_value = str(payload[0] or "")
+        set_joystick_hint = bool(payload[1])
+        log_value = str(payload[2] or "")
+        status_ms = 0.0
+        joy_ms = 0.0
+        log_ms = 0.0
+        section_started = time.perf_counter()
+        _safe_status_update(
+            app,
+            status_value,
+            context="Failed to update status for manual error",
+        )
+        status_ms = max(0.0, (time.perf_counter() - section_started) * 1000.0)
+        if set_joystick_hint:
+            section_started = time.perf_counter()
+            try:
+                if hasattr(app, "joystick_event_status"):
+                    app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
+            except (AttributeError, RuntimeError, TclError) as exc:
+                _log_suppressed("Failed to update joystick status hint", exc)
+            joy_ms = max(0.0, (time.perf_counter() - section_started) * 1000.0)
+        section_started = time.perf_counter()
         try:
-            if hasattr(app, "joystick_event_status"):
-                app.joystick_event_status.set(_JOG_LIMIT_ERROR_HINT)
+            app.streaming_controller.handle_log(log_value)
         except (AttributeError, RuntimeError, TclError) as exc:
-            _log_suppressed("Failed to update joystick status hint", exc)
-    try:
-        src_tag = f" ({label})" if label else ""
-        app.streaming_controller.handle_log(f"[ERROR{src_tag}] {annotated}")
-    except (AttributeError, RuntimeError, TclError) as exc:
-        _log_suppressed("Failed to log manual error to console", exc)
-    try:
-        show_grbl_code_popup(app, annotated)
-    except (AttributeError, RuntimeError, TclError) as exc:
-        _log_suppressed("Failed showing GRBL error popup", exc)
+            _log_suppressed("Failed to log manual error to console", exc)
+        log_ms = max(0.0, (time.perf_counter() - section_started) * 1000.0)
+        total_ms = max(0.0, (time.perf_counter() - apply_started) * 1000.0)
+        record_task_timing(app, "ui.manual_error", total_ms, success=True)
+        logger.info(
+            "[ui] manual_error timing: total=%.2fms status=%.2fms joystick=%.2fms log=%.2fms",
+            total_ms,
+            status_ms,
+            joy_ms,
+            log_ms,
+        )
+        if total_ms > _MANUAL_ERROR_HANDLER_BUDGET_MS:
+            logger.warning(
+                "[ui] manual_error exceeded %.1fms budget: total=%.2fms",
+                _MANUAL_ERROR_HANDLER_BUDGET_MS,
+                total_ms,
+            )
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            app._manual_error_ui_after_id = after_fn(0, _apply_manual_error_ui)
+        except Exception as exc:
+            _log_suppressed("Failed scheduling manual_error deferred UI update", exc)
+            _apply_manual_error_ui()
+    else:
+        _apply_manual_error_ui()
+    elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+    record_task_timing(app, "ui.manual_error.enqueue", elapsed_ms, success=True)
 
 
 def _handle_manual_queue_drop_event(app: Any, dropped: int, total: int) -> None:
@@ -467,18 +564,66 @@ def _handle_alarm_event(app: Any, message: str) -> None:
         _log_suppressed("Failed showing GRBL alarm popup", exc)
 
 
-def _handle_stream_error_event(app: Any, msg: Any, err_idx: Any) -> None:
+def _handle_stream_error_event(
+    app: Any,
+    msg: Any,
+    err_idx: Any,
+    err_line: Any,
+    gcode_name: Any,
+) -> None:
+    message = str(msg or "").strip() or "Unknown stream error"
     parsed_idx: int | None = None
     if err_idx is not None:
         try:
             parsed_idx = int(cast(int | str, err_idx))
         except (TypeError, ValueError):
             parsed_idx = None
+    line_number: int | None = None
     if parsed_idx is not None and parsed_idx >= 0:
         app._last_error_index = parsed_idx
-    _safe_status_update(app, f"Stream error: {msg}", context="Failed to update stream error status")
+        line_number = parsed_idx + 1
+    line_text = _truncate_stream_error_line_text(str(err_line or ""))
+    file_name = str(gcode_name or "").strip()
+    if not file_name:
+        last_path = str(getattr(app, "_last_gcode_path", "") or "").strip()
+        file_name = os.path.basename(last_path) if last_path else ""
+    hint = _stream_error_hint(message, line_text)
+    app._last_stream_error_message = message
+    app._last_stream_error_file_name = file_name
+    app._last_stream_error_line_index = int(parsed_idx) if parsed_idx is not None else -1
+    app._last_stream_error_line_number = int(line_number) if line_number is not None else 0
+    app._last_stream_error_line_text = line_text
+    app._last_stream_error_hint = hint
+
+    line_desc = ""
+    if line_number is not None:
+        if file_name:
+            line_desc = f"{file_name} line {line_number}"
+        else:
+            line_desc = f"line {line_number}"
+    status_msg = f"Stream error: {message}"
+    if line_desc:
+        status_msg = f"{status_msg} | {line_desc}"
+    if line_text:
+        status_msg = f"{status_msg} -> {line_text}"
+    if hint:
+        status_msg = f"{status_msg} | {hint}"
+    _safe_status_update(
+        app,
+        status_msg,
+        context="Failed to update stream error status",
+    )
     try:
-        show_grbl_code_popup(app, cast(str | None, msg))
+        if line_desc:
+            app.streaming_controller.handle_log(
+                f"[stream error] {line_desc}{' -> ' + line_text if line_text else ''}"
+            )
+        if hint:
+            app.streaming_controller.handle_log(f"[stream error hint] {hint}")
+    except (AttributeError, RuntimeError, TclError) as exc:
+        _log_suppressed("Failed routing stream error details to console log", exc)
+    try:
+        show_grbl_code_popup(app, status_msg)
     except (AttributeError, RuntimeError, TclError) as exc:
         _log_suppressed("Failed showing stream error popup", exc)
 
@@ -565,16 +710,6 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("gcode_load_progress", token, done, total, label):
             handle_gcode_load_progress(app, token, done, total, label)
-            return
-        case ("streaming_validation_prompt", token, name, cleaned_lines, threshold, result_q):
-            handle_streaming_validation_prompt(
-                app,
-                cast(int, token),
-                cast(str, name),
-                cast(int, cleaned_lines),
-                cast(int, threshold),
-                result_q,
-            )
             return
         case ("gcode_loaded", *_):
             handle_gcode_loaded(app, evt)
@@ -673,8 +808,8 @@ def handle_event(app: Any, evt: UiEvent):
         case ("stream_interrupted", *_):
             handle_stream_interrupted(app, evt)
             return
-        case ("stream_error", msg, err_idx, _err_line, _name):
-            _handle_stream_error_event(app, msg, err_idx)
+        case ("stream_error", msg, err_idx, err_line, name):
+            _handle_stream_error_event(app, msg, err_idx, err_line, name)
             return
         case ("stream_pause_reason", reason):
             _handle_stream_pause_reason_event(app, reason)
@@ -692,8 +827,19 @@ def handle_event(app: Any, evt: UiEvent):
         case ("gcode_acked", idx):
             app.streaming_controller.handle_gcode_acked(idx)
             return
+        case ("live_gcode_window", payload):
+            app.streaming_controller.handle_live_gcode_window(
+                cast(dict[str, Any], payload)
+            )
+            return
         case ("progress", done, total):
             app.streaming_controller.handle_progress(done, total)
+            return
+        case ("progress_bytes", acked_offset, file_size_bytes):
+            app.streaming_controller.handle_progress_bytes(
+                int(cast(int, acked_offset)),
+                int(cast(int, file_size_bytes)),
+            )
             return
         case _:
             _handle_unknown_event(app, evt)
@@ -762,148 +908,6 @@ def handle_gcode_load_progress(app, token, done, total, label):
         app._set_gcode_loading_progress(done, total, label)
     except (AttributeError, RuntimeError, TclError, TypeError, ValueError) as exc:
         _log_suppressed("Failed to update G-code loading progress", exc)
-
-
-def handle_streaming_validation_prompt(
-    app,
-    token,
-    name: str,
-    cleaned_lines: int,
-    threshold: int,
-    result_q,
-):
-    if token != app._gcode_load_token:
-        try:
-            result_q.put_nowait(False)
-        except queue.Full as exc:
-            _log_suppressed("Streaming validation prompt result queue was full for stale token", exc)
-        return
-    prompt_key = (
-        str(name or "").strip().lower(),
-        max(0, int(cleaned_lines or 0)),
-        max(0, int(threshold or 0)),
-    )
-    remember_cache = getattr(app, "_streaming_validation_prompt_cache", None)
-    if not isinstance(remember_cache, dict):
-        remember_cache = {}
-        setattr(app, "_streaming_validation_prompt_cache", remember_cache)
-    cached_choice = remember_cache.get(prompt_key)
-    if isinstance(cached_choice, bool):
-        logger.info(
-            "[ui] streaming_validation_prompt cached answer: token=%s file=%s lines=%d threshold=%d allow=%s",
-            token,
-            str(name or ""),
-            int(cleaned_lines),
-            int(threshold),
-            bool(cached_choice),
-        )
-        try:
-            result_q.put_nowait(bool(cached_choice))
-        except queue.Full as exc:
-            _log_suppressed("Streaming validation prompt result queue was full for cached answer", exc)
-        return
-
-    logger.info(
-        "[ui] streaming_validation_prompt scheduled: token=%s file=%s lines=%d threshold=%d",
-        token,
-        str(name or ""),
-        int(cleaned_lines),
-        int(threshold),
-    )
-
-    def _show_prompt_async() -> None:
-        if token != app._gcode_load_token:
-            try:
-                result_q.put_nowait(False)
-            except queue.Full as exc:
-                _log_suppressed(
-                    "Streaming validation prompt result queue was full after token changed before show",
-                    exc,
-                )
-            return
-        try:
-            existing_dlg = getattr(app, "_streaming_validation_prompt_dialog", None)
-            if existing_dlg is not None:
-                try:
-                    existing_dlg.destroy()
-                except Exception as exc:
-                    _log_suppressed("Failed closing previous streaming validation prompt dialog", exc)
-            dlg = tk.Toplevel(app)
-            app._streaming_validation_prompt_dialog = dlg
-            dlg.title("Validate large file?")
-            dlg.transient(app)
-            dlg.resizable(False, False)
-            frame = ttk.Frame(dlg, padding=12)
-            frame.pack(fill="both", expand=True)
-            msg = (
-                f"Validate G-code for '{name}'?\n\n"
-                f"Detected {cleaned_lines:,} non-empty lines (prompt at {threshold:,}).\n"
-                "Validation adds another full scan and can take a while on huge files."
-            )
-            lbl = ttk.Label(frame, text=msg, wraplength=460, justify="left")
-            lbl.pack(fill="x", pady=(0, 10))
-            remember_var = tk.BooleanVar(master=dlg, value=False)
-            remember_cb = ttk.Checkbutton(
-                frame,
-                text="Remember my choice for this file/size condition",
-                variable=remember_var,
-            )
-            remember_cb.pack(anchor="w", pady=(0, 10))
-            btn_row = ttk.Frame(frame)
-            btn_row.pack(fill="x")
-
-            def _answer(allow: bool) -> None:
-                remember_choice = bool(remember_var.get())
-                if remember_choice:
-                    remember_cache[prompt_key] = bool(allow)
-                try:
-                    result_q.put_nowait(bool(allow))
-                except queue.Full as exc:
-                    _log_suppressed("Streaming validation prompt result queue was full on answer", exc)
-                logger.info(
-                    "[ui] streaming_validation_prompt answered: token=%s file=%s allow=%s remember=%s",
-                    token,
-                    str(name or ""),
-                    bool(allow),
-                    remember_choice,
-                )
-                try:
-                    if getattr(app, "_streaming_validation_prompt_dialog", None) is dlg:
-                        app._streaming_validation_prompt_dialog = None
-                    dlg.destroy()
-                except Exception as exc:
-                    _log_suppressed("Failed closing streaming validation prompt dialog", exc)
-
-            ttk.Button(btn_row, text="Validate", command=lambda: _answer(True)).pack(side="left", padx=(0, 6))
-            ttk.Button(btn_row, text="Skip", command=lambda: _answer(False)).pack(side="left")
-            dlg.protocol("WM_DELETE_WINDOW", lambda: _answer(False))
-            logger.info(
-                "[ui] streaming_validation_prompt shown: token=%s file=%s lines=%d threshold=%d",
-                token,
-                str(name or ""),
-                int(cleaned_lines),
-                int(threshold),
-            )
-        except Exception as exc:
-            _log_suppressed("Failed to show asynchronous streaming validation prompt", exc)
-            logger.info(
-                "[ui] streaming_validation_prompt fallback answer: token=%s file=%s allow=False reason=show_failed",
-                token,
-                str(name or ""),
-            )
-            try:
-                result_q.put_nowait(False)
-            except queue.Full as queue_exc:
-                _log_suppressed("Streaming validation prompt result queue was full on fallback answer", queue_exc)
-
-    after_fn = getattr(app, "after", None)
-    if callable(after_fn):
-        try:
-            after_fn(0, _show_prompt_async)
-            return
-        except Exception as exc:
-            _log_suppressed("Failed scheduling asynchronous streaming validation prompt", exc)
-    _show_prompt_async()
 
 
 def handle_gcode_loaded(app, evt):
@@ -1059,4 +1063,3 @@ def _clear_autolevel_restore(app) -> None:
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
-

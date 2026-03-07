@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import types
 from typing import Any, Callable
 from tkinter import messagebox
@@ -37,6 +38,7 @@ from simple_sender.utils.constants import (
     JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS,
     JOYSTICK_POLL_INTERVAL_MS,
 )
+from simple_sender.utils.task_timing import record_task_timing
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -61,6 +63,46 @@ def _joystick_live_status_visible(app) -> bool:
     if bool(getattr(app, "_joystick_capture_state", None)):
         return True
     return bool(getattr(app, "_app_settings_tab_active", False))
+
+
+def _app_settings_interaction_recent(app, now: float | None = None) -> bool:
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        return False
+    ts = float(getattr(app, "_app_settings_last_interaction_ts", 0.0) or 0.0)
+    if ts <= 0.0:
+        return True
+    if now is None:
+        now = time.monotonic()
+    window_s = float(
+        getattr(app, "_app_settings_interaction_active_window_s", 4.0) or 4.0
+    )
+    if window_s <= 0.0:
+        window_s = 4.0
+    return (float(now) - ts) <= window_s
+
+
+def _noninteractive_tab_idle(app) -> bool:
+    label = str(getattr(app, "_active_tab_label", "") or "").strip().lower()
+    return label in {"logs", "app settings", "checklists"}
+
+
+def _manual_control_ready(app) -> bool:
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if _stream_busy(app):
+        return False
+    state_text = str(getattr(app, "_machine_state_text", "") or "").strip().lower()
+    if not state_text:
+        return True
+    return state_text.startswith(("idle", "jog", "hold"))
+
+
+def _manual_ready_fast_poll_allowed(app) -> bool:
+    if bool(getattr(app, "_app_settings_tab_active", False)):
+        return False
+    if _noninteractive_tab_idle(app):
+        return False
+    return True
 
 
 def _joystick_poll_intervals_ms(app) -> tuple[int, int, int]:
@@ -137,6 +179,9 @@ def poll_joystick_events(
     update_joystick_live_status: Callable[..., Any],
     joystick_safety_ready: Callable[[Any], bool],
 ) -> None:
+    started = time.perf_counter()
+    poll_ok = True
+    record_poll_timing = bool(getattr(app, "_app_settings_tab_active", False))
     app._joystick_poll_id = None
     device_change = False
     events = []
@@ -199,6 +244,7 @@ def poll_joystick_events(
         if app._joystick_capture_state and not events:
             app._poll_joystick_states_from_hardware(py)
     except Exception as exc:
+        poll_ok = False
         logger.exception("Joystick polling failed: %s", exc)
         if getattr(app, "_active_joystick_hold_binding", None):
             app._stop_joystick_hold()
@@ -211,6 +257,11 @@ def poll_joystick_events(
         if can_poll:
             base_interval, idle_step, idle_max = _joystick_poll_intervals_ms(app)
             interval = base_interval
+            manual_ready = (
+                bool(app.joystick_bindings_enabled.get())
+                and _manual_control_ready(app)
+                and not bool(getattr(app, "_joystick_capture_state", None))
+            )
             if getattr(app, "_active_joystick_hold_binding", None):
                 interval = joystick_hold.JOYSTICK_HOLD_POLL_INTERVAL_MS
                 app._joystick_poll_idle_streak = 0
@@ -230,7 +281,69 @@ def poll_joystick_events(
                     and not app._joystick_capture_state
                 ):
                     interval = max(interval, int(JOYSTICK_DISCOVERY_INTERVAL_MS))
+            if (
+                manual_ready
+                and _manual_ready_fast_poll_allowed(app)
+                and not bool(getattr(app, "_active_joystick_hold_binding", None))
+            ):
+                manual_ready_interval = max(
+                    base_interval,
+                    int(
+                        getattr(
+                            app,
+                            "_joystick_poll_manual_ready_interval_ms",
+                            max(base_interval, 80),
+                        )
+                        or max(base_interval, 80)
+                    ),
+                )
+                interval = min(interval, manual_ready_interval)
+            if (
+                bool(getattr(app, "_app_settings_tab_active", False))
+                and not bool(getattr(app, "_joystick_capture_state", None))
+                and not bool(getattr(app, "_active_joystick_hold_binding", None))
+                and not _app_settings_interaction_recent(app, now=time.monotonic())
+            ):
+                app_settings_idle_interval = max(
+                    200,
+                    int(
+                        getattr(
+                            app,
+                            "_joystick_poll_app_settings_idle_interval_ms",
+                            450,
+                        )
+                        or 450
+                    ),
+                )
+                interval = max(interval, app_settings_idle_interval)
+            elif (
+                _noninteractive_tab_idle(app)
+                and not bool(getattr(app, "_joystick_capture_state", None))
+                and not bool(getattr(app, "_active_joystick_hold_binding", None))
+            ):
+                noninteractive_interval = max(
+                    300,
+                    int(
+                        getattr(
+                            app,
+                            "_joystick_poll_noninteractive_tab_interval_ms",
+                            900,
+                        )
+                        or 900
+                    ),
+                )
+                interval = max(interval, noninteractive_interval)
             app._joystick_poll_id = app.after(interval, app._poll_joystick_events)
+        if record_poll_timing:
+            elapsed_ms = 0.0
+            if started > 0.0:
+                elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+            record_task_timing(
+                app,
+                "joystick.poll",
+                elapsed_ms,
+                success=poll_ok,
+            )
 
 
 def describe_joystick_event(app, event) -> str | None:

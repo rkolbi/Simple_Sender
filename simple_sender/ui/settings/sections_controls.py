@@ -21,10 +21,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import sys
+import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.utils.constants import (
     CURRENT_LINE_CHOICES,
+    JOG_DRO_SMOOTHING_ALL_JOG,
+    JOG_DRO_SMOOTHING_OFF,
+    JOG_DRO_SMOOTHING_UI_JOG_ONLY,
 )
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
@@ -204,6 +208,41 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
         wraplength=560,
         justify="left",
     ).grid(row=3, column=1, columnspan=2, sticky="w", pady=(4, 0))
+    ttk.Label(jog_frame, text="DRO jog smoothing (interpolation)").grid(
+        row=4, column=0, sticky="w", padx=(0, 10), pady=(8, 4)
+    )
+    if not hasattr(app, "jog_dro_smoothing_mode"):
+        app.jog_dro_smoothing_mode = tk.StringVar(value=JOG_DRO_SMOOTHING_OFF)
+    mode_map = {
+        "Off": JOG_DRO_SMOOTHING_OFF,
+        "UI jog only": JOG_DRO_SMOOTHING_UI_JOG_ONLY,
+        "All jog": JOG_DRO_SMOOTHING_ALL_JOG,
+    }
+    reverse_mode_map = {value: key for key, value in mode_map.items()}
+    current_mode = str(app.jog_dro_smoothing_mode.get() or "").strip().lower()
+    if current_mode not in reverse_mode_map:
+        current_mode = JOG_DRO_SMOOTHING_OFF
+        app.jog_dro_smoothing_mode.set(current_mode)
+    app._jog_dro_smoothing_label_var = tk.StringVar(value=reverse_mode_map[current_mode])
+    app.jog_dro_smoothing_combo = ttk.Combobox(
+        jog_frame,
+        textvariable=app._jog_dro_smoothing_label_var,
+        values=("Off", "UI jog only", "All jog"),
+        state="readonly",
+        width=14,
+    )
+    app.jog_dro_smoothing_combo.grid(row=4, column=1, sticky="w", pady=(8, 4))
+
+    def _sync_jog_dro_smoothing(_event=None) -> None:
+        label = str(app._jog_dro_smoothing_label_var.get() or "").strip()
+        mode = mode_map.get(label, JOG_DRO_SMOOTHING_OFF)
+        app.jog_dro_smoothing_mode.set(mode)
+
+    app.jog_dro_smoothing_combo.bind("<<ComboboxSelected>>", _sync_jog_dro_smoothing)
+    apply_tooltip(
+        app.jog_dro_smoothing_combo,
+        "Controls jog DRO interpolation between status reports: Off, UI jog only, or all jog sources.",
+    )
     return row + 1
 
 
@@ -344,6 +383,31 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         app.stop_hold_focus_check,
         "Stop held jog actions if focus leaves the app window.",
     )
+    if not hasattr(app, "joystick_hold_miss_limit"):
+        app.joystick_hold_miss_limit = tk.IntVar(value=2)
+    ttk.Label(joystick_test_frame, text="Hold release sensitivity").grid(
+        row=8, column=0, sticky="w", pady=(8, 0)
+    )
+    app.joystick_hold_miss_limit_entry = ttk.Entry(
+        joystick_test_frame,
+        textvariable=app.joystick_hold_miss_limit,
+        width=6,
+    )
+    app.joystick_hold_miss_limit_entry.grid(
+        row=8, column=1, sticky="w", pady=(8, 0), padx=(8, 0)
+    )
+    attach_numeric_keypad(app.joystick_hold_miss_limit_entry, allow_decimal=False)
+    apply_tooltip(
+        app.joystick_hold_miss_limit_entry,
+        "Number of consecutive missed joystick polls before ending a held jog "
+        "(1=most sensitive, 8=most tolerant).",
+    )
+    ttk.Label(
+        joystick_test_frame,
+        text="Higher values can reduce accidental early stop on noisy controllers.",
+        wraplength=520,
+        justify="left",
+    ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
     input_state_frame = ttk.LabelFrame(kb_frame, text="Live input state", padding=8)
     input_state_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=6, pady=(0, 6))

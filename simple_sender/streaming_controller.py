@@ -29,6 +29,11 @@ from collections import deque
 from simple_sender.utils.constants import MAX_CONSOLE_LINES
 from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
 from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
+from simple_sender.utils.constants import (
+    GCODE_LIVE_WINDOW_NEXT_LINES,
+    GCODE_LIVE_WINDOW_PAST_LINES,
+    GCODE_LIVE_WINDOW_REFRESH_MS,
+)
 from simple_sender.types import AppProtocol, GcodeViewLike
 from simple_sender.ui.stream_completion import should_defer_completion
 
@@ -47,6 +52,7 @@ class StreamingController:
         self.console: tk.Text | None = None
         self.gview: GcodeViewLike | None = None
         self.progress_pct: tk.IntVar | None = None
+        self.progress_text: tk.StringVar | None = None
         self.buffer_fill: tk.StringVar | None = None
         self.buffer_fill_pct: tk.IntVar | None = None
         self.throughput_var: tk.StringVar | None = None
@@ -61,13 +67,42 @@ class StreamingController:
         self._pending_sent_index: int | None = None
         self._pending_acked_index: int | None = None
         self._pending_progress: tuple[int, int] | None = None
+        self._pending_progress_bytes: tuple[int, int] | None = None
         self._pending_buffer: tuple[int, int, int] | None = None
         self._progress_after_id: AfterId | None = None
         self._buffer_after_id: AfterId | None = None
+        self._live_window_after_id: AfterId | None = None
+        self._pending_live_window_payload: dict | None = None
+        self._live_window_refresh_ms = max(50, int(GCODE_LIVE_WINDOW_REFRESH_MS))
+        self._last_live_window_signature: tuple | None = None
+        self._last_live_header_text: str = ""
         self._last_progress_pct: int | None = None
+        self._last_progress_text: str | None = None
         self._last_buffer_fill_text: str | None = None
         self._last_buffer_fill_pct: int | None = None
         self._last_throughput_text: str | None = None
+
+    def _manual_motion_active(self) -> bool:
+        if bool(getattr(self.app, "_stream_done_pending_idle", False)):
+            return False
+        stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+        if stream_state in {"running", "paused"}:
+            return False
+        if bool(getattr(self.app, "_active_joystick_hold_binding", None)):
+            return True
+        state_text = str(getattr(self.app, "_machine_state_text", "") or "").strip().lower()
+        return state_text.startswith(("jog", "hold"))
+
+    def _manual_motion_console_throttle_active(self) -> bool:
+        return bool(self._manual_motion_active())
+
+    def _console_flush_interval_ms(self) -> int:
+        base = max(1, int(getattr(self.app, "_ui_throttle_ms", 100) or 100))
+        if self._manual_motion_console_throttle_active():
+            manual_interval = int(getattr(self.app, "_manual_motion_console_flush_ms", 300) or 300)
+            manual_interval = max(250, manual_interval)
+            return max(base, manual_interval)
+        return base
 
     def attach_widgets(
         self,
@@ -77,11 +112,13 @@ class StreamingController:
         buffer_fill: tk.StringVar,
         buffer_fill_pct: tk.IntVar,
         throughput_var: tk.StringVar,
+        progress_text: tk.StringVar | None = None,
     ) -> None:
         """Attach UI widgets used for streaming updates."""
         self.console = console
         self.gview = gview
         self.progress_pct = progress_pct
+        self.progress_text = progress_text or getattr(self.app, "progress_text", None)
         self.buffer_fill = buffer_fill
         self.buffer_fill_pct = buffer_fill_pct
         self.throughput_var = throughput_var
@@ -182,7 +219,7 @@ class StreamingController:
                     return
                 self._render_console()
                 return
-            if bool(self.app.performance_mode.get()):
+            if bool(self.app.performance_mode.get()) or self._manual_motion_console_throttle_active():
                 self._pending_console_trim += dropped
             else:
                 self._trim_console_widget(dropped)
@@ -193,19 +230,23 @@ class StreamingController:
                     return
                 self._render_console()
                 return
-            if bool(self.app.performance_mode.get()):
+            if bool(self.app.performance_mode.get()) or self._manual_motion_console_throttle_active():
                 self._pending_console_trim += byte_trimmed
             else:
                 self._trim_console_widget(byte_trimmed)
         if not self._console_filter_match(entry):
             return
-        if bool(self.app.performance_mode.get()):
+        if bool(self.app.performance_mode.get()) or self._manual_motion_console_throttle_active():
             self._pending_console_entries.append(entry)
-            if len(self._pending_console_entries) > int(CONSOLE_PENDING_BATCH_MAX):
+            pending_limit = int(CONSOLE_PENDING_BATCH_MAX)
+            if self._manual_motion_console_throttle_active():
+                pending_limit = max(pending_limit, 2000)
+            if len(self._pending_console_entries) > pending_limit:
                 # Bound pending memory growth during heavy logging bursts.
-                self._pending_console_entries = []
-                self._pending_console_trim = 0
-                self._console_render_pending = True
+                drop = len(self._pending_console_entries) - pending_limit
+                if drop > 0:
+                    self._pending_console_entries = self._pending_console_entries[drop:]
+                    self._pending_console_trim += drop
             self._schedule_console_flush()
             return
         self._append_to_console(entry)
@@ -229,10 +270,18 @@ class StreamingController:
     def _schedule_console_flush(self) -> None:
         if self._console_after_id is not None:
             return
-        self._console_after_id = self.app.after(self.app._ui_throttle_ms, self._flush_console_updates)
+        self._console_after_id = self.app.after(
+            self._console_flush_interval_ms(),
+            self._flush_console_updates,
+        )
 
     def _flush_console_updates(self) -> None:
         self._console_after_id = None
+        active_tab = str(getattr(self.app, "_active_tab_label", "") or "").strip().lower()
+        if self._manual_motion_console_throttle_active() and active_tab not in {"console"}:
+            if self._pending_console_entries or self._pending_console_trim > 0 or self._console_render_pending:
+                self._schedule_console_flush()
+            return
         if self._console_render_pending:
             self._console_render_pending = False
             self._pending_console_entries = []
@@ -247,10 +296,17 @@ class StreamingController:
         if self._pending_console_trim > 0:
             self._trim_console_widget_unlocked(self._pending_console_trim)
             self._pending_console_trim = 0
-        self._insert_entries_unlocked(self._pending_console_entries)
+        pending_entries = self._pending_console_entries
         self._pending_console_entries = []
+        if self._manual_motion_console_throttle_active() and len(pending_entries) > 200:
+            self._insert_entries_unlocked(pending_entries[:200])
+            self._pending_console_entries = pending_entries[200:]
+        else:
+            self._insert_entries_unlocked(pending_entries)
         self.console.see("end")
         self.console.config(state="disabled")
+        if self._pending_console_entries or self._pending_console_trim > 0:
+            self._schedule_console_flush()
 
     def _render_console(self) -> None:
         if not self.console:
@@ -268,7 +324,8 @@ class StreamingController:
 
     def _insert_entries_unlocked(self, entries: list[ConsoleEntry]) -> None:
         """Insert console entries in tag-runs to reduce Tk insert call volume."""
-        if not self.console or not entries:
+        console = self.console
+        if console is None or not entries:
             return
         run_tag: str | None = None
         run_lines: list[str] = []
@@ -280,9 +337,9 @@ class StreamingController:
                 return
             text = "\n".join(run_lines) + "\n"
             if run_tag:
-                self.console.insert("end", text, (run_tag,))
+                console.insert("end", text, (run_tag,))
             else:
-                self.console.insert("end", text)
+                console.insert("end", text)
             run_tag = None
             run_lines = []
 
@@ -413,15 +470,11 @@ class StreamingController:
         self._pending_sent_index = None
         self._pending_acked_index = None
         if sent_idx is not None:
-            self.app.gview.mark_sent_upto(sent_idx)
             self.app._last_sent_index = sent_idx
         if acked_idx is not None:
-            self.app.gview.mark_acked_upto(acked_idx)
             self.app._last_acked_index = acked_idx
             if sent_idx is None and acked_idx > self.app._last_sent_index:
                 self.app._last_sent_index = acked_idx
-        if sent_idx is not None or acked_idx is not None:
-            self.app._update_current_highlight()
 
     def _schedule_progress_flush(self) -> None:
         if self._progress_after_id is not None:
@@ -430,22 +483,83 @@ class StreamingController:
 
     def _flush_progress(self) -> None:
         self._progress_after_id = None
-        if not self._pending_progress:
+        if (not self._pending_progress) and (not self._pending_progress_bytes):
             return
-        done, total = self._pending_progress
+        done_total = self._pending_progress
         self._pending_progress = None
-        defer_completion = should_defer_completion(self.app, done, total, now_ts=time.time())
-        if self.progress_pct:
-            pct = int(round((done / total) * 100)) if total else 0
-            if defer_completion and pct >= 100:
-                pct = 99
-            if self._last_progress_pct != pct:
-                self.progress_pct.set(pct)
-                self._last_progress_pct = pct
-        if done and total and not defer_completion:
-            self.app._update_live_estimate(done, total)
-        if not defer_completion:
-            self.app._maybe_notify_job_completion(done, total)
+        byte_progress = self._pending_progress_bytes
+        self._pending_progress_bytes = None
+        stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+        done_pending_idle = bool(getattr(self.app, "_stream_done_pending_idle", False))
+        force_done_clamp = stream_state == "done" and not done_pending_idle
+
+        has_file_size = False
+        if byte_progress is not None:
+            acked_offset, file_size_bytes = byte_progress
+            acked_offset = max(0, int(acked_offset))
+            file_size_bytes = max(0, int(file_size_bytes))
+            setattr(self.app, "_stream_acked_byte_offset", int(acked_offset))
+            setattr(self.app, "_stream_progress_file_size_bytes", int(file_size_bytes))
+            if file_size_bytes > 0:
+                has_file_size = True
+                acked_offset = min(acked_offset, file_size_bytes)
+                if force_done_clamp:
+                    acked_offset = int(file_size_bytes)
+                setattr(self.app, "_stream_acked_byte_offset", int(acked_offset))
+                pct_f = max(
+                    0.0,
+                    min(100.0, (float(acked_offset) / float(file_size_bytes)) * 100.0),
+                )
+                if force_done_clamp:
+                    pct_f = 100.0
+                setattr(self.app, "_stream_progress_pct", float(pct_f))
+                self._set_progress_display(pct_f, visible=True)
+            else:
+                setattr(self.app, "_stream_progress_pct", 0.0)
+                self._set_progress_display(None, visible=False)
+
+        if done_total is not None:
+            done, total = done_total
+            defer_completion = should_defer_completion(
+                self.app, done, total, now_ts=time.time()
+            )
+            if (not has_file_size) and int(getattr(self.app, "_stream_progress_file_size_bytes", 0) or 0) <= 0:
+                pct = int(round((done / total) * 100)) if total else 0
+                if defer_completion and pct >= 100:
+                    pct = 99
+                elif force_done_clamp and pct > 0:
+                    pct = 100
+                setattr(self.app, "_stream_progress_pct", float(pct))
+                self._set_progress_display(float(pct), visible=bool(total))
+            if done and total and not defer_completion:
+                self.app._update_live_estimate(done, total)
+            if not defer_completion:
+                self.app._maybe_notify_job_completion(done, total)
+
+    def _set_progress_display(self, pct_f: float | None, *, visible: bool) -> None:
+        set_visible = getattr(self.app, "_set_stream_progress_visible", None)
+        if callable(set_visible):
+            try:
+                set_visible(bool(visible))
+            except Exception as exc:
+                logger.debug("Failed toggling stream progress visibility: %s", exc, exc_info=exc)
+        if not visible or pct_f is None:
+            if self.progress_pct and self._last_progress_pct != 0:
+                self.progress_pct.set(0)
+                self._last_progress_pct = 0
+            if self.progress_text and self._last_progress_text != "":
+                self.progress_text.set("")
+                self._last_progress_text = ""
+            return
+        pct_f = max(0.0, min(100.0, float(pct_f)))
+        pct_i = int(round(pct_f))
+        text = f"{pct_f:.1f}%"
+        if self.progress_pct and self._last_progress_pct != pct_i:
+            self.progress_pct.set(pct_i)
+            self._last_progress_pct = pct_i
+        if self.progress_text and self._last_progress_text != text:
+            self.progress_text.set(text)
+            self._last_progress_text = text
 
     def _schedule_buffer_flush(self) -> None:
         if self._buffer_after_id is not None:
@@ -475,6 +589,7 @@ class StreamingController:
             "_progress_after_id",
             "_buffer_after_id",
             "_console_after_id",
+            "_live_window_after_id",
         ):
             val = getattr(self, attr, None)
             if val is None:
@@ -488,7 +603,9 @@ class StreamingController:
         self._pending_sent_index = None
         self._pending_acked_index = None
         self._pending_progress = None
+        self._pending_progress_bytes = None
         self._pending_buffer = None
+        self._pending_live_window_payload = None
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
@@ -496,6 +613,9 @@ class StreamingController:
         self._last_buffer_fill_pct = None
         self._last_throughput_text = None
         self._last_progress_pct = None
+        self._last_progress_text = None
+        self._last_live_window_signature = None
+        self._last_live_header_text = ""
 
     @staticmethod
     def _entry_bytes(entry: ConsoleEntry) -> int:
@@ -556,5 +676,188 @@ class StreamingController:
         """Queue progress updates and estimate refreshes."""
         self._pending_progress = (done, total)
         self._schedule_progress_flush()
+
+    def handle_progress_bytes(self, acked_offset: int, file_size_bytes: int) -> None:
+        """Queue byte-based progress updates."""
+        self._pending_progress_bytes = (int(acked_offset), int(file_size_bytes))
+        self._schedule_progress_flush()
+
+    @staticmethod
+    def _sanitize_live_entries(
+        entries: object,
+        *,
+        limit: int,
+    ) -> list[tuple[int, str]]:
+        out: list[tuple[int, str]] = []
+        if not isinstance(entries, list):
+            return out
+        for item in entries:
+            if len(out) >= limit:
+                break
+            if isinstance(item, tuple) and len(item) >= 2:
+                raw_idx, raw_line = item[0], item[1]
+            elif isinstance(item, list) and len(item) >= 2:
+                raw_idx, raw_line = item[0], item[1]
+            else:
+                continue
+            try:
+                idx = int(raw_idx)
+            except Exception:
+                continue
+            out.append((idx, str(raw_line or "")))
+        return out
+
+    @staticmethod
+    def _sanitize_live_current(
+        current_line: object,
+    ) -> tuple[int, str] | None:
+        if isinstance(current_line, tuple) and len(current_line) >= 2:
+            raw_idx, raw_line = current_line[0], current_line[1]
+        elif isinstance(current_line, list) and len(current_line) >= 2:
+            raw_idx, raw_line = current_line[0], current_line[1]
+        else:
+            return None
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            return None
+        return (idx, str(raw_line or ""))
+
+    def _live_highlight_enabled(self) -> bool:
+        toggle_var = getattr(self.app, "current_line_highlight_enabled", None)
+        if toggle_var is not None:
+            getter = getattr(toggle_var, "get", None)
+            if callable(getter):
+                try:
+                    return bool(getter())
+                except Exception:
+                    pass
+        mode_var = getattr(self.app, "current_line_mode", None)
+        if mode_var is not None:
+            getter = getattr(mode_var, "get", None)
+            if callable(getter):
+                try:
+                    mode = str(getter() or "").strip().lower()
+                    if mode in {"none", "off", "disabled"}:
+                        return False
+                except Exception:
+                    pass
+        return True
+
+    def _schedule_live_window_flush(self) -> None:
+        if self._live_window_after_id is not None:
+            return
+        delay_ms = max(int(getattr(self.app, "_ui_throttle_ms", 0) or 0), self._live_window_refresh_ms)
+        self._live_window_after_id = self.app.after(delay_ms, self._flush_live_window)
+
+    def _flush_live_window(self) -> None:
+        self._live_window_after_id = None
+        payload = self._pending_live_window_payload
+        self._pending_live_window_payload = None
+        if not isinstance(payload, dict):
+            return
+        gview = getattr(self, "gview", None)
+        if gview is None:
+            return
+        past = self._sanitize_live_entries(
+            payload.get("past_lines", []),
+            limit=int(GCODE_LIVE_WINDOW_PAST_LINES),
+        )
+        current = self._sanitize_live_current(payload.get("current_line"))
+        nxt = self._sanitize_live_entries(
+            payload.get("next_lines", []),
+            limit=int(GCODE_LIVE_WINDOW_NEXT_LINES),
+        )
+        stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+        if (
+            stream_state not in {"running", "paused"}
+            and not past
+            and current is None
+            and not nxt
+            and int(getattr(self.app, "_live_gcode_next_count", 0) or 0) > 0
+            and int(getattr(self.app, "_live_gcode_past_count", 0) or 0) == 0
+            and int(getattr(self.app, "_live_gcode_current_count", 0) or 0) == 0
+        ):
+            # Keep pre-load "Next" preview visible while idle.
+            return
+        try:
+            buffered_count = max(
+                int(len(nxt)),
+                int(payload.get("next_buffered_count", len(nxt)) or len(nxt)),
+            )
+        except Exception:
+            buffered_count = int(len(nxt))
+        try:
+            file_size_bytes = max(0, int(payload.get("file_size_bytes", 0) or 0))
+        except Exception:
+            file_size_bytes = 0
+        try:
+            acked_offset = max(0, int(payload.get("acked_byte_offset", 0) or 0))
+        except Exception:
+            acked_offset = 0
+        if file_size_bytes > 0:
+            acked_offset = min(acked_offset, file_size_bytes)
+            stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+            done_pending_idle = bool(getattr(self.app, "_stream_done_pending_idle", False))
+            if stream_state == "done" and not done_pending_idle:
+                acked_offset = int(file_size_bytes)
+            progress_pct = max(
+                0.0,
+                min(100.0, (float(acked_offset) / float(file_size_bytes)) * 100.0),
+            )
+        else:
+            try:
+                progress_pct = max(0.0, min(100.0, float(payload.get("stream_progress_pct", 0.0) or 0.0)))
+            except Exception:
+                progress_pct = 0.0
+        signature = (
+            tuple(past),
+            current,
+            tuple(nxt),
+            int(buffered_count),
+            bool(self._live_highlight_enabled()),
+            int(round(progress_pct)),
+            int(acked_offset),
+            int(file_size_bytes),
+        )
+        if signature == self._last_live_window_signature:
+            return
+        self._last_live_window_signature = signature
+        try:
+            gview.set_live_window(
+                past,
+                current,
+                nxt,
+                next_buffered_count=buffered_count,
+                highlight_current=bool(self._live_highlight_enabled()),
+            )
+        except Exception as exc:
+            logger.debug("Failed rendering live G-code window", exc_info=exc)
+            return
+        header_text = (
+            f"Live G-code (500 past / current / 500 next) - Run: {int(round(progress_pct))}%"
+            if file_size_bytes > 0
+            else "Live G-code (500 past / current / 500 next) - Run: n/a"
+        )
+        header_var = getattr(self.app, "gcode_live_header_var", None)
+        setter = getattr(header_var, "set", None)
+        if callable(setter) and header_text != self._last_live_header_text:
+            try:
+                setter(header_text)
+                self._last_live_header_text = header_text
+            except Exception as exc:
+                logger.debug("Failed updating live G-code header text", exc_info=exc)
+        setattr(self.app, "_live_gcode_past_count", int(len(past)))
+        setattr(self.app, "_live_gcode_current_count", 1 if current is not None else 0)
+        setattr(self.app, "_live_gcode_next_count", int(len(nxt)))
+        setattr(self.app, "_live_gcode_pending_depth", int(buffered_count))
+        if current is not None:
+            setattr(self.app, "_live_gcode_last_acked_index", int(current[0]))
+        setattr(self.app, "_live_gcode_last_acked_byte_offset", int(acked_offset))
+
+    def handle_live_gcode_window(self, payload: dict) -> None:
+        """Queue bounded live G-code window updates for throttled UI rendering."""
+        self._pending_live_window_payload = dict(payload)
+        self._schedule_live_window_flush()
 
 

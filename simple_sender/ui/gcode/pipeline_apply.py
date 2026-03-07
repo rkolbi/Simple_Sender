@@ -49,6 +49,28 @@ def _count_motion_lines(lines: list[str]) -> int:
     return int(motion)
 
 
+def _live_highlight_enabled(app) -> bool:
+    toggle_var = getattr(app, "current_line_highlight_enabled", None)
+    if toggle_var is not None:
+        getter = getattr(toggle_var, "get", None)
+        if callable(getter):
+            try:
+                return bool(getter())
+            except Exception:
+                pass
+    mode_var = getattr(app, "current_line_mode", None)
+    if mode_var is not None:
+        getter = getattr(mode_var, "get", None)
+        if callable(getter):
+            try:
+                mode = str(getter() or "").strip().lower()
+                if mode in {"none", "off", "disabled"}:
+                    return False
+            except Exception:
+                pass
+    return True
+
+
 def _log_suppressed(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)
     if key in _logged_suppressed:
@@ -73,22 +95,6 @@ def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) 
     return bool(default)
 
 
-def _read_int_setting(app, *, attr_name: str, key: str, default: int) -> int:
-    var = getattr(app, attr_name, None)
-    if var is not None:
-        try:
-            return int(var.get())
-        except Exception:
-            pass
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        try:
-            return int(settings.get(key, default))
-        except Exception:
-            return int(default)
-    return int(default)
-
-
 def _pi_profile_enabled(app) -> bool:
     return _read_bool_setting(
         app,
@@ -102,55 +108,6 @@ def _should_prime_file_backed_send_cache(app) -> bool:
     # File-backed jobs already stream from disk; on low-power profiles we skip
     # in-memory priming to avoid duplicate payload caches.
     return not _pi_profile_enabled(app)
-
-
-def _viewer_virtualization_policy(
-    app,
-    line_count: int,
-    deps,
-    *,
-    sample_only: bool = False,
-) -> tuple[bool, int, int]:
-    try:
-        default_threshold = int(
-            getattr(deps, "GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT")
-        )
-    except Exception:
-        default_threshold = 120_000
-    try:
-        low_power_threshold = int(
-            getattr(deps, "GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER")
-        )
-    except Exception:
-        low_power_threshold = 40_000
-    try:
-        default_window = int(getattr(deps, "GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT"))
-    except Exception:
-        default_window = 2000
-    try:
-        low_power_window = int(
-            getattr(deps, "GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER")
-        )
-    except Exception:
-        low_power_window = 800
-
-    if _pi_profile_enabled(app):
-        threshold = max(1000, int(low_power_threshold))
-        window = max(200, int(low_power_window))
-        if sample_only:
-            # Sample-only loads should virtualize earlier on low-power systems.
-            sample_threshold = _read_int_setting(
-                app,
-                attr_name="streaming_line_threshold",
-                key="streaming_line_threshold",
-                default=threshold,
-            )
-            if sample_threshold > 0:
-                threshold = min(threshold, max(5000, int(sample_threshold)))
-    else:
-        threshold = max(1000, int(default_threshold))
-        window = max(200, int(default_window))
-    return line_count >= threshold, window, threshold
 
 
 def apply_loaded_gcode(
@@ -171,6 +128,7 @@ def apply_loaded_gcode(
         raise ValueError(
             "pipeline_apply.apply_loaded_gcode requires module dependencies"
         )
+    file_info_refresher = getattr(app, "_refresh_file_info_tab", None)
     if app.grbl.is_streaming():
         app._gcode_loading = False
         app._finish_gcode_loading()
@@ -314,6 +272,11 @@ def apply_loaded_gcode(
         app._gcode_estimate_replaced_quick = False
         app._gcode_post_popup_background_tasks = "none"
         app._gcode_offset_index_enabled = False
+        app._gcode_ssmeta_present = False
+        app._gcode_ssmeta = {}
+        app._gcode_dimensions_source = "scan"
+        app._gcode_units_source = "scan"
+        app._gcode_ssmeta_scan_reduced = False
     else:
         app._gcode_storage_mode = "file_backed_streaming"
         app._gcode_load_mode = str(
@@ -479,6 +442,20 @@ def apply_loaded_gcode(
         )
         app._gcode_estimate_replaced_quick = False
         app._gcode_post_popup_background_tasks = "none"
+        app._gcode_ssmeta_present = bool(
+            getattr(streaming_source, "_quick_ssmeta_present", False)
+        )
+        ssmeta = getattr(streaming_source, "_quick_ssmeta", None)
+        app._gcode_ssmeta = dict(ssmeta) if isinstance(ssmeta, dict) else {}
+        app._gcode_dimensions_source = str(
+            getattr(streaming_source, "_quick_dimensions_source", "scan") or "scan"
+        )
+        app._gcode_units_source = str(
+            getattr(streaming_source, "_quick_units_source", "scan") or "scan"
+        )
+        app._gcode_ssmeta_scan_reduced = bool(
+            getattr(streaming_source, "_quick_ssmeta_scan_reduced", False)
+        )
         quick_snapshot = getattr(
             streaming_source, "_quick_estimate_inputs_snapshot", None
         )
@@ -554,6 +531,12 @@ def apply_loaded_gcode(
     app._last_sent_index = -1
     app._last_acked_index = -1
     app._last_error_index = -1
+    app._last_stream_error_message = ""
+    app._last_stream_error_file_name = ""
+    app._last_stream_error_line_index = -1
+    app._last_stream_error_line_number = 0
+    app._last_stream_error_line_text = ""
+    app._last_stream_error_hint = ""
     app._last_parse_result = None
     app._last_parse_hash = None
     deps._reset_autolevel_state(app)
@@ -631,8 +614,21 @@ def apply_loaded_gcode(
         parse_bounds = (
             getattr(parse_result, "bounds", None) if parse_result is not None else None
         )
-        if parse_bounds:
-            return parse_bounds
+        if (
+            isinstance(parse_bounds, tuple)
+            and len(parse_bounds) == 6
+        ):
+            try:
+                return (
+                    float(parse_bounds[0]),
+                    float(parse_bounds[1]),
+                    float(parse_bounds[2]),
+                    float(parse_bounds[3]),
+                    float(parse_bounds[4]),
+                    float(parse_bounds[5]),
+                )
+            except Exception:
+                pass
         quick_bounds = getattr(app, "_gcode_bounds_box", None)
         if isinstance(quick_bounds, dict):
             try:
@@ -698,7 +694,6 @@ def apply_loaded_gcode(
         app._auto_level_prereq_snapshot = snapshot
 
     _refresh_autolevel_prereq_snapshot("load")
-    policy_line_count = int(total_lines) if total_lines is not None else len(lines)
     viewer_ready = False
     secondary_ready = True
 
@@ -759,24 +754,10 @@ def apply_loaded_gcode(
         app._set_gcode_loading_progress(done, total, name)
 
     if not lines and streaming_source is None:
-        app.gview.set_lines([])
+        app.gview.clear()
         app._set_gcode_loading_progress(0, 0, name)
         on_done()
         return
-
-    use_virtualized_viewer, virtual_window, virtual_threshold = (
-        _viewer_virtualization_policy(
-            app,
-            policy_line_count,
-            deps,
-            sample_only=sample_only,
-        )
-    )
-    app._gcode_viewer_policy_line_count = int(policy_line_count)
-    app._gcode_viewer_sample_line_count = int(len(lines))
-    app._gcode_viewer_virtualization_threshold = int(virtual_threshold)
-    app._gcode_viewer_sample_only = bool(sample_only)
-    app._gcode_viewer_virtual_window = int(virtual_window)
 
     def _measure_section(section_timings_ms: dict[str, float], name: str, fn):
         started = time.perf_counter()
@@ -793,14 +774,20 @@ def apply_loaded_gcode(
             refresher = getattr(app, "_refresh_gcode_stats_display", None)
             if callable(refresher):
                 refresher()
-                return
-            app.gcode_stats_var.set(format_streaming_estimate_text(app))
+            else:
+                app.gcode_stats_var.set(format_streaming_estimate_text(app))
+            if callable(file_info_refresher):
+                file_info_refresher()
 
         def _set_calculating_stats() -> None:
             app.gcode_stats_var.set("Calculating stats...")
+            if callable(file_info_refresher):
+                file_info_refresher()
 
         def _set_no_file_loaded() -> None:
             app.gcode_stats_var.set("")
+            if callable(file_info_refresher):
+                file_info_refresher()
 
         def _run_parse_schedule() -> None:
             deps.schedule_gcode_parse(app, lines, app._gcode_hash)
@@ -853,98 +840,55 @@ def apply_loaded_gcode(
                 _measure_section(
                     section_timings_ms, "stats.defer_fallback_sync", deferred_stats_work
                 )
+        if callable(file_info_refresher):
+            _measure_section(
+                section_timings_ms,
+                "file_info.refresh",
+                file_info_refresher,
+            )
         return section_timings_ms
 
     def _apply_viewer_lines() -> dict[str, float]:
         section_timings_ms: dict[str, float] = {}
-
-        def _emit_viewer_mode_log(message: str) -> None:
-            logger_fn = getattr(getattr(app, "streaming_controller", None), "log", None)
-            if callable(logger_fn):
-                logger_fn(message)
-            else:
-                app.ui_q.put(("log", message))
-
-        if use_virtualized_viewer and hasattr(app.gview, "set_lines_virtualized"):
-            app._gcode_viewer_mode = "virtualized"
-            app._gcode_viewer_chunk_size = None
-            try:
-                message = (
-                    f"[gcode] Virtualized G-code viewer enabled for {policy_line_count:,} line job "
-                    f"(showing {len(lines):,} lines, threshold {virtual_threshold:,}, "
-                    f"window {virtual_window:,}, sample_only={bool(sample_only)})."
-                )
-                _measure_section(
-                    section_timings_ms,
-                    "viewer.virtualized_mode_log",
-                    lambda: _emit_viewer_mode_log(message),
-                )
-            except Exception as exc:
-                _log_suppressed("Failed reporting virtualized G-code viewer mode", exc)
-            _measure_section(
-                section_timings_ms,
-                "viewer.progress_start",
-                lambda: app._set_gcode_loading_progress(0, len(lines), name),
+        def _apply_live_window_viewer() -> None:
+            preview_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_NEXT_LINES", 500) or 500)
+            preview_cap = max(1, preview_cap)
+            preview_next = [
+                (idx, str(raw_line or ""))
+                for idx, raw_line in enumerate(lines[:preview_cap])
+            ]
+            app.gview.set_live_window(
+                [],
+                None,
+                preview_next,
+                next_buffered_count=int(len(preview_next)),
+                highlight_current=bool(_live_highlight_enabled(app)),
             )
+            header_var = getattr(app, "gcode_live_header_var", None)
+            header_setter = getattr(header_var, "set", None)
+            if callable(header_setter):
+                header_setter("Live G-code (500 past / current / 500 next) - Run: n/a")
+            setattr(app, "_live_gcode_past_count", 0)
+            setattr(app, "_live_gcode_current_count", 0)
+            setattr(app, "_live_gcode_next_count", int(len(preview_next)))
+            setattr(app, "_live_gcode_pending_depth", int(len(preview_next)))
+            setattr(app, "_live_gcode_last_acked_index", -1)
+            setattr(app, "_live_gcode_last_acked_byte_offset", 0)
 
-            def _apply_virtualized_viewer() -> None:
-                try:
-                    app.gview.set_lines_virtualized(
-                        lines,
-                        window_size=virtual_window,
-                        on_done=on_done,
-                        on_progress=on_progress,
-                        defer_initial_render=True,
-                    )
-                except TypeError:
-                    app.gview.set_lines_virtualized(
-                        lines,
-                        window_size=virtual_window,
-                        on_done=on_done,
-                        on_progress=on_progress,
-                    )
-
-            _measure_section(
-                section_timings_ms,
-                "viewer.virtualized_apply",
-                _apply_virtualized_viewer,
-            )
-            return section_timings_ms
-
-        chunk_size = (
-            deps.GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE
-            if len(lines) > deps.GCODE_VIEWER_CHUNK_LOAD_THRESHOLD
-            else deps.GCODE_VIEWER_CHUNK_SIZE_SMALL
+        _measure_section(
+            section_timings_ms,
+            "viewer.live_apply",
+            _apply_live_window_viewer,
         )
-        app._gcode_viewer_mode = "chunked"
-        app._gcode_viewer_chunk_size = int(chunk_size)
         _measure_section(
             section_timings_ms,
             "viewer.progress_start",
-            lambda: app._set_gcode_loading_progress(0, len(lines), name),
+            lambda: app._set_gcode_loading_progress(len(lines), len(lines), name),
         )
-        try:
-            message = (
-                f"[gcode] Chunked G-code viewer load selected for {policy_line_count:,} line job "
-                f"(showing {len(lines):,} lines, threshold {virtual_threshold:,}, "
-                f"chunk {int(chunk_size):,}, sample_only={bool(sample_only)})."
-            )
-            _measure_section(
-                section_timings_ms,
-                "viewer.chunked_mode_log",
-                lambda: _emit_viewer_mode_log(message),
-            )
-        except Exception as exc:
-            _log_suppressed("Failed reporting chunked G-code viewer mode", exc)
         _measure_section(
             section_timings_ms,
-            "viewer.chunked_apply",
-            lambda: app.gview.set_lines_chunked(
-                lines,
-                chunk_size=chunk_size,
-                on_done=on_done,
-                on_progress=on_progress,
-            ),
+            "viewer.live_done",
+            on_done,
         )
         return section_timings_ms
 

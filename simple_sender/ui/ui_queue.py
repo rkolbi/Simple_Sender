@@ -44,7 +44,17 @@ from simple_sender.types import AppProtocol, UiEvent
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
-_LOW_IMPACT_UI_EVENT_KINDS = frozenset({"buffer_fill", "log_rx", "log_tx", "status", "throughput"})
+_LOW_IMPACT_UI_EVENT_KINDS = frozenset(
+    {
+        "buffer_fill",
+        "live_gcode_window",
+        "log_rx",
+        "log_tx",
+        "progress_bytes",
+        "status",
+        "throughput",
+    }
+)
 _UI_DRAIN_OUTLIER_CAPTURE_MS = 100.0
 _UI_DRAIN_OUTLIER_LOG_MS = 200.0
 _UI_DRAIN_OUTLIER_MAX_HISTORY = 24
@@ -115,11 +125,82 @@ def _connected_quiet_idle(app: AppProtocol) -> bool:
         return False
 
 
-def _task_timing_seq(value: object) -> int:
+def _manual_motion_ui_active(app: AppProtocol) -> bool:
     try:
-        return max(0, int(value or 0))
+        if _stream_ui_busy(app):
+            return False
+        if not bool(getattr(app, "connected", False)):
+            return False
+        if not bool(getattr(app, "_grbl_ready", False)):
+            return False
+        if bool(getattr(app, "_alarm_locked", False)):
+            return False
+        state = str(getattr(app, "_machine_state_text", "") or "").strip().lower()
+        if state.startswith("jog") or state.startswith("hold"):
+            return True
+        if bool(getattr(app, "_active_joystick_hold_binding", None)):
+            return True
+        grbl = getattr(app, "grbl", None)
+        busy_fn = getattr(grbl, "manual_queue_busy", None)
+        if callable(busy_fn):
+            try:
+                if bool(busy_fn()):
+                    return True
+            except Exception as exc:
+                _log_suppressed("Failed reading manual queue busy state in UI queue", exc)
+        try:
+            until_ts = float(getattr(app, "_manual_motion_fast_poll_until_ts", 0.0) or 0.0)
+        except Exception:
+            until_ts = 0.0
+        return until_ts > time.monotonic()
     except Exception:
-        return 0
+        return False
+
+
+def _task_timing_seq(value: object) -> int:
+    raw = value if value is not None else 0
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return max(0, raw)
+    if isinstance(raw, float):
+        return max(0, int(raw))
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            return max(0, int(raw))
+        except Exception:
+            return 0
+    return 0
+
+
+def _payload_int(payload: dict[str, object], key: str, default: int = 0) -> int:
+    raw = payload.get(key, default)
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return int(raw)
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            return int(raw)
+        except Exception:
+            return int(default)
+    return int(default)
+
+
+def _payload_float(payload: dict[str, object], key: str, default: float = 0.0) -> float:
+    raw = payload.get(key, default)
+    if isinstance(raw, bool):
+        return float(int(raw))
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            return float(raw)
+        except Exception:
+            return float(default)
+    return float(default)
 
 
 def _collect_outlier_special_ops(
@@ -201,9 +282,8 @@ def _record_ui_drain_outlier(app: AppProtocol, payload: dict[str, object]) -> No
         setattr(app, "_ui_queue_drain_outliers", history)
     history.append(payload)
     try:
-        app._ui_queue_drain_outlier_total = int(
-            getattr(app, "_ui_queue_drain_outlier_total", 0) or 0
-        ) + 1
+        current_total = int(getattr(app, "_ui_queue_drain_outlier_total", 0) or 0)
+        setattr(app, "_ui_queue_drain_outlier_total", current_total + 1)
     except Exception:
         pass
 
@@ -235,12 +315,12 @@ def _log_ui_drain_outlier(payload: dict[str, object], *, severe: bool) -> None:
     log_fn = logger.warning if severe else logger.info
     log_fn(
         "[ui] Drain outlier: tick=%.2fms tab=%s events=%s pending=%s slowest=%s(%.2fms)",
-        float(payload.get("tick_ms", 0.0) or 0.0),
+        _payload_float(payload, "tick_ms", 0.0),
         str(payload.get("active_tab", "") or "unknown"),
-        int(payload.get("events_drained", 0) or 0),
-        int(payload.get("pending_after_tick", 0) or 0),
+        _payload_int(payload, "events_drained", 0),
+        _payload_int(payload, "pending_after_tick", 0),
         str(payload.get("slowest_event_kind", "") or "unknown"),
-        float(payload.get("slowest_event_ms", 0.0) or 0.0),
+        _payload_float(payload, "slowest_event_ms", 0.0),
     )
     log_fn(
         "[ui] Drain outlier details: counts=%s | top_ms=%s | special=%s",
@@ -298,7 +378,9 @@ class UiEventQueue:
         "gcode_load_progress",
         "gcode_acked",
         "gcode_sent",
+        "live_gcode_window",
         "progress",
+        "progress_bytes",
         "status",
         "throughput",
     }
@@ -699,19 +781,33 @@ def drain_ui_queue(app: AppProtocol) -> None:
     finally:
         try:
             elapsed_ms = max(0.0, (time.perf_counter() - drain_start) * 1000.0)
-            app._ui_queue_drain_ticks = int(getattr(app, "_ui_queue_drain_ticks", 0)) + 1
-            app._ui_queue_drain_events = int(getattr(app, "_ui_queue_drain_events", 0)) + int(processed)
-            app._ui_queue_drain_max_ms = max(
+            setattr(
+                app,
+                "_ui_queue_drain_ticks",
+                int(getattr(app, "_ui_queue_drain_ticks", 0) or 0) + 1,
+            )
+            setattr(
+                app,
+                "_ui_queue_drain_events",
+                int(getattr(app, "_ui_queue_drain_events", 0) or 0) + int(processed),
+            )
+            setattr(
+                app,
+                "_ui_queue_drain_max_ms",
+                max(
                 float(getattr(app, "_ui_queue_drain_max_ms", 0.0)),
                 elapsed_ms,
+                ),
             )
             stall_budget_ms = float(
                 getattr(app, "_ui_queue_drain_stall_budget_ms", UI_QUEUE_DRAIN_STALL_BUDGET_MS)
             )
             if elapsed_ms > stall_budget_ms:
-                app._ui_queue_drain_stall_count = int(
-                    getattr(app, "_ui_queue_drain_stall_count", 0)
-                ) + 1
+                setattr(
+                    app,
+                    "_ui_queue_drain_stall_count",
+                    int(getattr(app, "_ui_queue_drain_stall_count", 0) or 0) + 1,
+                )
             runtime_eligible = (
                 bool(getattr(app, "connected", False))
                 and bool(getattr(app, "_grbl_ready", False))
@@ -721,25 +817,43 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 and not bool(getattr(app, "_disconnecting", False))
             )
             if runtime_eligible:
-                app._ui_queue_drain_runtime_ticks = int(
-                    getattr(app, "_ui_queue_drain_runtime_ticks", 0)
-                ) + 1
-                app._ui_queue_drain_runtime_events = int(
-                    getattr(app, "_ui_queue_drain_runtime_events", 0)
-                ) + int(processed)
-                app._ui_queue_drain_runtime_max_ms = max(
+                setattr(
+                    app,
+                    "_ui_queue_drain_runtime_ticks",
+                    int(getattr(app, "_ui_queue_drain_runtime_ticks", 0) or 0) + 1,
+                )
+                setattr(
+                    app,
+                    "_ui_queue_drain_runtime_events",
+                    int(getattr(app, "_ui_queue_drain_runtime_events", 0) or 0) + int(processed),
+                )
+                setattr(
+                    app,
+                    "_ui_queue_drain_runtime_max_ms",
+                    max(
                     float(getattr(app, "_ui_queue_drain_runtime_max_ms", 0.0)),
                     elapsed_ms,
+                    ),
                 )
                 if max_event_elapsed_ms > float(
                     getattr(app, "_ui_queue_drain_runtime_slowest_event_ms", 0.0) or 0.0
                 ):
-                    app._ui_queue_drain_runtime_slowest_event_ms = float(max_event_elapsed_ms)
-                    app._ui_queue_drain_runtime_slowest_event_kind = str(max_event_kind or "unknown")
+                    setattr(
+                        app,
+                        "_ui_queue_drain_runtime_slowest_event_ms",
+                        float(max_event_elapsed_ms),
+                    )
+                    setattr(
+                        app,
+                        "_ui_queue_drain_runtime_slowest_event_kind",
+                        str(max_event_kind or "unknown"),
+                    )
                 if elapsed_ms > stall_budget_ms:
-                    app._ui_queue_drain_runtime_stall_count = int(
-                        getattr(app, "_ui_queue_drain_runtime_stall_count", 0)
-                    ) + 1
+                    setattr(
+                        app,
+                        "_ui_queue_drain_runtime_stall_count",
+                        int(getattr(app, "_ui_queue_drain_runtime_stall_count", 0) or 0) + 1,
+                    )
             outlier_capture_ms = max(
                 1.0,
                 float(
@@ -812,6 +926,7 @@ def drain_ui_queue(app: AppProtocol) -> None:
             return
         next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
         stream_busy = _stream_ui_busy(app)
+        manual_motion_active = _manual_motion_ui_active(app)
         quiet_idle = (pending <= 0) and (not stream_busy) and _connected_quiet_idle(app)
         if pending > 0:
             try:
@@ -827,8 +942,8 @@ def drain_ui_queue(app: AppProtocol) -> None:
             else:
                 next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
         elif (
-            processed <= 0
-            or ((not stream_busy) and processed_low_impact_only)
+            ((processed <= 0) and (not manual_motion_active))
+            or ((not stream_busy) and processed_low_impact_only and (not manual_motion_active))
         ):
             try:
                 idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1

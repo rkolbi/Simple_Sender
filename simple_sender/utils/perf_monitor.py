@@ -38,6 +38,16 @@ from simple_sender.utils.task_timing import snapshot_task_timings
 
 logger = logging.getLogger(__name__)
 
+_HIDDEN_IDLE_TASK_SOURCE_MAP: dict[str, str] = {
+    "app_settings.lazy_build_slice": "app_settings_refresh",
+    "app_settings.sticky_header": "app_settings_refresh",
+    "diagnostics.runtime_telemetry_refresh": "diagnostics_refresh",
+    "joystick.discovery": "joystick_discovery",
+    "joystick.live_status": "joystick_live_status",
+    "joystick.poll": "joystick_poll",
+    "tooltip.notebook_poll": "tooltip_poll",
+}
+
 
 def _env_flag(name: str) -> bool:
     raw = str(os.getenv(name, "") or "").strip().lower()
@@ -324,10 +334,9 @@ class AppPerformanceMonitor:
         self._sample_trace: deque[dict[str, float | int | str | None]] = deque(
             maxlen=self._cpu_sample_maxlen
         )
-        # Backward-compatible attributes used by diagnostics/tests.
-        self._idle_cpu_samples = self._idle_cpu_stats.samples
-        self._quiet_idle_cpu_samples = self._quiet_idle_cpu_stats.samples
-        self._stream_cpu_samples = self._stream_cpu_stats.samples
+        self._hidden_idle_contributors: dict[str, dict[str, float | int]] = {}
+        self._hidden_idle_task_prev: dict[str, tuple[int, float]] = {}
+        self._seed_hidden_idle_task_prev()
         self._cpu_prev_wall = time.perf_counter()
         self._cpu_prev_proc = time.process_time()
         self._stream_seen = False
@@ -480,6 +489,135 @@ class AppPerformanceMonitor:
             phase_metrics[phase_name] = stats.snapshot()
         return phase_metrics
 
+    def _seed_hidden_idle_task_prev(self) -> None:
+        task_metrics = getattr(self._app, "_task_timing_metrics", None)
+        if not isinstance(task_metrics, dict):
+            return
+        for task_name in _HIDDEN_IDLE_TASK_SOURCE_MAP.keys():
+            raw_entry = task_metrics.get(task_name)
+            if not isinstance(raw_entry, dict):
+                continue
+            try:
+                count = max(0, int(raw_entry.get("count", 0) or 0))
+                total_ms = max(0.0, float(raw_entry.get("total_ms", 0.0) or 0.0))
+            except Exception:
+                continue
+            self._hidden_idle_task_prev[str(task_name)] = (count, total_ms)
+
+    def _record_hidden_idle_contributor(
+        self,
+        source: str,
+        *,
+        active_sample: bool = False,
+        cpu_ms: float = 0.0,
+        task_count: int = 0,
+        task_ms: float = 0.0,
+    ) -> None:
+        name = str(source or "").strip().lower()
+        if not name:
+            return
+        raw_entry = self._hidden_idle_contributors.get(name)
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        if active_sample:
+            entry["active_samples"] = int(entry.get("active_samples", 0) or 0) + 1
+        if cpu_ms > 0.0:
+            entry["active_cpu_ms"] = max(
+                0.0, float(entry.get("active_cpu_ms", 0.0) or 0.0)
+            ) + float(cpu_ms)
+        if task_count > 0:
+            entry["task_count"] = int(entry.get("task_count", 0) or 0) + int(task_count)
+        if task_ms > 0.0:
+            entry["task_ms"] = max(0.0, float(entry.get("task_ms", 0.0) or 0.0)) + float(
+                task_ms
+            )
+        self._hidden_idle_contributors[name] = entry
+
+    def _collect_hidden_idle_contributors(self, *, sample_cpu_ms: float) -> None:
+        app = self._app
+        app_settings_active = bool(getattr(app, "_app_settings_tab_active", False))
+        if app_settings_active:
+            self._record_hidden_idle_contributor(
+                "app_settings_tab",
+                active_sample=True,
+                cpu_ms=sample_cpu_ms,
+            )
+        runtime_telemetry_win = getattr(app, "_runtime_telemetry_window", None)
+        if runtime_telemetry_win is not None:
+            self._record_hidden_idle_contributor(
+                "diagnostics_window",
+                active_sample=True,
+                cpu_ms=sample_cpu_ms,
+            )
+        joystick_poll_id = getattr(app, "_joystick_poll_id", None)
+        if joystick_poll_id is not None:
+            self._record_hidden_idle_contributor(
+                "joystick_timer",
+                active_sample=True,
+                cpu_ms=sample_cpu_ms,
+            )
+        try:
+            notebook = getattr(app, "notebook", None)
+            tooltip_handler = (
+                getattr(notebook, "_tab_tooltip_handler", None) if notebook is not None else None
+            )
+            if tooltip_handler is not None and getattr(tooltip_handler, "_poll_after_id", None) is not None:
+                self._record_hidden_idle_contributor(
+                    "tooltip_timer",
+                    active_sample=True,
+                    cpu_ms=sample_cpu_ms,
+                )
+        except Exception:
+            pass
+
+        task_metrics = getattr(app, "_task_timing_metrics", None)
+        if not isinstance(task_metrics, dict):
+            return
+        for task_name, source_name in _HIDDEN_IDLE_TASK_SOURCE_MAP.items():
+            raw_entry = task_metrics.get(task_name)
+            if not isinstance(raw_entry, dict):
+                continue
+            try:
+                count = max(0, int(raw_entry.get("count", 0) or 0))
+                total_ms = max(0.0, float(raw_entry.get("total_ms", 0.0) or 0.0))
+            except Exception:
+                continue
+            prev_count, prev_total = self._hidden_idle_task_prev.get(task_name, (0, 0.0))
+            delta_count = max(0, count - int(prev_count))
+            delta_ms = max(0.0, total_ms - float(prev_total))
+            self._hidden_idle_task_prev[task_name] = (count, total_ms)
+            if delta_count <= 0 and delta_ms <= 0.0:
+                continue
+            self._record_hidden_idle_contributor(
+                source_name,
+                task_count=delta_count,
+                task_ms=delta_ms,
+            )
+
+    def _hidden_idle_contributors_snapshot(self, *, limit: int = 5) -> list[dict[str, float | int | str]]:
+        rows: list[dict[str, float | int | str]] = []
+        for source, raw_entry in self._hidden_idle_contributors.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            rows.append(
+                {
+                    "source": str(source),
+                    "active_samples": int(raw_entry.get("active_samples", 0) or 0),
+                    "active_cpu_ms": max(0.0, float(raw_entry.get("active_cpu_ms", 0.0) or 0.0)),
+                    "task_count": int(raw_entry.get("task_count", 0) or 0),
+                    "task_ms": max(0.0, float(raw_entry.get("task_ms", 0.0) or 0.0)),
+                }
+            )
+        rows.sort(
+            key=lambda item: (
+                float(item.get("task_ms", 0.0) or 0.0),
+                float(item.get("active_cpu_ms", 0.0) or 0.0),
+                int(item.get("task_count", 0) or 0),
+                int(item.get("active_samples", 0) or 0),
+            ),
+            reverse=True,
+        )
+        return rows[: max(1, int(limit))]
+
     def _sample_loop(self) -> None:
         while not self._stop_evt.wait(self._sample_interval_s):
             self._sample_once()
@@ -490,6 +628,7 @@ class AppPerformanceMonitor:
         delta_wall = max(1e-9, now_wall - self._cpu_prev_wall)
         delta_proc = max(0.0, now_proc - self._cpu_prev_proc)
         cpu_pct = (delta_proc / delta_wall) * 100.0
+        sample_cpu_ms = max(0.0, float(delta_proc) * 1000.0)
         self._cpu_prev_wall = now_wall
         self._cpu_prev_proc = now_proc
 
@@ -506,6 +645,8 @@ class AppPerformanceMonitor:
                 phase_key = "idle_gcode_visible" if self._is_gcode_tab_visible() else "idle_gcode_hidden"
                 self._phase_stats[phase_key].add(cpu_pct, rss)
                 phase = phase_key
+                if phase_key == "idle_gcode_hidden":
+                    self._collect_hidden_idle_contributors(sample_cpu_ms=sample_cpu_ms)
             if self._connected_and_quiet_idle():
                 self._quiet_idle_cpu_stats.add(cpu_pct)
             if self._connected_and_streaming():
@@ -624,6 +765,7 @@ class AppPerformanceMonitor:
             quiet_idle_sample_count = len(self._quiet_idle_cpu_stats.samples)
             stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
             phase_metrics = self._phase_metrics_snapshot()
+            hidden_idle_contributors = self._hidden_idle_contributors_snapshot(limit=8)
             ui_ticks, ui_events, ui_max_ms, ui_stalls = self._ui_drain_metrics()
             rss_start = self._rss_start
             rss_current = self._rss_current
@@ -679,6 +821,17 @@ class AppPerformanceMonitor:
                     f"rss start/current/peak={_format_mb(phase.get('rss_start_bytes'))} / "
                     f"{_format_mb(phase.get('rss_current_bytes'))} / "
                     f"{_format_mb(phase.get('rss_peak_bytes'))}"
+                )
+        if hidden_idle_contributors:
+            lines.append("Hidden-idle contributors (top):")
+            for entry in hidden_idle_contributors[:5]:
+                lines.append(
+                    "- "
+                    f"{str(entry.get('source', '') or 'unknown')}: "
+                    f"samples={int(entry.get('active_samples', 0) or 0)}, "
+                    f"cpu_ms={float(entry.get('active_cpu_ms', 0.0) or 0.0):.2f}, "
+                    f"events={int(entry.get('task_count', 0) or 0)}, "
+                    f"task_ms={float(entry.get('task_ms', 0.0) or 0.0):.2f}"
                 )
         lines.append(f"RSS start: {_format_mb(rss_start)}")
         lines.append(f"RSS current: {_format_mb(rss_current)}")
@@ -749,6 +902,7 @@ class AppPerformanceMonitor:
                 "rss_steady_state_bytes": self._rss_steady_state,
                 "steady_state_after_s": self._steady_state_after_s,
                 "phase_metrics": phase_metrics,
+                "hidden_idle_contributors": self._hidden_idle_contributors_snapshot(limit=16),
                 "sample_trace": list(self._sample_trace),
             }
         try:

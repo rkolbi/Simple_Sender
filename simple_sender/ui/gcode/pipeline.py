@@ -67,18 +67,9 @@ from simple_sender.utils.constants import (
     GCODE_STREAMING_LINE_THRESHOLD,
     GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT,
     GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER,
-    GCODE_VIEWER_CHUNK_LOAD_THRESHOLD,
-    GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE,
-    GCODE_VIEWER_CHUNK_SIZE_SMALL,
     GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD,
-    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT,
-    GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER,
-    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT,
-    GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER,
     TEMP_FILE_BUFFER_SIZE,
     MAX_LINE_LENGTH,
-    STREAMING_VALIDATION_PROMPT_TIMEOUT,
-    STREAMING_VALIDATION_PROMPT_LINES,
 )
 from simple_sender.utils.temp_paths import get_preferred_temp_dir
 from simple_sender.ui.job_controls import disable_job_controls
@@ -343,10 +334,15 @@ def clear_gcode(app):
     app._gcode_bounds_confidence = "rough"
     app._gcode_dimensions_confidence = "rough"
     app._gcode_dimensions_confidence_reasons = {}
+    app._gcode_dimensions_source = "scan"
     app._gcode_estimated_job_time_sec = None
     app._gcode_estimate_confidence = "provisional"
     app._gcode_estimate_confidence_reasons = {}
     app._gcode_estimate_replaced_quick = False
+    app._gcode_units_source = "scan"
+    app._gcode_ssmeta_present = False
+    app._gcode_ssmeta = {}
+    app._gcode_ssmeta_scan_reduced = False
     app._gcode_prepare_executable_total_lines = 0
     app._gcode_prepare_motion_total_lines = 0
     app._gcode_prepare_sampled_executable_lines = 0
@@ -409,9 +405,28 @@ def clear_gcode(app):
     app._stats_token += 1
     app._stats_cache.clear()
     app.grbl.load_gcode([])
-    app.gview.set_lines([])
+    app.gview.clear()
+    try:
+        header_var = getattr(app, "gcode_live_header_var", None)
+        if header_var is not None:
+            header_var.set("")
+    except Exception as exc:
+        _log_suppressed("Failed clearing live G-code header while clearing job", exc)
+    app._live_gcode_past_count = 0
+    app._live_gcode_current_count = 0
+    app._live_gcode_next_count = 0
+    app._live_gcode_pending_depth = 0
+    app._live_gcode_last_acked_index = -1
+    app._live_gcode_last_acked_byte_offset = 0
     app.gcode_stats_var.set("")
     app._gcode_status_last_text = ""
+    try:
+        file_info_var = getattr(app, "file_info_var", None)
+        if file_info_var is not None:
+            file_info_var.set("")
+    except Exception:
+        pass
+    app._file_info_last_text = ""
     app.progress_pct.set(0)
     try:
         app.buffer_fill.set("Buffer: 0%")
@@ -448,6 +463,12 @@ def clear_gcode(app):
     _restore_macro_state(app, macro_state_snapshot)
     app._job_started_at = None
     app._job_completion_notified = False
+    file_info_refresher = getattr(app, "_refresh_file_info_tab", None)
+    if callable(file_info_refresher):
+        try:
+            file_info_refresher()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing File Info after clearing G-code", exc)
 
 
 def _reset_autolevel_state(app) -> None:

@@ -29,6 +29,7 @@ from simple_sender.utils.constants import (
     JOYSTICK_HOLD_DEADMAN_TIMEOUT_MS,
     JOYSTICK_HOLD_DEFINITIONS,
     JOYSTICK_HOLD_FEED_HOLD_FALLBACK_DELAY_MS,
+    JOYSTICK_HOLD_MISS_LIMIT,
     JOYSTICK_HOLD_POLL_INTERVAL_MS as _JOYSTICK_HOLD_POLL_INTERVAL_MS,
     JOYSTICK_HOLD_REPEAT_MS,
     JOYSTICK_HOLD_MIN_DISTANCE,
@@ -52,10 +53,33 @@ JOYSTICK_HOLD_FALLBACK_DISTANCE_MM = 5000.0
 JOYSTICK_HOLD_AXIS_LIMIT_KEYS = {"X": "$130", "Y": "$131", "Z": "$132"}
 JOYSTICK_HOLD_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 JOYSTICK_HOLD_CANCEL_ATTEMPTS = 2
+JOYSTICK_HOLD_MISS_LIMIT_MIN = 1
+JOYSTICK_HOLD_MISS_LIMIT_MAX = 8
 
 
 def is_virtual_hold_button(btn) -> bool:
     return getattr(btn, "_hold_axis", None) is not None
+
+
+def _jog_dro_smoothing_mode(app) -> str:
+    mode = ""
+    var = getattr(app, "jog_dro_smoothing_mode", None)
+    if var is not None and hasattr(var, "get"):
+        try:
+            mode = str(var.get() or "").strip().lower()
+        except Exception:
+            mode = ""
+    if not mode:
+        settings = getattr(app, "settings", None)
+        if isinstance(settings, dict):
+            mode = str(settings.get("jog_dro_smoothing_mode", "") or "").strip().lower()
+    if mode not in {"off", "ui_jog_only", "all_jog"}:
+        mode = "off"
+    return mode
+
+
+def _joystick_jog_prediction_enabled(app) -> bool:
+    return _jog_dro_smoothing_mode(app) == "all_jog"
 
 
 def hold_vector_for_binding(app, binding_id: str) -> tuple[str, int] | None:
@@ -351,6 +375,31 @@ def send_hold_jog(app):
     elif axis == "Z":
         dz = direction * distance
     try:
+        mark_manual_motion = getattr(app, "_mark_manual_motion_activity", None)
+        if callable(mark_manual_motion):
+            mark_manual_motion()
+    except Exception as exc:
+        _log_suppressed("Failed marking manual motion activity for status poll boost", exc)
+    try:
+        stop_predict = getattr(app, "_stop_manual_jog_prediction", None)
+        if callable(stop_predict):
+            stop_predict(reason="joystick_hold_start")
+    except Exception as exc:
+        _log_suppressed("Failed stopping active jog DRO interpolation before joystick hold jog", exc)
+    try:
+        start_predict = getattr(app, "_start_manual_jog_prediction", None)
+        if callable(start_predict) and _joystick_jog_prediction_enabled(app):
+            start_predict(
+                dx=float(dx),
+                dy=float(dy),
+                dz=float(dz),
+                feed=float(feed),
+                unit_mode=str(app.unit_mode.get()),
+                source="joystick",
+            )
+    except Exception as exc:
+        _log_suppressed("Failed starting joystick jog DRO interpolation", exc)
+    try:
         app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source="joystick")
     except Exception as exc:
         logger.exception("Failed to send joystick hold jog: %s", exc)
@@ -374,6 +423,12 @@ def stop_hold(app, binding_id: str | None = None):
             _log_suppressed("Failed canceling joystick hold timer", exc)
         app._joystick_hold_after_id = None
     if app._active_joystick_hold_binding:
+        try:
+            stop_predict = getattr(app, "_stop_manual_jog_prediction", None)
+            if callable(stop_predict):
+                stop_predict(reason="joystick_hold_stop")
+        except Exception as exc:
+            _log_suppressed("Failed stopping joystick jog DRO interpolation", exc)
         for _ in range(JOYSTICK_HOLD_CANCEL_ATTEMPTS):
             try:
                 app.grbl.jog_cancel()
@@ -412,8 +467,36 @@ def check_release(app):
     if _joystick_binding_pressed(app, binding, release=True):
         app._joystick_hold_missed_polls = 0
         return
+    misses = int(getattr(app, "_joystick_hold_missed_polls", 0) or 0) + 1
+    app._joystick_hold_missed_polls = misses
+    miss_limit = _resolve_hold_miss_limit(app)
+    if misses < miss_limit:
+        return
     stop_hold(app, active)
 
 
 def binding_pressed(app, binding: dict[str, Any] | None, *, release: bool = False) -> bool:
     return _joystick_binding_pressed(app, binding, release=release)
+
+
+def _resolve_hold_miss_limit(app) -> int:
+    value: int | None = None
+    hold_miss_var = getattr(app, "joystick_hold_miss_limit", None)
+    if hold_miss_var is not None:
+        try:
+            value = int(hold_miss_var.get())
+        except Exception:
+            value = None
+    if value is None:
+        try:
+            value = int(
+                getattr(app, "_joystick_hold_miss_limit", JOYSTICK_HOLD_MISS_LIMIT)
+            )
+        except Exception:
+            value = int(JOYSTICK_HOLD_MISS_LIMIT)
+    if value < JOYSTICK_HOLD_MISS_LIMIT_MIN:
+        value = JOYSTICK_HOLD_MISS_LIMIT_MIN
+    if value > JOYSTICK_HOLD_MISS_LIMIT_MAX:
+        value = JOYSTICK_HOLD_MISS_LIMIT_MAX
+    app._joystick_hold_miss_limit = int(value)
+    return int(value)

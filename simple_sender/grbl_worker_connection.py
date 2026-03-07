@@ -139,7 +139,14 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
 
         # Disconnect if already connected
         if self.is_connected():
-            self.disconnect()
+            disconnect_fn = getattr(self, "disconnect")
+            try:
+                disconnect_fn(
+                    requested_by="connect",
+                    reason=f"Replacing active connection for port={port}",
+                )
+            except TypeError:
+                disconnect_fn()
 
         # Reset state
         self._stop_evt = threading_mod.Event()
@@ -232,12 +239,23 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             _cleanup_failed_connect()
             raise SerialConnectionError(f"Unexpected error connecting to {port}: {e}")
 
-    def disconnect(self) -> None:
+    def disconnect(self, *, requested_by: str = "api", reason: str | None = None) -> None:
         """Disconnect from GRBL controller.
 
         Stops all worker threads and closes the serial port.
         Thread-safe and idempotent.
         """
+        reason_text = str(reason or "").strip()
+        requester = str(requested_by or "").strip() or "api"
+        request_msg = f"Disconnect requested by {requester}"
+        if reason_text:
+            request_msg = f"{request_msg}: {reason_text}"
+        logger.info(request_msg)
+        try:
+            self.ui_q.put(("log", f"[disconnect] {request_msg}"))
+        except Exception as exc:
+            _log_suppressed("Failed queueing disconnect-request log message to UI", exc)
+
         # Signal threads to stop
         self._stop_evt.set()
 
@@ -247,6 +265,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._gcode = []
         self._send_index = 0
         self._ack_index = -1
+        self._ack_byte_offset = 0
+        self._stream_file_size_bytes = 0
         self._reset_stream_buffer()
         self._last_buffer_emit = None
         self._last_buffer_emit_ts = 0.0
@@ -266,6 +286,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._watchdog_ready_armed = False
         self._watchdog_ready_ts = 0.0
         self._connect_started_ts = 0.0
+        self._jog_cancel_inflight = False
+        self._jog_cancel_last_sent_ts = 0.0
 
         # Notify UI
         self.ui_q.put(("ready", False))
@@ -325,6 +347,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
     def _signal_disconnect(self, reason: str | None = None) -> None:
         """Signal an unexpected disconnect and reset internal state."""
         was_streaming = self._streaming or self._paused
+        detail = str(reason or "").strip() or "Unspecified disconnect trigger"
+        logger.warning("Worker disconnect signaled: %s", detail)
         self._stop_evt.set()
         try:
             if self.ser is not None:
@@ -336,6 +360,10 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self.ser = None
         self._streaming = False
         self._paused = False
+        self._jog_cancel_inflight = False
+        self._jog_cancel_last_sent_ts = 0.0
+        self._ack_byte_offset = 0
+        self._stream_file_size_bytes = 0
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
@@ -358,8 +386,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self.ui_q.put(("conn", False, None))
         except Exception as exc:
             _log_suppressed("Failed queueing disconnect state updates to UI", exc)
-        if reason:
-            try:
-                self.ui_q.put(("log", f"[disconnect] {reason}"))
-            except Exception as exc:
-                _log_suppressed("Failed queueing disconnect reason log to UI", exc)
+        try:
+            self.ui_q.put(("log", f"[disconnect] {detail}"))
+        except Exception as exc:
+            _log_suppressed("Failed queueing disconnect reason log to UI", exc)

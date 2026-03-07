@@ -150,11 +150,30 @@ def build_status_bar(app, before):
     # Status bar
     status_bar = ttk.Frame(app, padding=(8, 0, 8, 6))
     status_bar.pack(side="bottom", fill="x", before=before)
+
+    def _set_stream_progress_visible(visible: bool) -> None:
+        frame = getattr(app, "_stream_progress_frame", None)
+        if frame is None:
+            return
+        current = bool(getattr(app, "_stream_progress_visible", True))
+        visible = bool(visible)
+        if visible == current:
+            return
+        if visible:
+            frame.pack(side="right", padx=(0, 12))
+        else:
+            frame.pack_forget()
+        app._stream_progress_visible = visible
+
+    app._set_stream_progress_visible = _set_stream_progress_visible
+    app._stream_progress_visible = True
     app.status = ttk.Label(status_bar, text="Disconnected", anchor="w")
     app.status.pack(side="left", fill="x", expand=True)
-    ttk.Label(status_bar, text="Progress").pack(side="right")
+    app._stream_progress_frame = ttk.Frame(status_bar)
+    app._stream_progress_frame.pack(side="right", padx=(0, 12))
+    ttk.Label(app._stream_progress_frame, text="Progress").pack(side="left")
     app.progress_bar = ttk.Progressbar(
-        status_bar,
+        app._stream_progress_frame,
         orient="horizontal",
         length=140,
         mode="determinate",
@@ -162,7 +181,15 @@ def build_status_bar(app, before):
         variable=app.progress_pct,
         style="SimpleSender.Blue.Horizontal.TProgressbar",
     )
-    app.progress_bar.pack(side="right", padx=(6, 12))
+    app.progress_bar.pack(side="left", padx=(6, 6))
+    app.progress_pct_label = ttk.Label(
+        app._stream_progress_frame,
+        textvariable=app.progress_text,
+        anchor="e",
+        width=6,
+    )
+    app.progress_pct_label.pack(side="left")
+    app._set_stream_progress_visible(False)
     app.buffer_bar = ttk.Progressbar(
         status_bar,
         orient="horizontal",

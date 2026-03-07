@@ -6,6 +6,14 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ## [Unreleased]
 
 ### Changed
+- Lean runtime cleanup pass:
+  - removed obsolete `streaming_validation_prompt` UI event path and related type/constants/test hooks
+  - simplified fast-load worker API by dropping stale `_stream_from_disk` validation/sample threshold parameters that were no-ops
+  - retained manual deep validation exclusively through **Overdrive -> Validate Loaded Job**
+- Documentation refresh for lean sender runtime:
+  - README now documents the bounded Live G-code window (`500 past/current/500 next`) instead of legacy sent/acked highlight wording
+  - run-path validation text now points to manual Overdrive validation (quick/strict) and confirms Start/Run stays non-blocking
+  - diagnostics/settings wording updated to reflect Overdrive strict-default toggle and current fast-load thresholds
 - Revision 2.0.0 loader architecture kickoff:
   - all file-based G-code loads now normalize through one disk-backed path (`FileGcodeSource` + temp-file offsets)
   - sample-only behavior is now controlled by an explicit flag, decoupled from "source is file-backed", so non-sample jobs keep full stats/pathview features
@@ -27,9 +35,19 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Spatial tab visibility now follows render enablement state: when Spatial render is disabled, the `Spatial View` tab is hidden.
 - App Settings now includes a session-only `force Spatial tab + render` override (not persisted; resets on restart).
 - Sample-only pathview policy now honors the session-only Spatial override so operators can force Spatial sample for the current run.
+- Added early bounded `SSMETA` header parsing in the quick-assessment load path:
+  - scans only the header window (first lines/bytes) for `SSMETA key=value` metadata
+  - records `ssmeta_present` + parsed metadata map in runtime metrics/diagnostics
+  - uses metadata extents/units as preferred source when complete, setting dimensions confidence to confident
+  - supports scoped prefix forms like `material_size_in x=... y=... z=...` and `extents_in xmin=...`
+- Added a new scrollable **File Info** tab:
+  - read-only `SSMETA` header fields plus file/scan metrics
+  - includes file size, total/executable/motion counts with known/estimated flags, estimate+confidence, dimensions+confidence, and auto-level prereq summary
+- Hardened G-code comment cleaning for header comments:
+  - replaced non-nested regex stripping with nested `()` / `[]` comment-state scanning to prevent stray `)` artifacts from nested comment text in the G-code viewer.
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`942 passed, 3 skipped` on `python -m pytest -q`, validated 2026-03-03).
+- README testing baseline was refreshed to the current local result (`1006 passed, 2 skipped` on `python -m pytest -q`, validated 2026-03-06).
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
@@ -41,9 +59,13 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README Diagnostics docs now include runtime performance profiling/leak-watch settings and the exit performance report fields.
 - README Logs/Diagnostics docs now include `Clear Logs`, `Export diagnostics bundle (Save ZIP)`, and `Save final performance report (Save to Logs)`.
 - README Spatial docs now include automatic Spatial-tab hide-when-disabled behavior and the session-only Spatial override.
+- README now documents `SSMETA` header parsing, metadata source tags (`dimensions_source` / `units_source`), and the new scrollable File Info tab.
 - README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
 - `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
+
+### Fixed
+- Progress reporting now clamps to `100%` when stream state reaches `done`, including runtime metrics/diagnostics export fields.
 
 ## [1.8.0] - 2026-02-26
 

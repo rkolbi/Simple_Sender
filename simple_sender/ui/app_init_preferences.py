@@ -23,6 +23,11 @@
 import logging
 import sys
 
+from simple_sender.utils.constants import (
+    JOG_DRO_SMOOTHING_CHOICES,
+    JOG_DRO_SMOOTHING_OFF,
+)
+
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -114,7 +119,10 @@ def _init_behavior_preferences(
         value=setting("stop_joystick_hold_on_focus_loss", True)
     )
     app.validate_streaming_gcode = tk.BooleanVar(
-        value=setting("validate_streaming_gcode", True)
+        value=setting("validate_streaming_gcode", False)
+    )
+    app.overdrive_validation_stop_on_first_error = tk.BooleanVar(
+        value=setting("overdrive_validation_stop_on_first_error", True)
     )
     app.streaming_line_threshold = tk.IntVar(
         value=setting("streaming_line_threshold", gcode_streaming_line_threshold)
@@ -131,6 +139,18 @@ def _init_behavior_preferences(
     app.joystick_bindings_enabled = tk.BooleanVar(
         value=setting("joystick_bindings_enabled", False)
     )
+    jog_dro_smoothing_mode = str(
+        setting(
+            "jog_dro_smoothing_mode",
+            default_settings.get("jog_dro_smoothing_mode", JOG_DRO_SMOOTHING_OFF),
+        )
+        or ""
+    ).strip().lower()
+    if jog_dro_smoothing_mode not in JOG_DRO_SMOOTHING_CHOICES:
+        jog_dro_smoothing_mode = str(default_settings.get("jog_dro_smoothing_mode", JOG_DRO_SMOOTHING_OFF))
+    if jog_dro_smoothing_mode not in JOG_DRO_SMOOTHING_CHOICES:
+        jog_dro_smoothing_mode = JOG_DRO_SMOOTHING_OFF
+    app.jog_dro_smoothing_mode = tk.StringVar(value=jog_dro_smoothing_mode)
     app.dry_run_sanitize_stream = tk.BooleanVar(
         value=setting("dry_run_sanitize_stream", False)
     )
@@ -143,6 +163,22 @@ def _init_behavior_preferences(
     app.joystick_safety_enabled = tk.BooleanVar(
         value=setting("joystick_safety_enabled", False)
     )
+    try:
+        joystick_hold_miss_limit = int(
+            setting(
+                "joystick_hold_miss_limit",
+                default_settings.get("joystick_hold_miss_limit", 2),
+            )
+        )
+    except Exception:
+        joystick_hold_miss_limit = int(
+            default_settings.get("joystick_hold_miss_limit", 2)
+        )
+    if joystick_hold_miss_limit < 1:
+        joystick_hold_miss_limit = 1
+    if joystick_hold_miss_limit > 8:
+        joystick_hold_miss_limit = 8
+    app.joystick_hold_miss_limit = tk.IntVar(value=joystick_hold_miss_limit)
     app.kasa_enabled = tk.BooleanVar(value=setting("kasa_enabled", False))
     app.kasa_device_identifier = tk.StringVar(
         value=str(setting("kasa_device_identifier", "") or "").strip()

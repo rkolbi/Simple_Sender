@@ -82,6 +82,9 @@ from .utils.constants import (
     THREAD_JOIN_TIMEOUT,
     WATCHDOG_HOMING_TIMEOUT,
     WATCHDOG_SETTINGS_DUMP_TIMEOUT,
+    GCODE_LIVE_WINDOW_PAST_LINES,
+    GCODE_LIVE_WINDOW_NEXT_LINES,
+    GCODE_LIVE_WINDOW_REFRESH_MS,
 )
 from .utils.exceptions import SerialWriteError
 
@@ -242,10 +245,24 @@ class GrblWorker(
         self._paused = False
         self._send_index = 0  # next index to send
         self._ack_index = -1  # last acked index
+        self._ack_byte_offset = 0
+        self._stream_file_size_bytes = 0
         self._stream_buf_used = 0
         self._stream_line_queue: deque[StreamQueueItem] = deque()
         self._stream_pending_item: StreamPendingItem | None = None
         self._manual_pending_item: ManualPendingItem | None = None
+        self._live_acked_ring: deque[tuple[int, str]] = deque(
+            maxlen=max(1, int(GCODE_LIVE_WINDOW_PAST_LINES))
+        )
+        self._live_current_acked: tuple[int, str] | None = None
+        self._live_pending_window: deque[tuple[int, str]] = deque(
+            maxlen=max(1, int(GCODE_LIVE_WINDOW_NEXT_LINES))
+        )
+        self._live_window_refresh_s = max(
+            0.02, float(GCODE_LIVE_WINDOW_REFRESH_MS) / 1000.0
+        )
+        self._live_window_last_emit_ts = 0.0
+        self._live_window_dirty = False
         self._last_manual_source: str | None = None
         self._settings_dump_active = False
         self._settings_dump_seen = False
@@ -290,9 +307,24 @@ class GrblWorker(
         self._write_lock = threading.Lock()
         self._status_interval_lock = threading.Lock()
         self._tx_activity_evt = threading.Event()
+        self._status_interval_changed_evt = threading.Event()
         
         # State flags
         self._status_poll_interval = STATUS_POLL_DEFAULT
+        self._last_status_state_token = ""
+        self._manual_motion_status_grace_until_ts = 0.0
+        self._manual_motion_status_query_last_ts = 0.0
+        self._manual_motion_status_query_count = 0
+        self._manual_motion_status_query_interval_avg_ms = 0.0
+        self._manual_motion_status_query_interval_max_ms = 0.0
+        self._manual_motion_status_rx_last_ts = 0.0
+        self._manual_motion_status_rx_count = 0
+        self._manual_motion_status_rx_interval_avg_ms = 0.0
+        self._manual_motion_status_rx_interval_max_ms = 0.0
+        self._jog_cancel_inflight = False
+        self._jog_cancel_last_sent_ts = 0.0
+        self._jog_cancel_retry_timeout_s = 1.5
+        self._jog_cancel_debounce_s = 0.6
         self._ready = False
         self._alarm_active = False
         self._status_query_failures = 0
@@ -362,7 +394,16 @@ class GrblWorker(
             return False
         if text.startswith("<") and text.endswith(">"):
             interval_s = self._rx_status_log_interval_s
-            if lower.startswith("<idle"):
+            manual_motion_active = False
+            checker = getattr(self, "_manual_motion_status_active", None)
+            if callable(checker):
+                try:
+                    manual_motion_active = bool(checker())
+                except Exception:
+                    manual_motion_active = False
+            if manual_motion_active:
+                interval_s = min(interval_s, 0.1)
+            elif lower.startswith("<idle"):
                 interval_s = max(interval_s, self._rx_idle_status_log_interval_s)
             now = time.monotonic()
             if (now - self._last_rx_status_log_ts) < interval_s:
@@ -416,7 +457,16 @@ class GrblWorker(
             return False
         if text == "RT ?":
             interval_s = self._tx_status_query_log_interval_s
-            if self._ready and (not self._streaming) and (not self._paused):
+            manual_motion_active = False
+            checker = getattr(self, "_manual_motion_status_active", None)
+            if callable(checker):
+                try:
+                    manual_motion_active = bool(checker())
+                except Exception:
+                    manual_motion_active = False
+            if manual_motion_active:
+                interval_s = min(interval_s, 0.1)
+            elif self._ready and (not self._streaming) and (not self._paused):
                 interval_s = max(interval_s, self._tx_idle_status_query_log_interval_s)
             now = time.monotonic()
             if (now - self._last_tx_status_query_log_ts) < interval_s:
@@ -600,17 +650,100 @@ class GrblWorker(
             self._stream_line_queue.clear()
             self._stream_pending_item = None
             self._manual_pending_item = None
+            self._live_acked_ring.clear()
+            self._live_current_acked = None
+            self._live_pending_window.clear()
+            self._live_window_dirty = True
+            self._live_window_last_emit_ts = 0.0
             self._manual_source_queue.clear()
             self._resume_preamble.clear()
             self._rx_window = RX_BUFFER_SIZE
             self._send_index = 0
             self._ack_index = -1
+            self._ack_byte_offset = 0
             self._pause_after_idx = None
             self._pause_after_reason = None
             self._tx_bytes_window.clear()
             self._last_tx_emit_ts = 0.0
             self._tx_line_ts_window.clear()
             self._tx_lines_per_sec = 0.0
+        self._emit_live_gcode_window(force=True)
+
+    @staticmethod
+    def _safe_live_idx(value: Any) -> int | None:
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _emit_live_gcode_window(self, *, force: bool = False) -> None:
+        """Emit bounded live Past/Current/Next window payload to UI queue."""
+        now = time.monotonic()
+        if not force:
+            last_emit = float(getattr(self, "_live_window_last_emit_ts", 0.0) or 0.0)
+            if (now - last_emit) < float(getattr(self, "_live_window_refresh_s", 0.125)):
+                self._live_window_dirty = True
+                return
+        with self._stream_lock:
+            past_lines = list(self._live_acked_ring)
+            current_line = self._live_current_acked
+            pending: list[tuple[int, str]] = []
+            seen: set[int] = set()
+            for item in self._stream_line_queue:
+                if not bool(getattr(item, "is_gcode", False)):
+                    continue
+                idx = self._safe_live_idx(getattr(item, "idx", None))
+                if idx is None:
+                    continue
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                pending.append((idx, str(getattr(item, "line", "") or "")))
+                if len(pending) >= int(GCODE_LIVE_WINDOW_NEXT_LINES):
+                    break
+            pending_item = self._stream_pending_item
+            if (
+                pending_item is not None
+                and bool(getattr(pending_item, "is_gcode", False))
+                and len(pending) < int(GCODE_LIVE_WINDOW_NEXT_LINES)
+            ):
+                idx = self._safe_live_idx(getattr(pending_item, "idx", None))
+                if idx is not None and idx not in seen:
+                    pending.append((idx, str(getattr(pending_item, "line", "") or "")))
+            self._live_pending_window.clear()
+            self._live_pending_window.extend(pending)
+            pending_depth = int(len(pending))
+            acked_offset = max(0, int(getattr(self, "_ack_byte_offset", 0) or 0))
+            file_size = max(0, int(getattr(self, "_stream_file_size_bytes", 0) or 0))
+            last_acked_idx = (
+                int(current_line[0])
+                if isinstance(current_line, tuple) and len(current_line) >= 1
+                else int(getattr(self, "_ack_index", -1) or -1)
+            )
+        progress_pct = 0.0
+        if file_size > 0:
+            acked_offset = min(acked_offset, file_size)
+            progress_pct = max(
+                0.0,
+                min(100.0, (float(acked_offset) / float(file_size)) * 100.0),
+            )
+        payload = {
+            "past_lines": past_lines,
+            "current_line": current_line,
+            "next_lines": pending,
+            "next_buffered_count": pending_depth,
+            "pending_depth": pending_depth,
+            "last_acked_index": int(last_acked_idx),
+            "acked_byte_offset": int(acked_offset),
+            "file_size_bytes": int(file_size),
+            "stream_progress_pct": float(progress_pct),
+        }
+        try:
+            self.ui_q.put(("live_gcode_window", payload))
+            self._live_window_last_emit_ts = now
+            self._live_window_dirty = False
+        except Exception as exc:
+            _log_suppressed("Failed queueing live G-code window payload", exc)
 
     def _record_tx_line(self) -> None:
         now = time.time()
@@ -718,6 +851,32 @@ class GrblWorker(
         tx_loop_idle_ratio = 0.0
         if tx_loop_cycles > 0:
             tx_loop_idle_ratio = float(tx_loop_idle_cycles) / float(tx_loop_cycles)
+        stream_file_size_bytes = max(0, int(getattr(self, "_stream_file_size_bytes", 0) or 0))
+        acked_byte_offset = max(0, int(getattr(self, "_ack_byte_offset", 0) or 0))
+        if stream_file_size_bytes > 0:
+            acked_byte_offset = min(acked_byte_offset, stream_file_size_bytes)
+            stream_progress_pct = max(
+                0.0,
+                min(100.0, (float(acked_byte_offset) / float(stream_file_size_bytes)) * 100.0),
+            )
+        else:
+            stream_progress_pct = 0.0
+        try:
+            live_acked_count = int(len(self._live_acked_ring))
+        except Exception:
+            live_acked_count = 0
+        try:
+            live_pending_window_count = int(len(self._live_pending_window))
+        except Exception:
+            live_pending_window_count = 0
+        with self._status_interval_lock:
+            status_poll_interval_s = float(getattr(self, "_status_poll_interval", 0.0) or 0.0)
+        live_current_acked_index = -1
+        try:
+            if self._live_current_acked is not None:
+                live_current_acked_index = int(self._live_current_acked[0])
+        except Exception:
+            live_current_acked_index = -1
         return {
             "tx_lines_per_sec": float(self._tx_lines_per_sec),
             "ok_latency_ms_last": float(self._ok_latency_ms_last),
@@ -731,6 +890,47 @@ class GrblWorker(
             "queue_depth_last": queue_depth_last,
             "queue_depth_samples": queue_depth_samples,
             "serial_activity_tail": serial_activity_tail,
+            "stream_file_size_bytes": int(stream_file_size_bytes),
+            "acked_byte_offset": int(acked_byte_offset),
+            "stream_progress_pct": float(stream_progress_pct),
+            "live_gcode_acked_ring_count": int(live_acked_count),
+            "live_gcode_pending_window_count": int(live_pending_window_count),
+            "live_gcode_current_acked_index": int(live_current_acked_index),
+            "status_poll_interval_s": float(status_poll_interval_s),
+            "manual_motion_status_query_count": int(self._manual_motion_status_query_count),
+            "manual_motion_status_query_interval_avg_ms": float(
+                self._manual_motion_status_query_interval_avg_ms
+            ),
+            "manual_motion_status_query_interval_max_ms": float(
+                self._manual_motion_status_query_interval_max_ms
+            ),
+            "manual_motion_status_tx_query_count": int(self._manual_motion_status_query_count),
+            "manual_motion_status_tx_query_interval_avg_ms": float(
+                self._manual_motion_status_query_interval_avg_ms
+            ),
+            "manual_motion_status_tx_query_interval_max_ms": float(
+                self._manual_motion_status_query_interval_max_ms
+            ),
+            "manual_motion_status_query_interval_ms": float(
+                self._manual_motion_status_query_interval_avg_ms
+            ),
+            "manual_motion_status_rx_count": int(self._manual_motion_status_rx_count),
+            "manual_motion_status_rx_interval_avg_ms": float(
+                self._manual_motion_status_rx_interval_avg_ms
+            ),
+            "manual_motion_status_rx_interval_max_ms": float(
+                self._manual_motion_status_rx_interval_max_ms
+            ),
+            "manual_motion_status_rx_status_count": int(self._manual_motion_status_rx_count),
+            "manual_motion_status_rx_status_interval_avg_ms": float(
+                self._manual_motion_status_rx_interval_avg_ms
+            ),
+            "manual_motion_status_rx_status_interval_max_ms": float(
+                self._manual_motion_status_rx_interval_max_ms
+            ),
+            "manual_motion_status_rx_interval_ms": float(
+                self._manual_motion_status_rx_interval_avg_ms
+            ),
         }
     
     def _encode_line_payload(self, line: str) -> bytes:
@@ -793,21 +993,21 @@ class GrblWorker(
             logger.error(f"Write timeout: {e}")
             self.ui_q.put(("log", f"[write timeout] {e}"))
             if self.ser is not None:
-                self._signal_disconnect(f"Serial write timeout: {e}")
+                self._signal_disconnect(f"[tx/write-timeout] Serial write timeout: {e}")
             return False
             
         except serial_exc as e:
             logger.error(f"Serial write error: {e}")
             self.ui_q.put(("log", f"[write error] {e}"))
             if self.ser is not None:
-                self._signal_disconnect(f"Serial write error: {e}")
+                self._signal_disconnect(f"[tx/write] Serial write error: {e}")
             return False
             
         except Exception as e:
             logger.error(f"Unexpected write error: {e}")
             self.ui_q.put(("log", f"[write error] {e}"))
             if self.ser is not None:
-                self._signal_disconnect(f"Unexpected write error: {e}")
+                self._signal_disconnect(f"[tx/write] Unexpected write error: {e}")
             return False
     
     def _emit_buffer_fill(self) -> None:
@@ -881,6 +1081,21 @@ class GrblWorker(
         timeout_exc = _serial_timeout_exception_type(serial_module)
         serial_exc = _serial_exception_type(serial_module)
 
+        def _safe_read_size(ser_obj: object) -> int:
+            # Prefer draining available bytes when the backend exposes in_waiting,
+            # but always clamp to a safe positive integer for serial.read(size).
+            try:
+                waiting = getattr(ser_obj, "in_waiting", None)
+            except Exception:
+                waiting = None
+            if waiting is None:
+                return 1
+            try:
+                waiting_int = int(waiting)
+            except Exception:
+                return 1
+            return max(1, min(256, waiting_int))
+
         def _shutdown_in_progress() -> bool:
             shared_stop_evt = getattr(self, "_stop_evt", None)
             if shared_stop_evt is not None:
@@ -904,7 +1119,7 @@ class GrblWorker(
                 except Exception as e:
                     logger.error(f"RX thread error: {e}", exc_info=True)
                     self._emit_exception("RX thread error", e)
-                    self._signal_disconnect(f"RX thread error: {e}")
+                    self._signal_disconnect(f"[rx/check] RX thread error: {e}")
                     stop_evt.set()
                     break
                 ser = self.ser
@@ -913,11 +1128,11 @@ class GrblWorker(
                     continue
                 if hasattr(ser, "is_open") and not ser.is_open:
                     if not stop_evt.is_set():
-                        self._signal_disconnect("Serial port closed")
+                        self._signal_disconnect("[rx/port-closed] Serial port closed")
                         stop_evt.set()
                     break
                 try:
-                    chunk = ser.read(256)
+                    chunk = ser.read(_safe_read_size(ser))
                 except timeout_exc:
                     # Normal timeout - just continue
                     continue
@@ -927,7 +1142,7 @@ class GrblWorker(
                         break
                     logger.error(f"Serial read error: {e}")
                     self.ui_q.put(("log", f"[read error] {e}"))
-                    self._signal_disconnect(f"Serial read error: {e}")
+                    self._signal_disconnect(f"[rx/read] Serial read error: {e}")
                     stop_evt.set()
                     break
                 except Exception as e:
@@ -935,7 +1150,7 @@ class GrblWorker(
                         logger.debug("RX loop read aborted during shutdown: %s", e)
                         break
                     logger.error(f"Unexpected read error: {e}")
-                    self._signal_disconnect(f"Unexpected serial read error: {e}")
+                    self._signal_disconnect(f"[rx/read] Unexpected serial read error: {e}")
                     stop_evt.set()
                     break
                 
@@ -959,7 +1174,7 @@ class GrblWorker(
             else:
                 logger.error(f"RX thread error: {e}", exc_info=True)
                 self._emit_exception("RX thread error", e)
-                self._signal_disconnect(f"RX thread error: {e}")
+                self._signal_disconnect(f"[rx/thread] RX thread error: {e}")
                 stop_evt.set()
         
         finally:

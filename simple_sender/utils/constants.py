@@ -161,56 +161,14 @@ UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S = 1.0
 GRBL_SETTINGS_WRITE_DELAY = 0.05
 """Delay between sending GRBL settings updates (seconds)."""
 
-GCODE_VIEWER_CHUNK_SIZE_SMALL = 200
-"""Chunk size for small files (<1000 lines)."""
+GCODE_LIVE_WINDOW_PAST_LINES = 500
+"""Number of acknowledged lines retained in the live G-code Past window."""
 
-GCODE_VIEWER_CHUNK_SIZE_MEDIUM = 500
-"""Chunk size for medium files (1000-10000 lines)."""
+GCODE_LIVE_WINDOW_NEXT_LINES = 500
+"""Maximum number of pending lines retained in the live G-code Next window."""
 
-GCODE_VIEWER_CHUNK_SIZE_LARGE = 1000
-"""Chunk size for large files (>10000 lines)."""
-
-GCODE_VIEWER_CHUNK_SIZE_LOAD_LARGE = 300
-"""Chunk size for large load samples in the UI loader."""
-
-GCODE_VIEWER_CHUNK_LOAD_THRESHOLD = 2000
-"""Line count threshold for using the larger loader chunk size."""
-
-GCODE_VIEWER_INSERT_TIME_BUDGET_MS = 8.0
-"""Soft per-tick time budget (ms) for chunked G-code viewer insertion."""
-
-GCODE_VIEWER_INSERT_MAX_CHUNKS_PER_TICK = 8
-"""Maximum chunks inserted per Tk tick while loading the G-code viewer."""
-
-GCODE_VIEWER_INSERT_DELAY_MS = 2
-"""Delay (ms) before scheduling the next chunked G-code viewer insert tick."""
-
-GCODE_VIEWER_PROGRESS_EMIT_INTERVAL_MS = 80
-"""Minimum interval (ms) between chunked G-code viewer progress callbacks."""
-
-GCODE_VIEWER_LINE_CAP_DEFAULT = 120_000
-"""Maximum number of lines rendered in the G-code text viewer."""
-
-GCODE_VIEWER_LINE_CAP_LOW_POWER = 40_000
-"""Lower G-code viewer line cap for low-power profiles."""
-
-GCODE_VIEWER_VIRTUALIZE_THRESHOLD_DEFAULT = GCODE_VIEWER_LINE_CAP_DEFAULT
-"""Line-count threshold for enabling virtualized G-code text rendering."""
-
-GCODE_VIEWER_VIRTUALIZE_THRESHOLD_LOW_POWER = GCODE_VIEWER_LINE_CAP_LOW_POWER
-"""Lower virtualization threshold for low-power profiles."""
-
-GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_DEFAULT = 2000
-"""Number of lines rendered per virtualized G-code viewer window."""
-
-GCODE_VIEWER_VIRTUAL_WINDOW_SIZE_LOW_POWER = 320
-"""Virtualized viewer window size for low-power profiles."""
-
-GCODE_VIEWER_SMALL_FILE_THRESHOLD = 1000
-"""Line count threshold for small files."""
-
-GCODE_VIEWER_LARGE_FILE_THRESHOLD = 10000
-"""Line count threshold for large files."""
+GCODE_LIVE_WINDOW_REFRESH_MS = 125
+"""Maximum live G-code redraw cadence (ms) to avoid per-line UI churn."""
 
 GCODE_STREAMING_SIZE_THRESHOLD = 50 * 1024 * 1024
 """File size (bytes) above which streaming mode is used."""
@@ -235,12 +193,6 @@ GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER = 10_000
 
 GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD = 50_000
 """Maximum line count for precomputing in-memory streaming send caches."""
-
-STREAMING_VALIDATION_PROMPT_LINES = 500_000
-"""Cleaned line count above which streaming validation prompts for confirmation."""
-
-STREAMING_VALIDATION_PROMPT_TIMEOUT = 120
-"""Seconds to wait for streaming validation confirmation."""
 
 GCODE_LOAD_PROGRESS_INTERVAL = 0.25
 """Minimum seconds between progress updates while loading/validating G-code."""
@@ -406,6 +358,16 @@ JOYSTICK_HOLD_DEFINITIONS = [
     ("Z-", "jog_hold_z_minus", "Z", -1),
     ("Z+", "jog_hold_z_plus", "Z", 1),
 ]
+
+# Jog DRO smoothing / interpolation mode
+JOG_DRO_SMOOTHING_OFF = "off"
+JOG_DRO_SMOOTHING_UI_JOG_ONLY = "ui_jog_only"
+JOG_DRO_SMOOTHING_ALL_JOG = "all_jog"
+JOG_DRO_SMOOTHING_CHOICES = (
+    JOG_DRO_SMOOTHING_OFF,
+    JOG_DRO_SMOOTHING_UI_JOG_ONLY,
+    JOG_DRO_SMOOTHING_ALL_JOG,
+)
 """Definitions for joystick hold bindings (label, id, axis, direction)."""
 
 # Jogging presets
@@ -463,7 +425,7 @@ JOYSTICK_HOLD_MIN_DISTANCE = 0.01
 # MACRO SYSTEM CONSTANTS
 # ============================================================================
 
-MACRO_PREFIXES = ("Macro-", "Maccro-")
+MACRO_PREFIXES = ("Macro-",)
 """Valid prefixes for macro files."""
 
 MACRO_EXTS = ("", ".txt")

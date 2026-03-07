@@ -107,6 +107,7 @@ def build_console_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
         buffer_fill=app.buffer_fill,
         buffer_fill_pct=app.buffer_fill_pct,
         throughput_var=app.throughput_var,
+        progress_text=app.progress_text,
     )
 
     return ctab

@@ -24,6 +24,7 @@ import os
 import time
 import logging
 import tkinter as tk
+from typing import Callable
 
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.stream_completion import should_defer_done_until_idle
@@ -99,6 +100,56 @@ def _stream_busy_from_state(state: str | None, done_pending_idle: bool) -> bool:
         return True
     normalized = str(state or "").strip().lower()
     return normalized in ("running", "paused")
+
+
+def _set_stream_progress_ui(
+    app,
+    *,
+    pct: float | None,
+    visible: bool,
+    acked_offset: int | None = None,
+    file_size_bytes: int | None = None,
+) -> None:
+    if acked_offset is not None:
+        try:
+            app._stream_acked_byte_offset = max(0, int(acked_offset))
+        except Exception:
+            app._stream_acked_byte_offset = 0
+    if file_size_bytes is not None:
+        try:
+            app._stream_progress_file_size_bytes = max(0, int(file_size_bytes))
+        except Exception:
+            app._stream_progress_file_size_bytes = 0
+    if pct is None or not bool(visible):
+        app._stream_progress_pct = 0.0
+        if hasattr(app, "progress_text"):
+            try:
+                app.progress_text.set("")
+            except Exception:
+                pass
+        set_visible = getattr(app, "_set_stream_progress_visible", None)
+        if callable(set_visible):
+            try:
+                set_visible(False)
+            except Exception:
+                pass
+        return
+    try:
+        pct_f = max(0.0, min(100.0, float(pct)))
+    except Exception:
+        pct_f = 0.0
+    app._stream_progress_pct = pct_f
+    if hasattr(app, "progress_text"):
+        try:
+            app.progress_text.set(f"{pct_f:.1f}%")
+        except Exception:
+            pass
+    set_visible = getattr(app, "_set_stream_progress_visible", None)
+    if callable(set_visible):
+        try:
+            set_visible(True)
+        except Exception:
+            pass
 
 
 def _loaded_state_signature(
@@ -213,6 +264,7 @@ def _schedule_loaded_reconcile(
         app._stream_done_pending_idle = False
         try:
             app.progress_pct.set(0)
+            _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         except Exception as exc:
             _log_stream_ui_issue("Failed setting loaded progress during phase A", exc)
 
@@ -348,7 +400,7 @@ def _schedule_loaded_reconcile(
                     "Failed applying status poll profile during loaded phase C", exc
                 )
 
-    phases: list[tuple[str, object]] = [
+    phases: list[tuple[str, Callable[[], None]]] = [
         ("phase_a.reset_progress", _phase_a_reset_progress),
         ("phase_a.macro_state", _phase_a_macro_state),
         ("phase_a.disable_pause_resume", _phase_a_disable_pause_resume),
@@ -485,6 +537,7 @@ def handle_stream_state_event(app, evt):
         app._stream_loaded_force_apply = True
         try:
             app.progress_pct.set(0)
+            _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         except Exception as exc:
             _log_stream_ui_issue(
                 "Failed setting progress during load-settling stream-state update", exc
@@ -531,6 +584,33 @@ def handle_stream_state_event(app, evt):
             app._live_estimate_display_ts = 0.0
             app._refresh_gcode_stats_display()
             app.throughput_var.set("TX: 0 B/s")
+        if prev != "paused":
+            try:
+                last_acked_idx = int(getattr(app, "_last_acked_index", -1) or -1)
+            except Exception:
+                last_acked_idx = -1
+            if last_acked_idx < 0:
+                try:
+                    stream_file_size = max(
+                        int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+                        int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
+                    )
+                except Exception:
+                    stream_file_size = 0
+                try:
+                    app.progress_pct.set(0)
+                    _set_stream_progress_ui(
+                        app,
+                        pct=0.0,
+                        visible=bool(stream_file_size > 0),
+                        acked_offset=0,
+                        file_size_bytes=int(stream_file_size),
+                    )
+                except Exception as exc:
+                    _log_stream_ui_issue(
+                        "Failed resetting running-state byte progress at fresh stream start",
+                        exc,
+                    )
         try:
             status_text = app.status.cget("text")
         except (AttributeError, tk.TclError):
@@ -567,6 +647,7 @@ def handle_stream_state_event(app, evt):
         app._stream_done_pending_idle = False
         total = loaded_total
         app.progress_pct.set(0)
+        _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -608,9 +689,23 @@ def handle_stream_state_event(app, evt):
             defer_done = should_defer_done_until_idle(app, now_ts=now)
             app._stream_done_pending_idle = bool(defer_done)
             app.progress_pct.set(99 if defer_done else 100)
+            _set_stream_progress_ui(
+                app,
+                pct=(99.0 if defer_done else 100.0),
+                visible=True,
+                acked_offset=max(
+                    int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+                    int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
+                ),
+                file_size_bytes=max(
+                    int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+                    int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
+                ),
+            )
         else:
             app._stream_done_pending_idle = False
             app.progress_pct.set(0)
+            _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")
         if st == "done" and app._stream_done_pending_idle:
@@ -629,6 +724,7 @@ def handle_stream_state_event(app, evt):
             macro_vars["running"] = False
             macro_vars["paused"] = False
         app.progress_pct.set(0)
+        _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         restore_controls_after_stream(
             app,
             job_ready_hook=job_controls_ready,
@@ -644,6 +740,7 @@ def handle_stream_state_event(app, evt):
             macro_vars["running"] = False
             macro_vars["paused"] = False
         app.progress_pct.set(0)
+        _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         app.btn_run.config(state="disabled")
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")

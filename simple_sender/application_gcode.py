@@ -64,6 +64,7 @@ from simple_sender.ui.gcode.stats import (
     update_gcode_stats,
     update_live_estimate,
 )
+from simple_sender.ui.file_info_tab import refresh_file_info_tab
 from simple_sender.ui.viewer.gcode_viewer import reset_gcode_view_for_run
 
 class GcodeMixin:
@@ -147,6 +148,9 @@ class GcodeMixin:
 
     def _refresh_gcode_stats_display(self):
         refresh_gcode_stats_display(self)
+
+    def _refresh_file_info_tab(self):
+        refresh_file_info_tab(self)
 
     def _refresh_dro_display(self):
         refresh_dro_display(self)
@@ -244,4 +248,3 @@ class GcodeMixin:
             parse_result=parse_result,
             force_full_scan=force_full_scan,
         )
-
