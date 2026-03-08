@@ -67,6 +67,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 class UiEventsMixin:
     def _on_app_focus_out(self, event=None):
+        _ = event
         app = cast(Any, self)
         if not bool(app.stop_hold_on_focus_loss.get()):
             return

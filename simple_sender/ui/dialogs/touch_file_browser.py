@@ -114,6 +114,7 @@ def _show_missing_dependency_message(parent=None) -> None:
 
 
 def ask_open_path(app, *args, **kwargs) -> str:
+    del app
     del args
     if _tkfilebrowser is None:
         _show_missing_dependency_message(parent=kwargs.get("parent"))
@@ -130,6 +131,7 @@ def ask_open_path(app, *args, **kwargs) -> str:
 
 
 def ask_save_path(app, *args, **kwargs) -> str:
+    del app
     del args
     if _tkfilebrowser is None:
         _show_missing_dependency_message(parent=kwargs.get("parent"))

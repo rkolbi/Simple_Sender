@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 def init_settings_store(app, script_dir: str, module) -> tuple[float, float]:
+    _ = script_dir
     deps = module
     os = deps.os
     get_settings_path = deps.get_settings_path

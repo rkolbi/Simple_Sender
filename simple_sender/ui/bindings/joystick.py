@@ -525,6 +525,7 @@ def handle_joystick_event(
 
 
 def is_virtual_hold_button(app, btn) -> bool:
+    _ = app
     return joystick_hold.is_virtual_hold_button(btn)
 
 
@@ -750,6 +751,7 @@ def on_joystick_safety_toggle(app) -> None:
 
 
 def joystick_binding_from_event(app, key):
+    _ = app
     if not key:
         return None
     kind = key[0]
@@ -796,6 +798,7 @@ def joystick_binding_display(app, binding: dict[str, Any]) -> str:
 
 
 def joystick_binding_key(app, binding: dict[str, Any]):
+    _ = app
     if not isinstance(binding, dict):
         return None
     kind = binding.get("kind")

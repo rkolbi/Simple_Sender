@@ -40,11 +40,12 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _AUTO_RECONNECT_PORT_SCAN_MIN_INTERVAL_S = 1.0
 _AUTO_RECONNECT_PORT_SCAN_CACHE_MAX_AGE_S = 8.0
-_STATUS_POLL_PERF_IDLE_FLOOR = 2.0
-_STATUS_POLL_PERF_QUIET_IDLE_FLOOR = 3.0
+_STATUS_POLL_PERF_IDLE_FLOOR = 3.0
+_STATUS_POLL_PERF_QUIET_IDLE_FLOOR = 4.0
 _STATUS_POLL_QUIET_IDLE_MIN_SECONDS = 15.0
-_STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR = 4.0
+_STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR = 5.0
 _STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS = 60.0
+_STATUS_POLL_PERF_RUNNING = 0.35
 _STATUS_POLL_MANUAL_ACTIVE = 0.1
 _STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
@@ -664,7 +665,10 @@ def effective_status_poll_interval(app) -> float:
     if _manual_ready_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
     if _status_poll_should_use_running_profile(app):
-        return min(base, float(STATUS_POLL_RUNNING))
+        running_floor = float(STATUS_POLL_RUNNING)
+        if _performance_mode_enabled(app):
+            running_floor = max(running_floor, float(_STATUS_POLL_PERF_RUNNING))
+        return min(base, running_floor)
     if _performance_mode_enabled(app):
         idle_floor = float(_STATUS_POLL_PERF_IDLE_FLOOR)
         try:

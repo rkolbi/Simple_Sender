@@ -141,6 +141,7 @@ def refresh_keyboard_table(app):
         app._kb_item_to_button[item] = btn
 
 def create_virtual_hold_buttons(app) -> list[VirtualHoldButton]:
+    _ = app
     buttons: list[VirtualHoldButton] = []
     for label, binding_id, axis, direction in joystick_hold.JOYSTICK_HOLD_DEFINITIONS:
         buttons.append(VirtualHoldButton(f"{label} (Hold)", binding_id, axis, direction))
@@ -165,6 +166,7 @@ def collect_buttons(app) -> list:
     return buttons
 
 def button_label(app, btn) -> str:
+    _ = app
     label = ""
     try:
         label = btn.cget("text")

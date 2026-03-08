@@ -322,6 +322,7 @@ class Console(ttk.Frame):
         self._line_count = MAX_CONSOLE_LINES
     
     def _on_entry_return(self, event: tk.Event) -> str:
+        _ = event
         """Handle Return key in entry widget.
         
         Args:
@@ -356,6 +357,7 @@ class Console(ttk.Frame):
         return "break"
     
     def _on_history_up(self, event: tk.Event) -> str:
+        _ = event
         """Navigate up in command history.
         
         Args:
@@ -381,6 +383,7 @@ class Console(ttk.Frame):
         return "break"
     
     def _on_history_down(self, event: tk.Event) -> str:
+        _ = event
         """Navigate down in command history.
         
         Args:

@@ -24,10 +24,15 @@ import time
 import logging
 import threading
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from simple_sender.ui.stream_completion import (
+    begin_deferred_completion_wait,
+    end_deferred_completion_wait,
+)
 from simple_sender.utils.constants import (
     JOG_DRO_SMOOTHING_ALL_JOG,
     JOG_DRO_SMOOTHING_CHOICES,
@@ -43,6 +48,7 @@ _WPOS_FLASH_MIN_INTERVAL_S = 0.25
 _DRO_DISPLAY_STEP = 0.001
 _STATUS_SETTLING_MIN_INTERVAL_S = 0.2
 _STATUS_SLOW_LOG_MS = 50.0
+_STATUS_NONCRITICAL_BUDGET_MS = 8.0
 _JOG_DRO_PREDICT_TICK_MS = 60
 _JOG_DRO_PREDICT_DEFAULT_HORIZON_S = 1.25
 _JOG_DRO_PREDICT_MIN_HORIZON_S = 0.35
@@ -60,6 +66,93 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _schedule_status_ui_callback(
+    app,
+    *,
+    callback_attr: str,
+    callback: Callable[[], None],
+    context: str,
+    replace_pending: bool = True,
+) -> None:
+    pending_after_id = getattr(app, callback_attr, None)
+    if pending_after_id is not None:
+        if not bool(replace_pending):
+            return
+        after_cancel = getattr(app, "after_cancel", None)
+        if callable(after_cancel):
+            try:
+                after_cancel(pending_after_id)
+            except Exception as exc:
+                _log_suppressed(
+                    f"Failed canceling deferred status callback: {callback_attr}", exc
+                )
+        setattr(app, callback_attr, None)
+
+    def _run() -> None:
+        setattr(app, callback_attr, None)
+        try:
+            callback()
+        except Exception as exc:
+            _log_suppressed(context, exc)
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            setattr(app, callback_attr, after_fn(0, _run))
+            return
+        except Exception as exc:
+            _log_suppressed(
+                f"Failed scheduling deferred status callback: {callback_attr}",
+                exc,
+            )
+    _run()
+
+
+def _with_macro_vars_nonblocking(
+    app,
+    callback: Callable[[dict], None],
+    *,
+    context: str,
+) -> bool:
+    macro_executor = getattr(app, "macro_executor", None)
+    lock = getattr(macro_executor, "_macro_vars_lock", None)
+    macro_vars = getattr(macro_executor, "_macro_vars", None)
+    if (
+        lock is not None
+        and hasattr(lock, "acquire")
+        and hasattr(lock, "release")
+        and isinstance(macro_vars, dict)
+    ):
+        acquired = False
+        try:
+            acquired = bool(lock.acquire(blocking=False))
+        except Exception:
+            acquired = False
+        if not acquired:
+            return False
+        try:
+            callback(macro_vars)
+            return True
+        except Exception as exc:
+            _log_suppressed(context, exc)
+            return False
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
+    if macro_executor is None or not hasattr(macro_executor, "macro_vars"):
+        return False
+    try:
+        with macro_executor.macro_vars() as macro_vars_ctx:
+            if isinstance(macro_vars_ctx, dict):
+                callback(macro_vars_ctx)
+                return True
+    except Exception as exc:
+        _log_suppressed(context, exc)
+    return False
 
 
 def _signal_thread_event(obj, attr_name: str) -> None:
@@ -83,6 +176,26 @@ def _status_state_token(raw: str) -> str:
     if text.endswith(">"):
         text = text[:-1]
     return text
+
+
+def _status_relaxed_idle_signature(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not (text.startswith("<") and text.endswith(">")):
+        return text
+    body = text[1:-1]
+    parts = [part.strip() for part in body.split("|") if part.strip()]
+    if not parts:
+        return text
+    state = str(parts[0] or "").strip()
+    if not state.lower().startswith("idle"):
+        return text
+    filtered = [state]
+    for part in parts[1:]:
+        upper = part.upper()
+        if upper.startswith("WCO:") or upper.startswith("OV:"):
+            continue
+        filtered.append(part)
+    return "|".join(filtered)
 
 
 def _record_status_perf_metric(app, name: str, elapsed_ms: float) -> None:
@@ -141,21 +254,22 @@ def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
         if not getattr(app, "_macro_status_active", False):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)
-            _set_var_if_changed(app.machine_state, rendered_state)
-            try:
-                app._ensure_state_label_width(rendered_state)
-            except Exception as exc:
-                _log_suppressed("Failed adjusting machine-state width during settling", exc)
-            try:
-                app._update_state_highlight(banner_state)
-            except Exception as exc:
-                _log_suppressed("Failed updating machine-state highlight during settling", exc)
-    try:
-        with app.macro_executor.macro_vars() as macro_vars:
-            macro_vars["state"] = state
-            macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
-    except Exception as exc:
-        _log_suppressed("Failed updating macro state during settling status handling", exc)
+            _apply_machine_state_visuals(
+                app,
+                rendered_state=rendered_state,
+                banner_state=banner_state,
+                width_context="Failed adjusting machine-state width during settling",
+                highlight_context="Failed updating machine-state highlight during settling",
+            )
+    def _update_macro_state(macro_vars: dict) -> None:
+        macro_vars["state"] = state
+        macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
+
+    _with_macro_vars_nonblocking(
+        app,
+        _update_macro_state,
+        context="Failed updating macro state during settling status handling",
+    )
 
 
 def _log_slow_status_event(
@@ -190,6 +304,22 @@ def _stream_active_or_finishing(app) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return True
     return getattr(app, "_stream_state", None) in ("running", "paused")
+
+
+def _performance_mode_enabled(app) -> bool:
+    mode_var = getattr(app, "performance_mode", None)
+    if mode_var is not None and hasattr(mode_var, "get"):
+        try:
+            return bool(mode_var.get())
+        except Exception:
+            return False
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get("performance_mode", False))
+        except Exception:
+            return False
+    return False
 
 
 def _schedule_request_settings_dump(app) -> None:
@@ -453,7 +583,11 @@ def _run_progress_text(app) -> str:
         acked = 0
     acked = max(0, min(file_size, acked))
     pct = max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
-    return f"{int(round(pct))}%"
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
+    if stream_state != "done" or done_pending_idle:
+        pct = min(pct, 99.9)
+    return f"{int(pct)}%"
 
 
 def _stream_latched_banner_state(app, state: str, display_state: str) -> str:
@@ -469,6 +603,36 @@ def _render_machine_state_text(app, state: str, display_state: str) -> str:
     if state_lower.startswith("run") or display_lower.startswith("run"):
         return f"Run: {_run_progress_text(app)}"
     return display_state
+
+
+def _machine_state_highlight_key(state: str) -> str:
+    return _status_state_token(state).strip().lower()
+
+
+def _apply_machine_state_visuals(
+    app,
+    *,
+    rendered_state: str,
+    banner_state: str,
+    width_context: str,
+    highlight_context: str,
+) -> None:
+    rendered_changed = _set_var_if_changed(app.machine_state, rendered_state)
+    if rendered_changed:
+        try:
+            app._ensure_state_label_width(rendered_state)
+        except Exception as exc:
+            _log_suppressed(width_context, exc)
+    highlight_key = _machine_state_highlight_key(banner_state)
+    previous_highlight_key = str(
+        getattr(app, "_machine_state_highlight_key", "") or ""
+    )
+    if highlight_key != previous_highlight_key:
+        setattr(app, "_machine_state_highlight_key", highlight_key)
+        try:
+            app._update_state_highlight(banner_state)
+        except Exception as exc:
+            _log_suppressed(highlight_context, exc)
 
 
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
@@ -489,16 +653,21 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         elif not getattr(app, "_macro_status_active", False):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)
-            app.machine_state.set(rendered_state)
-            try:
-                app._ensure_state_label_width(rendered_state)
-            except Exception as exc:
-                _log_suppressed("Failed adjusting machine state label width", exc)
-            app._update_state_highlight(banner_state)
-            try:
-                app._update_current_highlight()
-            except Exception as exc:
-                _log_suppressed("Failed updating current-line highlight from status state", exc)
+            _apply_machine_state_visuals(
+                app,
+                rendered_state=rendered_state,
+                banner_state=banner_state,
+                width_context="Failed adjusting machine state label width",
+                highlight_context="Failed updating machine-state highlight",
+            )
+            if hasattr(app, "_update_current_highlight"):
+                _schedule_status_ui_callback(
+                    app,
+                    callback_attr="_status_current_highlight_after_id",
+                    callback=lambda: app._update_current_highlight(),
+                    context="Failed updating current-line highlight from status state",
+                    replace_pending=False,
+                )
         _maybe_restore_pending_g90(app)
 
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
@@ -520,34 +689,45 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
     manual_last = bool(getattr(app, "_manual_controls_last_enabled", False))
     if bool(controls_allowed) != manual_last:
         app._set_manual_controls_enabled(bool(controls_allowed))
-    with app.macro_executor.macro_vars() as macro_vars:
+    def _update_macro_state(macro_vars: dict) -> None:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
+
+    _with_macro_vars_nonblocking(
+        app,
+        _update_macro_state,
+        context="Failed updating macro state from status event",
+    )
     _signal_thread_event(app, "_status_update_event")
     if next_state_token != prev_state_token:
-        try:
+        def _apply_transition_ui_updates() -> None:
             if hasattr(app, "_refresh_toolbar_action_focus"):
                 app._refresh_toolbar_action_focus()
-        except Exception as exc:
-            _log_suppressed("Failed refreshing toolbar focus on machine-state transition", exc)
-        try:
             if hasattr(app, "_update_quick_button_visibility"):
                 app._update_quick_button_visibility()
-        except Exception as exc:
-            _log_suppressed("Failed updating quick buttons on machine-state transition", exc)
+
+        _schedule_status_ui_callback(
+            app,
+            callback_attr="_status_state_transition_ui_after_id",
+            callback=_apply_transition_ui_updates,
+            context="Failed applying state-transition toolbar/quick-button refresh",
+        )
     return True
 
 
 def _sync_deferred_stream_completion(app, state: str) -> None:
     if not bool(getattr(app, "_stream_done_pending_idle", False)):
         return
+    now_ts = time.time()
     total = int(getattr(app, "_gcode_total_lines", 0) or 0)
     if total <= 0:
         return
     done = int(getattr(app, "_last_acked_index", -1)) + 1
     if done < total:
+        begin_deferred_completion_wait(app, now_ts=now_ts)
         return
     if str(state or "").lower().startswith("idle"):
+        end_deferred_completion_wait(app, now_ts=now_ts)
         app._stream_done_pending_idle = False
         app._stream_state = "done"
         try:
@@ -601,6 +781,7 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
                 _log_suppressed("Failed scheduling deferred stream-completion finalize callback", exc)
         _finalize_completion_ui()
         return
+    begin_deferred_completion_wait(app, now_ts=now_ts)
     try:
         if int(app.progress_pct.get()) >= 100:
             app.progress_pct.set(99)
@@ -1406,7 +1587,14 @@ def _flash_wpos_labels(app) -> None:
             _log_suppressed("Failed scheduling WPos flash restore timer", exc)
 
 
-def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
+def _update_positions_and_macro_state(
+    app,
+    fields: _StatusFields,
+    *,
+    event_started_perf: float | None = None,
+    noncritical_budget_ms: float = _STATUS_NONCRITICAL_BUDGET_MS,
+) -> None:
+    stream_busy_for_noncritical = _stream_active_or_finishing(app)
     reported_wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
     mpos_vals = _parse_xyz_triplet(fields.mpos) if fields.mpos else None
     reported_wpos_vals = _parse_xyz_triplet(fields.wpos) if fields.wpos else None
@@ -1511,6 +1699,16 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
     def to_modal(value: float) -> float:
         return value * to_modal_factor
 
+    def _status_event_elapsed_ms() -> float:
+        if event_started_perf is None:
+            return 0.0
+        return max(0.0, (time.perf_counter() - float(event_started_perf)) * 1000.0)
+
+    def _should_defer_noncritical_updates() -> bool:
+        if stream_busy_for_noncritical or _performance_mode_enabled(app):
+            return True
+        return _status_event_elapsed_ms() >= max(1.0, float(noncritical_budget_ms))
+
     macro_updates: dict[str, object] = {}
     wpos_calc = None
     mpos_calc = None
@@ -1591,7 +1789,7 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
         macro_updates["wx"] = to_modal(wpos_vals[0])
         macro_updates["wy"] = to_modal(wpos_vals[1])
         macro_updates["wz"] = to_modal(wpos_vals[2])
-        if wpos_changed:
+        if wpos_changed and not stream_busy_for_noncritical:
             _flash_wpos_labels(app)
     elif wpos_calc:
         wpos_calc_tuple = (wpos_calc[0], wpos_calc[1], wpos_calc[2])
@@ -1619,20 +1817,36 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
         macro_updates["curfeed"] = fields.feed
     if fields.spindle is not None:
         macro_updates["curspindle"] = fields.spindle
-        mpos_rpm_var = getattr(app, "mpos_rpm", None)
-        if mpos_rpm_var is not None:
-            try:
-                rpm_text = str(int(round(float(fields.spindle))))
-                _set_var_if_changed(mpos_rpm_var, rpm_text)
-            except Exception as exc:
-                _log_suppressed("Failed updating MPos spindle-RPM display", exc)
-        spindle_rpm_var = getattr(app, "spindle_current_rpm_var", None)
-        if spindle_rpm_var is not None:
-            try:
-                rpm_text = str(int(round(float(fields.spindle))))
-                _set_var_if_changed(spindle_rpm_var, rpm_text)
-            except Exception as exc:
-                _log_suppressed("Failed updating spindle current-speed display", exc)
+        try:
+            rpm_text = str(int(round(float(fields.spindle))))
+        except Exception as exc:
+            _log_suppressed("Failed parsing spindle RPM from status line", exc)
+            rpm_text = None
+        if rpm_text is not None:
+            mpos_rpm_var = getattr(app, "mpos_rpm", None)
+            spindle_rpm_var = getattr(app, "spindle_current_rpm_var", None)
+
+            def _apply_spindle_rpm_ui_sync() -> None:
+                if mpos_rpm_var is not None:
+                    _set_var_if_changed(mpos_rpm_var, rpm_text)
+                if spindle_rpm_var is not None:
+                    _set_var_if_changed(spindle_rpm_var, rpm_text)
+
+            if _should_defer_noncritical_updates():
+                _schedule_status_ui_callback(
+                    app,
+                    callback_attr="_status_spindle_rpm_after_id",
+                    callback=_apply_spindle_rpm_ui_sync,
+                    context="Failed applying deferred spindle-RPM UI sync from status",
+                )
+            else:
+                try:
+                    _apply_spindle_rpm_ui_sync()
+                except Exception as exc:
+                    _log_suppressed(
+                        "Failed applying spindle-RPM UI sync from status",
+                        exc,
+                    )
     if fields.planner is not None:
         macro_updates["planner"] = fields.planner
         try:
@@ -1671,34 +1885,71 @@ def _update_positions_and_macro_state(app, fields: _StatusFields) -> None:
             if ov_values is not None:
                 app._last_status_ov = ov_values
             if ov_changed:
-                if feed_val is not None:
-                    app._set_feed_override_slider_value(feed_val)
-                if spindle_val is not None:
-                    app._set_spindle_override_slider_value(spindle_val)
-                app._refresh_override_info()
+                def _apply_override_ui_sync() -> None:
+                    if feed_val is not None:
+                        app._set_feed_override_slider_value(feed_val)
+                    if spindle_val is not None:
+                        app._set_spindle_override_slider_value(spindle_val)
+                    app._refresh_override_info()
+
+                if _should_defer_noncritical_updates():
+                    _schedule_status_ui_callback(
+                        app,
+                        callback_attr="_status_override_sync_after_id",
+                        callback=_apply_override_ui_sync,
+                        context="Failed applying deferred override UI sync from status",
+                    )
+                else:
+                    try:
+                        _apply_override_ui_sync()
+                    except Exception as exc:
+                        _log_suppressed(
+                            "Failed applying override UI sync from status",
+                            exc,
+                        )
     pin_state = {char for char in (fields.pins or "").upper() if char.isalpha()}
     endstop_active = bool(pin_state & {"X", "Y", "Z"})
     prb_value = None
-    try:
-        with app.macro_executor.macro_vars() as macro_vars:
-            if ov_values is not None:
-                changed = (
-                    macro_vars.get("OvFeed") != ov_values[0]
-                    or macro_vars.get("OvRapid") != ov_values[1]
-                    or macro_vars.get("OvSpindle") != ov_values[2]
-                )
-                macro_updates["OvFeed"] = ov_values[0]
-                macro_updates["OvRapid"] = ov_values[1]
-                macro_updates["OvSpindle"] = ov_values[2]
-                macro_updates["_OvChanged"] = bool(changed)
-            if macro_updates:
-                macro_vars.update(macro_updates)
-            prb_value = macro_vars.get("PRB")
-    except Exception as exc:
-        _log_suppressed("Failed updating macro status values", exc)
+
+    def _apply_macro_status_updates(macro_vars: dict) -> None:
+        nonlocal prb_value
+        if ov_values is not None:
+            changed = (
+                macro_vars.get("OvFeed") != ov_values[0]
+                or macro_vars.get("OvRapid") != ov_values[1]
+                or macro_vars.get("OvSpindle") != ov_values[2]
+            )
+            macro_updates["OvFeed"] = ov_values[0]
+            macro_updates["OvRapid"] = ov_values[1]
+            macro_updates["OvSpindle"] = ov_values[2]
+            macro_updates["_OvChanged"] = bool(changed)
+        if macro_updates:
+            macro_vars.update(macro_updates)
+        prb_value = macro_vars.get("PRB")
+
+    _with_macro_vars_nonblocking(
+        app,
+        _apply_macro_status_updates,
+        context="Failed updating macro status values",
+    )
     probe_active = bool(pin_state & {"P"}) or bool(prb_value)
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
-    app._update_led_panel(endstop_active, probe_active, hold_active)
+
+    def _apply_led_panel_state() -> None:
+        app._update_led_panel(endstop_active, probe_active, hold_active)
+
+    if _should_defer_noncritical_updates():
+        _schedule_status_ui_callback(
+            app,
+            callback_attr="_status_led_panel_after_id",
+            callback=_apply_led_panel_state,
+            context="Failed applying deferred LED panel state from status",
+        )
+    else:
+        try:
+            _apply_led_panel_state()
+        except Exception as exc:
+            _log_suppressed("Failed updating LED panel from status", exc)
 
 
 def handle_status_event(app, raw: str):
@@ -1731,6 +1982,28 @@ def handle_status_event(app, raw: str):
         _record_status_perf_metric(
             app,
             "duplicate_short_circuit",
+            (time.perf_counter() - event_start) * 1000.0,
+        )
+        _record_status_perf_metric(
+            app,
+            "total",
+            (time.perf_counter() - event_start) * 1000.0,
+        )
+        return
+    if (
+        state_lower.startswith("idle")
+        and not _stream_active_or_finishing(app)
+        and _status_relaxed_idle_signature(raw)
+        == _status_relaxed_idle_signature(previous_raw)
+    ):
+        app._status_seen = True
+        app._status_duplicate_count = int(
+            getattr(app, "_status_duplicate_count", 0) or 0
+        ) + 1
+        _sync_deferred_stream_completion(app, state_token or "Idle")
+        _record_status_perf_metric(
+            app,
+            "duplicate_short_circuit_relaxed",
             (time.perf_counter() - event_start) * 1000.0,
         )
         _record_status_perf_metric(
@@ -1806,7 +2079,12 @@ def handle_status_event(app, raw: str):
         )
     else:
         update_start = time.perf_counter()
-        _update_positions_and_macro_state(app, fields)
+        _update_positions_and_macro_state(
+            app,
+            fields,
+            event_started_perf=event_start,
+            noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+        )
         sync_manual_jog_prediction_with_status(app)
         positions_elapsed_ms = (time.perf_counter() - update_start) * 1000.0
         _record_status_perf_metric(

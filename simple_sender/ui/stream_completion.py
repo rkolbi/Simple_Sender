@@ -67,3 +67,54 @@ def should_defer_completion(app, done: int, total: int, now_ts: float | None = N
     if total <= 0 or done < total:
         return False
     return should_defer_done_until_idle(app, now_ts=now_ts)
+
+
+def _coerce_now_ts(now_ts: float | None = None) -> float:
+    if now_ts is None:
+        return time.time()
+    try:
+        return float(now_ts)
+    except Exception:
+        return time.time()
+
+
+def begin_deferred_completion_wait(app, now_ts: float | None = None) -> None:
+    now = _coerce_now_ts(now_ts)
+    active = bool(getattr(app, "_stream_done_wait_active", False))
+    if active:
+        started = float(getattr(app, "_stream_done_wait_started_ts", 0.0) or 0.0)
+        if started <= 0.0:
+            setattr(app, "_stream_done_wait_started_ts", float(now))
+        return
+    setattr(app, "_stream_done_wait_active", True)
+    setattr(app, "_stream_done_wait_started_ts", float(now))
+    count = int(getattr(app, "_stream_done_wait_count", 0) or 0)
+    setattr(app, "_stream_done_wait_count", max(0, count) + 1)
+
+
+def end_deferred_completion_wait(app, now_ts: float | None = None) -> float:
+    now = _coerce_now_ts(now_ts)
+    active = bool(getattr(app, "_stream_done_wait_active", False))
+    started = float(getattr(app, "_stream_done_wait_started_ts", 0.0) or 0.0)
+    elapsed_s = 0.0
+    if active and started > 0.0:
+        elapsed_s = max(0.0, now - started)
+        total_s = float(getattr(app, "_stream_done_wait_total_s", 0.0) or 0.0)
+        setattr(app, "_stream_done_wait_total_s", max(0.0, total_s) + elapsed_s)
+        setattr(app, "_stream_done_wait_last_s", elapsed_s)
+    setattr(app, "_stream_done_wait_active", False)
+    setattr(app, "_stream_done_wait_started_ts", 0.0)
+    return elapsed_s
+
+
+def deferred_completion_wait_snapshot(
+    app, now_ts: float | None = None
+) -> tuple[bool, float, float, float, int]:
+    now = _coerce_now_ts(now_ts)
+    active = bool(getattr(app, "_stream_done_wait_active", False))
+    started = float(getattr(app, "_stream_done_wait_started_ts", 0.0) or 0.0)
+    current_s = max(0.0, now - started) if active and started > 0.0 else 0.0
+    last_s = max(0.0, float(getattr(app, "_stream_done_wait_last_s", 0.0) or 0.0))
+    total_s = max(0.0, float(getattr(app, "_stream_done_wait_total_s", 0.0) or 0.0))
+    count = max(0, int(getattr(app, "_stream_done_wait_count", 0) or 0))
+    return (active, current_s, last_s, total_s, count)

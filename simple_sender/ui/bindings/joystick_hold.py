@@ -83,6 +83,7 @@ def _joystick_jog_prediction_enabled(app) -> bool:
 
 
 def hold_vector_for_binding(app, binding_id: str) -> tuple[str, int] | None:
+    _ = app
     info = JOYSTICK_HOLD_MAP.get(binding_id)
     if not info:
         return None
@@ -225,6 +226,7 @@ def max_hold_distance(app, axis: str, direction: int) -> float:
 
 
 def _joystick_binding_pressed(app, binding: dict[str, Any] | None, *, release: bool = False) -> bool:
+    _ = release
     if not binding:
         return False
     py = app._get_pygame_module()

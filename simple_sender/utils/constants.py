@@ -146,16 +146,16 @@ UI_QUEUE_DRAIN_STALL_BUDGET_MS = 16.0
 UI_QUEUE_MAINTENANCE_INTERVAL_S = 0.25
 """Maintenance cadence while UI events are actively flowing."""
 
-UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S = 1.0
+UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S = 1.25
 """Maintenance cadence while the UI queue is idle."""
 
-UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S = 3.0
+UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S = 4.0
 """Maintenance cadence during sustained connected-and-idle quiet runtime."""
 
 UI_QUEUE_RECONNECT_CHECK_INTERVAL_S = 0.25
 """Auto-reconnect check cadence while UI events are actively flowing."""
 
-UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S = 1.0
+UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S = 1.25
 """Auto-reconnect check cadence while the UI queue is idle."""
 
 GRBL_SETTINGS_WRITE_DELAY = 0.05

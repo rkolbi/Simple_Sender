@@ -602,6 +602,13 @@ def _init_stream_and_override_state(
     app._stream_loaded_reconcile_generation = 0
     app._stream_loaded_reconcile_signature = None
     app._stream_loaded_reconcile_last_metrics = {}
+    app._stream_state_stats_refresh_after_id = None
+    app._stream_state_post_apply_after_id = None
+    app._status_current_highlight_after_id = None
+    app._status_state_transition_ui_after_id = None
+    app._status_override_sync_after_id = None
+    app._status_led_panel_after_id = None
+    app._status_spindle_rpm_after_id = None
     app._streaming_lock_state = None
     app._status_settling_last_state = ""
     app._status_settling_last_apply_ts = 0.0
@@ -629,6 +636,11 @@ def _init_stream_and_override_state(
     app._stream_pause_total = 0.0
     app._stream_paused_at = None
     app._stream_done_pending_idle = False
+    app._stream_done_wait_active = False
+    app._stream_done_wait_started_ts = 0.0
+    app._stream_done_wait_last_s = 0.0
+    app._stream_done_wait_total_s = 0.0
+    app._stream_done_wait_count = 0
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None
@@ -742,23 +754,28 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._auto_reconnect_startup_gate_ts = 0.0
     app._user_disconnect = False
     app._ui_throttle_ms = 100
-    app._ui_queue_idle_interval_ms = 250
-    app._ui_queue_idle_max_interval_ms = 700
-    app._ui_queue_idle_backoff_step_ms = 50
-    app._ui_queue_quiet_idle_interval_ms = 350
-    app._ui_queue_quiet_idle_max_interval_ms = 1200
-    app._ui_queue_quiet_idle_backoff_step_ms = 100
+    app._ui_queue_idle_interval_ms = 300
+    app._ui_queue_idle_max_interval_ms = 900
+    app._ui_queue_idle_backoff_step_ms = 60
+    app._ui_queue_quiet_idle_interval_ms = 450
+    app._ui_queue_quiet_idle_max_interval_ms = 1400
+    app._ui_queue_quiet_idle_backoff_step_ms = 120
     app._ui_queue_idle_streak = 0
     app._ui_queue_drain_event_limit = 100
     app._ui_queue_drain_time_budget_ms = 8.0
     app._ui_queue_drain_stall_budget_ms = 16.0
-    app._ui_queue_drain_outlier_capture_ms = 100.0
+    app._ui_queue_drain_outlier_capture_ms = float(app._ui_queue_drain_stall_budget_ms)
     app._ui_queue_drain_outlier_log_ms = 200.0
     app._ui_queue_drain_outlier_history_limit = 24
     app._ui_queue_drain_outliers = deque(
         maxlen=app._ui_queue_drain_outlier_history_limit
     )
     app._ui_queue_drain_outlier_total = 0
+    app._ui_queue_drain_runtime_stall_history_limit = 20
+    app._ui_queue_drain_runtime_stalls = deque(
+        maxlen=app._ui_queue_drain_runtime_stall_history_limit
+    )
+    app._ui_queue_drain_runtime_stall_total = 0
     app._ui_queue_drain_ticks = 0
     app._ui_queue_drain_events = 0
     app._ui_queue_drain_max_ms = 0.0
@@ -789,11 +806,15 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._state_flash_color = None
     app._state_flash_on = False
     app._state_default_bg = None
+    app._machine_state_highlight_key = ""
+    app._machine_state_label_width = 0
     app._app_settings_tab_active = False
     app._active_tab_label = ""
     app._app_settings_last_interaction_ts = float(time.monotonic())
     app._app_settings_interaction_active_window_s = 4.0
     app._app_settings_sticky_idle_update_ms = 1800
+    app._ui_tool_reference_sync_last_ts = 0.0
+    app._ui_tool_reference_sync_quiet_idle_interval_s = 5.0
     app._joystick_poll_app_settings_idle_interval_ms = 1800
     app._joystick_poll_noninteractive_tab_interval_ms = 1500
     app._joystick_poll_manual_ready_interval_ms = 80
@@ -826,16 +847,16 @@ def init_runtime_state(
         getattr(deps, "UI_QUEUE_MAINTENANCE_INTERVAL_S", 0.25)
     )
     ui_maintenance_idle_interval_s = float(
-        getattr(deps, "UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S", 1.0)
+        getattr(deps, "UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S", 1.25)
     )
     ui_maintenance_quiet_idle_interval_s = float(
-        getattr(deps, "UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S", 3.0)
+        getattr(deps, "UI_QUEUE_QUIET_IDLE_MAINTENANCE_INTERVAL_S", 4.0)
     )
     auto_reconnect_check_interval_s = float(
         getattr(deps, "UI_QUEUE_RECONNECT_CHECK_INTERVAL_S", 0.25)
     )
     auto_reconnect_check_idle_interval_s = float(
-        getattr(deps, "UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S", 1.0)
+        getattr(deps, "UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S", 1.25)
     )
     joystick_poll_interval_ms = int(getattr(deps, "JOYSTICK_POLL_INTERVAL_MS", 50))
     joystick_poll_idle_max_interval_ms = int(

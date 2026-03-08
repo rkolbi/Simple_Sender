@@ -279,6 +279,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._status_query_failures = 0
         self._settings_dump_active = False
         self._settings_dump_seen = False
+        self._settings_dump_started_ts = 0.0
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0
@@ -369,6 +370,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._status_query_failures = 0
         self._settings_dump_active = False
         self._settings_dump_seen = False
+        self._settings_dump_started_ts = 0.0
         self._watchdog_paused = False
         self._watchdog_trip_ts = 0.0
         self._watchdog_ignore_until = 0.0

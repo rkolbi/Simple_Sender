@@ -55,9 +55,10 @@ _LOW_IMPACT_UI_EVENT_KINDS = frozenset(
         "throughput",
     }
 )
-_UI_DRAIN_OUTLIER_CAPTURE_MS = 100.0
+_UI_DRAIN_OUTLIER_CAPTURE_MS = float(UI_QUEUE_DRAIN_STALL_BUDGET_MS)
 _UI_DRAIN_OUTLIER_LOG_MS = 200.0
 _UI_DRAIN_OUTLIER_MAX_HISTORY = 24
+_UI_DRAIN_RUNTIME_STALL_MAX_HISTORY = 20
 _UI_DRAIN_SPECIAL_EVENT_KINDS = frozenset(
     {
         "ui_call",
@@ -76,6 +77,7 @@ _UI_DRAIN_SPECIAL_TASK_PREFIXES = (
     "log_viewer.",
     "ui.maintenance.",
 )
+_TOOL_REFERENCE_UNREAD = object()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -155,6 +157,65 @@ def _manual_motion_ui_active(app: AppProtocol) -> bool:
         return until_ts > time.monotonic()
     except Exception:
         return False
+
+
+def _read_tool_reference_nonblocking(app: AppProtocol):
+    macro_executor = getattr(app, "macro_executor", None)
+    lock = getattr(macro_executor, "_macro_vars_lock", None)
+    macro_vars = getattr(macro_executor, "_macro_vars", None)
+    if (
+        lock is None
+        or not hasattr(lock, "acquire")
+        or not hasattr(lock, "release")
+        or not isinstance(macro_vars, dict)
+    ):
+        return _TOOL_REFERENCE_UNREAD
+    acquired = False
+    try:
+        acquired = bool(lock.acquire(blocking=False))
+    except Exception:
+        acquired = False
+    if not acquired:
+        return _TOOL_REFERENCE_UNREAD
+    try:
+        macro_ns = macro_vars.get("macro")
+        state = getattr(macro_ns, "state", None)
+        return getattr(state, "TOOL_REFERENCE", None) if state is not None else None
+    except Exception:
+        return _TOOL_REFERENCE_UNREAD
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
+
+
+def _should_run_tool_reference_sync(
+    app: AppProtocol,
+    *,
+    quiet_idle: bool,
+    now: float,
+) -> bool:
+    if (not quiet_idle) or (not bool(getattr(app, "connected", False))):
+        return True
+    try:
+        quiet_interval_s = float(
+            getattr(app, "_ui_tool_reference_sync_quiet_idle_interval_s", 5.0) or 5.0
+        )
+    except Exception:
+        quiet_interval_s = 5.0
+    quiet_interval_s = max(0.5, quiet_interval_s)
+    try:
+        last_sync_ts = float(getattr(app, "_ui_tool_reference_sync_last_ts", 0.0) or 0.0)
+    except Exception:
+        last_sync_ts = 0.0
+    current_tool_ref = _read_tool_reference_nonblocking(app)
+    if current_tool_ref is not _TOOL_REFERENCE_UNREAD:
+        if current_tool_ref != getattr(app, "_tool_reference_last", None):
+            return True
+    if last_sync_ts <= 0.0:
+        return True
+    return (now - last_sync_ts) >= quiet_interval_s
 
 
 def _task_timing_seq(value: object) -> int:
@@ -284,6 +345,41 @@ def _record_ui_drain_outlier(app: AppProtocol, payload: dict[str, object]) -> No
     try:
         current_total = int(getattr(app, "_ui_queue_drain_outlier_total", 0) or 0)
         setattr(app, "_ui_queue_drain_outlier_total", current_total + 1)
+    except Exception:
+        pass
+
+
+def _record_ui_runtime_stall(app: AppProtocol, payload: dict[str, object]) -> None:
+    history_limit = _UI_DRAIN_RUNTIME_STALL_MAX_HISTORY
+    try:
+        configured_limit = int(
+            getattr(
+                app,
+                "_ui_queue_drain_runtime_stall_history_limit",
+                _UI_DRAIN_RUNTIME_STALL_MAX_HISTORY,
+            )
+        )
+        if configured_limit > 0:
+            history_limit = configured_limit
+    except Exception:
+        history_limit = _UI_DRAIN_RUNTIME_STALL_MAX_HISTORY
+    history = getattr(app, "_ui_queue_drain_runtime_stalls", None)
+    if isinstance(history, deque):
+        if history.maxlen != history_limit:
+            history = deque(history, maxlen=history_limit)
+            setattr(app, "_ui_queue_drain_runtime_stalls", history)
+    elif isinstance(history, list):
+        history = deque(history[-history_limit:], maxlen=history_limit)
+        setattr(app, "_ui_queue_drain_runtime_stalls", history)
+    else:
+        history = deque(maxlen=history_limit)
+        setattr(app, "_ui_queue_drain_runtime_stalls", history)
+    history.append(payload)
+    try:
+        current_total = int(
+            getattr(app, "_ui_queue_drain_runtime_stall_total", 0) or 0
+        )
+        setattr(app, "_ui_queue_drain_runtime_stall_total", current_total + 1)
     except Exception:
         pass
 
@@ -737,11 +833,21 @@ def drain_ui_queue(app: AppProtocol) -> None:
                         callback=app._update_quick_button_visibility,
                     )
                 if hasattr(app, "_sync_tool_reference_label"):
-                    _run_ui_maintenance_task(
+                    should_sync_tool_ref = _should_run_tool_reference_sync(
                         app,
-                        task_name="tool_reference_sync",
-                        callback=app._sync_tool_reference_label,
+                        quiet_idle=quiet_idle,
+                        now=now,
                     )
+                    if should_sync_tool_ref:
+                        _run_ui_maintenance_task(
+                            app,
+                            task_name="tool_reference_sync",
+                            callback=app._sync_tool_reference_label,
+                        )
+                        try:
+                            setattr(app, "_ui_tool_reference_sync_last_ts", now)
+                        except Exception:
+                            pass
             if not bool(getattr(app, "connected", False)):
                 reconnect_interval_key = (
                     "_auto_reconnect_check_interval_s"
@@ -874,7 +980,9 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     )
                 ),
             )
-            if elapsed_ms >= outlier_capture_ms:
+            capture_runtime_stall = runtime_eligible and (elapsed_ms > stall_budget_ms)
+            capture_outlier = elapsed_ms >= outlier_capture_ms
+            if capture_runtime_stall or capture_outlier:
                 kind_counts_sorted = dict(
                     sorted(
                         per_kind_counts.items(),
@@ -915,11 +1023,16 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     "task_timing_seq_start": int(task_timing_seq_start),
                     "task_timing_seq_end": int(task_timing_seq_end),
                 }
-                _record_ui_drain_outlier(app, outlier_payload)
-                _log_ui_drain_outlier(
-                    outlier_payload,
-                    severe=(elapsed_ms >= outlier_log_ms),
-                )
+                if capture_runtime_stall:
+                    stall_payload = dict(outlier_payload)
+                    stall_payload["stall_budget_ms"] = round(float(stall_budget_ms), 3)
+                    _record_ui_runtime_stall(app, stall_payload)
+                if capture_outlier:
+                    _record_ui_drain_outlier(app, outlier_payload)
+                    _log_ui_drain_outlier(
+                        outlier_payload,
+                        severe=(elapsed_ms >= outlier_log_ms),
+                    )
         except Exception:
             pass
         if app._closing:

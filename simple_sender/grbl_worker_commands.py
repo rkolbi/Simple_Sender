@@ -128,6 +128,9 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                 timeout = float(getattr(self, "_settings_dump_watchdog_timeout", WATCHDOG_SETTINGS_DUMP_TIMEOUT))
             except Exception:
                 timeout = WATCHDOG_SETTINGS_DUMP_TIMEOUT
+            self._settings_dump_active = True
+            self._settings_dump_seen = False
+            self._settings_dump_started_ts = time.time()
             if timeout > 0:
                 try:
                     self.suspend_watchdog(timeout, reason="settings_dump")
@@ -176,6 +179,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         self._watchdog_ready_ts = 0.0
         self._settings_dump_active = False
         self._settings_dump_seen = False
+        self._settings_dump_started_ts = 0.0
         was_streaming = self._streaming or self._paused
         with self._stream_lock:
             self._stream_token += 1

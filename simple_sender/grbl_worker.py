@@ -266,6 +266,7 @@ class GrblWorker(
         self._last_manual_source: str | None = None
         self._settings_dump_active = False
         self._settings_dump_seen = False
+        self._settings_dump_started_ts = 0.0
         self._pause_after_idx: Optional[int] = None
         self._pause_after_reason: str | None = None
         self._resume_preamble: deque[str] = deque()
@@ -321,6 +322,25 @@ class GrblWorker(
         self._manual_motion_status_rx_count = 0
         self._manual_motion_status_rx_interval_avg_ms = 0.0
         self._manual_motion_status_rx_interval_max_ms = 0.0
+        self._manual_motion_status_session_active = False
+        self._manual_motion_status_session_count = 0
+        self._manual_motion_status_session_start_ts = 0.0
+        self._manual_motion_status_session_last_start_ts = 0.0
+        self._manual_motion_status_session_last_end_ts = 0.0
+        self._manual_motion_status_session_last_change_ts = 0.0
+        self._manual_motion_status_session_last_source = ""
+        self._status_wait_sample_count = 0
+        self._status_wait_requested_avg_s = 0.0
+        self._status_wait_actual_avg_s = 0.0
+        self._status_wait_overshoot_max_ms = 0.0
+        self._status_wait_overshoot_recent_max_ms = 0.0
+        self._status_wait_overshoot_recent_window_s = 60.0
+        self._status_wait_last_reason = ""
+        self._status_wait_last_requested_s = 0.0
+        self._status_wait_last_actual_s = 0.0
+        self._status_wait_last_overshoot_ms = 0.0
+        self._status_wait_reason_counts: dict[str, int] = {}
+        self._status_wait_trace: deque[dict[str, Any]] = deque(maxlen=120)
         self._jog_cancel_inflight = False
         self._jog_cancel_last_sent_ts = 0.0
         self._jog_cancel_retry_timeout_s = 1.5
@@ -342,6 +362,10 @@ class GrblWorker(
         self._homing_watchdog_enabled = True
         self._homing_watchdog_timeout = WATCHDOG_HOMING_TIMEOUT
         self._settings_dump_watchdog_timeout = WATCHDOG_SETTINGS_DUMP_TIMEOUT
+        self._settings_dump_watchdog_max_ignore_s = max(
+            float(WATCHDOG_SETTINGS_DUMP_TIMEOUT),
+            90.0,
+        )
         self._connect_started_ts = 0.0
         self._tx_loop_idle_wait_s = float(TX_LOOP_IDLE_WAIT_S)
         # Throttle high-frequency serial debug lines so logging I/O does not
@@ -543,7 +567,7 @@ class GrblWorker(
         """Context manager entry."""
         return self
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         """Context manager exit - ensures cleanup."""
         try:
             self.disconnect()
@@ -904,6 +928,27 @@ class GrblWorker(
             "manual_motion_status_query_interval_max_ms": float(
                 self._manual_motion_status_query_interval_max_ms
             ),
+            "manual_motion_status_session_active": bool(
+                self._manual_motion_status_session_active
+            ),
+            "manual_motion_status_session_count": int(
+                self._manual_motion_status_session_count
+            ),
+            "manual_motion_status_session_start_ts": float(
+                self._manual_motion_status_session_start_ts
+            ),
+            "manual_motion_status_session_last_start_ts": float(
+                self._manual_motion_status_session_last_start_ts
+            ),
+            "manual_motion_status_session_last_end_ts": float(
+                self._manual_motion_status_session_last_end_ts
+            ),
+            "manual_motion_status_session_last_change_ts": float(
+                self._manual_motion_status_session_last_change_ts
+            ),
+            "manual_motion_status_session_last_source": str(
+                self._manual_motion_status_session_last_source or ""
+            ),
             "manual_motion_status_tx_query_count": int(self._manual_motion_status_query_count),
             "manual_motion_status_tx_query_interval_avg_ms": float(
                 self._manual_motion_status_query_interval_avg_ms
@@ -931,6 +976,39 @@ class GrblWorker(
             "manual_motion_status_rx_interval_ms": float(
                 self._manual_motion_status_rx_interval_avg_ms
             ),
+            "status_wait_sample_count": int(self._status_wait_sample_count),
+            "status_wait_requested_avg_ms": float(
+                self._status_wait_requested_avg_s * 1000.0
+            ),
+            "status_wait_actual_avg_ms": float(self._status_wait_actual_avg_s * 1000.0),
+            "status_wait_overshoot_max_ms": float(
+                self._status_wait_overshoot_max_ms
+            ),
+            "status_wait_overshoot_max_recent_ms": float(
+                self._status_wait_overshoot_recent_max_ms
+            ),
+            "status_wait_overshoot_recent_window_s": float(
+                self._status_wait_overshoot_recent_window_s
+            ),
+            "status_wait_overshoot_alert_threshold_ms": 250.0,
+            "status_wait_overshoot_alert_recent": bool(
+                float(self._status_wait_overshoot_recent_max_ms) >= 250.0
+            ),
+            "status_wait_overshoot_alert_lifetime": bool(
+                float(self._status_wait_overshoot_max_ms) >= 250.0
+            ),
+            "status_wait_last_reason": str(self._status_wait_last_reason or ""),
+            "status_wait_last_requested_ms": float(
+                self._status_wait_last_requested_s * 1000.0
+            ),
+            "status_wait_last_actual_ms": float(
+                self._status_wait_last_actual_s * 1000.0
+            ),
+            "status_wait_last_overshoot_ms": float(
+                self._status_wait_last_overshoot_ms
+            ),
+            "status_wait_reason_counts": dict(self._status_wait_reason_counts),
+            "status_wait_trace": list(self._status_wait_trace),
         }
     
     def _encode_line_payload(self, line: str) -> bytes:

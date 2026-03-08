@@ -71,6 +71,7 @@ def all_stop_gcode_label(app) -> str:
 
 
 def position_all_stop_offset(app, event=None):
+    _ = event
     slot = getattr(app, "_all_stop_slot", None)
     btn = getattr(app, "btn_all_stop", None)
     if not slot or not btn:

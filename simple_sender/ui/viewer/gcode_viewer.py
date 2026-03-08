@@ -105,16 +105,16 @@ class GcodeViewer(ttk.Frame):
         past = list(past_lines[-int(GCODE_LIVE_WINDOW_PAST_LINES):])
         nxt = list(next_lines[: int(GCODE_LIVE_WINDOW_NEXT_LINES)])
 
-        lines: list[str] = ["--- Past (last 500 acked) ---"]
-        for idx, raw in past:
-            lines.append(self._format_live_line(idx, raw))
-
-        lines.append("--- Current (acked) ---")
+        lines: list[str] = ["--- Current (acked) ---"]
         if current_line is None:
             lines.append("<none>")
         else:
             self._live_current_row = len(lines) + 1
             lines.append(self._format_live_line(current_line[0], current_line[1]))
+
+        lines.append("--- Past (last 500 acked) ---")
+        for idx, raw in reversed(past):
+            lines.append(self._format_live_line(idx, raw))
 
         lines.append("--- Next (up to 500 queued) ---")
         for idx, raw in nxt:

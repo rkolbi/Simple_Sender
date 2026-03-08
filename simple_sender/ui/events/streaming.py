@@ -27,7 +27,11 @@ import tkinter as tk
 from typing import Callable
 
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
-from simple_sender.ui.stream_completion import should_defer_done_until_idle
+from simple_sender.ui.stream_completion import (
+    begin_deferred_completion_wait,
+    end_deferred_completion_wait,
+    should_defer_done_until_idle,
+)
 from .stream_state_ui import (
     apply_stream_busy_state,
     restore_controls_after_stream,
@@ -41,6 +45,66 @@ _LOADED_RECONCILE_WARN_MS = 50.0
 
 def _log_stream_ui_issue(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc)
+
+
+def _set_streaming_lock_safe(
+    app,
+    locked: bool,
+    *,
+    defer_toolbar_refresh: bool = False,
+) -> None:
+    set_streaming_lock = getattr(app, "_set_streaming_lock", None)
+    if not callable(set_streaming_lock):
+        return
+    if defer_toolbar_refresh:
+        try:
+            set_streaming_lock(bool(locked), defer_toolbar_refresh=True)
+            return
+        except TypeError:
+            # Backward-compatible fallback for test doubles/legacy implementations
+            # that only accept positional lock state.
+            pass
+    set_streaming_lock(bool(locked))
+
+
+def _schedule_stream_ui_callback(
+    app,
+    *,
+    callback_attr: str,
+    callback: Callable[[], None],
+    context: str,
+) -> None:
+    pending_after_id = getattr(app, callback_attr, None)
+    if pending_after_id is not None:
+        cancel_fn = getattr(app, "after_cancel", None)
+        if callable(cancel_fn):
+            try:
+                cancel_fn(pending_after_id)
+            except Exception as exc:
+                _log_stream_ui_issue(
+                    f"Failed canceling deferred stream UI callback: {callback_attr}",
+                    exc,
+                )
+        setattr(app, callback_attr, None)
+
+    def _run() -> None:
+        setattr(app, callback_attr, None)
+        try:
+            callback()
+        except Exception as exc:
+            _log_stream_ui_issue(context, exc)
+
+    after_fn = getattr(app, "after", None)
+    if callable(after_fn):
+        try:
+            setattr(app, callback_attr, after_fn(0, _run))
+            return
+        except Exception as exc:
+            _log_stream_ui_issue(
+                f"Failed scheduling deferred stream UI callback: {callback_attr}",
+                exc,
+            )
+    _run()
 
 
 def _stop_job_accessories_for_state(app, state: str) -> None:
@@ -351,7 +415,9 @@ def _schedule_loaded_reconcile(
         try:
             _measure_subsection(
                 "controls",
-                lambda: app._set_streaming_lock(False, defer_toolbar_refresh=True),
+                lambda: _set_streaming_lock_safe(
+                    app, False, defer_toolbar_refresh=True
+                ),
             )
         except Exception as exc:
             _log_stream_ui_issue(
@@ -533,6 +599,7 @@ def handle_stream_state_event(app, evt):
     app._stream_state = st
     load_settling = bool(getattr(app, "_gcode_load_settling", False))
     if st == "loaded" and load_settling:
+        end_deferred_completion_wait(app, now_ts=now)
         app._stream_done_pending_idle = False
         app._stream_loaded_force_apply = True
         try:
@@ -560,6 +627,7 @@ def handle_stream_state_event(app, evt):
         )
         return
     if st == "loaded":
+        end_deferred_completion_wait(app, now_ts=now)
         _schedule_loaded_reconcile(
             app,
             loaded_total=loaded_total,
@@ -582,7 +650,12 @@ def handle_stream_state_event(app, evt):
             app._live_estimate_observed_total_min = None
             app._live_estimate_display_min = None
             app._live_estimate_display_ts = 0.0
-            app._refresh_gcode_stats_display()
+            _schedule_stream_ui_callback(
+                app,
+                callback_attr="_stream_state_stats_refresh_after_id",
+                callback=lambda: app._refresh_gcode_stats_display(),
+                context="Failed refreshing G-code stats after running-state transition",
+            )
             app.throughput_var.set("TX: 0 B/s")
         if prev != "paused":
             try:
@@ -640,7 +713,12 @@ def handle_stream_state_event(app, evt):
         app._live_estimate_display_ts = 0.0
         if st in ("error", "alarm", "loaded"):
             app._live_estimate_total_min = None
-        app._refresh_gcode_stats_display()
+        _schedule_stream_ui_callback(
+            app,
+            callback_attr="_stream_state_stats_refresh_after_id",
+            callback=lambda: app._refresh_gcode_stats_display(),
+            context="Failed refreshing G-code stats after stream-state transition",
+        )
         app.throughput_var.set("TX: 0 B/s")
 
     if st == "loaded":
@@ -661,6 +739,7 @@ def handle_stream_state_event(app, evt):
         )
     elif st == "running":
         app._stream_done_pending_idle = False
+        end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = True
             macro_vars["paused"] = False
@@ -669,9 +748,10 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="disabled")
         app.btn_resume_from.config(state="disabled")
         app._set_manual_controls_enabled(False)
-        app._set_streaming_lock(True)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
     elif st == "paused":
         app._stream_done_pending_idle = False
+        end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = True
             macro_vars["paused"] = True
@@ -679,7 +759,7 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="normal")
         app.btn_resume_from.config(state="disabled")
         app._set_manual_controls_enabled(False)
-        app._set_streaming_lock(True)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
     elif st in ("done", "stopped"):
         _stop_job_accessories_for_state(app, st)
         with app.macro_executor.macro_vars() as macro_vars:
@@ -688,6 +768,10 @@ def handle_stream_state_event(app, evt):
         if st == "done":
             defer_done = should_defer_done_until_idle(app, now_ts=now)
             app._stream_done_pending_idle = bool(defer_done)
+            if defer_done:
+                begin_deferred_completion_wait(app, now_ts=now)
+            else:
+                end_deferred_completion_wait(app, now_ts=now)
             app.progress_pct.set(99 if defer_done else 100)
             _set_stream_progress_ui(
                 app,
@@ -704,13 +788,14 @@ def handle_stream_state_event(app, evt):
             )
         else:
             app._stream_done_pending_idle = False
+            end_deferred_completion_wait(app, now_ts=now)
             app.progress_pct.set(0)
             _set_stream_progress_ui(app, pct=0.0, visible=False, acked_offset=0)
         app.btn_pause.config(state="disabled")
         app.btn_resume.config(state="disabled")
         if st == "done" and app._stream_done_pending_idle:
             app._set_manual_controls_enabled(False)
-            app._set_streaming_lock(True)
+            _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
         else:
             restore_controls_after_stream(
                 app,
@@ -720,6 +805,7 @@ def handle_stream_state_event(app, evt):
     elif st == "error":
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
+        end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -736,6 +822,7 @@ def handle_stream_state_event(app, evt):
     elif st == "alarm":
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
+        end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False
@@ -746,24 +833,39 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="disabled")
         app.btn_resume_from.config(state="disabled")
         app._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
-        app._set_streaming_lock(False)
+        _set_streaming_lock_safe(app, False)
     stream_busy = st in ("running", "paused") or bool(
         getattr(app, "_stream_done_pending_idle", False)
     )
     apply_stream_busy_state(app, stream_busy, log_hook=_log_stream_ui_issue)
-    _refresh_stream_busy_ui(app)
-    if hasattr(app, "_update_joystick_polling_state") and (
-        stream_busy != prev_stream_busy
-    ):
-        try:
-            app._update_joystick_polling_state()
-        except Exception as exc:
-            _log_stream_ui_issue(
-                "Failed updating joystick polling state after stream-state transition",
-                exc,
-            )
-    if stream_busy != prev_stream_busy or st in ("alarm", "error"):
-        app._apply_status_poll_profile()
+
+    def _apply_post_stream_state_ui_updates() -> None:
+        _refresh_stream_busy_ui(app)
+        if hasattr(app, "_update_joystick_polling_state") and (
+            stream_busy != prev_stream_busy
+        ):
+            try:
+                app._update_joystick_polling_state()
+            except Exception as exc:
+                _log_stream_ui_issue(
+                    "Failed updating joystick polling state after stream-state transition",
+                    exc,
+                )
+        if stream_busy != prev_stream_busy or st in ("alarm", "error"):
+            try:
+                app._apply_status_poll_profile()
+            except Exception as exc:
+                _log_stream_ui_issue(
+                    "Failed applying status poll profile after stream-state transition",
+                    exc,
+                )
+
+    _schedule_stream_ui_callback(
+        app,
+        callback_attr="_stream_state_post_apply_after_id",
+        callback=_apply_post_stream_state_ui_updates,
+        context="Failed applying deferred stream-state UI updates",
+    )
 
 
 def handle_stream_interrupted(app, evt):

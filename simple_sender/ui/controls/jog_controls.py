@@ -175,6 +175,7 @@ def set_step_z(app, value: float):
 
 
 def validate_jog_feed_var(app, var: tk.DoubleVar, fallback_default: float):
+    _ = app
     try:
         val = float(var.get())
     except Exception as exc:

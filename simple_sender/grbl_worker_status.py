@@ -23,6 +23,7 @@
 import logging
 import threading
 import time
+from collections import deque
 from typing import cast
 
 from simple_sender.types import GrblWorkerState
@@ -45,7 +46,9 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _WATCHDOG_READY_ARM_GRACE_S = float(WATCHDOG_READY_ARM_GRACE)
 _MANUAL_MOTION_STATUS_INTERVAL_S = 0.1
-_STATUS_INTERVAL_WAKE_SLICE_S = 0.1
+_STATUS_INTERVAL_WAKE_SLICE_S = 0.05
+_STATUS_WAIT_OVERSHOOT_RECENT_WINDOW_S = 60.0
+_STATUS_WAIT_OVERSHOOT_LOG_THRESHOLD_MS = 250.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -94,6 +97,39 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             until_ts = 0.0
         return until_ts > float(now)
 
+    def _update_manual_motion_session_state(
+        self,
+        active: bool,
+        *,
+        now: float | None = None,
+        source: str = "",
+    ) -> bool:
+        now_ts = float(time.time() if now is None else now)
+        is_active = bool(active)
+        session_active = bool(
+            getattr(self, "_manual_motion_status_session_active", False)
+        )
+        if is_active and (not session_active):
+            self._manual_motion_status_session_active = True
+            self._manual_motion_status_session_count = int(
+                getattr(self, "_manual_motion_status_session_count", 0) or 0
+            ) + 1
+            self._manual_motion_status_session_start_ts = now_ts
+            self._manual_motion_status_session_last_start_ts = now_ts
+            self._manual_motion_status_session_last_change_ts = now_ts
+            self._manual_motion_status_session_last_source = str(source or "")
+            # Reset interval baselines on session transitions so cross-session
+            # idle gaps are not counted as manual-motion cadence outliers.
+            self._manual_motion_status_query_last_ts = 0.0
+            self._manual_motion_status_rx_last_ts = 0.0
+        elif (not is_active) and session_active:
+            self._manual_motion_status_session_active = False
+            self._manual_motion_status_session_start_ts = 0.0
+            self._manual_motion_status_session_last_end_ts = now_ts
+            self._manual_motion_status_session_last_change_ts = now_ts
+            self._manual_motion_status_session_last_source = str(source or "")
+        return bool(getattr(self, "_manual_motion_status_session_active", False))
+
     def _record_manual_motion_query_interval(self, now: float) -> None:
         prev_ts = float(getattr(self, "_manual_motion_status_query_last_ts", 0.0) or 0.0)
         self._manual_motion_status_query_last_ts = float(now)
@@ -128,21 +164,160 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             interval_ms,
         )
 
+    def _record_status_wait_sample(
+        self,
+        *,
+        requested_s: float,
+        actual_s: float,
+        reason: str,
+    ) -> None:
+        requested = max(0.0, float(requested_s))
+        actual = max(0.0, float(actual_s))
+        overshoot_ms = max(0.0, (actual - requested) * 1000.0)
+        sample_count = int(getattr(self, "_status_wait_sample_count", 0) or 0) + 1
+        prev_requested_avg = float(
+            getattr(self, "_status_wait_requested_avg_s", 0.0) or 0.0
+        )
+        prev_actual_avg = float(getattr(self, "_status_wait_actual_avg_s", 0.0) or 0.0)
+        self._status_wait_sample_count = sample_count
+        self._status_wait_requested_avg_s = (
+            ((prev_requested_avg * max(0, sample_count - 1)) + requested)
+            / float(sample_count)
+        )
+        self._status_wait_actual_avg_s = (
+            ((prev_actual_avg * max(0, sample_count - 1)) + actual)
+            / float(sample_count)
+        )
+        self._status_wait_overshoot_max_ms = max(
+            float(getattr(self, "_status_wait_overshoot_max_ms", 0.0) or 0.0),
+            overshoot_ms,
+        )
+        normalized_reason = str(reason or "unknown").strip().lower() or "unknown"
+        self._status_wait_last_reason = normalized_reason
+        self._status_wait_last_requested_s = requested
+        self._status_wait_last_actual_s = actual
+        self._status_wait_last_overshoot_ms = overshoot_ms
+        reason_counts = getattr(self, "_status_wait_reason_counts", None)
+        if not isinstance(reason_counts, dict):
+            reason_counts = {}
+            self._status_wait_reason_counts = reason_counts
+        reason_counts[normalized_reason] = int(reason_counts.get(normalized_reason, 0) or 0) + 1
+        trace = getattr(self, "_status_wait_trace", None)
+        sample_ts = float(time.time())
+        sample = {
+            "ts": sample_ts,
+            "requested_s": requested,
+            "actual_s": actual,
+            "overshoot_ms": overshoot_ms,
+            "reason": normalized_reason,
+        }
+        if isinstance(trace, list | deque):
+            try:
+                trace.append(sample)
+            except Exception:
+                trace = deque([sample], maxlen=120)
+                self._status_wait_trace = trace
+            else:
+                if isinstance(trace, list) and len(trace) > 120:
+                    del trace[:-120]
+        else:
+            trace = deque([sample], maxlen=120)
+            self._status_wait_trace = trace
+        recent_max_ms = 0.0
+        try:
+            recent_window_s = float(
+                getattr(
+                    self,
+                    "_status_wait_overshoot_recent_window_s",
+                    _STATUS_WAIT_OVERSHOOT_RECENT_WINDOW_S,
+                )
+                or _STATUS_WAIT_OVERSHOOT_RECENT_WINDOW_S
+            )
+        except Exception:
+            recent_window_s = _STATUS_WAIT_OVERSHOOT_RECENT_WINDOW_S
+        recent_window_s = max(1.0, recent_window_s)
+        recent_cutoff_ts = sample_ts - recent_window_s
+        if isinstance(trace, list | deque):
+            for entry in trace:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    if float(entry.get("ts", 0.0) or 0.0) < recent_cutoff_ts:
+                        continue
+                    recent_max_ms = max(
+                        recent_max_ms,
+                        float(entry.get("overshoot_ms", 0.0) or 0.0),
+                    )
+                except Exception:
+                    continue
+        else:
+            recent_max_ms = max(recent_max_ms, overshoot_ms)
+        self._status_wait_overshoot_recent_max_ms = recent_max_ms
+        if overshoot_ms >= float(_STATUS_WAIT_OVERSHOOT_LOG_THRESHOLD_MS):
+            state_token = str(getattr(self, "_last_status_state_token", "") or "")
+            stream_state = (
+                "streaming"
+                if bool(getattr(self, "_streaming", False))
+                else "non_streaming"
+            )
+            logger.info(
+                "[status/wait] Overshoot spike: overshoot_ms=%.2f requested_ms=%.2f actual_ms=%.2f "
+                "reason=%s state=%s stream=%s",
+                float(overshoot_ms),
+                float(requested * 1000.0),
+                float(actual * 1000.0),
+                normalized_reason,
+                state_token or "unknown",
+                stream_state,
+            )
+
     def _wait_status_interval(self, stop_evt: threading.Event, interval_s: float) -> bool:
         interval = max(0.0, float(interval_s))
         changed_evt = getattr(self, "_status_interval_changed_evt", None)
+        started = time.monotonic()
         if not isinstance(changed_evt, threading.Event) or interval <= 0.25:
-            return bool(stop_evt.wait(interval))
+            stopped = bool(stop_evt.wait(interval))
+            elapsed = max(0.0, time.monotonic() - started)
+            self._record_status_wait_sample(
+                requested_s=interval,
+                actual_s=elapsed,
+                reason="stop" if stopped else "timeout",
+            )
+            return stopped
         deadline = time.monotonic() + interval
         while not stop_evt.is_set():
             if changed_evt.is_set():
                 changed_evt.clear()
+                elapsed = max(0.0, time.monotonic() - started)
+                self._record_status_wait_sample(
+                    requested_s=interval,
+                    actual_s=elapsed,
+                    reason="interval_changed",
+                )
                 return False
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
+                elapsed = max(0.0, time.monotonic() - started)
+                self._record_status_wait_sample(
+                    requested_s=interval,
+                    actual_s=elapsed,
+                    reason="timeout",
+                )
                 return False
             if stop_evt.wait(min(_STATUS_INTERVAL_WAKE_SLICE_S, remaining)):
+                elapsed = max(0.0, time.monotonic() - started)
+                self._record_status_wait_sample(
+                    requested_s=interval,
+                    actual_s=elapsed,
+                    reason="stop",
+                )
                 return True
+        elapsed = max(0.0, time.monotonic() - started)
+        self._record_status_wait_sample(
+            requested_s=interval,
+            actual_s=elapsed,
+            reason="stop",
+        )
         return True
 
     def set_status_poll_interval(self, interval: float) -> None:
@@ -391,6 +566,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 if getattr(self, "_settings_dump_seen", False):
                     self._settings_dump_active = False
                     self._settings_dump_seen = False
+                    self._settings_dump_started_ts = 0.0
                     self.clear_watchdog_ignore("settings_dump")
                     self._safe_ui_put(("settings_dump_done",), context="settings dump")
                     self._emit_ui_log_rx("ok", context="settings ok")
@@ -419,6 +595,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             if line_lower.startswith("error") and getattr(self, "_settings_dump_active", False):
                 self._settings_dump_active = False
                 self._settings_dump_seen = False
+                self._settings_dump_started_ts = 0.0
                 self.clear_watchdog_ignore("settings_dump")
             ack_index = None
             ack_line_idx = None
@@ -516,7 +693,16 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             parts = line.strip("<>").split("|")
             state = parts[0] if parts else ""
             self._last_status_state_token = str(state or "")
-            if self._manual_motion_status_active(now=now, state_token=state):
+            manual_motion_active = self._manual_motion_status_active(
+                now=now,
+                state_token=state,
+            )
+            manual_motion_active = self._update_manual_motion_session_state(
+                manual_motion_active,
+                now=now,
+                source="rx_status",
+            )
+            if manual_motion_active:
                 self._record_manual_motion_rx_interval(now)
             else:
                 self._manual_motion_status_grace_until_ts = 0.0
@@ -586,6 +772,41 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         break
                     watchdog_ignore_until = float(getattr(self, "_watchdog_ignore_until", 0.0))
                     watchdog_ignored = watchdog_ignore_until and (now < watchdog_ignore_until)
+                    settings_dump_active = bool(
+                        getattr(self, "_settings_dump_active", False)
+                    )
+                    if settings_dump_active:
+                        started_ts = float(
+                            getattr(self, "_settings_dump_started_ts", 0.0) or 0.0
+                        )
+                        max_ignore_s = float(
+                            getattr(
+                                self,
+                                "_settings_dump_watchdog_max_ignore_s",
+                                getattr(self, "_settings_dump_watchdog_timeout", 0.0),
+                            )
+                            or 0.0
+                        )
+                        elapsed = (now - started_ts) if started_ts > 0.0 else 0.0
+                        if max_ignore_s <= 0.0 or elapsed <= max_ignore_s:
+                            watchdog_ignored = True
+                        else:
+                            self._settings_dump_active = False
+                            self._settings_dump_seen = False
+                            self._settings_dump_started_ts = 0.0
+                            self.clear_watchdog_ignore("settings_dump")
+                            try:
+                                self.ui_q.put(
+                                    (
+                                        "log",
+                                        "[watchdog] Settings dump grace expired; watchdog re-enabled.",
+                                    )
+                                )
+                            except Exception as exc:
+                                _log_suppressed(
+                                    "Failed queueing settings-dump watchdog-expiry log",
+                                    exc,
+                                )
                     idle = now - self._last_rx_ts
                     watchdog_enforced = self._watchdog_enforced(now)
                     if self._alarm_active:
@@ -628,6 +849,11 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 if connected:
                     try:
                         manual_motion_active = self._manual_motion_status_active(now=now)
+                        manual_motion_active = self._update_manual_motion_session_state(
+                            manual_motion_active,
+                            now=now,
+                            source="status_loop_query",
+                        )
                         if manual_motion_active:
                             self._record_manual_motion_query_interval(now)
                         self.send_realtime(RT_STATUS)
@@ -667,7 +893,14 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 # Get current interval
                 with self._status_interval_lock:
                     interval = self._status_poll_interval
-                if self._manual_motion_status_active():
+                wait_now = time.time()
+                manual_motion_active = self._manual_motion_status_active(now=wait_now)
+                manual_motion_active = self._update_manual_motion_session_state(
+                    manual_motion_active,
+                    now=wait_now,
+                    source="status_loop_wait",
+                )
+                if manual_motion_active:
                     interval = min(float(interval), float(_MANUAL_MOTION_STATUS_INTERVAL_S))
                 if bool(getattr(self, "_live_window_dirty", False)):
                     self._emit_live_gcode_window(force=False)

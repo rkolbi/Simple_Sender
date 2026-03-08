@@ -24,6 +24,8 @@ import logging
 import json
 import os
 import platform
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -35,11 +37,13 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from typing import Any, cast
 
+from simple_sender import __version__ as SIMPLE_SENDER_PACKAGE_VERSION
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.kasa_actions import format_kasa_status_line, kasa_status_snapshot
 from simple_sender.ui.macro_files import discover_macro_assets
 from simple_sender.ui.pi_profile import PI_PROFILE_STATUS_POLL_INTERVAL
+from simple_sender.ui.stream_completion import deferred_completion_wait_snapshot
 from simple_sender.utils.constants import (
     GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT,
     GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER,
@@ -73,6 +77,7 @@ PERF_TEST_STATUS_POLL_INTERVAL = max(1.0, float(PI_PROFILE_STATUS_POLL_INTERVAL)
 DIAG_BUNDLE_LOG_MAX_FILES = 12
 DIAG_BUNDLE_LOG_TAIL_MAX_BYTES = 512_000
 DIAG_BUNDLE_IO_CHUNK_BYTES = 64 * 1024
+DIAGNOSTICS_SCHEMA_REV = "2026-03-07-telemetry-r2"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -105,7 +110,51 @@ def _json_dump(obj: Any) -> str:
         return "{}"
 
 
-def _build_system_info_text(app: Any) -> str:
+def _collect_build_info(app: Any) -> dict[str, Any]:
+    version_getter = getattr(getattr(app, "version_var", None), "get", None)
+    app_version = str(version_getter() if callable(version_getter) else "").strip()
+    info: dict[str, Any] = {
+        "schema_rev": DIAGNOSTICS_SCHEMA_REV,
+        "package_version": str(SIMPLE_SENDER_PACKAGE_VERSION or "").strip(),
+        "app_version": app_version,
+        "build_commit": "",
+        "build_source": "",
+    }
+    env_commit = str(os.environ.get("SIMPLE_SENDER_BUILD_COMMIT", "") or "").strip()
+    if env_commit:
+        info["build_commit"] = env_commit
+        info["build_source"] = "env:SIMPLE_SENDER_BUILD_COMMIT"
+        return info
+    git_exe = str(shutil.which("git") or "").strip()
+    if not git_exe:
+        return info
+    cwd = ""
+    try:
+        cwd = os.getcwd()
+    except Exception:
+        cwd = ""
+    if not cwd:
+        return info
+    try:
+        proc = subprocess.run(
+            [git_exe, "rev-parse", "--short", "HEAD"],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.5,
+            check=False,
+        )
+        commit = str(proc.stdout or "").strip()
+        if proc.returncode == 0 and commit:
+            info["build_commit"] = commit
+            info["build_source"] = "git"
+    except Exception as exc:
+        _log_suppressed("Failed collecting git commit metadata for diagnostics", exc)
+    return info
+
+
+def _build_system_info_text(app: Any, *, build_info: dict[str, Any] | None = None) -> str:
     lines: list[str] = []
     lines.append("Simple Sender system snapshot")
     lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
@@ -113,6 +162,21 @@ def _build_system_info_text(app: Any) -> str:
     version_text = str(version_getter() if callable(version_getter) else "").strip()
     if version_text:
         lines.append(f"App version: {version_text}")
+    if build_info is None:
+        build_info = _collect_build_info(app)
+    if isinstance(build_info, dict):
+        schema_rev = str(build_info.get("schema_rev", "") or "").strip()
+        if schema_rev:
+            lines.append(f"Diagnostics schema: {schema_rev}")
+        package_version = str(build_info.get("package_version", "") or "").strip()
+        if package_version:
+            lines.append(f"Package version: {package_version}")
+        commit = str(build_info.get("build_commit", "") or "").strip()
+        source = str(build_info.get("build_source", "") or "").strip()
+        if commit:
+            lines.append(f"Build commit: {commit}")
+        if source:
+            lines.append(f"Build source: {source}")
     lines.append(f"Python: {sys.version.splitlines()[0] if sys.version else 'n/a'}")
     lines.append(f"Executable: {sys.executable}")
     lines.append(f"Platform: {platform.platform()}")
@@ -211,6 +275,7 @@ def _bounded_ssmeta(ssmeta: Any) -> dict[str, str]:
 
 def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
+    metrics["build_info"] = _collect_build_info(app)
     try:
         kasa_snapshot = kasa_status_snapshot(app)
     except Exception as exc:
@@ -559,6 +624,13 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         acked_byte_offset = max(0, acked_byte_offset)
     stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
     stream_done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
+    (
+        stream_done_wait_active,
+        stream_done_wait_current_s,
+        stream_done_wait_last_s,
+        stream_done_wait_total_s,
+        stream_done_wait_count,
+    ) = deferred_completion_wait_snapshot(app, now_ts=time.time())
     if (
         stream_state == "done"
         and not stream_done_pending_idle
@@ -588,6 +660,12 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics["stream_progress_pct"] = float(stream_progress_pct)
     metrics["acked_byte_offset"] = int(acked_byte_offset)
     metrics["stream_file_size_bytes"] = int(stream_file_size_bytes)
+    metrics["stream_done_pending_idle"] = bool(stream_done_pending_idle)
+    metrics["stream_done_wait_active"] = bool(stream_done_wait_active)
+    metrics["stream_done_wait_current_s"] = float(stream_done_wait_current_s)
+    metrics["stream_done_wait_last_s"] = float(stream_done_wait_last_s)
+    metrics["stream_done_wait_total_s"] = float(stream_done_wait_total_s)
+    metrics["stream_done_wait_count"] = int(stream_done_wait_count)
     metrics["file_size_bytes"] = int(stream_file_size_bytes if stream_file_size_bytes > 0 else file_size_bytes)
     metrics["gcode_total_lines"] = int(total_line_count)
     metrics["gcode_total_lines_known"] = bool(total_line_count_known)
@@ -1007,10 +1085,35 @@ def _format_runtime_metrics(
             )
     outlier_total = metrics.get("perf_ui_queue_drain_outlier_total")
     outlier_entries = metrics.get("perf_ui_queue_drain_outliers")
+    runtime_stall_total = metrics.get("perf_ui_queue_drain_runtime_stall_total")
+    runtime_stall_entries = metrics.get("perf_ui_queue_drain_runtime_stalls")
     if isinstance(outlier_total, (int, float)) or (
         isinstance(outlier_entries, list) and outlier_entries
     ):
         lines.append(f"- UI queue outlier ticks captured: {int(outlier_total or 0)}")
+    if isinstance(runtime_stall_total, (int, float)) or (
+        isinstance(runtime_stall_entries, list) and runtime_stall_entries
+    ):
+        lines.append(
+            f"- UI queue runtime stalls captured: {int(runtime_stall_total or 0)}"
+        )
+    if isinstance(runtime_stall_entries, list) and runtime_stall_entries:
+        lines.append("- UI queue runtime stall details (recent):")
+        for entry in runtime_stall_entries[-5:]:
+            if not isinstance(entry, dict):
+                continue
+            tick_ms = float(entry.get("tick_ms", 0.0) or 0.0)
+            events = int(entry.get("events_drained", 0) or 0)
+            pending_after = int(entry.get("pending_after_tick", 0) or 0)
+            slow_kind = str(entry.get("slowest_event_kind", "") or "unknown")
+            slow_ms = float(entry.get("slowest_event_ms", 0.0) or 0.0)
+            budget_ms = float(entry.get("stall_budget_ms", 0.0) or 0.0)
+            lines.append(
+                "  "
+                f"tick={tick_ms:.2f} ms, budget={budget_ms:.2f} ms, "
+                f"events={events}, pending={pending_after}, "
+                f"slowest={slow_kind} ({slow_ms:.2f} ms)"
+            )
     if isinstance(outlier_entries, list) and outlier_entries:
         lines.append("- UI queue outlier details (recent):")
         for entry in outlier_entries[-5:]:
@@ -1169,12 +1272,28 @@ def _format_runtime_metrics(
     stream_file_size_bytes = int(metrics.get("stream_file_size_bytes", 0) or 0)
     acked_byte_offset = int(metrics.get("acked_byte_offset", 0) or 0)
     stream_progress_pct = float(metrics.get("stream_progress_pct", 0.0) or 0.0)
+    stream_done_pending_idle = bool(metrics.get("stream_done_pending_idle", False))
+    stream_done_wait_active = bool(metrics.get("stream_done_wait_active", False))
+    stream_done_wait_current_s = float(metrics.get("stream_done_wait_current_s", 0.0) or 0.0)
+    stream_done_wait_last_s = float(metrics.get("stream_done_wait_last_s", 0.0) or 0.0)
+    stream_done_wait_total_s = float(metrics.get("stream_done_wait_total_s", 0.0) or 0.0)
+    stream_done_wait_count = int(metrics.get("stream_done_wait_count", 0) or 0)
     lines.append(
         "- Stream byte progress: "
         f"stream_progress_pct={stream_progress_pct:.1f}, "
         f"acked_byte_offset={acked_byte_offset:,}, "
         f"file_size_bytes={stream_file_size_bytes:,}"
     )
+    if stream_done_wait_active or stream_done_wait_count > 0:
+        lines.append(
+            "- Deferred completion wait: "
+            f"pending_idle={stream_done_pending_idle}, "
+            f"active={stream_done_wait_active}, "
+            f"count={stream_done_wait_count}, "
+            f"current_s={stream_done_wait_current_s:.3f}, "
+            f"last_s={stream_done_wait_last_s:.3f}, "
+            f"total_s={stream_done_wait_total_s:.3f}"
+        )
     live_past = int(metrics.get("live_gcode_past_count", 0) or 0)
     live_current = int(metrics.get("live_gcode_current_count", 0) or 0)
     live_next = int(metrics.get("live_gcode_next_count", 0) or 0)
@@ -1228,6 +1347,47 @@ def _format_runtime_metrics(
             f"(samples={query_count}), "
             f"rx_status_interval_ms(avg/max)={rx_interval_avg:.2f}/{rx_interval_max:.2f} "
             f"(samples={rx_count})"
+        )
+    session_count = int(metrics.get("manual_motion_status_session_count", 0) or 0)
+    if session_count > 0:
+        session_active = bool(metrics.get("manual_motion_status_session_active", False))
+        last_source = str(
+            metrics.get("manual_motion_status_session_last_source", "") or ""
+        )
+        lines.append(
+            "- Manual-motion sessions: "
+            f"count={session_count}, active={session_active}, "
+            f"last_source={last_source or 'n/a'}"
+        )
+    status_wait_samples = int(metrics.get("status_wait_sample_count", 0) or 0)
+    if status_wait_samples > 0:
+        wait_avg_ms = float(metrics.get("status_wait_actual_avg_ms", 0.0) or 0.0)
+        wait_requested_avg_ms = float(
+            metrics.get("status_wait_requested_avg_ms", 0.0) or 0.0
+        )
+        wait_overshoot_max_lifetime_ms = float(
+            metrics.get("status_wait_overshoot_max_ms", 0.0) or 0.0
+        )
+        wait_overshoot_recent_ms = float(
+            metrics.get("status_wait_overshoot_max_recent_ms", 0.0)
+            or wait_overshoot_max_lifetime_ms
+        )
+        wait_recent_window_s = float(
+            metrics.get("status_wait_overshoot_recent_window_s", 60.0) or 60.0
+        )
+        wait_overshoot_alert_recent = bool(
+            metrics.get("status_wait_overshoot_alert_recent", False)
+        )
+        wait_last_reason = str(metrics.get("status_wait_last_reason", "") or "")
+        lines.append(
+            "- Status loop wait telemetry: "
+            f"requested_avg_ms={wait_requested_avg_ms:.2f}, "
+            f"actual_avg_ms={wait_avg_ms:.2f}, "
+            f"overshoot_max_recent_ms={wait_overshoot_recent_ms:.2f} "
+            f"(window={wait_recent_window_s:.0f}s, lifetime={wait_overshoot_max_lifetime_ms:.2f}), "
+            f"overshoot_alert_recent={wait_overshoot_alert_recent}, "
+            f"last_reason={wait_last_reason or 'n/a'}, "
+            f"samples={status_wait_samples}"
         )
     bounds_box = metrics.get("gcode_bounds_box")
     if isinstance(bounds_box, dict):
@@ -2508,14 +2668,16 @@ def _collect_streaming_bundle_artifacts(
 
 
 def _collect_diagnostics_bundle_payload(app: Any) -> dict[str, Any]:
+    build_info = _collect_build_info(app)
     session_text = "\n".join(_build_session_diagnostics_lines(app)) + "\n"
     perf_text = _build_performance_report_text(app).strip() + "\n"
     runtime_metrics = _runtime_metrics(app)
+    runtime_metrics["build_info"] = dict(build_info)
     runtime_metrics_json = _json_dump(runtime_metrics) + "\n"
     connection_timeline_json = (
         _json_dump(list(getattr(app, "_connection_timeline", []) or [])) + "\n"
     )
-    system_info_text = _build_system_info_text(app)
+    system_info_text = _build_system_info_text(app, build_info=build_info)
     settings_snapshot_json = _json_dump(getattr(app, "settings", {}) or {}) + "\n"
     settings_path = _resolved_settings_path(app)
     macro_assets = discover_macro_assets(app)
@@ -2549,6 +2711,7 @@ def _collect_diagnostics_bundle_payload(app: Any) -> dict[str, Any]:
         "version": str(
             getattr(getattr(app, "version_var", None), "get", lambda: "")() or ""
         ),
+        "build": dict(build_info),
         "files": {
             "session_diagnostics": True,
             "performance_report": True,

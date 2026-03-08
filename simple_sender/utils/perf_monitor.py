@@ -947,6 +947,20 @@ class AppPerformanceMonitor:
             snapshot["ui_queue_drain_outlier_total"] = int(
                 getattr(self._app, "_ui_queue_drain_outlier_total", 0) or 0
             )
+            runtime_stalls = getattr(self._app, "_ui_queue_drain_runtime_stalls", None)
+            runtime_stall_entries: list[dict[str, Any]] = []
+            if isinstance(runtime_stalls, deque):
+                for item in list(runtime_stalls):
+                    if isinstance(item, dict):
+                        runtime_stall_entries.append(dict(item))
+            elif isinstance(runtime_stalls, list):
+                for item in runtime_stalls:
+                    if isinstance(item, dict):
+                        runtime_stall_entries.append(dict(item))
+            snapshot["ui_queue_drain_runtime_stalls"] = runtime_stall_entries
+            snapshot["ui_queue_drain_runtime_stall_total"] = int(
+                getattr(self._app, "_ui_queue_drain_runtime_stall_total", 0) or 0
+            )
         except Exception:
             pass
         return snapshot

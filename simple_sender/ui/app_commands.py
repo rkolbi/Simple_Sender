@@ -63,6 +63,7 @@ def _append_connection_timeline_event(app, event: str, details: str = "") -> Non
 
 
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
+    _ = app
     if serial_available:
         return True
     msg = (

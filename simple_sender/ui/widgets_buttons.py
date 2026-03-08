@@ -144,6 +144,7 @@ class StopSignButton(tk.Canvas):
         self.config(cursor="arrow" if is_disabled else "hand2")
 
     def _on_click(self, event: Any | None = None) -> None:
+        _ = event
         if self._state == "disabled":
             return
         if callable(self._command):

@@ -40,6 +40,7 @@ def normalize_key_label(app, text: str) -> str:
 
 
 def normalize_key_chord(app, text: str) -> str:
+    _ = app
     raw = text.strip()
     if not raw:
         return ""
@@ -139,6 +140,7 @@ def event_to_binding_label(app, event) -> str:
 
 
 def sequence_conflict_pair(app, seq_a: tuple[str, ...], seq_b: tuple[str, ...]) -> bool:
+    _ = app
     if not seq_a or not seq_b:
         return False
     min_len = min(len(seq_a), len(seq_b))

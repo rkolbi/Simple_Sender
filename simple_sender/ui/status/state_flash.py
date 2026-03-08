@@ -69,7 +69,14 @@ def ensure_state_label_width(app, text: str | None) -> None:
     if width <= 0:
         return
     try:
+        applied_width = int(getattr(app, "_machine_state_label_width", 0) or 0)
+    except Exception:
+        applied_width = 0
+    if applied_width == width:
+        return
+    try:
         lbl.config(width=width)
+        app._machine_state_label_width = int(width)
     except tk.TclError as exc:
         _log_suppressed("Failed applying machine-state label width", exc)
 

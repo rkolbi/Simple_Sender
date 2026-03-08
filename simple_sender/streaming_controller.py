@@ -82,6 +82,17 @@ class StreamingController:
         self._last_buffer_fill_pct: int | None = None
         self._last_throughput_text: str | None = None
 
+    def _full_progress_allowed(self) -> bool:
+        stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+        done_pending_idle = bool(getattr(self.app, "_stream_done_pending_idle", False))
+        return stream_state == "done" and not done_pending_idle
+
+    @staticmethod
+    def _floor_percent_1dp(pct_f: float) -> float:
+        # Floor one-decimal display to prevent rounding 99.9x -> 100.0 before completion.
+        bounded = max(0.0, min(100.0, float(pct_f)))
+        return float(int(bounded * 10.0)) / 10.0
+
     def _manual_motion_active(self) -> bool:
         if bool(getattr(self.app, "_stream_done_pending_idle", False)):
             return False
@@ -524,8 +535,12 @@ class StreamingController:
                 self.app, done, total, now_ts=time.time()
             )
             if (not has_file_size) and int(getattr(self.app, "_stream_progress_file_size_bytes", 0) or 0) <= 0:
-                pct = int(round((done / total) * 100)) if total else 0
-                if defer_completion and pct >= 100:
+                pct = int((done / total) * 100) if total else 0
+                if done < total and pct >= 100:
+                    pct = 99
+                elif defer_completion and pct >= 100:
+                    pct = 99
+                elif (not self._full_progress_allowed()) and pct >= 100:
                     pct = 99
                 elif force_done_clamp and pct > 0:
                     pct = 100
@@ -552,8 +567,11 @@ class StreamingController:
                 self._last_progress_text = ""
             return
         pct_f = max(0.0, min(100.0, float(pct_f)))
-        pct_i = int(round(pct_f))
-        text = f"{pct_f:.1f}%"
+        if not self._full_progress_allowed():
+            pct_f = min(pct_f, 99.9)
+        pct_f_display = self._floor_percent_1dp(pct_f)
+        pct_i = int(pct_f_display)
+        text = f"{pct_f_display:.1f}%"
         if self.progress_pct and self._last_progress_pct != pct_i:
             self.progress_pct.set(pct_i)
             self._last_progress_pct = pct_i
@@ -810,13 +828,15 @@ class StreamingController:
                 progress_pct = max(0.0, min(100.0, float(payload.get("stream_progress_pct", 0.0) or 0.0)))
             except Exception:
                 progress_pct = 0.0
+        if not self._full_progress_allowed():
+            progress_pct = min(progress_pct, 99.9)
         signature = (
             tuple(past),
             current,
             tuple(nxt),
             int(buffered_count),
             bool(self._live_highlight_enabled()),
-            int(round(progress_pct)),
+            int(progress_pct),
             int(acked_offset),
             int(file_size_bytes),
         )
@@ -835,7 +855,7 @@ class StreamingController:
             logger.debug("Failed rendering live G-code window", exc_info=exc)
             return
         header_text = (
-            f"Live G-code (500 past / current / 500 next) - Run: {int(round(progress_pct))}%"
+            f"Live G-code (500 past / current / 500 next) - Run: {int(progress_pct)}%"
             if file_size_bytes > 0
             else "Live G-code (500 past / current / 500 next) - Run: n/a"
         )

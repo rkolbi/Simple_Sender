@@ -271,6 +271,7 @@ def restore_joystick_bindings_on_start(app):
     app._update_joystick_polling_state()
 
 def get_pygame_module(app) -> ModuleType | None:
+    _ = app
     if not PYGAME_AVAILABLE or pygame is None:
         return None
     return pygame
@@ -681,6 +682,7 @@ def on_key_binding(app, btn):
     app._invoke_button(btn)
 
 def invoke_button(app, btn):
+    _ = app
     if hasattr(btn, "invoke"):
         try:
             btn.invoke()
