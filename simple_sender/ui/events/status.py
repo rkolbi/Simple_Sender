@@ -49,6 +49,13 @@ _DRO_DISPLAY_STEP = 0.001
 _STATUS_SETTLING_MIN_INTERVAL_S = 0.2
 _STATUS_SLOW_LOG_MS = 50.0
 _STATUS_NONCRITICAL_BUDGET_MS = 8.0
+_STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS = 80.0
+_STATUS_STREAM_POSITION_COALESCE_MIN_MS = 20.0
+_STATUS_STREAM_POSITION_COALESCE_MAX_MS = 250.0
+_STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS = 140.0
+_STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S = 1.5
+_STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD = 5
+_STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS = 12
 _JOG_DRO_PREDICT_TICK_MS = 60
 _JOG_DRO_PREDICT_DEFAULT_HORIZON_S = 1.25
 _JOG_DRO_PREDICT_MIN_HORIZON_S = 0.35
@@ -222,6 +229,30 @@ def _record_status_perf_metric(app, name: str, elapsed_ms: float) -> None:
 
 def _status_settling_active(app) -> bool:
     return bool(getattr(app, "_gcode_load_settling", False))
+
+
+def _status_connect_settling_active(app) -> bool:
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if _stream_active_or_finishing(app):
+        return False
+    try:
+        until_ts = float(getattr(app, "_status_connect_settling_until_ts", 0.0) or 0.0)
+    except Exception:
+        return False
+    if until_ts <= 0.0:
+        return False
+    try:
+        now_mono = float(time.monotonic())
+    except Exception:
+        return False
+    if now_mono >= until_ts:
+        try:
+            setattr(app, "_status_connect_settling_until_ts", 0.0)
+        except Exception:
+            pass
+        return False
+    return True
 
 
 def _status_apply_interval_ok(app, state_token: str) -> bool:
@@ -490,6 +521,233 @@ class _StatusFields:
     pins: str | None = None
 
 
+def _clone_status_fields(fields: _StatusFields) -> _StatusFields:
+    return _StatusFields(
+        state=str(fields.state or ""),
+        wpos=None if fields.wpos is None else str(fields.wpos),
+        mpos=None if fields.mpos is None else str(fields.mpos),
+        feed=None if fields.feed is None else float(fields.feed),
+        spindle=None if fields.spindle is None else float(fields.spindle),
+        planner=None if fields.planner is None else int(fields.planner),
+        rxbytes=None if fields.rxbytes is None else int(fields.rxbytes),
+        wco=None if fields.wco is None else str(fields.wco),
+        ov=None if fields.ov is None else str(fields.ov),
+        pins=None if fields.pins is None else str(fields.pins),
+    )
+
+
+def _stream_status_positions_coalesce_active(app) -> bool:
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    if stream_state not in {"running", "paused"}:
+        return False
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return False
+    return True
+
+
+def _status_positions_pressure_active(app, *, now_mono: float | None = None) -> bool:
+    if now_mono is None:
+        now_mono = float(time.monotonic())
+    pressure_until_ts = float(
+        getattr(app, "_status_positions_pressure_until_ts", 0.0) or 0.0
+    )
+    return pressure_until_ts > 0.0 and now_mono < pressure_until_ts
+
+
+def _mark_status_positions_pressure(app, *, now_mono: float | None = None) -> None:
+    if now_mono is None:
+        now_mono = float(time.monotonic())
+    raw_recovery_s = getattr(
+        app,
+        "_status_positions_pressure_recovery_s",
+        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S,
+    )
+    try:
+        recovery_s = float(raw_recovery_s)
+    except Exception:
+        recovery_s = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S
+    recovery_s = max(0.2, min(10.0, recovery_s))
+    setattr(app, "_status_positions_pressure_until_ts", float(now_mono + recovery_s))
+
+
+def _status_ui_queue_pending_depth(app) -> int:
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is None or not hasattr(ui_q, "qsize"):
+        return 0
+    try:
+        return max(0, int(ui_q.qsize()))
+    except Exception:
+        return 0
+
+
+def _status_positions_should_force_defer(
+    app,
+    *,
+    event_started_perf: float | None,
+    noncritical_budget_ms: float,
+) -> bool:
+    if not _stream_status_positions_coalesce_active(app):
+        return False
+    now_mono = float(time.monotonic())
+    raw_pending_threshold = getattr(
+        app,
+        "_status_positions_pressure_pending_threshold",
+        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD,
+    )
+    try:
+        pending_threshold = int(raw_pending_threshold)
+    except Exception:
+        pending_threshold = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD
+    pending_threshold = max(1, pending_threshold)
+    pending_depth = _status_ui_queue_pending_depth(app)
+    if pending_depth >= pending_threshold:
+        _mark_status_positions_pressure(app, now_mono=now_mono)
+        _record_status_perf_metric(app, "positions_pressure_queue", 0.0)
+        return True
+    if event_started_perf is not None:
+        elapsed_ms = max(0.0, (time.perf_counter() - float(event_started_perf)) * 1000.0)
+        if elapsed_ms >= max(1.0, float(noncritical_budget_ms)):
+            _mark_status_positions_pressure(app, now_mono=now_mono)
+            _record_status_perf_metric(app, "positions_pressure_budget", 0.0)
+            return True
+    return _status_positions_pressure_active(app, now_mono=now_mono)
+
+
+def _status_positions_coalesce_interval_s(app) -> float:
+    raw_base = getattr(
+        app,
+        "_status_stream_position_coalesce_ms",
+        _STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS,
+    )
+    raw_pressure = getattr(
+        app,
+        "_status_stream_position_pressure_coalesce_ms",
+        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS,
+    )
+    try:
+        base_ms = float(raw_base)
+    except Exception:
+        base_ms = _STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS
+    try:
+        pressure_ms = float(raw_pressure)
+    except Exception:
+        pressure_ms = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS
+    base_ms = max(
+        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
+        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, base_ms),
+    )
+    pressure_ms = max(
+        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
+        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, pressure_ms),
+    )
+    interval_ms = (
+        max(base_ms, pressure_ms)
+        if _status_positions_pressure_active(app)
+        else base_ms
+    )
+    interval_ms = max(
+        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
+        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, interval_ms),
+    )
+    return interval_ms / 1000.0
+
+
+def _clear_coalesced_status_positions_state(app) -> None:
+    after_id = getattr(app, "_status_positions_coalesce_after_id", None)
+    if after_id is not None:
+        after_cancel = getattr(app, "after_cancel", None)
+        if callable(after_cancel):
+            try:
+                after_cancel(after_id)
+            except Exception as exc:
+                _log_suppressed("Failed canceling coalesced status-positions callback", exc)
+    setattr(app, "_status_positions_coalesce_after_id", None)
+    setattr(app, "_status_positions_coalesce_pending_fields", None)
+
+
+def _flush_coalesced_status_positions(app) -> None:
+    setattr(app, "_status_positions_coalesce_after_id", None)
+    fields = getattr(app, "_status_positions_coalesce_pending_fields", None)
+    setattr(app, "_status_positions_coalesce_pending_fields", None)
+    if not isinstance(fields, _StatusFields):
+        return
+    started = time.perf_counter()
+    try:
+        _update_positions_and_macro_state(
+            app,
+            fields,
+            event_started_perf=None,
+            noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+        )
+        sync_manual_jog_prediction_with_status(app)
+    finally:
+        setattr(app, "_status_positions_last_apply_ts", float(time.monotonic()))
+        _record_status_perf_metric(
+            app,
+            "positions_coalesced_apply",
+            (time.perf_counter() - started) * 1000.0,
+        )
+
+
+def _queue_coalesced_status_positions_update(
+    app,
+    fields: _StatusFields,
+    *,
+    force_defer: bool = False,
+) -> bool:
+    if not _stream_status_positions_coalesce_active(app):
+        return False
+    now_mono = float(time.monotonic())
+    interval_s = _status_positions_coalesce_interval_s(app)
+    last_apply_ts = float(getattr(app, "_status_positions_last_apply_ts", 0.0) or 0.0)
+    pending_after_id = getattr(app, "_status_positions_coalesce_after_id", None)
+    if (
+        not force_defer
+        and pending_after_id is None
+        and (last_apply_ts <= 0.0 or (now_mono - last_apply_ts) >= interval_s)
+    ):
+        return False
+
+    setattr(app, "_status_positions_coalesce_pending_fields", _clone_status_fields(fields))
+    if pending_after_id is not None:
+        return True
+
+    remaining_s = max(0.0, interval_s - max(0.0, now_mono - last_apply_ts))
+    raw_pressure_min_delay_ms = getattr(
+        app,
+        "_status_positions_pressure_min_defer_ms",
+        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS,
+    )
+    try:
+        pressure_min_delay_ms = int(raw_pressure_min_delay_ms)
+    except Exception:
+        pressure_min_delay_ms = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS
+    pressure_min_delay_ms = max(1, min(100, pressure_min_delay_ms))
+    delay_ms = max(
+        pressure_min_delay_ms if force_defer else 1,
+        int(round(remaining_s * 1000.0)),
+    )
+    after_fn = getattr(app, "after", None)
+    if not callable(after_fn):
+        setattr(app, "_status_positions_coalesce_pending_fields", None)
+        return False
+
+    try:
+        callback_id = after_fn(
+            delay_ms,
+            lambda: _flush_coalesced_status_positions(app),
+        )
+    except Exception as exc:
+        setattr(app, "_status_positions_coalesce_pending_fields", None)
+        _log_suppressed("Failed scheduling coalesced status-positions callback", exc)
+        return False
+    setattr(app, "_status_positions_coalesce_after_id", callback_id)
+    _record_status_perf_metric(app, "positions_coalesced_defer", 0.0)
+    if force_defer:
+        _record_status_perf_metric(app, "positions_coalesced_pressure_defer", 0.0)
+    return True
+
+
 def _parse_status_fields(raw: str) -> _StatusFields:
     parts = raw.strip("<>").split("|")
     fields = _StatusFields(state=parts[0] if parts else "?")
@@ -688,7 +946,19 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         app._job_controls_last_ready = bool(ready_now)
     manual_last = bool(getattr(app, "_manual_controls_last_enabled", False))
     if bool(controls_allowed) != manual_last:
-        app._set_manual_controls_enabled(bool(controls_allowed))
+        new_manual_enabled = bool(controls_allowed)
+        if _status_connect_settling_active(app):
+            def _apply_manual_controls_deferred() -> None:
+                app._set_manual_controls_enabled(new_manual_enabled)
+
+            _schedule_status_ui_callback(
+                app,
+                callback_attr="_status_manual_controls_after_id",
+                callback=_apply_manual_controls_deferred,
+                context="Failed applying deferred manual-control state during connect settling",
+            )
+        else:
+            app._set_manual_controls_enabled(new_manual_enabled)
     def _update_macro_state(macro_vars: dict) -> None:
         macro_vars["state"] = state
         macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
@@ -2079,13 +2349,28 @@ def handle_status_event(app, raw: str):
         )
     else:
         update_start = time.perf_counter()
-        _update_positions_and_macro_state(
+        force_defer_positions = _status_positions_should_force_defer(
             app,
-            fields,
             event_started_perf=event_start,
             noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
         )
-        sync_manual_jog_prediction_with_status(app)
+        if _queue_coalesced_status_positions_update(
+            app,
+            fields,
+            force_defer=force_defer_positions,
+        ):
+            pass
+        else:
+            if not _stream_status_positions_coalesce_active(app):
+                _clear_coalesced_status_positions_state(app)
+            _update_positions_and_macro_state(
+                app,
+                fields,
+                event_started_perf=event_start,
+                noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+            )
+            sync_manual_jog_prediction_with_status(app)
+            setattr(app, "_status_positions_last_apply_ts", float(time.monotonic()))
         positions_elapsed_ms = (time.perf_counter() - update_start) * 1000.0
         _record_status_perf_metric(
             app,

@@ -334,7 +334,7 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
 
 
 def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
-    app.version_var = tk.StringVar(value=f"Simple Sender (BETA)  -  Version: v{app_version}")
+    app.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{app_version}")
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))
     app.show_endstop_indicator = tk.BooleanVar(value=setting("show_endstop_indicator", True))

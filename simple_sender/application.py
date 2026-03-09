@@ -219,7 +219,7 @@ class App(tk.Tk):
         self._script_dir = _SCRIPT_DIR
         self._serial_available = SERIAL_AVAILABLE
         self._serial_import_error = SERIAL_IMPORT_ERROR
-        self.title("Simple Sender (BETA)")
+        self.title("Simple Sender")
         self.minsize(980, 620)
         self.bind("<Escape>", lambda _evt: self.attributes("-fullscreen", False))
         default_jog_feed_xy, default_jog_feed_z = init_settings_store(self, _SCRIPT_DIR)

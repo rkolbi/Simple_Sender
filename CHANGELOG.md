@@ -5,7 +5,22 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+### Added
+- `tests/unit/test_grbl_worker_status_coverage.py` to exercise status-wait and status-trace paths in `grbl_worker_status`, including idle-timeout and non-idle transition coverage used by the critical coverage gate.
+- Regression coverage for performance-mode poll/visual tuning:
+  - `tests/ui/test_grbl_lifecycle.py` now verifies the performance-mode running poll floor
+  - `tests/ui/test_status_efficiency.py` now verifies WPos flash suppression during performance-mode streaming
+- Regression coverage for queue-pressure status smoothing:
+  - `tests/ui/test_status_efficiency.py` now verifies forced position-update deferral under UI queue pressure
+  - `tests/ui/test_status_efficiency.py` now verifies adaptive coalesce-interval behavior while pressure is active
+
 ### Changed
+- Release polish for 2.4.0:
+  - removed beta branding from app title/version banner and docs
+  - promoted the current build as full `2.4.0` release metadata
+- App Settings layout update:
+  - moved `Show Resume From...`, `Show Recover`, and `Enable Auto-Level` into a new **Experimental** section
+  - kept Interface focused on startup/performance/logging/status controls
 - Lean runtime cleanup pass:
   - removed obsolete `streaming_validation_prompt` UI event path and related type/constants/test hooks
   - simplified fast-load worker API by dropping stale `_stream_from_disk` validation/sample threshold parameters that were no-ops
@@ -45,9 +60,16 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - includes file size, total/executable/motion counts with known/estimated flags, estimate+confidence, dimensions+confidence, and auto-level prereq summary
 - Hardened G-code comment cleaning for header comments:
   - replaced non-nested regex stripping with nested `()` / `[]` comment-state scanning to prevent stray `)` artifacts from nested comment text in the G-code viewer.
+- Pi/performance-mode status-path tuning:
+  - running-state status polling now uses a performance-mode floor (`0.35s`) instead of forcing the ultra-fast default profile, reducing status-event pressure on Pi-class hosts during active jobs
+  - WPos flash-highlight cosmetics are now suppressed during performance-mode streaming to reduce per-status Tk widget churn
+- Streaming status hot-path smoothing:
+  - status position updates now support pressure-aware forced deferral when UI queue backlog or per-event runtime budget indicates pressure
+  - coalesce cadence is now adaptive under pressure, with bounded recovery back to the baseline interval
+  - new status performance metric `positions_coalesced_pressure_defer` is emitted for diagnostics/telemetry
 
 ### Documentation
-- README testing baseline was refreshed to the current local result (`1006 passed, 2 skipped` on `python -m pytest -q`, validated 2026-03-06).
+- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-09; coverage test stage reported `1031 passed, 1 skipped`).
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
@@ -66,6 +88,13 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ### Fixed
 - Progress reporting now clamps to `100%` when stream state reaches `done`, including runtime metrics/diagnostics export fields.
+- `grbl_worker_status` status-wait tracing now normalizes trace payload types before serializing/logging so mypy remains clean on strict checks while preserving runtime diagnostics behavior.
+- Shutdown sequencing now remains best-effort across all steps: a settings-save failure no longer skips GRBL disconnect and final resource cleanup.
+
+### Baseline Validation (local, 2026-03-09)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1031 passed, 1 skipped`)
+- `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 138`: PASS
+- `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`138` source files)
 
 ## [1.8.0] - 2026-02-26
 

@@ -49,6 +49,8 @@ _STATUS_POLL_PERF_RUNNING = 0.35
 _STATUS_POLL_MANUAL_ACTIVE = 0.1
 _STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
+_STATUS_CONNECT_SETTLING_WINDOW_S = 1.5
+_STATUS_CONNECT_SETTLING_READY_TAIL_S = 1.0
 _CONNECTION_TIMELINE_LIMIT = 200
 
 
@@ -84,6 +86,27 @@ def _record_connection_timeline(app, event: str, details: str = "") -> None:
         history.append(payload)
     except Exception as exc:
         _log_suppressed("Failed appending connection timeline event", exc)
+
+
+def _arm_status_connect_settling(app, *, duration_s: float) -> None:
+    try:
+        duration = float(duration_s)
+    except Exception:
+        duration = 0.0
+    duration = max(0.0, duration)
+    if duration <= 0.0:
+        return
+    try:
+        now_mono = time.monotonic()
+    except Exception:
+        return
+    try:
+        current_until = float(getattr(app, "_status_connect_settling_until_ts", 0.0) or 0.0)
+    except Exception:
+        current_until = 0.0
+    new_until = now_mono + duration
+    if new_until > current_until:
+        setattr(app, "_status_connect_settling_until_ts", float(new_until))
 
 
 def _normalize_status_state(app) -> str:
@@ -401,6 +424,14 @@ def handle_connection_event(app, is_on: bool, port):
         app._alarm_message = ""
         app._pending_settings_refresh = True
         app._status_seen = False
+        try:
+            connect_settling_s = float(
+                getattr(app, "_status_connect_settling_window_s", _STATUS_CONNECT_SETTLING_WINDOW_S)
+                or _STATUS_CONNECT_SETTLING_WINDOW_S
+            )
+        except Exception:
+            connect_settling_s = _STATUS_CONNECT_SETTLING_WINDOW_S
+        _arm_status_connect_settling(app, duration_s=connect_settling_s)
         app.machine_state.set(f"CONNECTED ({port})")
         app._machine_state_text = f"CONNECTED ({port})"
         try:
@@ -455,6 +486,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._alarm_message = ""
         app._pending_settings_refresh = False
         app._status_seen = False
+        app._status_connect_settling_until_ts = 0.0
         app._report_units = None
         app._zero_all_pending_active = False
         app._zero_all_pending_expected_wco_raw = None
@@ -521,6 +553,18 @@ def handle_ready_event(app, ready):
     if app.connected and app._connected_port:
         _record_connection_timeline(app, "ready_true", f"port={app._connected_port}")
         app.status.config(text=f"Connected: {app._connected_port}")
+        try:
+            ready_tail_s = float(
+                getattr(
+                    app,
+                    "_status_connect_settling_ready_tail_s",
+                    _STATUS_CONNECT_SETTLING_READY_TAIL_S,
+                )
+                or _STATUS_CONNECT_SETTLING_READY_TAIL_S
+            )
+        except Exception:
+            ready_tail_s = _STATUS_CONNECT_SETTLING_READY_TAIL_S
+        _arm_status_connect_settling(app, duration_s=ready_tail_s)
         try:
             app._send_manual("$G", "status")
         except Exception as exc:

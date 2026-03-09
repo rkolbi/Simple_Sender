@@ -74,6 +74,14 @@ def log_exception(
             app._post_ui_thread(messagebox.showerror, dialog_title, tb)
 
 
+def _report_shutdown_failure(app, context: str, exc: BaseException) -> None:
+    try:
+        app._log_exception(context, exc)
+    except Exception as log_exc:
+        _log_suppressed(f"{context} (failed to call app._log_exception)", log_exc)
+        _log_suppressed(context, exc)
+
+
 def tk_report_callback_exception(app, exc, val, tb):
     try:
         text = "".join(traceback.format_exception(exc, val, tb))
@@ -102,32 +110,35 @@ def on_close(app):
         close_grbl_code_popup(app)
     except Exception as exc:
         _log_suppressed("Failed closing GRBL code popup during shutdown", exc)
+    accessory_router = getattr(app, "accessory_router", None)
+    if accessory_router is not None:
+        try:
+            if hasattr(app, "_stop_job_accessories"):
+                app._stop_job_accessories("app_exit")
+        except Exception as exc:
+            _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
+        try:
+            wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
+            if callable(wait_for_idle):
+                wait_for_idle(timeout=1.0)
+        except Exception as exc:
+            _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
+        try:
+            accessory_router.shutdown(timeout=1.0)
+        except Exception as exc:
+            _log_suppressed("Failed shutting down accessory router during app close", exc)
     try:
-        accessory_router = getattr(app, "accessory_router", None)
-        if accessory_router is not None:
-            try:
-                if hasattr(app, "_stop_job_accessories"):
-                    app._stop_job_accessories("app_exit")
-            except Exception as exc:
-                _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
-            try:
-                wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
-                if callable(wait_for_idle):
-                    wait_for_idle(timeout=1.0)
-            except Exception as exc:
-                _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
-            try:
-                accessory_router.shutdown(timeout=1.0)
-            except Exception as exc:
-                _log_suppressed("Failed shutting down accessory router during app close", exc)
         app._save_settings()
+    except Exception as exc:
+        _report_shutdown_failure(app, "Failed saving settings during shutdown", exc)
+    try:
         disconnect_fn = getattr(app.grbl, "disconnect")
         try:
             disconnect_fn(requested_by="shutdown", reason="Application close")
         except TypeError:
             disconnect_fn()
     except Exception as exc:
-        app._log_exception("Shutdown failed", exc)
+        _report_shutdown_failure(app, "Failed disconnecting GRBL during shutdown", exc)
     source = getattr(app, "_gcode_source", None)
     if source is not None:
         cleanup_path = getattr(source, "_cleanup_path", None)
@@ -141,8 +152,14 @@ def on_close(app):
             except OSError as exc:
                 _log_suppressed("Failed deleting temporary G-code cleanup file during shutdown", exc)
         app._gcode_source = None
-    app._stop_joystick_hold()
-    app._stop_joystick_polling()
+    try:
+        app._stop_joystick_hold()
+    except Exception as exc:
+        _log_suppressed("Failed stopping joystick hold during shutdown", exc)
+    try:
+        app._stop_joystick_polling()
+    except Exception as exc:
+        _log_suppressed("Failed stopping joystick polling during shutdown", exc)
     py = app._get_pygame_module()
     if py is not None:
         try:
@@ -155,4 +172,7 @@ def on_close(app):
             perf_monitor.emit_exit_report()
         except Exception as exc:
             _log_suppressed("Failed emitting performance report during shutdown", exc)
-    app.destroy()
+    try:
+        app.destroy()
+    except Exception as exc:
+        _log_suppressed("Failed destroying application root during shutdown", exc)

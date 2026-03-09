@@ -22,6 +22,7 @@
 
 from .sections_advanced import (
     build_auto_level_section,
+    build_experimental_section,
     build_interface_section,
     build_safety_aids_section,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "build_diagnostics_section",
     "build_error_dialogs_section",
     "build_estimation_section",
+    "build_experimental_section",
     "build_viewer_section",
     "build_interface_section",
     "build_jogging_section",

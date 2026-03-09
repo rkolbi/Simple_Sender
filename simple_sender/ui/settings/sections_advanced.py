@@ -327,45 +327,51 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.fullscreen_startup_check,
         "Enable fullscreen on startup (takes effect after restart).",
     )
+    next_row = _build_interface_performance_row(app, interface_frame, 1)
+    next_row = _build_interface_logging_row(app, interface_frame, next_row)
+    next_row = _build_interface_indicators_row(app, interface_frame, next_row)
+    next_row = _build_status_bar_button_visibility_row(app, interface_frame, next_row)
+    _build_status_bar_quick_toggle_row(app, interface_frame, next_row)
+    return row + 1
+
+
+def build_experimental_section(app, parent: ttk.Frame, row: int) -> int:
+    experimental_frame = ttk.LabelFrame(parent, text="Experimental", padding=8)
+    experimental_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
+    experimental_frame.grid_columnconfigure(0, weight=1)
     app.resume_button_check = ttk.Checkbutton(
-        interface_frame,
+        experimental_frame,
         text="Show 'Resume From...' button",
         variable=app.show_resume_from_button,
         command=app._on_resume_button_visibility_change,
     )
-    app.resume_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    app.resume_button_check.grid(row=0, column=0, sticky="w")
     apply_tooltip(
         app.resume_button_check,
         "Toggle the visibility of the toolbar button that lets you resume from a specific line.",
     )
     app.recover_button_check = ttk.Checkbutton(
-        interface_frame,
+        experimental_frame,
         text="Show 'Recover' button",
         variable=app.show_recover_button,
         command=app._on_recover_button_visibility_change,
     )
-    app.recover_button_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
+    app.recover_button_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.recover_button_check,
         "Show or hide the Recover button that brings up the alarm recovery dialog.",
     )
     app.auto_level_enabled_check = ttk.Checkbutton(
-        interface_frame,
+        experimental_frame,
         text="Enable Auto-Level",
         variable=app.auto_level_enabled,
         command=app._on_auto_level_enabled_change,
     )
-    app.auto_level_enabled_check.grid(row=3, column=0, sticky="w", pady=(4, 0))
+    app.auto_level_enabled_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
     apply_tooltip(
         app.auto_level_enabled_check,
         "Show Auto-Level in the toolbar after a job loads (disable to keep it hidden).",
     )
-
-    next_row = _build_interface_performance_row(app, interface_frame, 4)
-    next_row = _build_interface_logging_row(app, interface_frame, next_row)
-    next_row = _build_interface_indicators_row(app, interface_frame, next_row)
-    next_row = _build_status_bar_button_visibility_row(app, interface_frame, next_row)
-    _build_status_bar_quick_toggle_row(app, interface_frame, next_row)
     return row + 1
 
 

@@ -30,6 +30,7 @@ from .sections import (
     build_diagnostics_section,
     build_error_dialogs_section,
     build_estimation_section,
+    build_experimental_section,
     build_interface_section,
     build_jogging_section,
     build_kasa_plug_section,
@@ -848,8 +849,15 @@ def build_app_settings_tab(app, notebook):
         "Interface",
         build_interface_section,
         mode="basic",
-        description="Startup behavior, toolbar visibility, status indicators, and quick button toggles.",
-        keywords=("startup", "fullscreen", "toolbar", "quick buttons"),
+        description="Startup behavior, performance/logging controls, status indicators, and quick button toggles.",
+        keywords=("startup", "fullscreen", "performance", "quick buttons"),
+    )
+    _add_section(
+        "Experimental",
+        build_experimental_section,
+        mode="basic",
+        description="Experimental toolbar controls for Resume From, Recover, and Auto-Level visibility.",
+        keywords=("experimental", "resume", "recover", "auto-level", "toolbar"),
     )
     _add_section(
         "Theme",

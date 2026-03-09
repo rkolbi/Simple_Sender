@@ -1,14 +1,12 @@
 ﻿# Simple Sender - Full Manual
-![Release: 2.2.0](https://img.shields.io/badge/release-2.2.0-blue)
+![Release: 2.4.0](https://img.shields.io/badge/release-2.4.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
-
-### Work in progress (beta). Please run a few dry-run validations before real cuts.
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-> **Current runtime model (v2.2 lean path):** Top View and Spatial View are disabled. Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
+> **Current runtime model (v2.4 lean path):** Top View and Spatial View are disabled. Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
 
-> **Safety notice:** This is **beta** software. Always test "in the air" with the spindle **off** before cutting material.
+> **Safety notice:** Always test "in the air" with the spindle **off** before cutting material.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -113,7 +111,7 @@ This is a practical, end-to-end flow with rationale for key options.
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
-   - Performance mode: reduces console churn during streaming; toggle it from the Interface block inside App Settings.
+   - Performance mode: reduces console churn during streaming; toggle it from **App Settings > Interface**.
   6) **Prepare the machine**
      - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
      - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
@@ -175,7 +173,7 @@ This is a practical, end-to-end flow with rationale for key options.
   
   ![-](pics/grblsettingstab.JPG)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, Resume/Recover buttons, Auto-Level toggle, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
   ![](pics/appsettingstab.JPG)
   
@@ -201,6 +199,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover button shows quick actions.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
+- **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
 - **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
@@ -455,7 +454,7 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Streaming loads are supported; if the leveled file is large, it may reload in streaming sample mode.
 - Auto-level is disabled for files that already end in `-AL` (load the original file to re-level).
 - You can open Auto-Level while disconnected to review settings; **Start Probe** stays disabled until connected, GRBL is ready, and no alarm is active.
-- Auto-Level can be disabled in App Settings > Interface to keep the toolbar in Read Job mode.
+- Auto-Level can be disabled in App Settings > Experimental to keep the toolbar in Read Job mode.
 
 ### How it works
 1) The app reads the parsed job bounds.
@@ -710,7 +709,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current baseline in this repository (validated on March 6, 2026): `1006 passed, 2 skipped` on `python -m pytest -q`; skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 9, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1031 passed, 1 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -893,7 +892,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-06), and local/CI hooks now enforce `--expected-count 138`.
+5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-09), and local/CI hooks now enforce `--expected-count 138`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -1177,9 +1176,6 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Interface
 - Start in fullscreen: opens the app in fullscreen on next launch.
-- Show "Resume From..." button: toggles the toolbar button.
-- Show "Recover" button: toggles the alarm recovery button.
-- Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
 - View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
@@ -1187,6 +1183,11 @@ Macro UI is included below along with the rest of the interface.
 - Status bar quick buttons (Tips, Keys, Auto-Level Overlay, Release): toggles each status-bar quick button.
 - Status bar quick toggles (Tips, Keys, Auto-Level Overlay): immediate action buttons to flip the corresponding feature.
 - Recommendation: keep the indicators on and only hide quick buttons you never use.
+
+### App Settings: Experimental
+- Show "Resume From..." button: toggles the toolbar button.
+- Show "Recover" button: toggles the alarm recovery button.
+- Enable Auto-Level: shows Auto-Level in the toolbar after a job loads.
 
 ### App Settings: Auto-Level Presets
 - Small max area: area threshold (mm^2) that selects the Small preset.
@@ -1288,7 +1289,7 @@ Macro UI is included below along with the rest of the interface.
 - Cancel: closes without changes.
 
 ### Macro Sample Dialog
-- Title: shows the macro name being sampleed.
+- Title: shows the macro name being sampled.
 - Macro text: read-only contents of the macro (excluding the header lines).
 - Close: closes the sample.
 
