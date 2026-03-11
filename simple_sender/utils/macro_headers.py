@@ -77,18 +77,18 @@ def parse_macro_header(
     """Parse macro metadata.
 
     Returns (name, tooltip, button_color, button_text_color, body_start_index).
-    Header lines are fixed:
-      - line 1: button label
-      - line 2: tooltip
-      - line 3: button color (or blank)
-      - line 4: button text color (or blank)
-    body_start_index is always 4 (line 5 onward).
+
+    Supports both legacy and new header layouts:
+      - legacy: line 1 label, line 2 tooltip, body starts at line 3
+      - new: line 3 button color (or blank), line 4 text color (or blank)
+
+    Body start is determined by whether line 3/4 are recognizable header lines.
     """
     name = str(lines[0]).strip() if lines else ""
     tip = str(lines[1]).strip() if len(lines) > 1 else ""
     button_color: str | None = None
     button_text_color: str | None = None
-    body_start = 4
+    body_start = 2
 
     third_line = str(lines[2]).strip() if len(lines) > 2 else ""
     color_token = parse_macro_color_line(
@@ -96,16 +96,27 @@ def parse_macro_header(
         kind="button",
         color_validator=color_validator,
     )
+    third_explicit = bool(_COLOR_PREFIX_PAT.match(third_line))
+    third_reserved = (third_line == "") or (color_token is not None) or third_explicit
     if color_token:
         button_color = color_token
-
-    fourth_line = str(lines[3]).strip() if len(lines) > 3 else ""
-    text_color_token = parse_macro_color_line(
-        fourth_line,
-        kind="text",
-        color_validator=color_validator,
-    )
-    if text_color_token:
-        button_text_color = text_color_token
+    if third_reserved:
+        body_start = 3
+        fourth_line = str(lines[3]).strip() if len(lines) > 3 else ""
+        text_color_token = parse_macro_color_line(
+            fourth_line,
+            kind="text",
+            color_validator=color_validator,
+        )
+        fourth_explicit = bool(_TEXT_COLOR_PREFIX_PAT.match(fourth_line))
+        fourth_reserved = (
+            fourth_line == ""
+            or text_color_token is not None
+            or fourth_explicit
+        )
+        if text_color_token:
+            button_text_color = text_color_token
+        if fourth_reserved:
+            body_start = 4
 
     return name, tip, button_color, button_text_color, body_start

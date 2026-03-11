@@ -388,6 +388,8 @@ def handle_connection_event(app, is_on: bool, port):
     app._disconnecting = False
     app._homing_in_progress = False
     app._homing_state_seen = False
+    alarm_latched = bool(getattr(app, "_alarm_latched", False))
+    alarm_message = str(getattr(app, "_alarm_message", "") or "")
     if app.connected:
         _record_connection_timeline(app, "connected", f"port={port or ''}")
         app._auto_reconnect_last_port = port or app._auto_reconnect_last_port
@@ -420,8 +422,11 @@ def handle_connection_event(app, is_on: bool, port):
             _log_suppressed("Failed setting port combobox readonly after connect", exc)
         app._connected_port = port
         app._grbl_ready = False
-        app._alarm_locked = False
-        app._alarm_message = ""
+        if alarm_latched:
+            app._alarm_locked = True
+        else:
+            app._alarm_locked = False
+            app._alarm_message = ""
         app._pending_settings_refresh = True
         app._status_seen = False
         try:
@@ -465,6 +470,12 @@ def handle_connection_event(app, is_on: bool, port):
                 app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
         except Exception as exc:
             _log_suppressed("Failed restoring loaded G-code after connect", exc)
+        if alarm_latched:
+            alarm_status = alarm_message or "ALARM latched: verify machine, then use Unlock ($X) or Home ($H)."
+            try:
+                app._set_alarm_lock(True, alarm_status)
+            except Exception as exc:
+                _log_suppressed("Failed restoring latched alarm lock after reconnect", exc)
     else:
         _record_connection_timeline(app, "disconnected")
         try:
@@ -483,7 +494,13 @@ def handle_connection_event(app, is_on: bool, port):
         app._connected_port = None
         app._grbl_ready = False
         app._alarm_locked = False
-        app._alarm_message = ""
+        preserve_latched_alarm = bool(alarm_latched) and not bool(getattr(app, "_user_disconnect", False))
+        if preserve_latched_alarm:
+            app._alarm_message = alarm_message
+        else:
+            app._alarm_latched = False
+            app._alarm_clear_requested = False
+            app._alarm_message = ""
         app._pending_settings_refresh = False
         app._status_seen = False
         app._status_connect_settling_until_ts = 0.0
@@ -540,7 +557,8 @@ def handle_ready_event(app, ready):
         _record_connection_timeline(app, "ready_false")
         app._status_seen = False
         app._alarm_locked = False
-        app._alarm_message = ""
+        if not bool(getattr(app, "_alarm_latched", False)):
+            app._alarm_message = ""
         if app.connected:
             disable_job_controls(app)
             app._set_manual_controls_enabled(False)

@@ -114,6 +114,10 @@ def macro_wait_for_status(
     start = time.monotonic()
     with macro_vars_lock:
         seq = int(macro_vars.get("_status_seq", 0) or 0)
+    try:
+        baseline_status_ts = float(getattr(app, "_last_status_ts", 0.0) or 0.0)
+    except Exception:
+        baseline_status_ts = 0.0
     status_evt = getattr(app, "_status_update_event", None)
     if isinstance(status_evt, threading.Event):
         try:
@@ -125,6 +129,14 @@ def macro_wait_for_status(
         with macro_vars_lock:
             now_seq = int(macro_vars.get("_status_seq", 0) or 0)
         if now_seq != seq:
+            return True
+        # Some status handlers may skip macro sequence updates for duplicate
+        # idle frames; accept any fresh status timestamp after the query.
+        try:
+            now_status_ts = float(getattr(app, "_last_status_ts", 0.0) or 0.0)
+        except Exception:
+            now_status_ts = baseline_status_ts
+        if now_status_ts > baseline_status_ts:
             return True
         elapsed = max(0.0, time.monotonic() - start)
         if timeout_s and elapsed > timeout_s:

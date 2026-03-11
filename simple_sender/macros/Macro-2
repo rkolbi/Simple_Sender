@@ -3,21 +3,10 @@ Moves to the tool-height sensor so you can clean, inspect, or stage without alte
 
 
 ; Match the safe height and sensor coordinates to the other macros so you always park in a consistent spot.
-%macro.state.SAFE_HEIGHT = -5
-%macro.state.PROBE_X_LOCATION = -1.5
-%macro.state.PROBE_Y_LOCATION = -1224
-
-%WCS = WCS
-%PLANE = plane
-%UNITS = units
-%DISTANCE = distance
-%FEEDMODE = feedmode
-%SPINDLE = spindle
-%COOLANT = coolant
 M5
 G21
 G90
-G53 G0 Z[macro.state.SAFE_HEIGHT]
-G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
+G53 G0 Z-5
+G53 G0 X-1.5 Y-1224
 %wait
 STATE_RETURN

@@ -92,6 +92,19 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _safe_bool_setting(app: Any, attr_name: str, default: bool = False) -> bool:
+    raw = getattr(app, attr_name, None)
+    if raw is None:
+        return bool(default)
+    getter = getattr(raw, "get", None)
+    if callable(getter):
+        try:
+            raw = getter()
+        except Exception:
+            return bool(default)
+    return bool(raw)
+
+
 def _extract_motion_setting(settings_data: Any, key: str) -> float | None:
     if not isinstance(settings_data, dict):
         return None
@@ -881,9 +894,11 @@ def start_validation(app: Any) -> None:
         messagebox.showwarning("Validate G-code", "Load a G-code job first.")
         return
 
-    strict = bool(getattr(app, "validate_streaming_gcode", None).get())
-    stop_on_first = bool(
-        getattr(app, "overdrive_validation_stop_on_first_error", None).get()
+    strict = _safe_bool_setting(app, "validate_streaming_gcode", default=False)
+    stop_on_first = _safe_bool_setting(
+        app,
+        "overdrive_validation_stop_on_first_error",
+        default=False,
     )
 
     run_id = int(getattr(app, "_overdrive_validation_run_id", 0) or 0) + 1

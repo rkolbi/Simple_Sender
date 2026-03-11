@@ -187,7 +187,8 @@ class _RollingCpuStats:
             val = max(0.0, float(value))
         except (TypeError, ValueError):
             return
-        if len(self._samples) >= self._samples.maxlen:
+        maxlen = self._samples.maxlen
+        if maxlen is not None and len(self._samples) >= maxlen:
             old = self._samples.popleft()
             self._sum -= old
             self._update_bin(old, delta=-1)
@@ -234,7 +235,7 @@ class _RollingCpuStats:
         return (lower + upper) / 2.0
 
 
-def _format_mb(value_bytes: int | None) -> str:
+def _format_mb(value_bytes: float | int | None) -> str:
     if value_bytes is None:
         return "n/a"
     return f"{(float(value_bytes) / (1024.0 * 1024.0)):.2f} MB"
@@ -860,15 +861,15 @@ class AppPerformanceMonitor:
         if task_timings:
             lines.append("Background I/O timings:")
             for task_name in sorted(task_timings.keys()):
-                entry = task_timings[task_name]
+                timing_entry = task_timings[task_name]
                 lines.append(
                     "- "
                     f"{task_name}: "
-                    f"count={int(entry.get('count', 0) or 0)}, "
-                    f"ok={int(entry.get('ok_count', 0) or 0)}, "
-                    f"err={int(entry.get('err_count', 0) or 0)}, "
-                    f"avg={float(entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
-                    f"max={float(entry.get('max_ms', 0.0) or 0.0):.2f} ms"
+                    f"count={int(timing_entry.get('count', 0) or 0)}, "
+                    f"ok={int(timing_entry.get('ok_count', 0) or 0)}, "
+                    f"err={int(timing_entry.get('err_count', 0) or 0)}, "
+                    f"avg={float(timing_entry.get('avg_ms', 0.0) or 0.0):.2f} ms, "
+                    f"max={float(timing_entry.get('max_ms', 0.0) or 0.0):.2f} ms"
                 )
         lines.append("Budgets:")
         lines.extend(self._build_budget_lines(idle_cpu_avg, quiet_idle_cpu_avg, stream_cpu_p95))
@@ -885,7 +886,7 @@ class AppPerformanceMonitor:
             quiet_idle_cpu_avg, quiet_idle_cpu_p95 = self._quiet_idle_cpu_stats.summary()
             stream_cpu_avg, stream_cpu_p95 = self._stream_cpu_stats.summary()
             phase_metrics = self._phase_metrics_snapshot()
-            snapshot = {
+            snapshot: dict[str, Any] = {
                 "available": True,
                 "uptime_s": max(0.0, time.perf_counter() - self._created_at),
                 "startup_time_s": self._startup_time_s,

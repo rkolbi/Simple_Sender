@@ -166,7 +166,9 @@ def bcnc_compile_line(
                 else:
                     expr += ch
         elif ch == "=":
-            if not out and bracket == 0 and paren == 0:
+            if bracket > 0 and not in_comment:
+                expr += ch
+            elif not out and bracket == 0 and paren == 0:
                 for t in " ()-+*/^$":
                     if t in cmd:
                         cmd += ch
@@ -194,6 +196,11 @@ def bcnc_compile_line(
     if not out:
         return None
     if len(out) > 1:
+        return out
+    # Keep expression-only bracket lines (e.g. ["G0 X0" if cond else ""]) in
+    # list form so they are evaluated in the expression path instead of being
+    # treated like exec-only code blocks.
+    if isinstance(out[0], types.CodeType):
         return out
     return out[0]
 

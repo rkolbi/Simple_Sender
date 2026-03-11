@@ -40,6 +40,7 @@ from simple_sender.ui.controls.toolbar import (
 )
 from simple_sender.ui.dialogs import show_macro_prompt
 from simple_sender.ui.main_tabs import on_tab_changed, update_tab_visibility
+from simple_sender.ui.manual_controls import clear_widget_transient_state
 from simple_sender.ui.settings import (
     bind_app_settings_mousewheel,
     bind_app_settings_touch_scroll,
@@ -66,6 +67,14 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 class UiEventsMixin:
+    def _clear_manual_control_transient_states(self) -> None:
+        app = cast(Any, self)
+        for widget in getattr(app, "_manual_controls", ()):
+            try:
+                clear_widget_transient_state(widget)
+            except Exception:
+                continue
+
     def _on_app_focus_out(self, event=None):
         _ = event
         app = cast(Any, self)
@@ -154,6 +163,7 @@ class UiEventsMixin:
 
     def _start_macro_status(self, name: str):
         app = cast(Any, self)
+        self._clear_manual_control_transient_states()
         text = (name or "Macro").strip() or "Macro"
         app._macro_status_text = f"Macro: {text}"
         app._macro_status_scroll_index = 0
@@ -196,6 +206,7 @@ class UiEventsMixin:
     def _stop_macro_status(self):
         app = cast(Any, self)
         if not getattr(app, "_macro_status_active", False):
+            self._clear_manual_control_transient_states()
             return
         app._macro_status_active = False
         after_id = getattr(app, "_macro_status_after_id", None)
@@ -210,6 +221,7 @@ class UiEventsMixin:
             app._ensure_state_label_width(app._machine_state_text)
         except Exception as exc:
             _log_suppressed("Failed restoring machine-state label width after macro-status stop", exc)
+        self._clear_manual_control_transient_states()
         app._update_state_highlight(app._machine_state_text)
 
     def _on_resume_button_visibility_change(self):

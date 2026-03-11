@@ -28,6 +28,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import tkinter.font as tkfont
 
+from simple_sender.ui.alarm_state import mark_alarm_clear_requested
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
@@ -385,8 +386,14 @@ def _pulse_command_widget(widget) -> None:
     try:
         state = getattr(widget, "state", None)
         if callable(state):
+            def _clear_state_pulse() -> None:
+                try:
+                    state(["!pressed", "!selected", "!active"])
+                except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+                    _log_suppressed("Failed clearing pressed-state pulse for touch feedback", exc)
+
             state(["pressed"])
-            widget.after(_TOUCH_FEEDBACK_PULSE_MS, lambda: state(["!pressed"]))
+            widget.after(_TOUCH_FEEDBACK_PULSE_MS, _clear_state_pulse)
             return
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed applying pressed-state pulse for touch feedback", exc)
@@ -566,6 +573,7 @@ def start_homing(app):
     app._machine_state_text = "Home"
     app.machine_state.set("Homing")
     app._update_state_highlight("Homing")
+    mark_alarm_clear_requested(app)
     try:
         app.grbl.home()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
@@ -799,8 +807,18 @@ def require_grbl_connection(app) -> bool:
 def run_if_connected(app, func):
     if not require_grbl_connection(app):
         return
+    try:
+        name = str(getattr(func, "__name__", "") or "").strip().lower()
+    except Exception:
+        name = ""
+    if name in {"unlock", "home"}:
+        mark_alarm_clear_requested(app)
     func()
 
 
 def send_manual(app, command: str, source: str):
-    app.grbl.send_immediate(command, source=source)
+    cmd = str(command or "").strip()
+    upper = cmd.upper()
+    if upper.startswith("$X") or upper.startswith("$H"):
+        mark_alarm_clear_requested(app)
+    app.grbl.send_immediate(cmd, source=source)

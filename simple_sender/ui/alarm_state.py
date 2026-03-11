@@ -53,9 +53,18 @@ def format_alarm_message(message: str | None) -> str:
     return f"ALARM: {text}"
 
 
+def mark_alarm_clear_requested(app) -> None:
+    try:
+        app._alarm_clear_requested = True
+    except Exception as exc:
+        _log_suppressed("Failed marking alarm-clear request", exc)
+
+
 def set_alarm_lock(app, locked: bool, message: str | None = None):
     if locked:
         app._alarm_locked = True
+        app._alarm_latched = True
+        app._alarm_clear_requested = False
         if message:
             app._alarm_message = message
         disable_job_controls(app)
@@ -73,9 +82,11 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         app._start_state_flash("#ff5252")
         return
 
-    if not app._alarm_locked:
+    if not app._alarm_locked and not bool(getattr(app, "_alarm_latched", False)):
         return
     app._alarm_locked = False
+    app._alarm_latched = False
+    app._alarm_clear_requested = False
     app._alarm_message = ""
     app.macro_executor.clear_alarm_notification()
     try:

@@ -42,6 +42,19 @@ from simple_sender.ui.status.state_flash import (
 from simple_sender.ui.ui_actions import on_autolevel_overlay_change, toggle_autolevel_overlay
 
 
+def _highlight_state_token(state: str | None) -> str:
+    text = str(state or "").strip()
+    if not text:
+        return ""
+    if text.startswith("<"):
+        text = text[1:]
+    if "|" in text:
+        text = text.split("|", 1)[0]
+    if text.endswith(">"):
+        text = text[:-1]
+    return text.strip().lower()
+
+
 class StateUiMixin:
     def _build_led_panel(self, parent):
         build_led_panel(self, parent)
@@ -81,4 +94,8 @@ class StateUiMixin:
 
     def _update_state_highlight(self, state: str | None):
         update_state_highlight(self, state)
+        try:
+            self._machine_state_highlight_key = _highlight_state_token(state)
+        except Exception:
+            pass
 

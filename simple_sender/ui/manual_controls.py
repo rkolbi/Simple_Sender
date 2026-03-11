@@ -25,6 +25,7 @@ import tkinter as tk
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_TRANSIENT_TTK_STATES_TO_CLEAR = ("!pressed", "!selected", "!active")
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -33,6 +34,24 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def clear_widget_transient_state(widget) -> None:
+    state_fn = getattr(widget, "state", None)
+    if callable(state_fn):
+        try:
+            state_fn(list(_TRANSIENT_TTK_STATES_TO_CLEAR))
+        except tk.TclError:
+            pass
+    try:
+        relief = str(widget.cget("relief")).strip().lower()
+    except Exception:
+        relief = ""
+    if relief == "sunken":
+        try:
+            widget.config(relief="raised")
+        except Exception:
+            pass
 
 
 def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
@@ -69,6 +88,9 @@ def _set_widget_state_if_needed(app, widget, state: str) -> None:
         if current == state:
             cache[widget] = state
             return
+    # Clear transient button visuals before disabling to avoid sticky states.
+    if state != "normal":
+        clear_widget_transient_state(widget)
     widget.config(state=state)
     cache[widget] = state
 

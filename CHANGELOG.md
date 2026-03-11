@@ -90,9 +90,11 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Progress reporting now clamps to `100%` when stream state reaches `done`, including runtime metrics/diagnostics export fields.
 - `grbl_worker_status` status-wait tracing now normalizes trace payload types before serializing/logging so mypy remains clean on strict checks while preserving runtime diagnostics behavior.
 - Shutdown sequencing now remains best-effort across all steps: a settings-save failure no longer skips GRBL disconnect and final resource cleanup.
+- Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
+- Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
-### Baseline Validation (local, 2026-03-09)
-- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1031 passed, 1 skipped`)
+### Baseline Validation (local, 2026-03-10)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1063 passed, 2 skipped`)
 - `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 138`: PASS
 - `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`138` source files)
 

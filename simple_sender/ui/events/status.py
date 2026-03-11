@@ -274,15 +274,25 @@ def _status_apply_interval_ok(app, state_token: str) -> bool:
     return True
 
 
+def _status_allows_alarm_clear(app) -> bool:
+    if not bool(getattr(app, "_alarm_locked", False)):
+        return False
+    if not bool(getattr(app, "_alarm_latched", False)):
+        return True
+    return bool(getattr(app, "_alarm_clear_requested", False))
+
+
 def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
     state_lower = str(state or "").strip().lower()
     app._machine_state_text = state
     if state_lower.startswith("alarm"):
         app._set_alarm_lock(True, state)
     else:
-        if getattr(app, "_alarm_locked", False):
+        if _status_allows_alarm_clear(app):
             app._set_alarm_lock(False)
-        if not getattr(app, "_macro_status_active", False):
+        if (not bool(getattr(app, "_alarm_locked", False))) and not getattr(
+            app, "_macro_status_active", False
+        ):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)
             _apply_machine_state_visuals(
@@ -906,8 +916,9 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
     if state_lower.startswith("alarm"):
         app._set_alarm_lock(True, state)
     else:
-        if app._alarm_locked:
-            app._set_alarm_lock(False)
+        if bool(getattr(app, "_alarm_locked", False)):
+            if _status_allows_alarm_clear(app):
+                app._set_alarm_lock(False)
         elif not getattr(app, "_macro_status_active", False):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)

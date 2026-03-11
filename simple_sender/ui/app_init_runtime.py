@@ -662,6 +662,8 @@ def _init_stream_and_override_state(
 
     app._grbl_ready = False
     app._alarm_locked = False
+    app._alarm_latched = False
+    app._alarm_clear_requested = False
     app._alarm_message = ""
     app._pending_settings_refresh = False
     app._connected_port = None

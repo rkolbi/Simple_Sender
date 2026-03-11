@@ -335,7 +335,11 @@ class MacroRunnerMixin(MacroExecutorState):
         else:
             self.grbl.send_immediate(command)
         if wait_for_idle:
-            completed = self.grbl.wait_for_manual_completion()
+            line_timeout_s = self._macro_line_timeout_s()
+            completion_timeout_s = 0.0
+            if line_timeout_s > 0:
+                completion_timeout_s = max(30.0, float(line_timeout_s))
+            completed = self.grbl.wait_for_manual_completion(timeout_s=completion_timeout_s)
             if not completed:
                 raise TimeoutError("Command completion timed out.")
-            self._macro_wait_for_idle()
+            self._macro_wait_for_idle(timeout_s=max(0.0, float(line_timeout_s)))

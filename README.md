@@ -709,7 +709,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 9, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1031 passed, 1 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 10, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1063 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -892,7 +892,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-09), and local/CI hooks now enforce `--expected-count 138`.
+5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-10), and local/CI hooks now enforce `--expected-count 138`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
