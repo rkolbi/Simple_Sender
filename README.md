@@ -4,7 +4,7 @@
 
 A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
 
-> **Current runtime model (v2.4 lean path):** Top View and Spatial View are disabled. Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
+> **Current runtime model (v2.4 lean path):** Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
 
 > **Safety notice:** Always test "in the air" with the spindle **off** before cutting material.
 
