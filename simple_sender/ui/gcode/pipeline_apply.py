@@ -851,7 +851,7 @@ def apply_loaded_gcode(
     def _apply_viewer_lines() -> dict[str, float]:
         section_timings_ms: dict[str, float] = {}
         def _apply_live_window_viewer() -> None:
-            preview_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_NEXT_LINES", 500) or 500)
+            preview_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_LOOKAHEAD_LINES", 10) or 10)
             preview_cap = max(1, preview_cap)
             preview_next = [
                 (idx, str(raw_line or ""))
@@ -867,7 +867,10 @@ def apply_loaded_gcode(
             header_var = getattr(app, "gcode_live_header_var", None)
             header_setter = getattr(header_var, "set", None)
             if callable(header_setter):
-                header_setter("Live G-code (500 past / current / 500 next) - Run: n/a")
+                past_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_PAST_LINES", 500) or 500)
+                header_setter(
+                    f"Live G-code ({int(preview_cap)} look ahead / current / {int(past_cap)} past) - Run: n/a"
+                )
             setattr(app, "_live_gcode_past_count", 0)
             setattr(app, "_live_gcode_current_count", 0)
             setattr(app, "_live_gcode_next_count", int(len(preview_next)))

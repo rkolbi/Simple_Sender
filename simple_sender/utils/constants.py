@@ -167,6 +167,9 @@ GCODE_LIVE_WINDOW_PAST_LINES = 500
 GCODE_LIVE_WINDOW_NEXT_LINES = 500
 """Maximum number of pending lines retained in the live G-code Next window."""
 
+GCODE_LIVE_WINDOW_LOOKAHEAD_LINES = 10
+"""Number of upcoming lines rendered in the live G-code Look Ahead section."""
+
 GCODE_LIVE_WINDOW_REFRESH_MS = 125
 """Maximum live G-code redraw cadence (ms) to avoid per-line UI churn."""
 

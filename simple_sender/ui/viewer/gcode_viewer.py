@@ -33,7 +33,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from ...utils.constants import (
-    GCODE_LIVE_WINDOW_NEXT_LINES,
+    GCODE_LIVE_WINDOW_LOOKAHEAD_LINES,
     GCODE_LIVE_WINDOW_PAST_LINES,
     COLOR_GCODE_CURRENT,
     COLOR_GCODE_TEXT,
@@ -95,35 +95,51 @@ class GcodeViewer(ttk.Frame):
         next_buffered_count: int = 0,
         highlight_current: bool = True,
     ) -> None:
-        """Render a bounded live Past/Current/Next G-code window."""
+        """Render a bounded live Look Ahead/Current/Past G-code window."""
         self._live_mode = True
         self._live_current_row = None
         self._sent_upto = -1
         self._acked_upto = -1
         self._current_idx = -1
 
-        past = list(past_lines[-int(GCODE_LIVE_WINDOW_PAST_LINES):])
-        nxt = list(next_lines[: int(GCODE_LIVE_WINDOW_NEXT_LINES)])
+        current_idx: int | None = None
+        if isinstance(current_line, tuple) and len(current_line) >= 1:
+            try:
+                current_idx = int(current_line[0])
+            except Exception:
+                current_idx = None
 
-        lines: list[str] = ["--- Current (acked) ---"]
+        filtered_past: list[tuple[int, str]] = []
+        for idx, raw in past_lines:
+            try:
+                idx_i = int(idx)
+            except Exception:
+                continue
+            if current_idx is not None and idx_i == current_idx:
+                continue
+            filtered_past.append((idx_i, str(raw or "")))
+        past = list(filtered_past[-int(GCODE_LIVE_WINDOW_PAST_LINES):])
+        look_ahead = list(next_lines[: int(GCODE_LIVE_WINDOW_LOOKAHEAD_LINES)])
+
+        lines: list[str] = ["--- Look Ahead ---"]
+        if not look_ahead:
+            lines.append("<none>")
+        else:
+            # Render farthest-first so the immediate next command sits closest
+            # to Current (Acked) for operator scanning.
+            for idx, raw in reversed(look_ahead):
+                lines.append(self._format_live_line(idx, raw))
+
+        lines.append("--- Current (Acked) ---")
         if current_line is None:
             lines.append("<none>")
         else:
             self._live_current_row = len(lines) + 1
             lines.append(self._format_live_line(current_line[0], current_line[1]))
 
-        lines.append("--- Past (last 500 acked) ---")
+        lines.append(f"--- Past (Last {int(GCODE_LIVE_WINDOW_PAST_LINES)} acked) ---")
         for idx, raw in reversed(past):
             lines.append(self._format_live_line(idx, raw))
-
-        lines.append("--- Next (up to 500 queued) ---")
-        for idx, raw in nxt:
-            lines.append(self._format_live_line(idx, raw))
-
-        buffered = max(0, int(next_buffered_count))
-        if buffered < len(nxt):
-            buffered = len(nxt)
-        lines.append(f"Next: {buffered} buffered")
 
         self.lines_count = len(lines)
         self.text.config(state="normal")

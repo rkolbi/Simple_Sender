@@ -30,6 +30,7 @@ from simple_sender.utils.constants import MAX_CONSOLE_LINES
 from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
 from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
 from simple_sender.utils.constants import (
+    GCODE_LIVE_WINDOW_LOOKAHEAD_LINES,
     GCODE_LIVE_WINDOW_NEXT_LINES,
     GCODE_LIVE_WINDOW_PAST_LINES,
     GCODE_LIVE_WINDOW_REFRESH_MS,
@@ -784,7 +785,7 @@ class StreamingController:
         current = self._sanitize_live_current(payload.get("current_line"))
         nxt = self._sanitize_live_entries(
             payload.get("next_lines", []),
-            limit=int(GCODE_LIVE_WINDOW_NEXT_LINES),
+            limit=int(GCODE_LIVE_WINDOW_LOOKAHEAD_LINES),
         )
         stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
         if (
@@ -855,9 +856,9 @@ class StreamingController:
             logger.debug("Failed rendering live G-code window", exc_info=exc)
             return
         header_text = (
-            f"Live G-code (500 past / current / 500 next) - Run: {int(progress_pct)}%"
+            f"Live G-code ({int(GCODE_LIVE_WINDOW_LOOKAHEAD_LINES)} look ahead / current / {int(GCODE_LIVE_WINDOW_PAST_LINES)} past) - Run: {int(progress_pct)}%"
             if file_size_bytes > 0
-            else "Live G-code (500 past / current / 500 next) - Run: n/a"
+            else f"Live G-code ({int(GCODE_LIVE_WINDOW_LOOKAHEAD_LINES)} look ahead / current / {int(GCODE_LIVE_WINDOW_PAST_LINES)} past) - Run: n/a"
         )
         header_var = getattr(self.app, "gcode_live_header_var", None)
         setter = getattr(header_var, "set", None)

@@ -996,21 +996,56 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
     return True
 
 
+def _deferred_completion_target_total(app) -> int:
+    try:
+        executable_total = int(getattr(app, "_gcode_executable_lines", 0) or 0)
+    except Exception:
+        executable_total = 0
+    if executable_total > 0:
+        return executable_total
+    try:
+        return int(getattr(app, "_gcode_total_lines", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _deferred_completion_bytes_done(app) -> bool:
+    try:
+        file_size = max(
+            int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
+            int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+        )
+    except Exception:
+        file_size = 0
+    if file_size <= 0:
+        return False
+    try:
+        acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
+    except Exception:
+        acked = 0
+    return max(0, acked) >= file_size
+
+
 def _sync_deferred_stream_completion(app, state: str) -> None:
     if not bool(getattr(app, "_stream_done_pending_idle", False)):
         return
     now_ts = time.time()
-    total = int(getattr(app, "_gcode_total_lines", 0) or 0)
-    if total <= 0:
-        return
-    done = int(getattr(app, "_last_acked_index", -1)) + 1
-    if done < total:
+    total = _deferred_completion_target_total(app)
+    done = max(0, int(getattr(app, "_last_acked_index", -1)) + 1)
+    complete_by_lines = total > 0 and done >= total
+    complete_by_bytes = _deferred_completion_bytes_done(app)
+    if not complete_by_lines and not complete_by_bytes:
         begin_deferred_completion_wait(app, now_ts=now_ts)
         return
     if str(state or "").lower().startswith("idle"):
         end_deferred_completion_wait(app, now_ts=now_ts)
         app._stream_done_pending_idle = False
         app._stream_state = "done"
+        notify_total = total if total > 0 else done
+        if complete_by_bytes and done > 0 and done < notify_total:
+            # Keep completion signaling consistent when non-executable file
+            # lines exceed streamed executable commands.
+            notify_total = done
         try:
             app.progress_pct.set(100)
         except Exception as exc:
@@ -1019,7 +1054,7 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
         def _finalize_completion_ui() -> None:
             app._deferred_stream_finalize_pending = False
             try:
-                app._maybe_notify_job_completion(done, total)
+                app._maybe_notify_job_completion(done, notify_total)
             except Exception as exc:
                 _log_suppressed("Failed notifying deferred stream completion", exc)
             try:
