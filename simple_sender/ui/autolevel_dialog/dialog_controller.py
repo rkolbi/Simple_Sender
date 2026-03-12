@@ -154,6 +154,7 @@ class AutoLevelDialogController:
         self.sample_var: tk.StringVar = cast(tk.StringVar, None)
         self.bounds_var: tk.StringVar = cast(tk.StringVar, None)
         self.status_var: tk.StringVar = cast(tk.StringVar, None)
+        self.last_test_probe_var: tk.StringVar = cast(tk.StringVar, None)
         self.map_summary_var: tk.StringVar = cast(tk.StringVar, None)
         self.stats_var: tk.StringVar = cast(tk.StringVar, None)
         self.path_order_var: tk.StringVar = cast(tk.StringVar, None)
@@ -190,6 +191,7 @@ class AutoLevelDialogController:
         self.settle_entry: ttk.Entry = cast(ttk.Entry, None)
         self.interp_combo: ttk.Combobox = cast(ttk.Combobox, None)
         self.start_btn: ttk.Button = cast(ttk.Button, None)
+        self.test_btn: ttk.Button = cast(ttk.Button, None)
         self.apply_btn: ttk.Button = cast(ttk.Button, None)
         self.save_btn: ttk.Button = cast(ttk.Button, None)
         self.save_map_btn: ttk.Button = cast(ttk.Button, None)
@@ -359,6 +361,9 @@ class AutoLevelDialogController:
         self.sample_var = tk.StringVar(value="")
         self.bounds_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
+        self.last_test_probe_var = tk.StringVar(
+            value=str(getattr(self.app, "_auto_level_last_test_probe_result", "") or "")
+        )
         self.map_summary_var = tk.StringVar(value="")
         self.stats_var = tk.StringVar(value="")
         self.profile_var = tk.StringVar(value=self.profile_name.title())
@@ -539,7 +544,13 @@ class AutoLevelDialogController:
         wpos = getattr(self.app, "_wpos_raw", None)
         if not wpos or len(wpos) < 2:
             return None
-        report_units = getattr(self.app, "_report_units", None) or self.app.unit_mode.get()
+        report_units = getattr(self.app, "_report_units", None)
+        if not report_units:
+            unit_mode = getattr(self.app, "unit_mode", None)
+            try:
+                report_units = unit_mode.get() if unit_mode is not None else "mm"
+            except Exception:
+                report_units = "mm"
         try:
             return (
                 convert_units(float(wpos[0]), report_units, "mm"),
@@ -565,6 +576,7 @@ class AutoLevelDialogController:
         self.update_sample()
 
     def set_start_state(self) -> None:
+        self._set_test_probe_state()
         if self.start_btn is None:
             return
         if self.app.auto_level_runner.is_running():
@@ -597,6 +609,51 @@ class AutoLevelDialogController:
         self.start_btn.config(state="normal")
         self._sync_pending_g90_notice()
 
+    def _set_test_probe_state(self) -> None:
+        if self.test_btn is None:
+            return
+        if self.app.auto_level_runner.is_running():
+            self.test_btn.config(state="disabled")
+            return
+        errors = validate_probe_settings_vars(
+            self.safe_z_var,
+            self.probe_depth_var,
+            self.probe_feed_var,
+            self.retract_var,
+            self.settle_var,
+        )
+        if errors:
+            self.test_btn.config(state="disabled")
+            return
+        ready, _reason = probe_connection_state(self.app)
+        if not ready:
+            self.test_btn.config(state="disabled")
+            return
+        if self._current_wpos_mm() is None:
+            self.test_btn.config(state="disabled")
+            return
+        self.test_btn.config(state="normal")
+
+    def _record_last_test_probe_result(self, text: str) -> None:
+        value = str(text or "")
+        try:
+            self.app._auto_level_last_test_probe_result = value
+        except Exception as exc:
+            _log_suppressed("Failed storing last test probe result on app", exc)
+        try:
+            self.last_test_probe_var.set(value)
+        except Exception as exc:
+            _log_suppressed("Failed updating last test probe result variable", exc)
+
+    def _parse_probe_run_settings(self) -> ProbeRunSettings:
+        return ProbeRunSettings(
+            safe_z=parse_float_var(self.safe_z_var, "safe Z"),
+            probe_depth=parse_float_var(self.probe_depth_var, "probe depth"),
+            probe_feed=parse_float_var(self.probe_feed_var, "probe feed"),
+            retract_z=parse_float_var(self.retract_var, "retract Z"),
+            settle_time=parse_float_var(self.settle_var, "settle time"),
+        )
+
     def _sync_pending_g90_notice(self) -> None:
         if getattr(self.app, "_pending_force_g90", False):
             if not self.status_var.get():
@@ -604,6 +661,44 @@ class AutoLevelDialogController:
             return
         if self.status_var.get() == self.pending_g90_text:
             self.status_var.set("")
+
+    def _has_complete_height_map(self) -> bool:
+        height_map = getattr(self.app, "_auto_level_height_map", None)
+        if height_map is None:
+            return False
+        try:
+            return bool(height_map.is_complete())
+        except Exception as exc:
+            _log_suppressed("Failed checking auto-level height-map completeness", exc)
+            return False
+
+    def _has_leveled_output(self) -> bool:
+        leveled_lines = getattr(self.app, "_auto_level_leveled_lines", None)
+        return bool(
+            (isinstance(leveled_lines, list) and bool(leveled_lines))
+            or getattr(self.app, "_auto_level_leveled_path", None)
+        )
+
+    def _has_original_output(self) -> bool:
+        original_lines = getattr(self.app, "_auto_level_original_lines", None)
+        return bool(
+            (isinstance(original_lines, list) and bool(original_lines))
+            or getattr(self.app, "_auto_level_original_path", None)
+            or getattr(self.app, "_auto_level_original_source_path", None)
+        )
+
+    def _sync_action_button_states(self) -> None:
+        map_ready = self._has_complete_height_map()
+        if self.apply_btn is not None:
+            self.apply_btn.config(state="normal" if map_ready else "disabled")
+        if self.save_map_btn is not None:
+            self.save_map_btn.config(state="normal" if map_ready else "disabled")
+        if self.save_btn is not None:
+            self.save_btn.config(state="normal" if self._has_leveled_output() else "disabled")
+        if self.revert_btn is not None:
+            self.revert_btn.config(state="normal" if self._has_original_output() else "disabled")
+        if self.load_map_btn is not None:
+            self.load_map_btn.config(state="normal")
 
     def update_sample(self) -> None:
         if self.base_bounds is None:
@@ -715,6 +810,10 @@ class AutoLevelDialogController:
         if errors:
             self.deps.messagebox.showwarning("Auto-Level", errors[0])
             return
+        ready, reason = probe_connection_state(self.app)
+        if not ready:
+            self.deps.messagebox.showwarning("Auto-Level", reason)
+            return
         if not self.app._require_grbl_connection():
             return
         if self.app._alarm_locked:
@@ -733,13 +832,7 @@ class AutoLevelDialogController:
             for px, py in skipped_points:
                 height_map.mark_invalid(px, py)
         try:
-            settings = ProbeRunSettings(
-                safe_z=parse_float_var(self.safe_z_var, "safe Z"),
-                probe_depth=parse_float_var(self.probe_depth_var, "probe depth"),
-                probe_feed=parse_float_var(self.probe_feed_var, "probe feed"),
-                retract_z=parse_float_var(self.retract_var, "retract Z"),
-                settle_time=parse_float_var(self.settle_var, "settle time"),
-            )
+            settings = self._parse_probe_run_settings()
         except ValueError as exc:
             self.deps.messagebox.showwarning("Auto-Level", str(exc))
             return
@@ -803,6 +896,141 @@ class AutoLevelDialogController:
         if not started:
             self._set_controls_enabled(True)
             self.status_var.set("Probe start failed.")
+
+    def test_probe(self) -> None:
+        errors = validate_probe_settings_vars(
+            self.safe_z_var,
+            self.probe_depth_var,
+            self.probe_feed_var,
+            self.retract_var,
+            self.settle_var,
+        )
+        if errors:
+            self.deps.messagebox.showwarning("Auto-Level", errors[0])
+            return
+        ready, reason = probe_connection_state(self.app)
+        if not ready:
+            self.deps.messagebox.showwarning("Auto-Level", reason)
+            return
+        if self.app.auto_level_runner.is_running():
+            return
+        pos = self._current_wpos_mm()
+        if pos is None:
+            self.deps.messagebox.showwarning(
+                "Auto-Level",
+                "Position unavailable. Connect and wait for status.",
+            )
+            return
+        proceed = self.deps.messagebox.askokcancel(
+            "Auto-Level",
+            "A single probe test will be performed at the current XY position.\n"
+            "This does not update the height map.\n"
+            "Confirm probe wiring is correct before continuing.",
+        )
+        if not proceed:
+            return
+        try:
+            settings = self._parse_probe_run_settings()
+        except ValueError as exc:
+            self.deps.messagebox.showwarning("Auto-Level", str(exc))
+            return
+        x_mm, y_mm = pos
+        test_bounds = ProbeBounds(minx=x_mm, maxx=x_mm, miny=y_mm, maxy=y_mm)
+        test_grid = ProbeGrid(
+            bounds=test_bounds,
+            xs=[x_mm],
+            ys=[y_mm],
+            points=[(x_mm, y_mm)],
+            spacing_x=0.0,
+            spacing_y=0.0,
+            margin=0.0,
+        )
+        test_map = HeightMap(test_grid.xs, test_grid.ys)
+
+        action_states = {
+            "apply": self.apply_btn.cget("state") if self.apply_btn is not None else "disabled",
+            "save_map": self.save_map_btn.cget("state") if self.save_map_btn is not None else "disabled",
+            "save": self.save_btn.cget("state") if self.save_btn is not None else "disabled",
+            "revert": self.revert_btn.cget("state") if self.revert_btn is not None else "disabled",
+        }
+
+        self.progress_bar.configure(maximum=1, value=0)
+        self.status_var.set("Running test probe...")
+        self._set_controls_enabled(False)
+
+        def on_progress(done: int, total: int) -> None:
+            def update() -> None:
+                self.progress_bar.configure(value=done)
+                self.status_var.set(f"Test probe {done}/{total}")
+
+            self.app.after(0, update)
+
+        def on_done(ok: bool, reason: str | None) -> None:
+            def finish() -> None:
+                self._set_controls_enabled(True)
+                try:
+                    if self.apply_btn is not None:
+                        self.apply_btn.config(state=action_states["apply"])
+                    if self.save_map_btn is not None:
+                        self.save_map_btn.config(state=action_states["save_map"])
+                    if self.save_btn is not None:
+                        self.save_btn.config(state=action_states["save"])
+                    if self.revert_btn is not None:
+                        self.revert_btn.config(state=action_states["revert"])
+                except Exception as exc:
+                    _log_suppressed("Failed restoring action button states after test probe", exc)
+                self.set_start_state()
+                if ok:
+                    measured = test_map.get_index(0, 0)
+                    if measured is None:
+                        report = getattr(self.app.probe_controller, "last_report", lambda: None)()
+                        if report is not None:
+                            measured = float(getattr(report, "z", 0.0))
+                    timestamp = time.strftime("%H:%M:%S")
+                    z_text = f"{measured:.4f}" if measured is not None else "n/a"
+                    self._record_last_test_probe_result(
+                        f"Last test probe [{timestamp}]: X{x_mm:.3f} Y{y_mm:.3f} Z{z_text} mm"
+                    )
+                    if measured is None:
+                        self.status_var.set("Test probe complete.")
+                    else:
+                        self.status_var.set(
+                            f"Test probe hit: X{x_mm:.3f} Y{y_mm:.3f} Z{measured:.4f} mm"
+                        )
+                else:
+                    timestamp = time.strftime("%H:%M:%S")
+                    message = f"Test probe failed: {reason or 'failed'}"
+                    if getattr(self.app, "_pending_force_g90", False):
+                        message = f"{message} (pending G90 restore)"
+                    self._record_last_test_probe_result(
+                        f"Last test probe [{timestamp}]: X{x_mm:.3f} Y{y_mm:.3f} failed ({reason or 'failed'})"
+                    )
+                    self.status_var.set(message)
+
+            self.app.after(0, finish)
+
+        started = self.app.auto_level_runner.start(
+            test_grid,
+            test_map,
+            settings,
+            on_progress=on_progress,
+            on_done=on_done,
+        )
+        if not started:
+            self._set_controls_enabled(True)
+            try:
+                if self.apply_btn is not None:
+                    self.apply_btn.config(state=action_states["apply"])
+                if self.save_map_btn is not None:
+                    self.save_map_btn.config(state=action_states["save_map"])
+                if self.save_btn is not None:
+                    self.save_btn.config(state=action_states["save"])
+                if self.revert_btn is not None:
+                    self.revert_btn.config(state=action_states["revert"])
+            except Exception as exc:
+                _log_suppressed("Failed restoring action button states after test probe start failure", exc)
+            self.set_start_state()
+            self.status_var.set("Test probe start failed.")
 
     def _make_output_path(self, source_path: str) -> str:
         base, ext = os.path.splitext(os.path.basename(source_path))
@@ -1025,8 +1253,7 @@ class AutoLevelDialogController:
             self.dlg.destroy()
 
     def _set_controls_enabled(self, enabled: bool) -> None:
-        state = "normal" if enabled else "disabled"
-        widgets = (
+        settings_widgets = (
             self.profile_combo,
             self.preset_combo,
             self.preset_save_btn,
@@ -1044,13 +1271,18 @@ class AutoLevelDialogController:
             self.settle_entry,
             self.interp_combo,
             *self.avoidance_controls,
+        )
+        action_widgets = (
             self.start_btn,
+            self.test_btn,
             self.apply_btn,
             self.save_btn,
             self.save_map_btn,
             self.load_map_btn,
             self.revert_btn,
         )
+        widgets = settings_widgets + action_widgets
+        state = "normal" if enabled else "disabled"
         for widget in widgets:
             try:
                 if widget is None:
@@ -1058,6 +1290,9 @@ class AutoLevelDialogController:
                 widget.config(state=state)
             except Exception as exc:
                 _log_suppressed("Failed toggling auto-level dialog control state", exc)
+        if enabled:
+            self.set_start_state()
+            self._sync_action_button_states()
         if self.close_btn is not None:
             self.close_btn.config(text="Cancel" if not enabled else "Close")
 
@@ -1246,12 +1481,21 @@ class AutoLevelDialogController:
             sticky="w",
             pady=(6, 0),
         )
+        ttk.Label(self.frm, textvariable=self.last_test_probe_var, wraplength=460, justify="left").grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(2, 0),
+        )
         self.progress_bar = ttk.Progressbar(self.frm, mode="determinate", length=240)
-        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.progress_bar.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         btn_row = ttk.Frame(self.frm)
-        btn_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        btn_row.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.start_btn = ttk.Button(btn_row, text="Start Probe", command=self.start_probe)
         self.start_btn.pack(side="left", padx=(0, 6))
+        self.test_btn = ttk.Button(btn_row, text="Test Probe", command=self.test_probe)
+        self.test_btn.pack(side="left", padx=(0, 6))
         self.apply_btn = ttk.Button(btn_row, text="Apply to Job", command=self.apply_level, state="disabled")
         self.apply_btn.pack(side="left", padx=(0, 6))
         self.save_btn = ttk.Button(btn_row, text="Save Leveled", command=self.save_leveled, state="disabled")
@@ -1323,4 +1567,3 @@ def show_auto_level_dialog(
     if deps is None:
         deps = build_auto_level_dialog_dependencies()
     AutoLevelDialogController(app, deps).show()
-

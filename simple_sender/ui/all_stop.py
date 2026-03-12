@@ -23,6 +23,7 @@
 import logging
 import tkinter as tk
 
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.utils.constants import (
     JOG_PANEL_ALL_STOP_OFFSET_FALLBACK_PX,
     JOG_PANEL_ALL_STOP_OFFSET_IN,
@@ -41,11 +42,50 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _cancel_machine_driving_tasks(app) -> None:
+    reason = "Canceled by ALL STOP."
+    try:
+        grbl = getattr(app, "grbl", None)
+        if grbl is not None:
+            jog_cancel = getattr(grbl, "jog_cancel", None)
+            if callable(jog_cancel):
+                jog_cancel()
+            cancel_pending_jogs = getattr(grbl, "cancel_pending_jogs", None)
+            if callable(cancel_pending_jogs):
+                cancel_pending_jogs()
+            complete_tool_change = getattr(grbl, "complete_stream_tool_change", None)
+            if callable(complete_tool_change):
+                complete_tool_change(False, reason)
+    except Exception as exc:
+        _log_suppressed("Failed canceling GRBL queued motion/tool-change during ALL STOP", exc)
+    try:
+        macro_executor = getattr(app, "macro_executor", None)
+        cancel_macro = getattr(macro_executor, "cancel_macro", None)
+        if callable(cancel_macro):
+            cancel_macro(reason=reason)
+    except Exception as exc:
+        _log_suppressed("Failed canceling active macro during ALL STOP", exc)
+    try:
+        auto_level_runner = getattr(app, "auto_level_runner", None)
+        cancel_probe = getattr(auto_level_runner, "cancel", None)
+        if callable(cancel_probe):
+            cancel_probe()
+    except Exception as exc:
+        _log_suppressed("Failed canceling auto-level probing during ALL STOP", exc)
+    try:
+        cancel_event = getattr(app, "_overdrive_validation_cancel_event", None)
+        if cancel_event is not None and hasattr(cancel_event, "set"):
+            cancel_event.set()
+    except Exception as exc:
+        _log_suppressed("Failed canceling overdrive validation during ALL STOP", exc)
+
+
 def all_stop_action(app):
     try:
         app._stop_joystick_hold()
     except Exception as exc:
         _log_suppressed("Failed stopping joystick hold before ALL STOP action", exc)
+    _cancel_machine_driving_tasks(app)
     if not app._require_grbl_connection():
         return
     try:
@@ -58,9 +98,22 @@ def all_stop_action(app):
         app.grbl.reset()
     elif mode == "stop_reset":
         app.grbl.stop_stream()
-        app.grbl.reset()
+        stop_stream_resets = False
+        stop_stream_resets_checker = getattr(app.grbl, "stop_stream_performs_reset", None)
+        if callable(stop_stream_resets_checker):
+            try:
+                stop_stream_resets = bool(stop_stream_resets_checker())
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed checking whether stop_stream already performs reset",
+                    exc,
+                )
+                stop_stream_resets = True
+        if not stop_stream_resets:
+            app.grbl.reset()
     else:
         app.grbl.stop_stream()
+    invalidate_job_setup_state(app)
 
 
 def all_stop_gcode_label(app) -> str:

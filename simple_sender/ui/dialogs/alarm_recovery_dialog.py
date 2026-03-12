@@ -25,6 +25,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ def show_alarm_recovery(app) -> None:
         except Exception as exc:
             logger.exception("Failed stopping Kasa job accessories before reset: %s", exc)
         app.grbl.reset()
+        invalidate_job_setup_state(app)
 
     ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(app.grbl.unlock)).pack(
         side="left", padx=(0, 6)

@@ -85,7 +85,13 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             logger.warning("Cannot send command - not connected")
             return
         
-        if self._streaming:
+        allow_stream_paused_macro = bool(
+            source == "macro"
+            and self._streaming
+            and self._paused
+            and bool(getattr(self, "_stream_tool_change_active", False))
+        )
+        if self._streaming and not allow_stream_paused_macro:
             logger.warning("Cannot send immediate command during streaming")
             try:
                 self.ui_q.put(("log", f"[manual blocked] {command.strip()} (streaming active)"))

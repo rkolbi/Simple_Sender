@@ -31,6 +31,11 @@ from typing import Any, Callable
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.job_setup_state import (
+    confirm_job_start_without_setup,
+    has_valid_job_setup_state,
+    invalidate_job_setup_state,
+)
 from simple_sender.utils.constants import BAUD_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -374,6 +379,9 @@ def open_gcode(app):
 def run_job(app):
     if not app._require_grbl_connection():
         return
+    if not has_valid_job_setup_state(app):
+        if not confirm_job_start_without_setup(app):
+            return
     try:
         app._kasa_last_stream_line_index = -1
     except Exception as exc:
@@ -443,3 +451,4 @@ def stop_job(app):
     except Exception as exc:
         _log_suppressed("Failed stopping Kasa job accessories on Stop/Reset", exc)
     app.grbl.stop_stream()
+    invalidate_job_setup_state(app)

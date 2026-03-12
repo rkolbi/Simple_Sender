@@ -70,19 +70,28 @@ def macro_wait_for_idle(
     grbl,
     ui_q,
     timeout_s: float = 30.0,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     if not grbl.is_connected():
         return
     start = time.monotonic()
     seen_busy = False
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            return
         if not grbl.is_connected():
             return
         state = str(app._machine_state_text).strip()
         is_idle = state.upper().startswith("IDLE")
         if getattr(app, "_homing_in_progress", False):
             is_idle = False
-        if not grbl.is_streaming():
+        stream_active = bool(grbl.is_streaming())
+        allow_paused_tool_change = bool(
+            stream_active
+            and bool(getattr(grbl, "_paused", False))
+            and bool(getattr(grbl, "_stream_tool_change_active", False))
+        )
+        if (not stream_active) or allow_paused_tool_change:
             if not is_idle:
                 seen_busy = True
             elif is_idle and (seen_busy or (time.monotonic() - start) > 0.2):
@@ -110,6 +119,7 @@ def macro_wait_for_status(
     macro_vars: dict[str, Any],
     macro_vars_lock,
     timeout_s: float = 1.0,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     start = time.monotonic()
     with macro_vars_lock:
@@ -126,6 +136,8 @@ def macro_wait_for_status(
             _log_suppressed("Failed clearing status-update event before waiting", exc)
     grbl.send_realtime(RT_STATUS)
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         with macro_vars_lock:
             now_seq = int(macro_vars.get("_status_seq", 0) or 0)
         if now_seq != seq:
@@ -161,6 +173,7 @@ def macro_wait_for_modal(
     macro_vars_lock,
     seq: int | None = None,
     timeout_s: float = 1.0,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     start = time.monotonic()
     if seq is None:
@@ -173,6 +186,8 @@ def macro_wait_for_modal(
         except Exception as exc:
             _log_suppressed("Failed clearing modal-update event before waiting", exc)
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         with macro_vars_lock:
             now_seq = int(macro_vars.get("_modal_seq", 0) or 0)
         if now_seq != seq:

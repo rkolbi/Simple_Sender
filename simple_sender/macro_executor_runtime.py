@@ -49,6 +49,8 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 class MacroRunnerMixin(MacroExecutorState):
+    _last_macro_run_success: bool | None
+
     def _validate_macro_color(self, color: str) -> bool:
         checker = getattr(self.app, "winfo_rgb", None)
         if not callable(checker):
@@ -60,6 +62,8 @@ class MacroRunnerMixin(MacroExecutorState):
             return False
 
     def _macro_timeout_setting(self, attr_name: str, default_value: float) -> float:
+        if bool(getattr(self.app, "_tool_change_unlimited_time_active", False)):
+            return 0.0
         value = getattr(self.app, attr_name, default_value)
         try:
             if hasattr(value, "get"):
@@ -91,29 +95,35 @@ class MacroRunnerMixin(MacroExecutorState):
             return
         self.ui_q.put(("log", f"[macro][audit] {message}"))
 
-    def run_macro(self, index: int):
+    def run_macro(self, index: int, allow_streaming_paused: bool = False) -> bool:
         if not self.grbl.is_connected():
             messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
-            return
+            return False
         if self.grbl.is_streaming():
-            messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
-            return
+            allow_during_tool_change = bool(
+                allow_streaming_paused
+                and bool(getattr(self.grbl, "_paused", False))
+                and bool(getattr(self.grbl, "_stream_tool_change_active", False))
+            )
+            if not allow_during_tool_change:
+                messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
+                return False
         if bool(getattr(self.app, "_alarm_locked", False)):
             messagebox.showwarning("Macro blocked", "Clear the alarm before running a macro.")
-            return
+            return False
         path = self.macro_path(index)
         if not path:
-            return
+            return False
         if not self._macro_lock.acquire(blocking=False):
             messagebox.showwarning("Macro busy", "Another macro is running.")
-            return
+            return False
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except (OSError, UnicodeError) as exc:
             messagebox.showerror("Macro error", str(exc))
             self._macro_lock.release()
-            return
+            return False
         name, tip, _color, _text_color, body_start = parse_macro_header(
             lines,
             color_validator=self._validate_macro_color,
@@ -129,12 +139,14 @@ class MacroRunnerMixin(MacroExecutorState):
             self.app.streaming_controller.log(f"[{ts}] Macro contents:")
             for raw in lines[body_start:]:
                 self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
+        self._last_macro_run_success = None
         t = threading.Thread(
             target=self._run_macro_worker,
             args=(lines, path, body_start),
             daemon=True,
         )
         t.start()
+        return True
 
     def _run_macro_worker(self, lines: list[str], path: str | None, body_start: int = 2):
         start = time.perf_counter()
@@ -143,6 +155,7 @@ class MacroRunnerMixin(MacroExecutorState):
         total_timeout_s = self._macro_total_timeout_s()
         self._alarm_event.clear()
         self._alarm_notified = False
+        aborted = False
         name = lines[0].strip() if lines else "Macro"
         self._macro_audit(
             (
@@ -172,6 +185,7 @@ class MacroRunnerMixin(MacroExecutorState):
             modal_ok = self._macro_wait_for_modal(modal_seq)
             status_ok = self._macro_wait_for_status()
             if not modal_ok or not status_ok:
+                aborted = True
                 self.ui_q.put(("log", "[macro] Snapshot failed; macro aborted."))
                 self._macro_audit("Snapshot failed; aborting.", force=True)
                 return
@@ -181,6 +195,7 @@ class MacroRunnerMixin(MacroExecutorState):
             for idx in range(body_start, len(lines)):
                 now = time.perf_counter()
                 if total_timeout_s > 0 and (now - start) > total_timeout_s:
+                    aborted = True
                     self.ui_q.put(
                         ("log", f"[macro] Macro timed out after {total_timeout_s:.1f}s; aborted."),
                     )
@@ -194,6 +209,7 @@ class MacroRunnerMixin(MacroExecutorState):
                 line = raw_line.strip()
                 self._current_macro_line = raw_line
                 if self._alarm_event.is_set():
+                    aborted = True
                     self._macro_audit(f"L{idx + 1} abort: alarm event set", force=True)
                     break
                 if not line:
@@ -205,6 +221,7 @@ class MacroRunnerMixin(MacroExecutorState):
                 try:
                     compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
                     if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
+                        aborted = True
                         self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
                         self._macro_audit(f"L{line_no} compile_error: {compiled[1]}", force=True)
                         self._notify_macro_compile_error(path, raw_line, line_no, compiled[1])
@@ -234,20 +251,24 @@ class MacroRunnerMixin(MacroExecutorState):
                         continue
                     self._macro_audit(f"L{line_no} eval: {evaluated}")
                     if not self._execute_command(evaluated, raw_line):
+                        aborted = True
                         self._macro_audit(f"L{line_no} aborted by command", force=True)
                         break
                     self._macro_audit(f"L{line_no} ok")
                     if getattr(self.app, "_alarm_locked", False):
+                        aborted = True
                         self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
                         self._macro_audit(f"L{line_no} abort: alarm lock active", force=True)
                         break
                 except Exception as exc:
+                    aborted = True
                     logger.exception("Macro line %d failed", line_no)
                     self.ui_q.put(("log", f"[macro] Line {line_no} failed: {exc}"))
                     self._macro_audit(f"L{line_no} error: {exc}", force=True)
                     break
                 elapsed_line = time.perf_counter() - line_start
                 if line_timeout_s > 0 and elapsed_line > line_timeout_s:
+                    aborted = True
                     self.ui_q.put(
                         (
                             "log",
@@ -261,10 +282,25 @@ class MacroRunnerMixin(MacroExecutorState):
                     )
                     break
         except Exception as exc:
-            self.ui_q.put(("log", f"[macro] Runtime error: {exc}"))
-            self._macro_audit(f"Runtime error: {exc}", force=True)
-            self.app._log_exception("Macro error", exc, show_dialog=True, dialog_title="Macro error")
+            aborted = True
+            canceled = bool(
+                isinstance(exc, RuntimeError)
+                and str(exc).strip().lower() == "macro canceled."
+                and bool(self._alarm_event.is_set())
+            )
+            if canceled:
+                self._macro_audit("Runtime canceled by operator.", force=True)
+            else:
+                self.ui_q.put(("log", f"[macro] Runtime error: {exc}"))
+                self._macro_audit(f"Runtime error: {exc}", force=True)
+                self.app._log_exception(
+                    "Macro error",
+                    exc,
+                    show_dialog=True,
+                    dialog_title="Macro error",
+                )
         finally:
+            self._last_macro_run_success = not aborted
             try:
                 if not self._macro_state_restored:
                     self._macro_restore_units()
@@ -327,7 +363,19 @@ class MacroRunnerMixin(MacroExecutorState):
             self._alarm_event.clear()
         self._alarm_notified = False
 
+    def cancel_macro(self, reason: str | None = None) -> bool:
+        self._alarm_event.set()
+        active = bool(getattr(self._macro_lock, "locked", lambda: False)())
+        if not active:
+            return False
+        text = str(reason or "").strip() or "Canceled."
+        self.ui_q.put(("log", f"[macro] {text}"))
+        self._last_macro_run_success = False
+        return True
+
     def _macro_send(self, command: str, *, wait_for_idle: bool = True):
+        if self._alarm_event.is_set():
+            raise RuntimeError("Macro canceled.")
         if not self.grbl.is_connected():
             raise RuntimeError("Controller disconnected during macro execution.")
         if hasattr(self.app, "_send_manual"):
@@ -341,5 +389,9 @@ class MacroRunnerMixin(MacroExecutorState):
                 completion_timeout_s = max(30.0, float(line_timeout_s))
             completed = self.grbl.wait_for_manual_completion(timeout_s=completion_timeout_s)
             if not completed:
+                if self._alarm_event.is_set():
+                    raise RuntimeError("Macro canceled.")
                 raise TimeoutError("Command completion timed out.")
             self._macro_wait_for_idle(timeout_s=max(0.0, float(line_timeout_s)))
+            if self._alarm_event.is_set():
+                raise RuntimeError("Macro canceled.")

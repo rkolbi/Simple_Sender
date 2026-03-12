@@ -535,7 +535,9 @@ def save_settings(app):
     app._on_homing_watchdog_change()
 
     try:
-        os.makedirs(os.path.dirname(app.settings_path), exist_ok=True)
+        settings_dir = os.path.dirname(str(getattr(app, "settings_path", "") or ""))
+        if settings_dir:
+            os.makedirs(settings_dir, exist_ok=True)
     except Exception as exc:
         logger.exception("Failed to create settings directory: %s", exc)
 

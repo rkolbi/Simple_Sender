@@ -78,6 +78,11 @@ class GcodeParseResult:
 def clean_gcode_line(line: str) -> str:
     """Strip comments/whitespace and return a safe, normalized line."""
     line = line.replace("\ufeff", "")
+    # Preserve tool-change directive payloads verbatim so CAM-emitted tool names
+    # (including parentheses/symbols) survive into the sender workflow.
+    stripped = line.strip()
+    if stripped.startswith("TC:"):
+        return stripped
     out_chars: list[str] = []
     paren_depth = 0
     bracket_depth = 0

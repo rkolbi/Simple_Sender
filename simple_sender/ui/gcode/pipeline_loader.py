@@ -178,10 +178,22 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _ssmeta_clean_value(raw: str) -> str:
-    value = str(raw or "").strip().strip("()[]")
+    value = str(raw or "").strip()
+    if len(value) >= 2:
+        if value[0] == "(" and value[-1] == ")":
+            value = value[1:-1].strip()
+        elif value[0] == "[" and value[-1] == "]":
+            value = value[1:-1].strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         value = value[1:-1]
-    return value.strip().strip(",;")
+    value = value.strip().strip(",;")
+    # Remove unmatched trailing comment wrappers while preserving balanced
+    # parentheses/brackets used in tool descriptions.
+    while value.endswith(")") and value.count("(") < value.count(")"):
+        value = value[:-1].rstrip()
+    while value.endswith("]") and value.count("[") < value.count("]"):
+        value = value[:-1].rstrip()
+    return value
 
 
 def _parse_ssmeta_blob(raw: str) -> dict[str, str]:
@@ -263,6 +275,8 @@ def _read_ssmeta_header(
     bytes_read = 0
     found = False
     metadata: dict[str, str] = {}
+    toolpaths_entries: list[str] = []
+    tool_entries: list[str] = []
     try:
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
             while lines_read < max_lines and bytes_read < max_bytes:
@@ -278,9 +292,19 @@ def _read_ssmeta_header(
                 if not parsed:
                     continue
                 for key, value in parsed.items():
-                    metadata[str(key).strip().lower()] = _ssmeta_clean_value(value)
+                    clean_key = str(key).strip().lower()
+                    clean_value = _ssmeta_clean_value(value)
+                    metadata[clean_key] = clean_value
+                    if clean_key in {"toolpaths_output", "toolpaths"} and clean_value:
+                        toolpaths_entries.append(clean_value)
+                    if clean_key in {"tools_used", "tools"} and clean_value:
+                        tool_entries.append(clean_value)
     except Exception:
         return False, {}
+    if toolpaths_entries:
+        metadata["__ssmeta_toolpaths_list"] = "\n".join(toolpaths_entries)
+    if tool_entries:
+        metadata["__ssmeta_tools_list"] = "\n".join(tool_entries)
     return bool(found), metadata
 
 

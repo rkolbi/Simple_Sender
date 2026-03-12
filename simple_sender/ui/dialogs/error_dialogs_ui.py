@@ -316,7 +316,7 @@ def _get_non_negative_float_setting(app, attr: str, default: float) -> float:
     return value
 
 
-def _schedule_grbl_popup_close(app) -> None:
+def _schedule_grbl_popup_close(app, *, allow_auto_close: bool = True) -> None:
     auto_close_s = _get_non_negative_float_setting(
         app,
         "grbl_popup_auto_dismiss_sec",
@@ -329,6 +329,8 @@ def _schedule_grbl_popup_close(app) -> None:
         except Exception as exc:
             _log_suppressed("Failed canceling existing GRBL code popup auto-dismiss timer before reschedule", exc)
     app._grbl_code_popup_after_id = None
+    if not bool(allow_auto_close):
+        return
     if auto_close_s <= 0:
         return
     if not hasattr(app, "after"):
@@ -394,6 +396,8 @@ def show_grbl_code_popup(app, message: str | None) -> None:
         popup.deiconify()
         popup.lift()
         center_window(popup, app)
-        _schedule_grbl_popup_close(app)
+        # Safety-first behavior: alarms/errors stay visible until the operator
+        # explicitly dismisses them.
+        _schedule_grbl_popup_close(app, allow_auto_close=False)
     except Exception:
         return

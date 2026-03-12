@@ -78,6 +78,9 @@ class _StreamSourceReadError(RuntimeError):
 
 
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    def stop_stream_performs_reset(self) -> bool:
+        return True
+
     def _resolve_stream_file_size_bytes(self, lines: Sequence[str]) -> int:
         try:
             prepared = int(getattr(lines, "_prepare_file_size_bytes", 0) or 0)
@@ -505,6 +508,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     def _next_stream_item_locked(self) -> StreamPendingItem | None:
         if self._pause_after_idx is not None and self._send_index > self._pause_after_idx:
             return None
+        if self._stream_tool_change_pending is not None:
+            return None
         if self._stream_pending_item is not None:
             return self._stream_pending_item
         if self._resume_preamble:
@@ -544,6 +549,118 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             idx=self._send_index,
             file_end_offset=line_end_offset,
         )
+
+    @staticmethod
+    def _match_stream_directive(line: str) -> tuple[str, str | None] | None:
+        stripped = str(line or "").strip()
+        if not stripped:
+            return None
+        if stripped == "VACUUM_ON":
+            return ("vacuum_on", None)
+        if stripped == "VACUUM_OFF":
+            return ("vacuum_off", None)
+        if stripped.startswith("TC:"):
+            return ("tool_change", stripped[3:].strip())
+        return None
+
+    def _ack_handled_stream_line(self, item: StreamPendingItem, *, emit_sent: bool = True) -> None:
+        ack_idx: int | None = None
+        ack_line = str(item.line or "")
+        ack_byte_offset: int | None = None
+        stream_file_size_bytes = 0
+        with self._stream_lock:
+            if not item.is_gcode:
+                return
+            idx = self._send_index
+            if item.idx is not None:
+                try:
+                    idx = int(item.idx)
+                except Exception:
+                    idx = self._send_index
+            if idx != self._send_index:
+                idx = self._send_index
+            self._send_index = idx + 1
+            if idx > self._ack_index:
+                self._ack_index = idx
+            ack_idx = idx
+            queued_end_offset = item.file_end_offset
+            if queued_end_offset is not None:
+                try:
+                    queued_end = max(0, int(queued_end_offset))
+                except Exception:
+                    queued_end = 0
+                if queued_end > int(getattr(self, "_ack_byte_offset", 0) or 0):
+                    self._ack_byte_offset = queued_end
+                ack_byte_offset = int(getattr(self, "_ack_byte_offset", 0) or 0)
+                stream_file_size_bytes = int(
+                    getattr(self, "_stream_file_size_bytes", 0) or 0
+                )
+            self._live_current_acked = (idx, ack_line)
+            self._live_acked_ring.append((idx, ack_line))
+
+        if ack_idx is None:
+            return
+        if emit_sent:
+            self.ui_q.put(("gcode_sent", ack_idx, ack_line))
+        self.ui_q.put(("gcode_acked", ack_idx))
+        self.ui_q.put(("progress", ack_idx + 1, len(self._gcode)))
+        if ack_byte_offset is not None and stream_file_size_bytes > 0:
+            self.ui_q.put(
+                (
+                    "progress_bytes",
+                    min(int(ack_byte_offset), int(stream_file_size_bytes)),
+                    int(stream_file_size_bytes),
+                )
+            )
+        self._emit_live_gcode_window(force=False)
+
+    def _start_stream_tool_change_locked(
+        self,
+        item: StreamPendingItem,
+        *,
+        tool_name: str,
+    ) -> tuple[int | None, str]:
+        idx = item.idx if item.idx is not None else self._send_index
+        self._stream_pending_item = None
+        self._stream_tool_change_pending = StreamPendingItem(
+            line=item.line,
+            is_gcode=True,
+            idx=idx,
+            file_end_offset=item.file_end_offset,
+        )
+        self._stream_tool_change_name = str(tool_name or "")
+        self._stream_tool_change_active = True
+        self._paused = True
+        return idx, self._stream_tool_change_name
+
+    def complete_stream_tool_change(self, success: bool, reason: str | None = None) -> None:
+        pending_item: StreamPendingItem | None = None
+        still_streaming = False
+        with self._stream_lock:
+            pending_item = self._stream_tool_change_pending
+            self._stream_tool_change_pending = None
+            self._stream_tool_change_name = ""
+            self._stream_tool_change_active = False
+            still_streaming = bool(self._streaming)
+            self._paused = False
+        if pending_item is None:
+            return
+        if not still_streaming:
+            return
+        if success:
+            self._ack_handled_stream_line(pending_item)
+            self.ui_q.put(("stream_state", "running", None))
+            self._signal_tx_activity()
+            return
+        detail = str(reason or "").strip() or "Tool change workflow canceled."
+        idx = pending_item.idx
+        line_text = pending_item.line
+        msg = self._format_stream_error(f"Tool change failed: {detail}", idx, line_text)
+        with self._stream_lock:
+            self._streaming = False
+        self.ui_q.put(("stream_error", msg, idx, line_text, self._gcode_name))
+        self.ui_q.put(("log", f"[stream error] {msg}"))
+        self.ui_q.put(("stream_state", "error", detail))
 
     def _handle_stream_source_read_failure(self, failure: _StreamSourceReadError) -> None:
         source_name = ""
@@ -718,6 +835,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             if read_failure is not None:
                 self._handle_stream_source_read_failure(read_failure)
                 break
+            handled_item: StreamPendingItem | None = None
+            handled_vacuum_on = False
+            directive_deferred = False
+            tool_change_started = False
             with self._stream_lock:
                 if self._stream_loop_blocked():
                     break
@@ -725,11 +846,40 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 if item is None:
                     break
 
-                validated = self._validate_stream_item_locked(item)
-                if validated is None:
-                    break
-                item, payload, line_len, spindle_state = validated
-                queue_item = self._reserve_stream_item_locked(item, line_len)
+                directive = None
+                if item.is_gcode:
+                    directive = self._match_stream_directive(item.line)
+                if directive is not None:
+                    kind, directive_payload = directive
+                    if self._stream_line_queue:
+                        self._stream_pending_item = item
+                        directive_deferred = True
+                    elif kind == "tool_change":
+                        idx, tool_name = self._start_stream_tool_change_locked(
+                            item,
+                            tool_name=str(directive_payload or ""),
+                        )
+                        self.ui_q.put(("stream_state", "paused", None))
+                        self.ui_q.put(("stream_pause_reason", "tool change"))
+                        self.ui_q.put(("stream_tool_change", idx, tool_name))
+                        tool_change_started = True
+                    else:
+                        self._stream_pending_item = None
+                        handled_item = item
+                        handled_vacuum_on = (kind == "vacuum_on")
+                if not directive_deferred and not tool_change_started and handled_item is None:
+                    validated = self._validate_stream_item_locked(item)
+                    if validated is None:
+                        break
+                    item, line_payload, line_len, spindle_state = validated
+                    queue_item = self._reserve_stream_item_locked(item, line_len)
+            if handled_item is not None:
+                # Handle vacuum directives in sender space and never transmit to GRBL.
+                self._ack_handled_stream_line(handled_item)
+                self.ui_q.put(("stream_vacuum_directive", handled_vacuum_on))
+                continue
+            if directive_deferred or tool_change_started:
+                break
 
             if self._stream_send_invalidated(stream_token):
                 with self._stream_lock:
@@ -741,7 +891,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._emit_buffer_fill()
                 break
 
-            if not self._write_line(queue_item.line, payload):
+            if not self._write_line(queue_item.line, line_payload):
                 with self._stream_lock:
                     self._rollback_reserved_stream_locked(
                         is_gcode=queue_item.is_gcode,
@@ -774,7 +924,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             pending = bool(
                 self._stream_line_queue or
                 self._stream_pending_item or
-                self._resume_preamble
+                self._resume_preamble or
+                self._stream_tool_change_pending is not None
             )
         
         if (self._streaming and
@@ -826,7 +977,13 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
 
     def _manual_loop_blocked(self) -> bool:
         if self._streaming or self._paused:
-            return True
+            allow_tool_change_macro = bool(
+                self._streaming
+                and self._paused
+                and bool(getattr(self, "_stream_tool_change_active", False))
+            )
+            if not allow_tool_change_macro:
+                return True
         if not self.is_connected():
             return True
         if self._abort_writes.is_set() and not self._alarm_active:

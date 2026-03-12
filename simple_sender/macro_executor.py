@@ -50,6 +50,7 @@ class MacroExecutor(MacroPromptMixin, MacroStateMixin, MacroCommandMixin, MacroR
         self._alarm_notified = False
         self._macro_saved_state = None
         self._macro_state_restored = False
+        self._last_macro_run_success: bool | None = None
         macro_namespace = types.SimpleNamespace(state=types.SimpleNamespace())
         self._macro_vars = {
             "prbx": 0.0,

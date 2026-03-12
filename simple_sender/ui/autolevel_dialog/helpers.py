@@ -118,6 +118,13 @@ def update_stats_summary(height_map: HeightMap | None, stats_var: tk.StringVar) 
 def probe_connection_state(app) -> tuple[bool, str]:
     if not getattr(app, "connected", False):
         return False, "Connect to enable probing."
+    grbl = getattr(app, "grbl", None)
+    if grbl is not None:
+        try:
+            if bool(grbl.is_streaming()):
+                return False, "Stop the stream before probing."
+        except Exception:
+            pass
     if not getattr(app, "_grbl_ready", False) or not getattr(app, "_status_seen", False):
         return False, "Waiting for GRBL status."
     if getattr(app, "_alarm_locked", False):

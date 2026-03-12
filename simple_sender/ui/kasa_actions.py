@@ -823,6 +823,50 @@ def handle_outgoing_gcode_line(
     _ = line_index
 
 
+def handle_stream_vacuum_directive(app, is_on: bool) -> None:
+    if not _kasa_supported():
+        return
+    if not hasattr(app, "accessory_router"):
+        return
+    settings = kasa_settings_snapshot(app)
+    if not bool(settings.get("kasa_enabled", False)):
+        return
+    if not bool(settings.get("vacuum_enabled", False)):
+        return
+    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
+    if not device_identifier:
+        return
+    try:
+        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
+    except Exception:
+        outlet_count = 2
+    outlet_id = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
+    if outlet_id > outlet_count:
+        log_kasa_message(
+            app,
+            f"VACUUM_{'ON' if is_on else 'OFF'} ignored: outlet {outlet_id} unavailable.",
+        )
+        return
+    accepted = False
+    try:
+        accepted = bool(
+            app.accessory_router.request_outlet_state(
+                int(outlet_id),
+                bool(is_on),
+                source=f"stream_vacuum_{'on' if is_on else 'off'}",
+            )
+        )
+    except Exception as exc:
+        _log_suppressed("Failed issuing streamed vacuum directive to Kasa router", exc)
+    if not accepted:
+        log_kasa_message(
+            app,
+            f"VACUUM_{'ON' if is_on else 'OFF'} request skipped for outlet {outlet_id}.",
+        )
+        return
+    _set_kasa_quick_state(app, vacuum=bool(is_on))
+
+
 def _selected_job_outlets(app) -> list[int]:
     settings = kasa_settings_snapshot(app)
     if not bool(settings.get("kasa_enabled", False)):
@@ -905,6 +949,7 @@ __all__ = [
     "discover_kasa_devices",
     "format_kasa_status_line",
     "handle_outgoing_gcode_line",
+    "handle_stream_vacuum_directive",
     "handle_stream_spindle_state",
     "kasa_status_snapshot",
     "kasa_settings_snapshot",

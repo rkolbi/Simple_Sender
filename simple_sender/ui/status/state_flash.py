@@ -59,9 +59,8 @@ def ensure_state_label_width(app, text: str | None) -> None:
     except Exception:
         current = 0
     needed = len(text)
-    width = current if current > 0 else needed
-    if needed > width:
-        width = needed
+    width = max(current, needed)
+    if width != current:
         try:
             app._machine_state_max_chars = width
         except Exception as exc:

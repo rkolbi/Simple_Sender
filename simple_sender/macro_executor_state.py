@@ -46,6 +46,7 @@ class MacroStateMixin(MacroExecutorState):
             grbl=self.grbl,
             ui_q=self.ui_q,
             timeout_s=timeout_s,
+            cancel_event=getattr(self, "_alarm_event", None),
         )
 
     def _macro_wait_for_status(self, timeout_s: float = 1.0) -> bool:
@@ -56,6 +57,7 @@ class MacroStateMixin(MacroExecutorState):
             macro_vars=self._macro_vars,
             macro_vars_lock=self._macro_vars_lock,
             timeout_s=timeout_s,
+            cancel_event=getattr(self, "_alarm_event", None),
         )
 
     def _macro_wait_for_modal(self, seq: int | None = None, timeout_s: float = 1.0) -> bool:
@@ -66,6 +68,7 @@ class MacroStateMixin(MacroExecutorState):
             macro_vars_lock=self._macro_vars_lock,
             seq=seq,
             timeout_s=timeout_s,
+            cancel_event=getattr(self, "_alarm_event", None),
         )
 
     def _snapshot_macro_state(self) -> dict[str, str]:
@@ -118,6 +121,7 @@ class MacroStateMixin(MacroExecutorState):
 
     def _wait_for_connection_state(self, target: bool, timeout_s: float = 10.0) -> bool:
         start = time.monotonic()
+        cancel_event = getattr(self, "_alarm_event", None)
         conn_evt = getattr(self.app, "_connection_state_event", None)
         if isinstance(conn_evt, threading.Event):
             try:
@@ -125,6 +129,8 @@ class MacroStateMixin(MacroExecutorState):
             except Exception:
                 pass
         while True:
+            if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
+                return False
             if getattr(self.app, "_closing", False):
                 return False
             if bool(getattr(self.app, "connected", False)) is target:

@@ -29,6 +29,7 @@ from collections import deque
 from tkinter import messagebox
 
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.utils.constants import (
     STATUS_POLL_DEFAULT,
@@ -196,6 +197,34 @@ def _manual_ready_fast_poll_active(app) -> bool:
     if bool(getattr(app, "_alarm_locked", False)):
         return False
     return _normalize_status_state(app).startswith("idle")
+
+
+def _probe_indicator_fast_poll_active(app) -> bool:
+    if _stream_running_or_paused(app):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if not bool(getattr(app, "_grbl_ready", False)):
+        return False
+    if bool(getattr(app, "_alarm_locked", False)):
+        return False
+    if bool(getattr(app, "_homing_in_progress", False)):
+        return False
+    if not _normalize_status_state(app).startswith("idle"):
+        return False
+    probe_var = getattr(app, "show_probe_indicator", None)
+    if probe_var is not None and hasattr(probe_var, "get"):
+        try:
+            return bool(probe_var.get())
+        except Exception:
+            return False
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        try:
+            return bool(settings.get("show_probe_indicator", False))
+        except Exception:
+            return False
+    return False
 
 
 def mark_manual_motion_activity(app, *, duration_s: float | None = None) -> None:
@@ -388,6 +417,7 @@ def handle_connection_event(app, is_on: bool, port):
     app._disconnecting = False
     app._homing_in_progress = False
     app._homing_state_seen = False
+    invalidate_job_setup_state(app)
     alarm_latched = bool(getattr(app, "_alarm_latched", False))
     alarm_message = str(getattr(app, "_alarm_message", "") or "")
     if app.connected:
@@ -554,6 +584,7 @@ def handle_connection_event(app, is_on: bool, port):
 def handle_ready_event(app, ready):
     app._grbl_ready = bool(ready)
     if not app._grbl_ready:
+        invalidate_job_setup_state(app)
         _record_connection_timeline(app, "ready_false")
         app._status_seen = False
         app._alarm_locked = False
@@ -726,6 +757,8 @@ def effective_status_poll_interval(app) -> float:
         return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
     if _manual_ready_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
+    if _probe_indicator_fast_poll_active(app):
+        return min(base, float(STATUS_POLL_RUNNING))
     if _status_poll_should_use_running_profile(app):
         running_floor = float(STATUS_POLL_RUNNING)
         if _performance_mode_enabled(app):

@@ -58,6 +58,7 @@ from simple_sender.ui.ui_actions import (
 from simple_sender.ui.kasa_actions import (
     discover_kasa_devices,
     handle_outgoing_gcode_line,
+    handle_stream_vacuum_directive,
     handle_stream_spindle_state,
     kasa_settings_snapshot,
     log_kasa_message,
@@ -73,6 +74,7 @@ from simple_sender.ui.kasa_actions import (
     toggle_kasa_vacuum_quick,
     test_kasa_outlet,
 )
+from simple_sender.ui.tool_change_actions import handle_stream_tool_change
 
 class ActionsMixin:
     def refresh_ports(self, auto_connect: bool = False) -> None:
@@ -192,6 +194,17 @@ class ActionsMixin:
 
     def _handle_stream_spindle_state(self, is_on: bool) -> None:
         handle_stream_spindle_state(self, is_on)
+
+    def _handle_stream_vacuum_directive(self, is_on: bool) -> None:
+        handle_stream_vacuum_directive(self, is_on)
+
+    def _handle_stream_tool_change(
+        self,
+        tool_name: str,
+        *,
+        line_index: int | None = None,
+    ) -> None:
+        handle_stream_tool_change(self, tool_name, line_index=line_index)
 
     def _start_job_accessories(self, source: str = "job_run") -> None:
         start_job_accessories(self, source=source)

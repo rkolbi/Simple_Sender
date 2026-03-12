@@ -133,6 +133,9 @@ class GrblWorkerState:
     _resume_preamble: deque[str]
     _pause_after_idx: int | None
     _pause_after_reason: str | None
+    _stream_tool_change_pending: StreamPendingItem | None
+    _stream_tool_change_name: str
+    _stream_tool_change_active: bool
     _send_index: int
     _ack_index: int
     _ack_byte_offset: int
@@ -265,6 +268,9 @@ class GrblWorkerState:
     def _encode_line_payload(self, line: str) -> bytes:
         raise NotImplementedError
 
+    def complete_stream_tool_change(self, success: bool, reason: str | None = None) -> None:
+        raise NotImplementedError
+
 
 class MacroExecutorState:
     app: Any
@@ -282,8 +288,12 @@ class MacroExecutorState:
 
     _macro_state_restored: bool
     _macro_saved_state: dict[str, str] | None
+    _last_macro_run_success: bool | None
 
     def macro_path(self, index: int) -> str | None:
+        raise NotImplementedError
+
+    def cancel_macro(self, reason: str | None = None) -> bool:
         raise NotImplementedError
 
     def _macro_send(self, command: str, *, wait_for_idle: bool = True) -> None:
@@ -410,6 +420,8 @@ UiEvent = (
     | tuple[Literal["stream_interrupted"], bool, str | None]
     | tuple[Literal["stream_error"], str, int | None, str | None, str | None]
     | tuple[Literal["stream_pause_reason"], str]
+    | tuple[Literal["stream_vacuum_directive"], bool]
+    | tuple[Literal["stream_tool_change"], int | None, str]
     | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]
     | tuple[Literal["gcode_acked"], int]

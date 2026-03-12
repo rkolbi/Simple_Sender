@@ -269,6 +269,9 @@ class GrblWorker(
         self._settings_dump_started_ts = 0.0
         self._pause_after_idx: Optional[int] = None
         self._pause_after_reason: str | None = None
+        self._stream_tool_change_pending: StreamPendingItem | None = None
+        self._stream_tool_change_name: str = ""
+        self._stream_tool_change_active = False
         self._resume_preamble: deque[str] = deque()
         self._rx_window = RX_BUFFER_SIZE
         self._stream_token = 0
@@ -687,6 +690,9 @@ class GrblWorker(
             self._ack_byte_offset = 0
             self._pause_after_idx = None
             self._pause_after_reason = None
+            self._stream_tool_change_pending = None
+            self._stream_tool_change_name = ""
+            self._stream_tool_change_active = False
             self._tx_bytes_window.clear()
             self._last_tx_emit_ts = 0.0
             self._tx_line_ts_window.clear()

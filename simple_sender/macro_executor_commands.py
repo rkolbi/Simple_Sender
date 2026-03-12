@@ -51,6 +51,10 @@ class MacroCommandMixin(MacroExecutorState):
             wait_for_connection_state=self._wait_for_connection_state,
             macro_restore_state=self._macro_restore_state,
             parse_macro_prompt=self._parse_macro_prompt,
+            macro_cancelled=lambda: bool(
+                getattr(getattr(self, "_alarm_event", None), "is_set", lambda: False)()
+            ),
+            format_macro_message=self._format_macro_message,
         )
 
     def _bcnc_compile_line(self, line: str):

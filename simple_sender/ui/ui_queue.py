@@ -464,6 +464,8 @@ class UiEventQueue:
         "stream_error",
         "stream_interrupted",
         "stream_pause_reason",
+        "stream_tool_change",
+        "stream_vacuum_directive",
         "spindle_state",
         "stream_state",
         "ui_call",

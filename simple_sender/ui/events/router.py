@@ -34,6 +34,7 @@ from .status import (
 )
 from . import streaming as _event_router_streaming
 from simple_sender.ui.grbl_lifecycle import handle_connection_event, handle_ready_event
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.dialogs.error_dialogs_ui import show_grbl_code_popup
 from simple_sender.utils.task_timing import record_task_timing
@@ -410,6 +411,11 @@ def _clear_homing_watchdog(app: Any, context: str) -> None:
 
 
 def _handle_log_rx_event(app: Any, raw: str) -> None:
+    try:
+        if str(raw).lstrip().upper().startswith("GRBL"):
+            invalidate_job_setup_state(app)
+    except Exception as exc:
+        _log_suppressed("Failed invalidating job setup on GRBL reset banner", exc)
     _parse_modal_units(app, raw)
     _parse_report_units_setting(app, raw)
     probe_controller = getattr(app, "probe_controller", None)
@@ -813,6 +819,23 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("stream_pause_reason", reason):
             _handle_stream_pause_reason_event(app, reason)
+            return
+        case ("stream_vacuum_directive", is_on):
+            try:
+                if hasattr(app, "_handle_stream_vacuum_directive"):
+                    app._handle_stream_vacuum_directive(bool(cast(bool, is_on)))
+            except Exception as exc:
+                _log_suppressed("Failed handling streamed vacuum directive", exc)
+            return
+        case ("stream_tool_change", line_idx, tool_name):
+            try:
+                if hasattr(app, "_handle_stream_tool_change"):
+                    app._handle_stream_tool_change(
+                        cast(str, tool_name),
+                        line_index=cast(int | None, line_idx),
+                    )
+            except Exception as exc:
+                _log_suppressed("Failed handling streamed tool-change directive", exc)
             return
         case ("spindle_state", is_on, _idx):
             try:

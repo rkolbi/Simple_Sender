@@ -63,6 +63,7 @@ def _handle_prompt_command(
     macro_vars: dict[str, Any],
     macro_vars_lock,
     parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
+    macro_cancelled: Callable[[], bool] | None = None,
 ) -> bool | None:
     if cmd not in ("M0", "M00", "PROMPT"):
         return None
@@ -78,6 +79,8 @@ def _handle_prompt_command(
         macro_snapshot,
     )
     prompt_timeout_s = float(getattr(app, "_macro_prompt_timeout_s", MACRO_PROMPT_TIMEOUT))
+    if bool(getattr(app, "_tool_change_unlimited_time_active", False)):
+        prompt_timeout_s = 0.0
     if prompt_timeout_s < 0:
         prompt_timeout_s = 0.0
     prompt_started = time.monotonic()
@@ -88,6 +91,14 @@ def _handle_prompt_command(
             choice = result_q.get(timeout=0.2)
             break
         except queue.Empty:
+            if callable(macro_cancelled):
+                try:
+                    if bool(macro_cancelled()):
+                        choice = cancel_label
+                        ui_q.put(("log", "[macro] Prompt canceled by ALL STOP; macro aborted."))
+                        break
+                except Exception as exc:
+                    _log_suppressed("Failed evaluating macro cancellation during prompt wait", exc)
             if getattr(app, "_closing", False):
                 choice = cancel_label
                 break
@@ -292,6 +303,8 @@ def execute_macro_command(
     wait_for_connection_state: Callable[[bool, float], bool],
     macro_restore_state: Callable[[], bool],
     parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
+    macro_cancelled: Callable[[], bool] | None = None,
+    format_macro_message: Callable[[str], str] | None = None,
 ) -> bool:
     if line is None:
         return True
@@ -319,9 +332,21 @@ def execute_macro_command(
         macro_vars=macro_vars,
         macro_vars_lock=macro_vars_lock,
         parse_macro_prompt=parse_macro_prompt,
+        macro_cancelled=macro_cancelled,
     )
     if prompt_result is not None:
         return prompt_result
+    if "[" in s and callable(format_macro_message):
+        try:
+            expanded = str(format_macro_message(s))
+        except Exception as exc:
+            _log_suppressed("Failed expanding inline macro expressions in command line", exc)
+            expanded = s
+        s = expanded.strip()
+        if not s:
+            return True
+        cmd_parts = s.replace(",", " ").split()
+        cmd = cmd_parts[0].upper()
     command_result = _handle_named_macro_command(
         cmd=cmd,
         cmd_parts=cmd_parts,

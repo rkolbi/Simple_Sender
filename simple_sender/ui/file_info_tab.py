@@ -179,6 +179,43 @@ def _home_text(ssmeta: dict[str, str]) -> str:
     return ", ".join(parts)
 
 
+def _ordered_ssmeta_values(
+    ssmeta: dict[str, str], *, list_key: str, fallback_keys: tuple[str, ...]
+) -> list[str]:
+    raw_list = _first(ssmeta, list_key)
+    if raw_list:
+        values = [part.strip() for part in raw_list.splitlines() if part.strip()]
+        if values:
+            return values
+    fallback = _first(ssmeta, *fallback_keys)
+    return [fallback] if fallback else []
+
+
+def _toolpath_tool_rows(ssmeta: dict[str, str]) -> list[str]:
+    toolpaths = _ordered_ssmeta_values(
+        ssmeta,
+        list_key="__ssmeta_toolpaths_list",
+        fallback_keys=("toolpaths_output", "toolpaths"),
+    )
+    tools = _ordered_ssmeta_values(
+        ssmeta,
+        list_key="__ssmeta_tools_list",
+        fallback_keys=("tools_used", "tools"),
+    )
+    count = max(len(toolpaths), len(tools))
+    rows: list[str] = []
+    for index in range(count):
+        toolpath = toolpaths[index] if index < len(toolpaths) else ""
+        tool = tools[index] if index < len(tools) else ""
+        if toolpath and tool:
+            rows.append(f"{index + 1} {toolpath} / {tool}")
+        elif toolpath:
+            rows.append(f"{index + 1} {toolpath}")
+        elif tool:
+            rows.append(f"{index + 1} {tool}")
+    return rows
+
+
 def render_file_info_text(app) -> str:
     job_loaded = _job_loaded_for_file_info(app)
     ssmeta = getattr(app, "_gcode_ssmeta", None)
@@ -206,10 +243,6 @@ def render_file_info_text(app) -> str:
             ("units", "Units"),
             ("plane", "Plane"),
             ("abs", "Abs mode"),
-            ("toolpaths_output", "Toolpaths output"),
-            ("toolpaths", "Toolpaths output"),
-            ("tools_used", "Tools used"),
-            ("tools", "Tools used"),
             ("notes", "Notes"),
         )
         seen_labels: set[str] = set()
@@ -232,6 +265,12 @@ def render_file_info_text(app) -> str:
                 continue
             lines.append(f"- {label}: {value}")
             seen_labels.add(label)
+        toolpath_tool_rows = _toolpath_tool_rows(ssmeta_map)
+        if toolpath_tool_rows:
+            lines.append("")
+            lines.append("- Toolpaths and Tools:")
+            lines.extend(toolpath_tool_rows)
+            lines.append("")
         extents_rows = _format_ssmeta_extents(ssmeta_map)
         if extents_rows:
             lines.append("- Extents:")

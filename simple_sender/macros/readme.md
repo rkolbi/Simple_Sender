@@ -18,14 +18,15 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 - `Macro-1` - **Park over WPos X/Y**: lifts to safe machine Z and returns to WCS X0/Y0.
 - `Macro-2` - **Park over Bit Setter**: parks over fixed sensor coordinates in machine coordinates.
 - `Macro-3` - **Job Setup**: guided setup chooser that asks for `XYZ Plate`, `Z Plate`, or `Manual`, then runs the matching setup flow and captures `macro.state.TOOL_REFERENCE`.
-- `Macro-4` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`.
+- `Macro-4` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE`, re-probes after swap, then reapplies `G10 L20 Z[...]`; this same workflow is used when streamed files contain `TC:<tool name>` sender directives.
 - Backup/reference macro files are intentionally kept outside this folder to avoid accidental runtime loading.
 
 ## Recommended Flow
 
 1. Use `Macro-3` (**Job Setup**) and choose `XYZ Plate`, `Z Plate`, or `Manual`.
-2. Use `Macro-4` (**Tool Change**) for subsequent tool swaps.
-3. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
+2. Use `Macro-4` (**Tool Change**) for subsequent tool swaps (or let streamed `TC:<tool name>` lines trigger the same dialog/workflow automatically).
+3. Re-run `Macro-3` after disconnect/reconnect, controller reset/new session, or any reset path that clears setup assumptions.
+4. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
 
 ## Notes
 
@@ -37,6 +38,9 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
   - remaining lines = executed macro body
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
+- During file streaming, `TC:<tool name>` is handled as a sender directive (not GRBL G-code): the app pauses the stream, shows the existing tool-change prompt with the required tool name, runs the Macro-4 workflow, waits with no timeout, then resumes when complete.
+- During file streaming, exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines are sender directives that trigger configured vacuum outlet actions and are never sent to GRBL.
+- Run-button safety gate: starting a job checks the same `macro.state.TOOL_REFERENCE` state behind the Tool Ref label. If it is missing/invalid, the app shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
 - Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab (with collapsible checklist titles) and release/start-job checklist dialogs.
 
 ## Core Directives
@@ -66,6 +70,8 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 
 - Button missing: ensure file name is `Macro-1`..`Macro-8` in a discovered macros directory.
 - Macro blocked: streaming/alarm/disconnected states prevent execution by design.
+- Run warns `Job Setup Not Completed`: run `Macro-3` to repopulate `macro.state.TOOL_REFERENCE` for the current session, then retry.
+- Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the tool-change macro prerequisites (for example `macro.state.TOOL_REFERENCE`) are satisfied.
 - Stale coordinates: insert `%update` before using `wx/wy/wz`.
 - Appears complete too early: keep Current Line mode on `Machine` and watch for final `Idle`.
 - Unexpected units/modal state: add `STATE_RETURN` or explicit restore lines.
