@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 import logging
-import queue
 import threading
 import time
 
@@ -50,35 +49,6 @@ def _all_stop_cancel_requested(app) -> bool:
         return bool(cancel_event.is_set())
     except Exception:
         return False
-
-
-def _prompt_for_tool_change(app, tool_name: str) -> bool:
-    result_q: queue.Queue[str] = queue.Queue(maxsize=1)
-    display_name = str(tool_name or "").strip() or "(tool name not provided)"
-    title = "Tool Change Required"
-    message = (
-        "Install the required tool:\n\n"
-        f"{display_name}\n\n"
-        "Select Run Tool Change to launch Macro-4."
-    )
-    app._call_on_ui_thread(
-        app._show_macro_prompt,
-        title,
-        message,
-        ["Run Tool Change", "Cancel Job"],
-        "Cancel Job",
-        result_q,
-        timeout=None,
-    )
-    while True:
-        try:
-            choice = result_q.get(timeout=0.2)
-            return str(choice or "") == "Run Tool Change"
-        except queue.Empty:
-            if _all_stop_cancel_requested(app):
-                return False
-            if bool(getattr(app, "_closing", False)):
-                return False
 
 
 def _snapshot_macro_timeout_state(app) -> tuple[float | None, float | None, float, bool]:
@@ -214,11 +184,20 @@ def _wait_for_macro_finish(app) -> bool:
     return bool(getattr(executor, "_last_macro_run_success", False))
 
 
+def _tool_change_macro_prompt_cancelled(app) -> bool:
+    executor = getattr(app, "macro_executor", None)
+    vars_ctx = getattr(executor, "macro_vars", None)
+    if not callable(vars_ctx):
+        return False
+    try:
+        with vars_ctx() as macro_vars:
+            return bool(macro_vars.get("prompt_cancelled", False))
+    except Exception:
+        return False
+
+
 def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) -> None:
     _ = line_index
-    if not _prompt_for_tool_change(app, tool_name):
-        app.grbl.complete_stream_tool_change(False, "Tool change canceled by user.")
-        return
     try:
         saved_timeouts = _disable_macro_timeouts_for_tool_change(app)
     except Exception as exc:
@@ -231,9 +210,11 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
         try:
             with app.macro_executor.macro_vars() as macro_vars:
                 macro_vars["tool_change_required_tool_name"] = str(tool_name or "")
+                macro_vars["tool_change_context"] = "stream"
                 macro_ns = macro_vars.get("macro")
                 state_ns = getattr(macro_ns, "state", None)
                 if state_ns is not None:
+                    setattr(state_ns, "TOOL_CHANGE_CONTEXT", "stream")
                     setattr(state_ns, "REQUIRED_TOOL_NAME", str(tool_name or ""))
         except Exception as exc:
             _log_suppressed("Failed storing required tool name in macro vars", exc)
@@ -260,7 +241,12 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
     if started and succeeded:
         app.grbl.complete_stream_tool_change(True)
         return
-    app.grbl.complete_stream_tool_change(False, "Tool-change macro failed.")
+    reason = "Tool-change macro failed."
+    if _all_stop_cancel_requested(app):
+        reason = "Canceled by ALL STOP."
+    elif _tool_change_macro_prompt_cancelled(app):
+        reason = "Tool change canceled by user."
+    app.grbl.complete_stream_tool_change(False, reason)
 
 
 def handle_stream_tool_change(app, tool_name: str, *, line_index: int | None = None) -> None:

@@ -653,6 +653,15 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._signal_tx_activity()
             return
         detail = str(reason or "").strip() or "Tool change workflow canceled."
+        detail_lower = detail.lower()
+        if "cancel" in detail_lower:
+            with self._stream_lock:
+                self._streaming = False
+                self._paused = False
+            self.ui_q.put(("log", f"[stream] Tool change canceled: {detail}"))
+            self.ui_q.put(("stream_state", "stopped", None))
+            self._emit_live_gcode_window(force=True)
+            return
         idx = pending_item.idx
         line_text = pending_item.line
         msg = self._format_stream_error(f"Tool change failed: {detail}", idx, line_text)

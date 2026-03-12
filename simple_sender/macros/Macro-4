@@ -31,7 +31,12 @@ G90
 G53 G0 Z[macro.state.SAFE_HEIGHT]
 G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
 %wait
-M0 (Change the tool and press Resume when done.)
+%macro.tool_change_context = str(getattr(macro.state, "TOOL_CHANGE_CONTEXT", "") or "").strip().lower()
+%macro.required_tool_name = str(getattr(macro.state, "REQUIRED_TOOL_NAME", "") or "").strip()
+%macro.tool_change_prompt = ""
+%if macro.tool_change_context == "stream" and macro.required_tool_name: macro.tool_change_prompt = f"Please remove current tool and replace with {macro.required_tool_name}. Press Resume once tool is swapped or Cancel to end job."
+%if not macro.tool_change_prompt: macro.tool_change_prompt = "Please swap tool. Press Resume once tool is swapped or Cancel to abort."
+M0 ([macro.tool_change_prompt])
 G53 Z[macro.state.PROBE_Z_LOCATION]
 G91
 G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]

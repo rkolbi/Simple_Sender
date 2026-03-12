@@ -2190,10 +2190,8 @@ def _update_positions_and_macro_state(
                         )
     pin_state = {char for char in (fields.pins or "").upper() if char.isalpha()}
     endstop_active = bool(pin_state & {"X", "Y", "Z"})
-    prb_value = None
 
     def _apply_macro_status_updates(macro_vars: dict) -> None:
-        nonlocal prb_value
         if ov_values is not None:
             changed = (
                 macro_vars.get("OvFeed") != ov_values[0]
@@ -2206,20 +2204,19 @@ def _update_positions_and_macro_state(
             macro_updates["_OvChanged"] = bool(changed)
         if macro_updates:
             macro_vars.update(macro_updates)
-        prb_value = macro_vars.get("PRB")
 
     _with_macro_vars_nonblocking(
         app,
         _apply_macro_status_updates,
         context="Failed updating macro status values",
     )
-    probe_active = bool(pin_state & {"P"}) or bool(prb_value)
+    probe_active = bool(pin_state & {"P"})
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
 
     def _apply_led_panel_state() -> None:
         app._update_led_panel(endstop_active, probe_active, hold_active)
 
-    if _should_defer_noncritical_updates():
+    if _should_defer_noncritical_updates() and stream_busy_for_noncritical:
         _schedule_status_ui_callback(
             app,
             callback_attr="_status_led_panel_after_id",

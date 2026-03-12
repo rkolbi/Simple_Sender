@@ -95,6 +95,31 @@ class MacroRunnerMixin(MacroExecutorState):
             return
         self.ui_q.put(("log", f"[macro][audit] {message}"))
 
+    def _prepare_tool_change_prompt_context(
+        self,
+        *,
+        index: int,
+        allow_streaming_paused: bool,
+    ) -> None:
+        if int(index) != 4:
+            return
+        stream_tool_change_active = bool(
+            allow_streaming_paused
+            and bool(getattr(self.grbl, "_stream_tool_change_active", False))
+        )
+        context = "stream" if stream_tool_change_active else "manual"
+        try:
+            with self._macro_vars_lock:
+                self._macro_vars["tool_change_context"] = context
+                macro_ns = self._macro_vars.get("macro")
+                state_ns = getattr(macro_ns, "state", None)
+                if state_ns is not None:
+                    setattr(state_ns, "TOOL_CHANGE_CONTEXT", context)
+                if not stream_tool_change_active:
+                    self._macro_vars["tool_change_required_tool_name"] = ""
+        except Exception as exc:
+            _log_suppressed("Failed preparing tool-change prompt context", exc)
+
     def run_macro(self, index: int, allow_streaming_paused: bool = False) -> bool:
         if not self.grbl.is_connected():
             messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
@@ -111,6 +136,10 @@ class MacroRunnerMixin(MacroExecutorState):
         if bool(getattr(self.app, "_alarm_locked", False)):
             messagebox.showwarning("Macro blocked", "Clear the alarm before running a macro.")
             return False
+        self._prepare_tool_change_prompt_context(
+            index=int(index),
+            allow_streaming_paused=bool(allow_streaming_paused),
+        )
         path = self.macro_path(index)
         if not path:
             return False

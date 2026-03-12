@@ -49,6 +49,7 @@ _STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS = 60.0
 _STATUS_POLL_PERF_RUNNING = 0.35
 _STATUS_POLL_MANUAL_ACTIVE = 0.1
 _STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
+_STATUS_POLL_PROBE_INDICATOR = 0.02
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
 _STATUS_CONNECT_SETTLING_WINDOW_S = 1.5
 _STATUS_CONNECT_SETTLING_READY_TAIL_S = 1.0
@@ -755,10 +756,10 @@ def effective_status_poll_interval(app) -> float:
         base = STATUS_POLL_DEFAULT
     if _manual_motion_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
+    if _probe_indicator_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_PROBE_INDICATOR))
     if _manual_ready_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
-    if _probe_indicator_fast_poll_active(app):
-        return min(base, float(STATUS_POLL_RUNNING))
     if _status_poll_should_use_running_profile(app):
         running_floor = float(STATUS_POLL_RUNNING)
         if _performance_mode_enabled(app):
