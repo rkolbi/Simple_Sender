@@ -2,9 +2,26 @@
 ![Release: 2.4.0](https://img.shields.io/badge/release-2.4.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
-A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python + Tkinter + pyserial**. This manual is the single place to learn, use, and troubleshoot the app.
+Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 
-> **Current runtime model (v2.4 lean path):** Jobs load via a file-backed quick assessment path focused on responsiveness and low memory usage.
+## Design Objectives and Key Features
+
+Simple Sender was built around a clear set of practical goals, and those same goals still shape its core features:
+
+- Run well on affordable hardware such as a Raspberry Pi 4, while also supporting other platforms.
+- Be easy to operate from a touchscreen at the machine.
+- Designed to stream very large G-code files reliably.
+- Present a simple, direct, workflow-oriented interface without unnecessary bells and whistles.
+- Support automatic control of Kasa-connected accessories such as a shop vacuum and light.
+- Support reliable multi-tool jobs with tool reference and offset handling that compensates for different tool heights during tool changes.
+- Provide a guided tool-change workflow that helps the operator change tools correctly and then automatically resumes the job.
+- Recognize custom sender directives such as `VACUUM_ON`, `VACUUM_OFF`, and `TC:<tool name>`, with included VCarve Pro 12.5 post processors in both inch and mm variants.
+- Include support for keyboard shortcuts and joystick bindings for faster machine control.
+- Include Job Setup safeguards to help prevent starting a job before setup is complete.
+- Provide macro support for repeatable machine setup and operator workflows, from simple actions to full Python-based logic.
+- Remain lightweight, stable, and efficient for day-to-day CNC use.
+- Focus on GRBL 1.1h with a lean, shop-friendly feature set.
+- Prioritize clarity, dependability, and practical usability over clutter.
 
 > **Safety notice:** Always test "in the air" with the spindle **off** before cutting material.
 
@@ -44,7 +61,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 
 ## Overview
 - Target: GRBL 1.1h, 3-axis.
-- Character-count streaming with Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
+- Character-count streaming with a Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read Job) with an in-app touch-friendly browser (plus optional system-picker fallback), clear/unload button, inline status/progress.
@@ -52,6 +69,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
 - Resume From... dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present).
+- Run safety gate for Job Setup: Run checks the current tool-reference offset state and warns with **Job Setup Not Completed** when setup is invalid.
 - Tooltips for every control; disabled buttons explain why (streaming, disconnected, alarm).
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
 - Overdrive tab: spindle control, Spoilboard Generator, and feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
@@ -59,6 +77,7 @@ A minimal **GRBL 1.1h** sender for **3-axis** controllers. Built with **Python +
 - Preflight check tool summarizes readiness/bounds/validation on demand from App Settings.
 - Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
 - Macros: left-click to run, right-click to sample, with in-app Macro Manager for edit/duplicate/reorder.
+- Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
@@ -87,7 +106,7 @@ python main.py
 - Only run trusted macro files.
 
 ## Operation / Use Walkthrough
-This is a practical, end-to-end flow with rationale for key options.
+This is a practical end-to-end flow, with rationale for the key options.
 
 1) **Connect and handshake**
    - Pick your COM port (auto-selects last if "Reconnect to last port on open" is enabled in App Settings).
@@ -112,15 +131,17 @@ This is a practical, end-to-end flow with rationale for key options.
    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
    - Performance mode: reduces console churn during streaming; toggle it from **App Settings > Interface**.
-  6) **Prepare the machine**
-     - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
-     - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-     - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
-     - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
-  7) **Start and monitor**
-     - Click **Run** (Training Wheels may prompt). Streaming starts immediately and keeps run-path checks lean; use preflight and deep validation tools from App Settings/Overdrive when you want extra review before cutting.
-     - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. Optional deep validation is now manual via **Overdrive -> Validate Loaded Job** (quick or strict), so Start/Run never blocks on a pre-run validation pass.
-     - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
+6) **Prepare the machine**
+   - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
+   - Run **Macro-3 (Job Setup)** for this machine session and confirm the tool reference label is populated before starting production cuts.
+   - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
+   - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
+   - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
+7) **Start and monitor**
+   - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**.
+   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight and deep validation tools from App Settings/Overdrive when you want extra review before cutting.
+   - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. Optional deep validation is now manual via **Overdrive -> Validate Loaded Job** (quick or strict), so Start/Run never blocks on a pre-run validation pass.
+   - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover** to see a guided recovery panel.
    - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
@@ -135,8 +156,9 @@ This is a practical, end-to-end flow with rationale for key options.
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
 3) Read Job file; optional Clear Job to unload.
-4) Run (Training Wheels may confirm). Pause/Resume/Stop as needed.
-5) Clear alarms with Unlock ($X) or Home ($H).
+4) Run **Macro-3 (Job Setup)** and verify the tool reference label is populated.
+5) Run (Training Wheels may confirm). If setup state is missing/invalid, either rerun Job Setup or choose Start Anyway intentionally.
+6) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job / Auto-Level (same button; Auto-Level appears after a job is loaded), Clear Job, Run/Pause/Resume/Stop, Resume From..., Unlock, Recover.
@@ -206,6 +228,8 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
+- **Job Setup run gate:** Run checks the same `macro.state.TOOL_REFERENCE` value used by the Tool Ref display. If the value is missing/blank/invalid (`None`, unknown text, NaN, etc.), it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
+- **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that reset assumptions (including ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level**; **Clear Job** returns it to **Read Job**.
@@ -213,6 +237,9 @@ This is a practical, end-to-end flow with rationale for key options.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
+- **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
+- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the existing tool-change macro workflow. Streaming stays paused with no timeout until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
+- **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (viewer window + sampled metadata).
 - **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
 - **Lean runtime model:** The sender does not render Top View/Spatial geometry during load; UI remains focused on readiness, dimensions, and estimate output.
@@ -249,6 +276,7 @@ This is a practical, end-to-end flow with rationale for key options.
 - Line-length errors include the original file line count and the non-empty cleaned line count; counts are reported as non-empty lines over the limit.
 - Streaming errors pause the job (gSender-style) and report the file name, line number, and line text in the error status.
 - Program pauses (M0/M1) and tool changes (M6) automatically pause the stream after the line is acknowledged.
+- Sender directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are intercepted before serial transmission, so they do not generate unknown-command GRBL errors.
 - Console Save pre-fills a timestamped filename (`simple_sender_console_YYYYMMDD_HHMMSS.txt`) for touch-friendly export.
 
 ## GRBL Settings UI
@@ -264,7 +292,7 @@ Macro file header format:
 - Line 4: button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`). Leave blank if unused.
 - Remaining lines: executed macro body.
 
-Macros are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed.
+Manual macro launches are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed. The streamed `TC:<tool name>` sender directive is the built-in exception: it pauses the stream and reuses the existing tool-change macro workflow.
 `App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
 
 In the image below, macro files **Macro-1** through **Macro-4** are present in the macros folder, so they appear in the button bar; **Macro-5** through **Macro-8** are missing, so those buttons aren’t shown.
@@ -273,6 +301,8 @@ In the image below, macro files **Macro-1** through **Macro-4** are present in t
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
+
+During streamed jobs, `TC:<tool name>` lines use this same prompt/tool-change path and intentionally wait with no timeout until the operator completes the tool-change flow.
 
 Macro scripting remains fully open, and runtime hardening is applied around it: line-level failures are logged with line numbers, audit entries (`[macro][audit]`) record raw/evaluated/outcome details (with GUI logging enabled), and timeout guards can abort stalled runs. By default both macro timeouts are disabled (`0`), and you can tune them in App Settings > Macros (line timeout and total timeout).
 
@@ -453,7 +483,7 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Requires a loaded, file-backed G-code job; bounds come from quick assessment / parser data.
 - Streaming loads are supported; if the leveled file is large, it may reload in streaming sample mode.
 - Auto-level is disabled for files that already end in `-AL` (load the original file to re-level).
-- You can open Auto-Level while disconnected to review settings; **Start Probe** stays disabled until connected, GRBL is ready, and no alarm is active.
+- You can open Auto-Level while disconnected to review settings; **Start Probe** and **Test Probe** stay disabled until connected, GRBL is ready, and no alarm is active.
 - Auto-Level can be disabled in App Settings > Experimental to keep the toolbar in Read Job mode.
 
 ### How it works
@@ -469,9 +499,10 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 2) Open **Auto-Level** and review the grid sample and probe settings.
 3) Connect to the controller and clear alarms; verify the probe input works.
 4) Set Z0 to the surface plane and confirm Safe Z, probe depth, and feed.
-5) Click **Start Probe** and monitor progress.
-6) Click **Apply to Job** to generate and load the leveled `-AL` file.
-7) Run the leveled job, or use **Save Leveled** to keep a copy in a new location.
+5) Click **Test Probe** to run a single-point probe at the current XY and verify probe behavior.
+6) Click **Start Probe** and monitor progress.
+7) Click **Apply to Job** to generate and load the leveled `-AL` file.
+8) Run the leveled job, or use **Save Leveled** to keep a copy in a new location.
 
 ### Quick checklist
 - Job loaded and dimensions/estimate look correct in the G-code panel.
@@ -482,10 +513,12 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 
 ### Buttons and outputs
 - **Start Probe:** begins probing. Disabled until connected, GRBL is ready, and no alarms are active.
+- **Test Probe:** runs a single probe at the current XY using the active probe settings; does not modify the job height map.
 - **Apply to Job:** writes a leveled file and loads it; the original job is kept so you can revert.
 - **Revert Job:** restores the original job.
 - **Save Leveled:** writes the leveled job to disk (useful if you want a second copy in a new location).
 - **Save Map / Load Map:** stores or reuses a height map; once loaded you can apply without re-probing.
+- **Last test probe line:** shows the most recent test probe result with timestamp and XYZ hit value (or failure reason).
 - Auto-level saves `original-AL.gcode` (or `original-AL-#.gcode` if needed) in the same folder before loading it. The file starts with a `(Auto-Level from <name>)` header comment and retains source comments/blank lines when possible. If the folder is not writable, it falls back to a temporary file and warns you to save a copy.
 
 ### Presets and settings
@@ -573,9 +606,7 @@ Before running the surfacing program, the operator must:
 - With the surfacing bit installed, touch off on the spoilboard surface (touch plate, paper method, or preferred probing method).
 - Set that point as `Z = 0.000`.
 - Meaning:
-- `Z0 = current top of spoilboard`.
-- Any negative Z cuts into the spoilboard.
-- Example: `Surfacing Depth = 0.50 mm` means the tool cuts at `Z = -0.50 mm`.
+- Here, `Z0` is the current spoilboard surface. Any negative `Z` value cuts below that surface. For example, a Surfacing Depth of `0.50 mm` cuts at `Z = -0.50 mm`.
 
 ##### 6) Confirm units (quick check)
 - This Spoilboard Generator currently outputs `G21`, so units are millimeters.
@@ -643,9 +674,11 @@ This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) an
    - If you need XY re-zero, re-jog and re-zero X/Y.
 6) **Optional: Auto-Level the job**
    - Load the job, open **Auto-Level**, confirm Safe Z / depth / feed / grid.
+   - Click **Test Probe** at your current XY to confirm probe behavior.
    - Click **Start Probe**, then **Apply to Job** to load the leveled file.
 7) **Dry run and cut**
    - Do a dry run in air, then run the job with the spindle enabled.
+   - If Run shows **Job Setup Not Completed**, rerun **Macro-3** for the current session (or choose **Start Anyway** only when intentional).
 
 ### Macro shortcuts
 If you prefer guided probing, the macro set includes touch-plate and reference-tool helpers (see the Macro table below):
@@ -675,6 +708,7 @@ Use this when you want job lifecycle events to control smart outlets, such as a 
 
 - Linux only: this section is hidden on non-Linux platforms.
 - Trigger behavior: enabled outlets turn on when a job starts and turn off when a job finishes, stops, alarms, or is canceled/aborted.
+- Stream directives: exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines in streamed files toggle the configured Vacuum outlet immediately; these lines are consumed by the sender and are never sent to GRBL.
 - Safety: keep a physical e-stop/power cutoff available. Kasa control is convenience automation, not a safety system.
 - Reliability: Kasa device operations use bounded request timeouts (default 15s). If a device call stalls, the action fails with a logged timeout instead of blocking the accessory worker indefinitely.
 
@@ -709,7 +743,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 10, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1063 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 11, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1069 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -852,6 +886,7 @@ python tools/perf_microbench.py
 - Connect fails: verify port/baud 115200; close other apps.
 - No $$: wait for ready/status; clear alarms; stop streaming.
 - Alarm: use $X/$H; reset + re-home if needed.
+- Run shows `Job Setup Not Completed`: run `Macro-3 (Job Setup)` to capture tool reference for this session, then try Run again. Use `Start Anyway` only when you intentionally accept the risk.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
@@ -993,8 +1028,8 @@ The macro panel supports `Macro-1` through `Macro-8`; the repository currently s
 | --- | --- | --- | --- | --- |
 | Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Avoid while a stream is active; it's a manual setup macro. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
 | Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Avoid while cutting or with spindle running. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
-| Macro-3: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup where one macro should guide the decision path before probing. | Avoid during production runs without operator supervision; this flow requires plate/clip interaction and prompts. | Starts with a custom `PROMPT` (`[btn(...)]` keys), branches on `macro.prompt_choice_key` (`x/z/m`), runs the matching touch-plate/manual path, then performs shared `$132`-based reference capture and stores `macro.state.TOOL_REFERENCE = wz`. |
-| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height. | Tool changes after a reference tool has already been captured by Job Setup. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
+| Macro-3: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup before job start, and after reconnect/reset/new controller session. | Avoid during production runs without operator supervision; this flow requires plate/clip interaction and prompts. | Starts with a custom `PROMPT` (`[btn(...)]` keys), branches on `macro.prompt_choice_key` (`x/z/m`), runs the matching touch-plate/manual path, then performs shared `$132`-based reference capture and stores `macro.state.TOOL_REFERENCE = wz`. |
+| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Avoid before `macro.state.TOOL_REFERENCE` exists (macro aborts early). | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -1007,7 +1042,7 @@ Macro UI is included below along with the rest of the interface.
 - Connect/Disconnect: opens or closes the selected port; shows `Connecting...` / `Disconnecting...` while workers run, then waits for banner/status before enabling controls.
 - Read Job / Auto-Level: opens the touch-friendly in-app file browser for G-code selection (with optional `Use System Picker` fallback), then reads the selected file into the viewer; after a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
 - Clear Job: unloads the current job and resets samples/state.
-- Run: starts streaming the loaded job to GRBL.
+- Run: starts streaming the loaded job to GRBL. If Job Setup state is invalid, it shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
 - Pause: issues feed hold during a running job.
 - Resume: resumes after a pause or hold.
 - Stop/Reset: stops streaming and soft-resets GRBL per the configured ALL STOP behavior.
@@ -1027,7 +1062,7 @@ Macro UI is included below along with the rest of the interface.
 - Jog X+/X-/Y+/Y-: jogs by the selected XY step using the current jog feed.
 - Jog Z+/Z-: jogs by the selected Z step using the Z jog feed.
 - JOG STOP: cancels an active jog (RT 0x85) and stops pending jogs.
-- Tool reference label: displays the stored tool reference height used by probing workflows.
+- Tool reference label: displays the stored tool reference height used by probing workflows and by the Run safety gate.
 - ALL STOP: immediate stop using the selected ALL STOP behavior.
 - XY Step adjuster (-/+ with indicator): sets the XY jog step value used by the jog pad.
 - Z Step adjuster (-/+ with indicator): sets the Z jog step value used by the jog pad.
@@ -1264,9 +1299,11 @@ Macro UI is included below along with the rest of the interface.
 - Read Position: fills X/Y from current position.
 
 ### Auto-Level Dialog: Actions
-- Status line: read-only status updates during probe/apply.
+- Status line: read-only status updates during start probe, test probe, and apply.
+- Last test probe line: read-only timestamped result of the latest single-point test probe.
 - Progress bar: probe progress indicator.
 - Start Probe: begins probing the grid.
+- Test Probe: runs one probe cycle at the current XY without changing the height map.
 - Apply to Job: applies the height map to the loaded job.
 - Save Leveled: writes the leveled G-code to disk.
 - Save Map: saves the height map JSON.
