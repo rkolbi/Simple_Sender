@@ -251,10 +251,11 @@ def poll_joystick_events(
         app._joystick_poll_idle_streak = 0
     finally:
         can_poll = bool(app.joystick_bindings_enabled.get() or app._joystick_capture_state)
+        should_schedule_poll = True
         if can_poll and (_stream_busy(app) and not app._joystick_capture_state):
             app._joystick_poll_idle_streak = 0
-            return
-        if can_poll:
+            should_schedule_poll = False
+        if can_poll and should_schedule_poll:
             base_interval, idle_step, idle_max = _joystick_poll_intervals_ms(app)
             interval = base_interval
             manual_ready = (

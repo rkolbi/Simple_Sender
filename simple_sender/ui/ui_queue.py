@@ -1037,77 +1037,76 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     )
         except Exception:
             pass
-        if app._closing:
-            return
-        next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
-        stream_busy = _stream_ui_busy(app)
-        manual_motion_active = _manual_motion_ui_active(app)
-        quiet_idle = (pending <= 0) and (not stream_busy) and _connected_quiet_idle(app)
-        if pending > 0:
-            try:
-                setattr(app, "_ui_queue_idle_streak", 0)
-            except Exception:
-                pass
-            if pending >= 500:
-                next_delay_ms = 1
-            elif pending >= 200:
-                next_delay_ms = 5
-            elif pending >= 50:
-                next_delay_ms = 15
+        if not app._closing:
+            next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+            stream_busy = _stream_ui_busy(app)
+            manual_motion_active = _manual_motion_ui_active(app)
+            quiet_idle = (pending <= 0) and (not stream_busy) and _connected_quiet_idle(app)
+            if pending > 0:
+                try:
+                    setattr(app, "_ui_queue_idle_streak", 0)
+                except Exception:
+                    pass
+                if pending >= 500:
+                    next_delay_ms = 1
+                elif pending >= 200:
+                    next_delay_ms = 5
+                elif pending >= 50:
+                    next_delay_ms = 15
+                else:
+                    next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
+            elif (
+                ((processed <= 0) and (not manual_motion_active))
+                or ((not stream_busy) and processed_low_impact_only and (not manual_motion_active))
+            ):
+                try:
+                    idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1
+                    setattr(app, "_ui_queue_idle_streak", idle_streak)
+                    idle_interval_attr = "_ui_queue_idle_interval_ms"
+                    idle_max_attr = "_ui_queue_idle_max_interval_ms"
+                    idle_step_attr = "_ui_queue_idle_backoff_step_ms"
+                    if quiet_idle:
+                        idle_interval_attr = "_ui_queue_quiet_idle_interval_ms"
+                        idle_max_attr = "_ui_queue_quiet_idle_max_interval_ms"
+                        idle_step_attr = "_ui_queue_quiet_idle_backoff_step_ms"
+                    idle_base_ms = int(
+                        max(
+                            UI_QUEUE_DRAIN_INTERVAL_MS,
+                            getattr(app, idle_interval_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
+                        )
+                    )
+                    idle_max_ms = int(
+                        max(
+                            idle_base_ms,
+                            getattr(app, idle_max_attr, idle_base_ms),
+                        )
+                    )
+                    idle_backoff_step_ms = int(
+                        max(
+                            1,
+                            getattr(app, idle_step_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
+                        )
+                    )
+                    backoff_candidate_ms = UI_QUEUE_DRAIN_INTERVAL_MS + (
+                        idle_streak * idle_backoff_step_ms
+                    )
+                    next_delay_ms = int(
+                        min(
+                            idle_max_ms,
+                            max(idle_base_ms, backoff_candidate_ms),
+                        )
+                    )
+                except Exception:
+                    next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
             else:
-                next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
-        elif (
-            ((processed <= 0) and (not manual_motion_active))
-            or ((not stream_busy) and processed_low_impact_only and (not manual_motion_active))
-        ):
+                try:
+                    setattr(app, "_ui_queue_idle_streak", 0)
+                except Exception:
+                    pass
             try:
-                idle_streak = int(getattr(app, "_ui_queue_idle_streak", 0) or 0) + 1
-                setattr(app, "_ui_queue_idle_streak", idle_streak)
-                idle_interval_attr = "_ui_queue_idle_interval_ms"
-                idle_max_attr = "_ui_queue_idle_max_interval_ms"
-                idle_step_attr = "_ui_queue_idle_backoff_step_ms"
-                if quiet_idle:
-                    idle_interval_attr = "_ui_queue_quiet_idle_interval_ms"
-                    idle_max_attr = "_ui_queue_quiet_idle_max_interval_ms"
-                    idle_step_attr = "_ui_queue_quiet_idle_backoff_step_ms"
-                idle_base_ms = int(
-                    max(
-                        UI_QUEUE_DRAIN_INTERVAL_MS,
-                        getattr(app, idle_interval_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
-                    )
-                )
-                idle_max_ms = int(
-                    max(
-                        idle_base_ms,
-                        getattr(app, idle_max_attr, idle_base_ms),
-                    )
-                )
-                idle_backoff_step_ms = int(
-                    max(
-                        1,
-                        getattr(app, idle_step_attr, UI_QUEUE_DRAIN_INTERVAL_MS),
-                    )
-                )
-                backoff_candidate_ms = UI_QUEUE_DRAIN_INTERVAL_MS + (
-                    idle_streak * idle_backoff_step_ms
-                )
-                next_delay_ms = int(
-                    min(
-                        idle_max_ms,
-                        max(idle_base_ms, backoff_candidate_ms),
-                    )
-                )
-            except Exception:
-                next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
-        else:
-            try:
-                setattr(app, "_ui_queue_idle_streak", 0)
-            except Exception:
-                pass
-        try:
-            app.after(next_delay_ms, app._drain_ui_queue)
-        except Exception as exc:
-            try:
-                app._log_exception("UI queue reschedule error", exc)
-            except Exception as log_exc:
-                _log_suppressed("Failed logging UI queue reschedule error", log_exc)
+                app.after(next_delay_ms, app._drain_ui_queue)
+            except Exception as exc:
+                try:
+                    app._log_exception("UI queue reschedule error", exc)
+                except Exception as log_exc:
+                    _log_suppressed("Failed logging UI queue reschedule error", log_exc)

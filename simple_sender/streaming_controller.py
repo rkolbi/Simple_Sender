@@ -31,7 +31,6 @@ from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
 from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
 from simple_sender.utils.constants import (
     GCODE_LIVE_WINDOW_LOOKAHEAD_LINES,
-    GCODE_LIVE_WINDOW_NEXT_LINES,
     GCODE_LIVE_WINDOW_PAST_LINES,
     GCODE_LIVE_WINDOW_REFRESH_MS,
 )
