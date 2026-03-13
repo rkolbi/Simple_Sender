@@ -834,7 +834,7 @@ def _format_hhmm(seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
-def _run_progress_text(app) -> str:
+def _run_progress_pct_from_bytes(app) -> float | None:
     try:
         file_size = int(
             getattr(app, "_stream_progress_file_size_bytes", 0)
@@ -844,13 +844,49 @@ def _run_progress_text(app) -> str:
     except Exception:
         file_size = 0
     if file_size <= 0:
-        return "n/a"
+        return None
     try:
         acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
     except Exception:
         acked = 0
     acked = max(0, min(file_size, acked))
-    pct = max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
+    return max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
+
+
+def _run_progress_pct_from_lines(app) -> tuple[float | None, bool]:
+    try:
+        total = int(getattr(app, "_gcode_executable_lines", 0) or 0)
+    except Exception:
+        total = 0
+    if total > 0:
+        known = bool(getattr(app, "_gcode_executable_lines_known", True))
+    else:
+        try:
+            total = int(getattr(app, "_gcode_total_lines", 0) or 0)
+        except Exception:
+            total = 0
+        known = bool(getattr(app, "_gcode_total_lines_known", True))
+    if total <= 0:
+        return None, False
+    try:
+        done = int(getattr(app, "_last_acked_index", -1) or -1) + 1
+    except Exception:
+        done = 0
+    done = max(0, min(total, done))
+    return max(0.0, min(100.0, (float(done) / float(total)) * 100.0)), bool(known)
+
+
+def _run_progress_text(app) -> str:
+    line_pct, line_known = _run_progress_pct_from_lines(app)
+    byte_pct = _run_progress_pct_from_bytes(app)
+    if line_pct is not None and line_known:
+        pct = line_pct if byte_pct is None else min(line_pct, byte_pct)
+    elif byte_pct is not None:
+        pct = byte_pct
+    elif line_pct is not None:
+        pct = line_pct
+    else:
+        return "n/a"
     stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
     done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
     if stream_state != "done" or done_pending_idle:

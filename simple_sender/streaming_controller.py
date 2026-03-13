@@ -81,6 +81,23 @@ class StreamingController:
         self._last_buffer_fill_text: str | None = None
         self._last_buffer_fill_pct: int | None = None
         self._last_throughput_text: str | None = None
+        self._pending_log_rx_lines: list[str] = []
+        self._log_rx_after_id: AfterId | None = None
+        self._log_rx_flush_interval_ms = max(
+            100, int(getattr(self.app, "_log_rx_flush_interval_ms", 125) or 125)
+        )
+        self._manual_motion_hidden_status_log_interval_s = max(
+            0.25,
+            float(
+                getattr(
+                    self.app,
+                    "_manual_motion_hidden_status_log_interval_s",
+                    0.75,
+                )
+                or 0.75
+            ),
+        )
+        self._manual_motion_hidden_status_log_last_ts = 0.0
 
     def _full_progress_allowed(self) -> bool:
         stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
@@ -284,6 +301,33 @@ class StreamingController:
         self._console_after_id = self.app.after(
             self._console_flush_interval_ms(),
             self._flush_console_updates,
+        )
+
+    def _schedule_log_rx_flush(self) -> None:
+        if self._log_rx_after_id is not None:
+            return
+        self._log_rx_after_id = self.app.after(
+            int(self._log_rx_flush_interval_ms),
+            self._flush_log_rx_updates,
+        )
+
+    def _flush_log_rx_updates(self) -> None:
+        self._log_rx_after_id = None
+        pending = self._pending_log_rx_lines
+        self._pending_log_rx_lines = []
+        if not pending:
+            return
+        for raw in pending:
+            self.log(f"<< {raw}", self._console_tag_for_line(raw))
+
+    @staticmethod
+    def _is_critical_rx_line(raw: str) -> bool:
+        upper = str(raw or "").upper()
+        return (
+            "ALARM" in upper
+            or "ERROR" in upper
+            or upper.startswith("GRBL")
+            or "[MSG" in upper
         )
 
     def _flush_console_updates(self) -> None:
@@ -607,6 +651,7 @@ class StreamingController:
             "_progress_after_id",
             "_buffer_after_id",
             "_console_after_id",
+            "_log_rx_after_id",
             "_live_window_after_id",
         ):
             val = getattr(self, attr, None)
@@ -627,6 +672,7 @@ class StreamingController:
         self._pending_console_entries = []
         self._pending_console_trim = 0
         self._console_render_pending = False
+        self._pending_log_rx_lines = []
         self._last_buffer_fill_text = None
         self._last_buffer_fill_pct = None
         self._last_throughput_text = None
@@ -655,7 +701,24 @@ class StreamingController:
         """Log a line received from GRBL."""
         if self._should_suppress_rx_log(raw):
             return
-        self.log(f"<< {raw}", self._console_tag_for_line(raw))
+        if (
+            (not self._is_critical_rx_line(raw))
+            and self._is_status_line(raw)
+            and self._manual_motion_console_throttle_active()
+            and str(getattr(self.app, "_active_tab_label", "") or "").strip().lower() not in {"console"}
+        ):
+            now = time.monotonic()
+            if (
+                now - float(self._manual_motion_hidden_status_log_last_ts)
+                < float(self._manual_motion_hidden_status_log_interval_s)
+            ):
+                return
+            self._manual_motion_hidden_status_log_last_ts = now
+        self._pending_log_rx_lines.append(str(raw))
+        if self._is_critical_rx_line(raw):
+            self._flush_log_rx_updates()
+            return
+        self._schedule_log_rx_flush()
 
     def handle_log_tx(self, message: str) -> None:
         """Log a line sent to GRBL."""

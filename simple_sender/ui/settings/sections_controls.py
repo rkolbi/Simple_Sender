@@ -520,6 +520,20 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
         ),
     )
     apply_tooltip(app.vacuum_outlet_combo, "Select which outlet controls Vacuum.")
+    ttk.Label(vacuum_row, text="Off delay (sec)").grid(
+        row=1, column=1, sticky="w", padx=(12, 6), pady=(4, 0)
+    )
+    app.vacuum_off_delay_entry = ttk.Entry(
+        vacuum_row,
+        textvariable=app.vacuum_off_delay_sec,
+        width=12,
+    )
+    app.vacuum_off_delay_entry.grid(row=1, column=2, sticky="w", pady=(4, 0))
+    attach_numeric_keypad(app.vacuum_off_delay_entry, allow_decimal=True)
+    apply_tooltip(
+        app.vacuum_off_delay_entry,
+        "Delay VACUUM_OFF by this many seconds so dust collection can clear remaining debris.",
+    )
 
     light_row = ttk.Frame(kasa_frame)
     light_row.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))

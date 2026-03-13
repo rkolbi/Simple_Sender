@@ -912,6 +912,9 @@ class GrblWorker(
             "ok_latency_ms_last": float(self._ok_latency_ms_last),
             "ok_latency_ms_avg": float(self._ok_latency_ms_avg),
             "ok_latency_samples": int(self._ok_latency_sample_count),
+            "ack_latency_ms_last": float(self._ok_latency_ms_last),
+            "ack_latency_ms_avg": float(self._ok_latency_ms_avg),
+            "ack_latency_samples": int(self._ok_latency_sample_count),
             "tx_loop_cycles": tx_loop_cycles,
             "tx_loop_idle_cycles": tx_loop_idle_cycles,
             "tx_loop_active_cycles": tx_loop_active_cycles,
@@ -927,6 +930,7 @@ class GrblWorker(
             "live_gcode_pending_window_count": int(live_pending_window_count),
             "live_gcode_current_acked_index": int(live_current_acked_index),
             "status_poll_interval_s": float(status_poll_interval_s),
+            "status_poll_interval_effective_s": float(status_poll_interval_s),
             "manual_motion_status_query_count": int(self._manual_motion_status_query_count),
             "manual_motion_status_query_interval_avg_ms": float(
                 self._manual_motion_status_query_interval_avg_ms

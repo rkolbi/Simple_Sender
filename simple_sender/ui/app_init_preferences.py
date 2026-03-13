@@ -184,6 +184,12 @@ def _init_behavior_preferences(
         value=str(setting("kasa_device_identifier", "") or "").strip()
     )
     app.vacuum_enabled = tk.BooleanVar(value=setting("vacuum_enabled", False))
+    app.vacuum_off_delay_sec = tk.DoubleVar(
+        value=setting(
+            "vacuum_off_delay_sec",
+            default_settings.get("vacuum_off_delay_sec", 0.0),
+        )
+    )
     app.vacuum_outlet = tk.IntVar(value=_outlet_setting("vacuum_outlet", 1))
     app.light_enabled = tk.BooleanVar(value=setting("light_enabled", False))
     app.light_outlet = tk.IntVar(value=_outlet_setting("light_outlet", 2))

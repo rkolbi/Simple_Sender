@@ -188,6 +188,8 @@ def _init_kasa_runtime_state(app, tk) -> None:
         app.kasa_device_identifier = tk.StringVar(value="")
     if not hasattr(app, "vacuum_enabled"):
         app.vacuum_enabled = tk.BooleanVar(value=False)
+    if not hasattr(app, "vacuum_off_delay_sec"):
+        app.vacuum_off_delay_sec = tk.DoubleVar(value=0.0)
     if not hasattr(app, "vacuum_outlet"):
         app.vacuum_outlet = tk.IntVar(value=1)
     if not hasattr(app, "light_enabled"):
@@ -230,6 +232,9 @@ def _init_kasa_runtime_state(app, tk) -> None:
     app._kasa_job_running = False
     app._kasa_vacuum_quick_on = False
     app._kasa_light_quick_on = False
+    app._kasa_vacuum_off_delay_after_id = None
+    app._kasa_vacuum_off_delay_outlet = None
+    app._kasa_vacuum_off_delay_source = ""
 
 
 def _clamp_float_setting(setting, key: str, fallback: float) -> float:
@@ -769,6 +774,7 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._auto_reconnect_startup_gate_ts = 0.0
     app._user_disconnect = False
     app._ui_throttle_ms = 100
+    app._log_rx_flush_interval_ms = 125
     app._ui_queue_idle_interval_ms = 300
     app._ui_queue_idle_max_interval_ms = 900
     app._ui_queue_idle_backoff_step_ms = 60

@@ -277,6 +277,12 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     metrics["build_info"] = _collect_build_info(app)
     try:
+        configured_poll = float(getattr(app, "status_poll_interval").get())
+    except Exception:
+        configured_poll = 0.0
+    if configured_poll > 0.0:
+        metrics["status_poll_interval_configured_s"] = float(configured_poll)
+    try:
         kasa_snapshot = kasa_status_snapshot(app)
     except Exception as exc:
         _log_suppressed("Failed collecting Kasa status snapshot for diagnostics", exc)
@@ -303,6 +309,13 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
             raw = {}
         if isinstance(raw, dict):
             metrics.update(cast(dict[str, Any], raw))
+            if (
+                "status_poll_interval_effective_s" not in metrics
+                and "status_poll_interval_s" in metrics
+            ):
+                metrics["status_poll_interval_effective_s"] = float(
+                    metrics.get("status_poll_interval_s", 0.0) or 0.0
+                )
     perf_monitor = getattr(app, "_perf_monitor", None)
     metrics["perf_available"] = False
     if perf_monitor is None:
@@ -905,13 +918,48 @@ def _format_runtime_metrics(
     )
     if has_worker_metrics:
         tx_lines_per_sec = float(metrics.get("tx_lines_per_sec", 0.0) or 0.0)
-        ok_last = float(metrics.get("ok_latency_ms_last", 0.0) or 0.0)
-        ok_avg = float(metrics.get("ok_latency_ms_avg", 0.0) or 0.0)
-        ok_samples = int(metrics.get("ok_latency_samples", 0) or 0)
+        ack_last = float(
+            metrics.get(
+                "ack_latency_ms_last",
+                metrics.get("ok_latency_ms_last", 0.0),
+            )
+            or 0.0
+        )
+        ack_avg = float(
+            metrics.get(
+                "ack_latency_ms_avg",
+                metrics.get("ok_latency_ms_avg", 0.0),
+            )
+            or 0.0
+        )
+        ack_samples = int(
+            metrics.get(
+                "ack_latency_samples",
+                metrics.get("ok_latency_samples", 0),
+            )
+            or 0
+        )
         lines.append(f"- TX lines/sec: {tx_lines_per_sec:.2f}")
         lines.append(
-            f"- ACK latency ms: last={ok_last:.2f}, avg={ok_avg:.2f}, samples={ok_samples}"
+            f"- ACK latency ms: last={ack_last:.2f}, avg={ack_avg:.2f}, samples={ack_samples}"
         )
+        configured_poll = float(
+            metrics.get("status_poll_interval_configured_s", 0.0) or 0.0
+        )
+        effective_poll = float(
+            metrics.get(
+                "status_poll_interval_effective_s",
+                metrics.get("status_poll_interval_s", 0.0),
+            )
+            or 0.0
+        )
+        if configured_poll > 0.0 and effective_poll > 0.0:
+            lines.append(
+                "- Status poll interval s: "
+                f"configured={configured_poll:.3f}, effective={effective_poll:.3f}"
+            )
+        elif effective_poll > 0.0:
+            lines.append(f"- Status poll interval s: {effective_poll:.3f}")
         tx_loop_cycles = int(metrics.get("tx_loop_cycles", 0) or 0)
         tx_loop_idle_cycles = int(metrics.get("tx_loop_idle_cycles", 0) or 0)
         tx_loop_active_cycles = int(metrics.get("tx_loop_active_cycles", 0) or 0)

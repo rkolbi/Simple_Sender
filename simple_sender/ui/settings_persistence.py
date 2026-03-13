@@ -468,6 +468,7 @@ def _build_kasa_settings(app) -> dict[str, object]:
             "kasa_enabled": False,
             "kasa_device_identifier": "",
             "vacuum_enabled": False,
+            "vacuum_off_delay_sec": 0.0,
             "vacuum_outlet": 1,
             "light_enabled": False,
             "light_outlet": 2,
@@ -486,6 +487,13 @@ def _build_kasa_settings(app) -> dict[str, object]:
     vacuum_enabled_var = getattr(app, "vacuum_enabled", None)
     vacuum_enabled = (
         bool(vacuum_enabled_var.get()) if vacuum_enabled_var is not None else False
+    )
+    vacuum_off_delay_sec = _read_nonnegative_float_setting(
+        app,
+        attr_name="vacuum_off_delay_sec",
+        key="vacuum_off_delay_sec",
+        default=0.0,
+        label="Vacuum off delay",
     )
     light_enabled_var = getattr(app, "light_enabled", None)
     light_enabled = (
@@ -523,6 +531,7 @@ def _build_kasa_settings(app) -> dict[str, object]:
         "kasa_enabled": kasa_enabled,
         "kasa_device_identifier": device_identifier,
         "vacuum_enabled": vacuum_enabled,
+        "vacuum_off_delay_sec": float(vacuum_off_delay_sec),
         "vacuum_outlet": vacuum_outlet,
         "light_enabled": light_enabled,
         "light_outlet": light_outlet,
