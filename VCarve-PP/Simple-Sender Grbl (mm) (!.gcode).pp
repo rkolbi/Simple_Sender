@@ -139,6 +139,7 @@ begin HEADER
 
 begin TOOLCHANGE
 
+"G4"
 "VACUUM_OFF"
 "M5"
 "TC:[TOOLNAME]"
