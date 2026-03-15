@@ -272,6 +272,7 @@ begin JET_TOOL_POWER
 
 begin FOOTER
 
+"G4"
 "VACUUM_OFF"
 "M5"
 "G0[ZH]"
