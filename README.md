@@ -1,8 +1,9 @@
-﻿# Simple Sender - Full Manual
+# Simple Sender - Full Manual
 ![Release: 2.4.0](https://img.shields.io/badge/release-2.4.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
+  ![](pics/screenshot-01.png)
 
 ## Design Objectives and Key Features
 
@@ -152,7 +153,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
    - Raw $$ tab keeps the text capture.
 10) **Macros**
-   - Left-click to run; right-click to sample contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
+       - Left-click to run; right-click to sample contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
 
 ## Quick Start Workflow
 1) Launch, select port (auto-selects last if enabled), Connect.
@@ -173,37 +174,38 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   **G-code viewer:** Bounded Live G-code window (`500 past / current / 500 next`) fed from worker ack/pending queues so the tab stays responsive on large jobs.
   
-  ![](pics/g-codetab.jpg)
+  ![](pics/screenshot-02.png)
+  ![](pics/screenshot-03.png)
 
   **File Info:** Read-only, scrollable file/metadata summary. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and auto-level prereq snapshot summary).
   
   **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
-  ![-](pics/consoletab.JPG)
+  ![-](pics/screenshot-04.png)
   
   **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
   
-  ![](pics/logstab.JPG)
+  ![](pics/screenshot-05.png)
   
   **Overdrive:** Spindle ON/OFF controls, a Spoilboard Generator button, plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
   
-  ![-](pics/overdrivetab.JPG)
+  ![-](pics/screenshot-06.png)
   
   **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
   
-  ![-](pics/rawtab.JPG)
+  ![-](pics/screenshot-07.png)
   
   **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
   
-  ![-](pics/grblsettingstab.JPG)
+  ![-](pics/screenshot-08.png)
   
   **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
-  ![](pics/appsettingstab.JPG)
+  ![](pics/screenshot-09.png)
   
   **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including collapsible checklist titles in the Checklists tab, the Release/Start Job checklist dialogs, and the status-bar Release quick button.
   
-  ![-](pics/checkliststab.JPG)
+  ![-](pics/screenshot-10.png)
   
   **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
@@ -285,6 +287,8 @@ This is a practical end-to-end flow, with rationale for the key options.
 - Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. Raw $$ tab holds capture.
 
 ## Macros
+![](pics\screenshot-Macro.png)
+
 Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (optional `.txt` extensions are supported).
 
 Macro file header format:
@@ -564,6 +568,8 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Always test in the air first and confirm probe wiring before running a full grid.
 
 ## Spoilboard Generator
+![](pics\screenshot-SpoilBoard.png)
+
 Use the Overdrive tab's **Spoilboard** button to generate a surfacing program without opening a CAM tool.
 
 ### Inputs
