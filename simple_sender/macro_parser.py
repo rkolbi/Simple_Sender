@@ -83,14 +83,47 @@ def bcnc_compile_line(
             with macro_vars_lock:
                 if not macro_vars.get("running"):
                     return None
+            gated = line[len("%if running") :].strip()
+            return (
+                bcnc_compile_line(
+                    gated,
+                    macros_allow_python=macros_allow_python,
+                    macro_vars=macro_vars,
+                    macro_vars_lock=macro_vars_lock,
+                )
+                if gated
+                else None
+            )
         if line.startswith("%if not running"):
             with macro_vars_lock:
                 if macro_vars.get("running"):
                     return None
+            gated = line[len("%if not running") :].strip()
+            return (
+                bcnc_compile_line(
+                    gated,
+                    macros_allow_python=macros_allow_python,
+                    macro_vars=macro_vars,
+                    macro_vars_lock=macro_vars_lock,
+                )
+                if gated
+                else None
+            )
         if line.startswith("%if paused"):
             with macro_vars_lock:
                 if not macro_vars.get("paused"):
                     return None
+            gated = line[len("%if paused") :].strip()
+            return (
+                bcnc_compile_line(
+                    gated,
+                    macros_allow_python=macros_allow_python,
+                    macro_vars=macro_vars,
+                    macro_vars_lock=macro_vars_lock,
+                )
+                if gated
+                else None
+            )
         try:
             return compile(line[1:], "", "exec")
         except Exception as exc:
