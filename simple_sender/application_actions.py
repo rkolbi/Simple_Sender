@@ -150,8 +150,8 @@ class ActionsMixin:
     def _run_if_connected(self, func: Callable[..., Any]) -> None:
         run_if_connected(self, func)
 
-    def _send_manual(self, command: str, source: str) -> None:
-        send_manual(self, command, source)
+    def _send_manual(self, command: str, source: str) -> bool:
+        return bool(send_manual(self, command, source))
 
     def _kasa_settings_snapshot(self) -> dict[str, Any]:
         return cast(dict[str, Any], kasa_settings_snapshot(self))

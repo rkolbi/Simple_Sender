@@ -72,7 +72,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             except Exception as exc:
                 _log_suppressed("Failed signaling status thread after manual-motion grace update", exc)
 
-    def send_immediate(self, command: str, *, source: str | None = None) -> None:
+    def send_immediate(self, command: str, *, source: str | None = None) -> bool:
         """Send command immediately (bypasses streaming).
         
         Used for manual console commands and UI buttons.
@@ -83,7 +83,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         """
         if not self.is_connected():
             logger.warning("Cannot send command - not connected")
-            return
+            return False
         
         allow_stream_paused_macro = bool(
             source == "macro"
@@ -97,7 +97,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                 self.ui_q.put(("log", f"[manual blocked] {command.strip()} (streaming active)"))
             except Exception as exc:
                 _log_suppressed("Failed queueing blocked manual-command log while streaming", exc)
-            return
+            return False
         
         if source:
             self._last_manual_source = str(source)
@@ -106,7 +106,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         command_source = self._last_manual_source
         command = command.strip()
         if not command:
-            return
+            return False
         cmd_upper = command.upper()
         if cmd_upper.startswith("$J="):
             self._mark_manual_motion_status_grace()
@@ -115,7 +115,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         if self._alarm_active:
             if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
                 logger.warning(f"Command '{command}' blocked during alarm")
-                return
+                return False
 
         if cmd_upper.startswith("$H"):
             try:
@@ -149,6 +149,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         
         with self._stream_lock:
             self._enqueue_manual_command(command, command_source)
+        return True
     
     def unlock(self) -> None:
         """Send unlock command ($X) to clear alarm state."""

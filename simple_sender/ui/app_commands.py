@@ -67,6 +67,23 @@ def _append_connection_timeline_event(app, event: str, details: str = "") -> Non
         _log_suppressed("Failed appending connection timeline event", exc)
 
 
+def _post_ui(app, func, *args, **kwargs) -> None:
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(func, *args, **kwargs)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed posting UI callback via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", func, args, kwargs))
+            return
+        except Exception as exc:
+            _log_suppressed("Failed posting UI callback via ui_q", exc)
+
+
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
     _ = app
     if serial_available:
@@ -303,23 +320,14 @@ def start_connect_worker(
         except Exception as exc:
             _append_connection_timeline_event(app, "connect_worker_failed", f"port={port} error={exc}")
             if show_error:
-                try:
-                    app.after(0, lambda exc=exc: messagebox.showerror("Connect failed", str(exc)))
-                except Exception as schedule_exc:
-                    _log_suppressed("Failed scheduling connect-failed error dialog", schedule_exc)
+                _post_ui(app, messagebox.showerror, "Connect failed", str(exc))
             callback = on_failure
             if callback is not None:
-                try:
-                    app.after(0, lambda exc=exc: callback(exc))
-                except Exception as schedule_exc:
-                    _log_suppressed("Failed scheduling connect-failure callback", schedule_exc)
+                _post_ui(app, callback, exc)
         finally:
             app._connecting = False
             if not connected_ok:
-                try:
-                    app.after(0, lambda: _sync_connection_controls(app))
-                except Exception as schedule_exc:
-                    _log_suppressed("Failed scheduling connection-control sync after connect failure", schedule_exc)
+                _post_ui(app, _sync_connection_controls, app)
 
     app._connecting = True
     _set_connection_controls_pending(app, "Connecting...")
@@ -346,13 +354,7 @@ def start_disconnect_worker(app):
         finally:
             app._disconnecting = False
             if not disconnected_ok:
-                try:
-                    app.after(0, lambda: _sync_connection_controls(app))
-                except Exception as schedule_exc:
-                    _log_suppressed(
-                        "Failed scheduling connection-control sync after disconnect failure",
-                        schedule_exc,
-                    )
+                _post_ui(app, _sync_connection_controls, app)
 
     app._disconnecting = True
     _set_connection_controls_pending(app, "Disconnecting...")

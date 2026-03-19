@@ -21,6 +21,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import threading
+from collections import deque
+from dataclasses import dataclass
 from tkinter import messagebox
 
 from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
@@ -28,6 +31,11 @@ from simple_sender.types import LineSource
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_RESUME_CACHE_MAX = 8
+_RESUME_CHECKPOINT_STRIDE = 256
+_resume_cache_lock = threading.Lock()
+_resume_preamble_cache: dict[int, tuple[object, "_ResumePreambleCache"]] = {}
+_resume_cache_order: deque[int] = deque()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -38,104 +46,229 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
-    units = None
-    distance = None
-    plane = None
-    feed_mode = None
-    arc_mode = None
-    coord = None
-    spindle = None
-    coolant = None
-    feed = None
-    spindle_speed = None
-    has_g92 = False
+@dataclass(slots=True)
+class _ResumeModalState:
+    units: str | None = None
+    distance: str | None = None
+    plane: str | None = None
+    feed_mode: str | None = None
+    arc_mode: str | None = None
+    coord: str | None = None
+    spindle: int | None = None
+    coolant: int | None = None
+    feed: float | None = None
+    spindle_speed: float | None = None
+    has_g92: bool = False
+
+    def copy(self) -> "_ResumeModalState":
+        return _ResumeModalState(
+            units=self.units,
+            distance=self.distance,
+            plane=self.plane,
+            feed_mode=self.feed_mode,
+            arc_mode=self.arc_mode,
+            coord=self.coord,
+            spindle=self.spindle,
+            coolant=self.coolant,
+            feed=self.feed,
+            spindle_speed=self.spindle_speed,
+            has_g92=self.has_g92,
+        )
+
+    def to_preamble(self) -> list[str]:
+        preamble = []
+        for item in (
+            self.units,
+            self.distance,
+            self.plane,
+            self.arc_mode,
+            self.feed_mode,
+            self.coord,
+        ):
+            if item:
+                preamble.append(item)
+        if self.feed is not None:
+            preamble.append(f"F{self.feed:g}")
+        if self.spindle is not None:
+            if self.spindle in (3, 4):
+                if self.spindle_speed is not None:
+                    preamble.append(f"M{self.spindle} S{self.spindle_speed:g}")
+                else:
+                    preamble.append(f"M{self.spindle}")
+            else:
+                preamble.append("M5")
+        if self.coolant is not None:
+            preamble.append(f"M{self.coolant}")
+        return preamble
+
+
+class _ResumePreambleCache:
+    def __init__(self, lines: LineSource):
+        self._lines = lines
+        self._lock = threading.Lock()
+        self._line_count = self._safe_len(lines)
+        self._checkpoints: dict[int, _ResumeModalState] = {0: _ResumeModalState()}
+
+    @staticmethod
+    def _safe_len(lines: LineSource) -> int | None:
+        try:
+            return max(0, int(len(lines)))  # type: ignore[arg-type]
+        except Exception:
+            return None
+
+    def _reset_if_size_changed(self) -> None:
+        latest_count = self._safe_len(self._lines)
+        if latest_count is None:
+            return
+        if self._line_count is None:
+            self._line_count = latest_count
+            return
+        if latest_count != self._line_count:
+            self._line_count = latest_count
+            self._checkpoints = {0: _ResumeModalState()}
+
+    def get(self, stop_index: int) -> tuple[list[str], bool]:
+        target = max(0, int(stop_index))
+        with self._lock:
+            self._reset_if_size_changed()
+            checkpoint = 0
+            for idx in self._checkpoints.keys():
+                if idx <= target and idx >= checkpoint:
+                    checkpoint = idx
+            state = self._checkpoints[checkpoint].copy()
+            for idx in range(checkpoint, target):
+                try:
+                    raw = self._lines[idx]  # type: ignore[index]
+                except Exception:
+                    break
+                _apply_line_to_state(state, raw)
+                next_idx = idx + 1
+                if next_idx % _RESUME_CHECKPOINT_STRIDE == 0:
+                    self._checkpoints[next_idx] = state.copy()
+            self._checkpoints[target] = state.copy()
+            return state.to_preamble(), state.has_g92
+
+
+def _get_resume_cache(lines: LineSource) -> _ResumePreambleCache | None:
+    try:
+        len(lines)  # type: ignore[arg-type]
+        lines[0:0]  # type: ignore[index]
+    except Exception:
+        return None
+    cache_key = id(lines)
+    with _resume_cache_lock:
+        cached = _resume_preamble_cache.get(cache_key)
+        if cached is not None and cached[0] is lines:
+            try:
+                _resume_cache_order.remove(cache_key)
+            except ValueError:
+                pass
+            _resume_cache_order.append(cache_key)
+            return cached[1]
+        cache = _ResumePreambleCache(lines)
+        _resume_preamble_cache[cache_key] = (lines, cache)
+        try:
+            _resume_cache_order.remove(cache_key)
+        except ValueError:
+            pass
+        _resume_cache_order.append(cache_key)
+        while len(_resume_cache_order) > _RESUME_CACHE_MAX:
+            old_key = _resume_cache_order.popleft()
+            _resume_preamble_cache.pop(old_key, None)
+        return cache
+
+
+def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
+    s = clean_gcode_line(raw)
+    if not s:
+        return
+    s = s.upper()
 
     def is_code(code: float, target: float) -> bool:
         return abs(code - target) < 1e-3
 
-    max_index = max(0, stop_index)
+    for w, val in WORD_PAT.findall(s):
+        if w == "G":
+            try:
+                code = float(val)
+            except Exception:
+                continue
+            if (
+                is_code(code, 92)
+                or is_code(code, 92.1)
+                or is_code(code, 92.2)
+                or is_code(code, 92.3)
+            ):
+                state.has_g92 = True
+                continue
+            gstr = f"G{val}"
+            if is_code(code, 20) or is_code(code, 21):
+                state.units = gstr
+            elif is_code(code, 90) or is_code(code, 91):
+                state.distance = gstr
+            elif is_code(code, 17) or is_code(code, 18) or is_code(code, 19):
+                state.plane = gstr
+            elif is_code(code, 93) or is_code(code, 94):
+                state.feed_mode = gstr
+            elif is_code(code, 90.1) or is_code(code, 91.1):
+                state.arc_mode = gstr
+            elif (
+                is_code(code, 54)
+                or is_code(code, 55)
+                or is_code(code, 56)
+                or is_code(code, 57)
+                or is_code(code, 58)
+                or is_code(code, 59)
+                or is_code(code, 59.1)
+                or is_code(code, 59.2)
+                or is_code(code, 59.3)
+            ):
+                state.coord = gstr
+        elif w == "M":
+            try:
+                code = int(float(val))
+            except Exception:
+                continue
+            if code in (3, 4, 5):
+                state.spindle = code
+            elif code in (7, 8, 9):
+                state.coolant = code
+        elif w == "F":
+            try:
+                state.feed = float(val)
+            except Exception as exc:
+                _log_suppressed("Failed parsing feed value while building resume preamble", exc)
+        elif w == "S":
+            try:
+                state.spindle_speed = float(val)
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed parsing spindle-speed value while building resume preamble",
+                    exc,
+                )
+
+
+def _build_resume_preamble_fallback(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
+    state = _ResumeModalState()
+    max_index = max(0, int(stop_index))
     for idx, raw in enumerate(lines):
         if idx >= max_index:
             break
-        s = clean_gcode_line(raw)
-        if not s:
+        try:
+            _apply_line_to_state(state, raw)
+        except Exception:
             continue
-        s = s.upper()
-        for w, val in WORD_PAT.findall(s):
-            if w == "G":
-                try:
-                    code = float(val)
-                except Exception:
-                    continue
-                if (
-                    is_code(code, 92)
-                    or is_code(code, 92.1)
-                    or is_code(code, 92.2)
-                    or is_code(code, 92.3)
-                ):
-                    has_g92 = True
-                    continue
-                gstr = f"G{val}"
-                if is_code(code, 20) or is_code(code, 21):
-                    units = gstr
-                elif is_code(code, 90) or is_code(code, 91):
-                    distance = gstr
-                elif is_code(code, 17) or is_code(code, 18) or is_code(code, 19):
-                    plane = gstr
-                elif is_code(code, 93) or is_code(code, 94):
-                    feed_mode = gstr
-                elif is_code(code, 90.1) or is_code(code, 91.1):
-                    arc_mode = gstr
-                elif (
-                    is_code(code, 54)
-                    or is_code(code, 55)
-                    or is_code(code, 56)
-                    or is_code(code, 57)
-                    or is_code(code, 58)
-                    or is_code(code, 59)
-                    or is_code(code, 59.1)
-                    or is_code(code, 59.2)
-                    or is_code(code, 59.3)
-                ):
-                    coord = gstr
-            elif w == "M":
-                try:
-                    code = int(float(val))
-                except Exception:
-                    continue
-                if code in (3, 4, 5):
-                    spindle = code
-                elif code in (7, 8, 9):
-                    coolant = code
-            elif w == "F":
-                try:
-                    feed = float(val)
-                except Exception as exc:
-                    _log_suppressed("Failed parsing feed value while building resume preamble", exc)
-            elif w == "S":
-                try:
-                    spindle_speed = float(val)
-                except Exception as exc:
-                    _log_suppressed("Failed parsing spindle-speed value while building resume preamble", exc)
+    return state.to_preamble(), state.has_g92
 
-    preamble = []
-    for item in (units, distance, plane, arc_mode, feed_mode, coord):
-        if item:
-            preamble.append(item)
-    if feed is not None:
-        preamble.append(f"F{feed:g}")
-    if spindle is not None:
-        if spindle in (3, 4):
-            if spindle_speed is not None:
-                preamble.append(f"M{spindle} S{spindle_speed:g}")
-            else:
-                preamble.append(f"M{spindle}")
-        else:
-            preamble.append("M5")
-    if coolant is not None:
-        preamble.append(f"M{coolant}")
-    return preamble, has_g92
+
+def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
+    cache = _get_resume_cache(lines)
+    if cache is not None:
+        try:
+            return cache.get(stop_index)
+        except Exception as exc:
+            _log_suppressed("Failed using resume preamble cache; falling back", exc)
+    return _build_resume_preamble_fallback(lines, stop_index)
 
 
 def resume_from_line(app, start_index: int, preamble: list[str]):

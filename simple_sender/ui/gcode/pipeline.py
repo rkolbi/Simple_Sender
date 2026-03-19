@@ -110,6 +110,31 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _post_ui(app, func, *args, **kwargs) -> None:
+    # Test harnesses may run worker targets inline on the main thread.
+    if threading.current_thread() is threading.main_thread():
+        after = getattr(app, "after", None)
+        if callable(after):
+            try:
+                after(0, lambda: func(*args, **kwargs))
+                return
+            except Exception as exc:
+                _log_suppressed("Failed posting UI callback via app.after", exc)
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(func, *args, **kwargs)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed posting UI callback via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", func, args, kwargs))
+        except Exception as exc:
+            _log_suppressed("Failed posting UI callback via ui_q", exc)
+
+
 def _snapshot_macro_state(app) -> dict[str, object] | None:
     try:
         with app.macro_executor.macro_vars() as macro_vars:
@@ -222,7 +247,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
                     app._last_rate_source = None
                     app.gcode_stats_var.set("Estimate unavailable")
 
-                app.after(0, apply_error)
+                _post_ui(app, apply_error)
                 return
             if result is None:
                 return
@@ -244,7 +269,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
                 app._last_parse_hash = lines_hash
                 app._update_gcode_stats(lines, parse_result=result)
 
-            app.after(0, apply_result)
+            _post_ui(app, apply_result)
         finally:
             elapsed_ms = max(0.0, (time.perf_counter() - parse_started_at) * 1000.0)
             record_task_timing(

@@ -6,6 +6,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ## [Unreleased]
 
 ### Added
+- Auto-Level dialog `Test Probe` action:
+  - runs a single-point probe at the current XY using the active probe settings
+  - leaves the current height map/job apply state unchanged (non-destructive validation flow)
+  - records a timestamped `Last test probe [...]` result line with XYZ hit details or failure reason
 - `tests/unit/test_grbl_worker_status_coverage.py` to exercise status-wait and status-trace paths in `grbl_worker_status`, including idle-timeout and non-idle transition coverage used by the critical coverage gate.
 - Regression coverage for performance-mode poll/visual tuning:
   - `tests/ui/test_grbl_lifecycle.py` now verifies the performance-mode running poll floor
@@ -13,8 +17,25 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Regression coverage for queue-pressure status smoothing:
   - `tests/ui/test_status_efficiency.py` now verifies forced position-update deferral under UI queue pressure
   - `tests/ui/test_status_efficiency.py` now verifies adaptive coalesce-interval behavior while pressure is active
+- Custom streamed sender directives for CAM post integration:
+  - exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines are intercepted and handled internally (vacuum on/off actions), never forwarded to GRBL
+  - lines beginning with `TC:` are intercepted as required-tool directives, routed through the existing tool-change dialog + macro workflow, and never forwarded to GRBL
+  - stream-progress accounting now treats these directives as handled lines so file progress/line advancement remains correct without controller transmission
+- Regression coverage for custom directive streaming:
+  - added `tests/unit/test_stream_custom_directives.py` for `VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`, and normal-line behavior through the pre-send stream pipeline
+  - added `tests/unit/test_tool_change_actions.py` for tool-name propagation, no-timeout tool-change waiting, and directive-driven vacuum action routing
+- Job Setup safety-gate regression coverage:
+  - `tests/ui/test_ui_commands.py` now verifies Run warning/cancel/start-anyway behavior based on tool-reference validity
+  - `tests/ui/test_grbl_lifecycle.py` now verifies tool-reference invalidation across connect/disconnect/ready-loss transitions
+  - `tests/ui/test_all_stop.py` now verifies reset-path invalidation for tool-reference setup state
 
 ### Changed
+- Release-candidate reliability hardening for v2.6:
+  - worker-thread UI updates for connect/disconnect, G-code parse, settings save paths, and log viewer actions now marshal through UI-thread queue helpers (`ui_post`) instead of direct cross-thread Tk calls
+  - GRBL settings `Save Changes` now completes as send-plus-verify: edited values are sent, then confirmed against a follow-up `$$` capture before success is reported
+  - settings verification now treats numerically equivalent values (for example `250`, `250.0`, `250.000`) as equivalent for numeric settings while keeping strict string checks for non-numeric settings
+  - Resume From dialog preview generation now runs with debounce + background computation to reduce UI-thread blocking while editing line numbers
+  - log export now reports full success, partial success (with failed-file details), or total failure explicitly
 - Release polish for 2.4.0:
   - removed beta branding from app title/version banner and docs
   - promoted the current build as full `2.4.0` release metadata
@@ -67,9 +88,15 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - status position updates now support pressure-aware forced deferral when UI queue backlog or per-event runtime budget indicates pressure
   - coalesce cadence is now adaptive under pressure, with bounded recovery back to the baseline interval
   - new status performance metric `positions_coalesced_pressure_defer` is emitted for diagnostics/telemetry
+- Job Start setup guard:
+  - Run now checks the current `macro.state.TOOL_REFERENCE` (same source used by the Tool Ref display) instead of macro-click history
+  - when setup is invalid/missing, Run shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`
+  - setup state is invalidated on connection/session resets and reset-style stop paths so stale setup does not silently carry across sessions
 
 ### Documentation
-- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-09; coverage test stage reported `1031 passed, 1 skipped`).
+- README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
+- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-19; coverage test stage reported `1148 passed, 2 skipped`).
+- README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
 - README `Goto Zero` behavior now documents the current XY-then-Z sequence.
@@ -85,6 +112,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
 - `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
+- README and `simple_sender/macros/readme.md` now document the Job Setup Run warning, operator workflow expectations, and setup-state invalidation behavior.
 
 ### Fixed
 - Progress reporting now clamps to `100%` when stream state reaches `done`, including runtime metrics/diagnostics export fields.
@@ -93,8 +121,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
 - Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
-### Baseline Validation (local, 2026-03-10)
-- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1063 passed, 2 skipped`)
+### Baseline Validation (local, 2026-03-19)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1148 passed, 2 skipped`)
 - `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 138`: PASS
 - `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`138` source files)
 

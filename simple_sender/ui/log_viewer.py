@@ -203,6 +203,36 @@ def _clear_log_files(paths: list[Path]) -> tuple[int, int]:
     return truncated, deleted
 
 
+def _format_export_outcome(
+    out_path: Path,
+    *,
+    total_files: int,
+    written_files: int,
+    failed_files: list[tuple[str, str]],
+) -> tuple[str, str]:
+    failed_count = len(failed_files)
+    if failed_count <= 0:
+        return (
+            "info",
+            f"Saved {written_files}/{total_files} log files to:\n{out_path}",
+        )
+    sample = "; ".join(f"{name}: {reason}" for name, reason in failed_files[:3])
+    if failed_count > 3:
+        sample = f"{sample}; ..."
+    if written_files > 0:
+        return (
+            "warning",
+            (
+                f"Partial export saved {written_files}/{total_files} log files to:\n{out_path}\n\n"
+                f"Failed files ({failed_count}): {sample}"
+            ),
+        )
+    return (
+        "error",
+        f"Export failed; no log files were written.\nFailed files ({failed_count}): {sample}",
+    )
+
+
 class LogViewer(ttk.Frame):
     def __init__(
         self,
@@ -291,17 +321,27 @@ class LogViewer(ttk.Frame):
     def _post_ui(self, callback) -> None:
         if self._closing:
             return
-        after = getattr(self.app, "after", None)
-        if callable(after):
+        if threading.current_thread() is threading.main_thread():
             try:
-                after(0, callback)
+                callback()
+            except Exception as exc:
+                _log_suppressed("Failed running Log Viewer callback on UI thread", exc)
+            return
+        post_ui = getattr(self.app, "_post_ui_thread", None)
+        if callable(post_ui):
+            try:
+                post_ui(callback)
                 return
             except Exception as exc:
-                _log_suppressed("Failed posting Log Viewer callback to UI thread", exc)
-        try:
-            callback()
-        except Exception as exc:
-            _log_suppressed("Failed running Log Viewer callback", exc)
+                _log_suppressed("Failed posting Log Viewer callback via _post_ui_thread", exc)
+        ui_q = getattr(self.app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("ui_post", callback, (), {}))
+                return
+            except Exception as exc:
+                _log_suppressed("Failed posting Log Viewer callback via ui_q", exc)
+        _log_suppressed("Dropped Log Viewer callback: no safe UI-post path", RuntimeError("no ui_post path"))
 
     def _start_refresh_worker(self) -> None:
         request = self._refresh_pending
@@ -384,15 +424,35 @@ class LogViewer(ttk.Frame):
         self._clear_inflight = bool(value)
         self._set_action_buttons_enabled(not (self._export_inflight or self._clear_inflight))
 
-    def _complete_export(self, out_path: Path, error: Exception | None, elapsed_ms: float) -> None:
+    def _complete_export(
+        self,
+        out_path: Path,
+        *,
+        total_files: int,
+        written_files: int,
+        failed_files: list[tuple[str, str]],
+        error: Exception | None,
+        elapsed_ms: float,
+    ) -> None:
         self._set_export_inflight(False)
         if self._closing:
             return
         record_task_timing(self.app, "log_viewer.export", elapsed_ms, success=(error is None))
-        if error is None:
-            messagebox.showinfo("Export Logs", f"Saved to:\n{out_path}")
+        if error is not None:
+            messagebox.showerror("Export Logs", f"Failed to export logs:\n{error}")
             return
-        messagebox.showerror("Export Logs", f"Failed to export logs:\n{error}")
+        level, message = _format_export_outcome(
+            out_path,
+            total_files=max(0, int(total_files)),
+            written_files=max(0, int(written_files)),
+            failed_files=list(failed_files),
+        )
+        if level == "info":
+            messagebox.showinfo("Export Logs", message)
+        elif level == "warning":
+            messagebox.showwarning("Export Logs", message)
+        else:
+            messagebox.showerror("Export Logs", message)
 
     def export_logs(self) -> None:
         if self._export_inflight or self._clear_inflight:
@@ -425,17 +485,30 @@ class LogViewer(ttk.Frame):
 
         def _worker() -> None:
             error: Exception | None = None
+            written_files = 0
+            failed_files: list[tuple[str, str]] = []
             try:
                 with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                     for log_path in log_files:
                         try:
                             archive.write(log_path, arcname=log_path.name)
+                            written_files += 1
                         except Exception as exc:
+                            failed_files.append((log_path.name, str(exc)))
                             _log_suppressed("Failed adding log file to export archive", exc)
             except Exception as exc:
                 error = exc
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-            self._post_ui(lambda: self._complete_export(out_path, error, elapsed_ms))
+            self._post_ui(
+                lambda: self._complete_export(
+                    out_path,
+                    total_files=len(log_files),
+                    written_files=written_files,
+                    failed_files=failed_files,
+                    error=error,
+                    elapsed_ms=elapsed_ms,
+                )
+            )
 
         try:
             worker = threading.Thread(

@@ -816,9 +816,9 @@ def run_if_connected(app, func):
     func()
 
 
-def send_manual(app, command: str, source: str):
+def send_manual(app, command: str, source: str) -> bool:
     cmd = str(command or "").strip()
     upper = cmd.upper()
     if upper.startswith("$X") or upper.startswith("$H"):
         mark_alarm_clear_requested(app)
-    app.grbl.send_immediate(cmd, source=source)
+    return bool(app.grbl.send_immediate(cmd, source=source))

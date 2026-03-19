@@ -24,6 +24,7 @@ import logging
 import threading
 import time
 import tkinter as tk
+from decimal import Decimal, InvalidOperation
 from tkinter import ttk, messagebox
 from typing import Any, Sequence
 
@@ -75,6 +76,34 @@ def parse_setting_float(settings_data: dict[str, tuple[str, int | None]], key: s
         return None
 
 
+def _parse_decimal_setting_value(value: str) -> Decimal | None:
+    text = str(value or "").strip()
+    if text == "":
+        return None
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not parsed.is_finite():
+        return None
+    return parsed
+
+
+def _settings_values_match_for_verify(key: str, expected: str, actual: str) -> bool:
+    expected_text = str(expected or "").strip()
+    actual_text = str(actual or "").strip()
+    if expected_text == actual_text:
+        return True
+    idx = parse_setting_index(key)
+    if idx is None or idx in GRBL_NON_NUMERIC_SETTINGS:
+        return False
+    expected_num = _parse_decimal_setting_value(expected_text)
+    actual_num = _parse_decimal_setting_value(actual_text)
+    if expected_num is None or actual_num is None:
+        return False
+    return expected_num == actual_num
+
+
 class GRBLSettingsController:
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -94,6 +123,22 @@ class GRBLSettingsController:
         self._settings_entry_meta: dict[ttk.Entry, tuple[str | None, str | None]] = {}
         self._settings_saving = False
         self._settings_prev_state: dict[str, Any] = {}
+        self._settings_pending_confirmation: dict[str, str] = {}
+
+    def _post_ui(self, func, *args, **kwargs) -> None:
+        poster = getattr(self.app, "_post_ui_thread", None)
+        if callable(poster):
+            try:
+                poster(func, *args, **kwargs)
+                return
+            except Exception as exc:
+                _log_suppressed("Failed posting settings callback via _post_ui_thread", exc)
+        ui_q = getattr(self.app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("ui_post", func, args, kwargs))
+            except Exception as exc:
+                _log_suppressed("Failed posting settings callback via ui_q", exc)
 
     def build_tabs(self, notebook: ttk.Notebook) -> None:
         rtab = ttk.Frame(notebook, padding=6)
@@ -233,6 +278,7 @@ class GRBLSettingsController:
         if not changes:
             messagebox.showinfo("No changes", "No non-empty settings to send.")
             return
+        self._settings_pending_confirmation = {}
         self._settings_saving = True
         self._set_settings_edit_enabled(False)
 
@@ -240,28 +286,29 @@ class GRBLSettingsController:
             sent = 0
             try:
                 for key, val in changes:
-                    self.app._send_manual(f"{key}={val}", "settings")
+                    accepted = bool(self.app._send_manual(f"{key}={val}", "settings"))
+                    if not accepted:
+                        raise RuntimeError(f"Controller rejected {key}={val}")
                     sent += 1
                     time.sleep(GRBL_SETTINGS_WRITE_DELAY)
+                wait_for_completion = getattr(self.app.grbl, "wait_for_manual_completion", None)
+                if callable(wait_for_completion):
+                    timeout_s = max(5.0, min(120.0, float(sent) * 2.0))
+                    if not bool(wait_for_completion(timeout_s=timeout_s)):
+                        raise TimeoutError("Timed out waiting for settings command queue to drain")
             except Exception as exc:
                 message = str(exc)
                 self.app.ui_q.put(("log", f"[settings] Save failed: {message}"))
-                try:
-                    def finish_failed(error_message: str = message) -> None:
-                        self._finish_settings_save_failed(error_message)
+                def finish_failed(error_message: str = message) -> None:
+                    self._finish_settings_save_failed(error_message)
 
-                    self.app.after(0, finish_failed)
-                except Exception as exc:
-                    _log_suppressed("Failed scheduling GRBL settings-save failure callback on UI thread", exc)
+                self._post_ui(finish_failed)
                 return
             self.app.ui_q.put(("log", f"[settings] Sent {sent} change(s)."))
-            try:
-                def finish_save(sent_count: int = sent) -> None:
-                    self._finish_settings_save(changes, sent_count)
+            def finish_save(sent_count: int = sent) -> None:
+                self._finish_settings_save(changes, sent_count)
 
-                self.app.after(0, finish_save)
-            except Exception as exc:
-                logger.exception("Failed to schedule settings refresh: %s", exc)
+            self._post_ui(finish_save)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -269,9 +316,25 @@ class GRBLSettingsController:
         self._settings_edited = {}
         self._settings_saving = False
         self._set_settings_edit_enabled(True)
-        self._mark_settings_saved(changes, sent_count, refresh=True)
+        self._settings_pending_confirmation = {
+            str(key): str(value).strip()
+            for key, value in changes
+            if str(key).strip()
+        }
+        try:
+            self.app.status.config(
+                text=f"Settings: sent {sent_count} change(s); verifying with $$"
+            )
+        except Exception as exc:
+            _log_suppressed("Failed updating status while verifying settings save", exc)
+        try:
+            self.app._request_settings_dump()
+        except Exception as exc:
+            logger.exception("Failed requesting settings verification dump: %s", exc)
+            self._finish_settings_save_failed("Failed requesting $$ verification dump")
 
     def _finish_settings_save_failed(self, message: str | None = None) -> None:
+        self._settings_pending_confirmation = {}
         self._settings_saving = False
         self._set_settings_edit_enabled(True)
         if message:
@@ -312,29 +375,47 @@ class GRBLSettingsController:
         if not self._settings_saving:
             self._set_settings_edit_enabled(True)
 
-    def _mark_settings_saved(
-        self, changes: Sequence[tuple[str, str]], sent_count: int, refresh: bool = False
-    ) -> None:
-        if refresh:
+    def _verify_pending_settings_confirmation(self) -> None:
+        pending = dict(self._settings_pending_confirmation)
+        if not pending:
+            return
+        self._settings_pending_confirmation = {}
+        mismatches: list[tuple[str, str, str]] = []
+        for key, expected in pending.items():
+            actual = str(self._settings_values.get(key, "")).strip()
+            if not _settings_values_match_for_verify(key, expected, actual):
+                mismatches.append((key, expected, actual))
+        if mismatches:
+            summary = ", ".join(
+                f"{key} expected {expected!r} got {actual!r}"
+                for key, expected, actual in mismatches[:3]
+            )
+            if len(mismatches) > 3:
+                summary = f"{summary}, ..."
+            self.app.ui_q.put(
+                (
+                    "log",
+                    f"[settings] Verification failed for {len(mismatches)} setting(s): {summary}",
+                )
+            )
             try:
                 self.app.status.config(
-                    text=f"Settings: sent {sent_count} change(s); refreshing $$ for confirmation"
+                    text=f"Settings verification failed ({len(mismatches)} mismatch(es))"
                 )
             except Exception as exc:
-                logger.exception("Failed to update settings status: %s", exc)
-            try:
-                self.app._request_settings_dump()
-            except Exception as exc:
-                logger.exception("Failed to request settings dump: %s", exc)
+                _log_suppressed("Failed updating status after settings verification failure", exc)
             return
-        for key, _ in changes:
-            if key in self._settings_values:
-                self._settings_baseline[key] = self._settings_values[key]
-                self._update_setting_row_tags(key)
+        for key, expected in pending.items():
+            actual = str(self._settings_values.get(key, "")).strip()
+            self._settings_baseline[key] = actual if actual != "" else expected
+            self._update_setting_row_tags(key)
+        self.app.ui_q.put(
+            ("log", f"[settings] Confirmed {len(pending)} change(s) from $$ response.")
+        )
         try:
-            self.app.status.config(text=f"Settings: sent {sent_count} change(s)")
+            self.app.status.config(text=f"Settings: confirmed {len(pending)} change(s)")
         except Exception as exc:
-            logger.exception("Failed to update settings status: %s", exc)
+            _log_suppressed("Failed updating status after settings verification success", exc)
 
     def _render_settings(self) -> None:
         if not self.settings_tree:
@@ -367,6 +448,7 @@ class GRBLSettingsController:
         for key in self._settings_items:
             self._update_setting_row_tags(key)
         self.app.status.config(text=f"Settings: {len(items)} values")
+        self._verify_pending_settings_confirmation()
 
     def _update_rapid_rates(self) -> None:
         rx = parse_setting_float(self._settings_data, "$110")

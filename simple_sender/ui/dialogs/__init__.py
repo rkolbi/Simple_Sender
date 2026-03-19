@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import tkinter as tk
+import threading
 from tkinter import ttk, messagebox
 
 from .alarm_recovery_dialog import show_alarm_recovery
@@ -100,19 +101,34 @@ def show_resume_dialog(app):
         frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left"
     )
     warning_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
+    preview_cache: dict[int, tuple[list[str], bool]] = {}
+    preview_after_id: dict[str, str | None] = {"value": None}
+    preview_seq = {"value": 0}
 
-    def update_sample():
+    def _post_ui(func, *args, **kwargs) -> None:
+        poster = getattr(app, "_post_ui_thread", None)
+        if callable(poster):
+            try:
+                poster(func, *args, **kwargs)
+                return
+            except Exception:
+                pass
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("ui_post", func, args, kwargs))
+                return
+            except Exception:
+                pass
+
+    def _render_preview(line_no: int, preamble: list[str], has_g92: bool) -> None:
+        preview_cache[int(line_no)] = (list(preamble), bool(has_g92))
         try:
-            line_no = int(line_var.get())
+            current_line = int(line_var.get())
         except Exception:
-            sample_var.set("Enter a valid line number.")
-            warning_var.set("")
             return
-        if line_no < 1 or line_no > total_lines:
-            sample_var.set("Line number is out of range.")
-            warning_var.set("")
+        if current_line != int(line_no):
             return
-        preamble, has_g92 = app._build_resume_preamble(app._last_gcode_lines, line_no - 1)
         if sync_var.get():
             if preamble:
                 sample_var.set("Modal re-sync: " + " ".join(preamble))
@@ -127,6 +143,64 @@ def show_resume_dialog(app):
         else:
             warning_var.set("")
 
+    def _schedule_preview(line_no: int) -> None:
+        if preview_after_id["value"] is not None:
+            try:
+                dlg.after_cancel(preview_after_id["value"])
+            except Exception:
+                pass
+            preview_after_id["value"] = None
+        preview_seq["value"] = int(preview_seq["value"]) + 1
+        request_seq = int(preview_seq["value"])
+
+        def _start_worker() -> None:
+            preview_after_id["value"] = None
+            cached = preview_cache.get(int(line_no))
+            if cached is not None:
+                _render_preview(int(line_no), cached[0], cached[1])
+                return
+
+            def worker() -> None:
+                preamble, has_g92 = app._build_resume_preamble(
+                    app._last_gcode_lines, int(line_no) - 1
+                )
+
+                def apply_preview() -> None:
+                    if not bool(dlg.winfo_exists()):
+                        return
+                    if int(preview_seq["value"]) != int(request_seq):
+                        preview_cache[int(line_no)] = (list(preamble), bool(has_g92))
+                        return
+                    _render_preview(int(line_no), preamble, has_g92)
+
+                _post_ui(apply_preview)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        preview_after_id["value"] = dlg.after(90, _start_worker)
+
+    def update_sample():
+        try:
+            line_no = int(line_var.get())
+        except Exception:
+            sample_var.set("Enter a valid line number.")
+            warning_var.set("")
+            return
+        if line_no < 1 or line_no > total_lines:
+            sample_var.set("Line number is out of range.")
+            warning_var.set("")
+            return
+        cached = preview_cache.get(int(line_no))
+        if cached is not None:
+            _render_preview(int(line_no), cached[0], cached[1])
+            return
+        if sync_var.get():
+            sample_var.set("Modal re-sync: calculating...")
+        else:
+            sample_var.set("Modal re-sync: disabled")
+        warning_var.set("Checking modal-state warnings...")
+        _schedule_preview(int(line_no))
+
     def on_start():
         try:
             line_no = int(line_var.get())
@@ -138,7 +212,11 @@ def show_resume_dialog(app):
             return
         preamble = []
         if sync_var.get():
-            preamble, _ = app._build_resume_preamble(app._last_gcode_lines, line_no - 1)
+            cached = preview_cache.get(int(line_no))
+            if cached is not None:
+                preamble = list(cached[0])
+            else:
+                preamble, _ = app._build_resume_preamble(app._last_gcode_lines, line_no - 1)
         app._resume_from_line(line_no - 1, preamble)
         dlg.destroy()
 
@@ -151,5 +229,12 @@ def show_resume_dialog(app):
     ttk.Button(btn_row, text="Start Resume", command=on_start).pack(side="left", padx=(0, 6))
     ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="left")
     dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+    def _on_destroy(_event=None):
+        if preview_after_id["value"] is not None:
+            try:
+                dlg.after_cancel(preview_after_id["value"])
+            except Exception:
+                pass
+            preview_after_id["value"] = None
+    dlg.bind("<Destroy>", _on_destroy, add="+")
     center_window(dlg, app)
-

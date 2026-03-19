@@ -1,5 +1,5 @@
-# Simple Sender - Full Manual
-![Release: 2.4.0](https://img.shields.io/badge/release-2.4.0-blue)
+﻿# Simple Sender - Full Manual
+![Release: 2.6.0](https://img.shields.io/badge/release-2.6.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
@@ -231,6 +231,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
+- **Worker-thread UI marshaling:** Background workers post UI updates through the UI queue/UI-thread helpers instead of calling Tk widgets directly, reducing cross-thread Tk risk during connect/load/settings/log operations.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 - **Job Setup run gate:** Run checks the same `macro.state.TOOL_REFERENCE` value used by the Tool Ref display. If the value is missing/blank/invalid (`None`, unknown text, NaN, etc.), it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
 - **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that reset assumptions (including ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
@@ -250,7 +251,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
-- **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line.
+- **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line. Preview generation is debounced and computed on a background worker, and may briefly show `Modal re-sync: calculating...` while updating.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; Live G-code window updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 
@@ -474,7 +475,7 @@ Use this checklist when creating job-critical macros:
 | Unexpected units/modal behavior after macro | Macro changed units/distance/WCS and did not restore expected state. | Add `STATE_RETURN` (or explicit restore commands) near macro end. |
 
 ## VCarve Pro Post-Processors
-The `ref/VCarve-PP` folder contains VCarve Pro `.pp` files used to produce jobs that plug directly into Simple Sender's semi-automatic workflow.
+VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root (with a reference copy in `ref/VCarve-PP/`) to produce jobs that plug directly into Simple Sender's semi-automatic workflow.
 
 ### Included files
 | File | Purpose |
@@ -773,7 +774,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 11, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1069 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 19, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1148 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -957,7 +958,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, verified on 2026-03-10), and local/CI hooks now enforce `--expected-count 138`.
+5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-19), and local/CI hooks now enforce `--expected-count 138`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -1126,7 +1127,7 @@ Macro UI is included below along with the rest of the interface.
 - Source filter: Application/Serial/UI/Errors/All.
 - Level filter: DEBUG/INFO/WARNING/ERROR/CRITICAL.
 - Refresh: reloads log files (last ~1000 lines).
-- Export Logs: writes a zip bundle for support.
+- Export Logs: writes a zip bundle for support and reports complete success, partial success (with failed files), or total failure.
 
 ### Overdrive Tab
 - Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
@@ -1157,7 +1158,7 @@ Macro UI is included below along with the rest of the interface.
 
 ### GRBL Settings Tab
 - Refresh $$: requests a fresh $$ dump and populates the table.
-- Save Changes: sends edited settings back to GRBL in sequence.
+- Save Changes: sends edited settings back to GRBL in sequence, then verifies the write using a follow-up `$$` capture before confirming success.
 - Settings table: scrollable columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
 - Edited highlight: rows with pending edits are highlighted until saved or reverted.
 
@@ -1350,7 +1351,7 @@ Macro UI is included below along with the rest of the interface.
 - Line number: 1-based line to resume from.
 - Use last acked: sets the line to the last acknowledged line + 1.
 - Send modal re-sync: toggles preamble commands before resuming.
-- Sample text: read-only summary of modal re-sync.
+- Sample text: read-only summary of modal re-sync; during recalculation it can show `Modal re-sync: calculating...`.
 - Warning text: warns if G92 offsets exist before the target line.
 - Start Resume: begins streaming from the selected line.
 - Cancel: closes without changes.
