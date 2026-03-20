@@ -96,6 +96,143 @@ Development dependencies are pinned in `requirements-dev.txt` to match the curre
 
 Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the module directory (`simple_sender/utils`).
 
+### Recommended: Samba share setup on Raspberry Pi / Linux
+
+If you run Simple Sender on a Raspberry Pi in the shop, Samba can make job transfer much easier. With Samba installed on the Pi, your Windows Vectric PC can see the machine as a normal network share, so you can save G-code directly to it without using USB sticks.
+
+This is optional, but it fits the intended Pi-based shop workflow very well.
+
+This example Samba configuration is meant for use behind or inside a protected network environment. It is intentionally convenience-first and is not very secure. If that is a concern for your install, do some research first and adjust the Samba configuration to align with your security posture before using it.
+
+#### 1) Install Samba
+
+```bash
+sudo apt update
+sudo apt install -y samba samba-common-bin
+```
+
+#### 2) Back up the current Samba config
+
+```bash
+sudo cp /etc/samba/smb.conf /etc/samba/smb.conf.bak
+```
+
+#### 3) Edit `/etc/samba/smb.conf`
+
+```bash
+sudo nano /etc/samba/smb.conf
+```
+
+Example configuration:
+
+```ini
+[global]
+   workgroup = WORKGROUP
+   server role = standalone server
+
+   # Name (helps Windows browsing)
+   netbios name = SIMPLE-SENDER
+   server string = Simple Sender
+
+   # Logging: keep it light
+   logging = file
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   log level = 1
+
+   # Don't involve PAM / unix password syncing (not needed for a simple share)
+   obey pam restrictions = no
+   unix password sync = no
+   pam password change = no
+
+   # Guest mapping: keep behavior simple
+   map to guest = Bad User
+
+   # Disable printing/spool subsystems (saves background work)
+   load printers = no
+   printing = bsd
+   printcap name = /dev/null
+   disable spoolss = yes
+
+   # Small performance improvements for LAN file copy + directory browsing
+   socket options = TCP_NODELAY IPTOS_LOWDELAY
+   use sendfile = yes
+   aio read size = 1
+   aio write size = 1
+   getwd cache = yes
+
+   # Reduce extra metadata/ACL chatter when you don't need Windows ACLs
+   ea support = no
+   store dos attributes = no
+   map acl inherit = no
+   vfs objects =
+   inherit acls = no
+
+   # Optional: lock Samba to Wi-Fi only
+   # interfaces = wlan0 lo
+   # bind interfaces only = yes
+
+[SIMPLE-SENDER]
+   comment = Simple Sender shared files
+   path = /root
+
+   browseable = yes
+   read only = no
+   guest ok = yes
+
+   force user = root
+   force group = root
+
+   create mask = 0777
+   directory mask = 0777
+   force create mode = 0777
+   force directory mode = 0777
+
+   # Less chatty / faster browsing from Windows Explorer
+   veto files = /.DS_Store/Thumbs.db/desktop.ini/
+   delete veto files = yes
+```
+
+#### 4) Test the Samba config
+
+```bash
+testparm
+```
+
+If `testparm` reports no errors, continue.
+
+#### 5) Restart and enable Samba
+
+```bash
+sudo systemctl restart smbd nmbd
+sudo systemctl enable smbd nmbd
+```
+
+#### 6) Access the share from Windows
+
+In Windows File Explorer, open:
+
+```text
+\\SIMPLE-SENDER\SIMPLE-SENDER
+```
+
+Or use the Pi's IP address:
+
+```text
+\\192.168.x.x\SIMPLE-SENDER
+```
+
+You can then save G-code files directly from Vectric to the Pi over the network.
+
+#### Notes
+
+- This example shares `/root` because that matches the current single-purpose shop setup shown here. If your Simple Sender jobs live somewhere else, change `path = /root` to the folder you actually want to share.
+- `guest ok = yes` keeps access simple on a trusted home or shop LAN, but it is less secure than using authenticated Samba users.
+- `force user = root` is convenient for a dedicated machine, but it is intentionally convenience-first. If you want a tighter setup later, move shared files into a dedicated folder and use a non-root user.
+- This configuration is best treated as an internal, protected-network setup. If that does not match your environment, research the Samba options you need and modify the configuration to fit your security posture.
+- If Windows browsing is unreliable, connecting by IP address is often the quickest workaround.
+- If you uncomment the `interfaces` lines, make sure the interface name matches your Pi (`wlan0`, `eth0`, etc.).
+
 ## Launching
 ```powershell
 python main.py
