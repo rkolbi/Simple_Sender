@@ -24,6 +24,7 @@ import tkinter as tk
 import threading
 from tkinter import ttk, messagebox
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles
 from .alarm_recovery_dialog import show_alarm_recovery
 from .macro_prompt_dialog import show_macro_prompt
 from .spoilboard_generator import show_spoilboard_generator_dialog
@@ -42,7 +43,10 @@ __all__ = [
 
 def show_resume_dialog(app):
     if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before resuming from a line.")
+        messagebox.showwarning(
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_RESUMING_FROM_LINE,
+        )
         return
     if not app._require_grbl_connection():
         return

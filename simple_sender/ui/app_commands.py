@@ -25,10 +25,11 @@ import os
 import threading
 import time
 from collections import deque
-from datetime import datetime
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles
+from simple_sender.services.job_service import JobService, JobStartOutcome
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import (
@@ -82,6 +83,14 @@ def _post_ui(app, func, *args, **kwargs) -> None:
             return
         except Exception as exc:
             _log_suppressed("Failed posting UI callback via ui_q", exc)
+
+
+def _job_service() -> JobService:
+    return JobService(
+        has_valid_job_setup_state=has_valid_job_setup_state,
+        invalidate_job_setup_state=invalidate_job_setup_state,
+        log_suppressed=_log_suppressed,
+    )
 
 
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
@@ -236,7 +245,10 @@ def toggle_connect(app):
         _set_connection_controls_pending(app, "Disconnecting...")
         return
     if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before disconnecting.")
+        messagebox.showwarning(
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_DISCONNECTING,
+        )
         return
     is_connected = bool(getattr(app, "connected", False))
     try:
@@ -364,7 +376,10 @@ def start_disconnect_worker(app):
 
 def open_gcode(app):
     if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before loading a new G-code file.")
+        messagebox.showwarning(
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_LOADING_NEW_GCODE,
+        )
         return
     initial_dir = _safe_initial_dir(app.settings.get("last_gcode_dir", ""))
     path = choose_gcode_path(app, initial_dir)
@@ -381,55 +396,13 @@ def open_gcode(app):
 def run_job(app):
     if not app._require_grbl_connection():
         return
-    if not has_valid_job_setup_state(app):
+    result = _job_service().start_job(app)
+    if result.outcome is JobStartOutcome.SETUP_CONFIRMATION_REQUIRED:
         if not confirm_job_start_without_setup(app):
             return
-    try:
-        app._kasa_last_stream_line_index = -1
-    except Exception as exc:
-        _log_suppressed("Failed resetting Kasa stream-line index before run", exc)
-    accessory_router = getattr(app, "accessory_router", None)
-    if accessory_router is not None:
-        reset_debounce = getattr(accessory_router, "reset_debounce", None)
-        if callable(reset_debounce):
-            try:
-                reset_debounce()
-            except Exception as exc:
-                _log_suppressed("Failed resetting Kasa debounce state before run", exc)
-    app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
-    app._reset_gcode_view_for_run()
-    try:
-        app._stream_acked_byte_offset = 0
-        app._stream_progress_pct = 0.0
-        app._stream_progress_file_size_bytes = max(
-            0,
-            int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
-        )
-    except Exception as exc:
-        _log_suppressed("Failed resetting stream byte-progress state before Run", exc)
-    try:
-        app.progress_pct.set(0)
-    except Exception as exc:
-        _log_suppressed("Failed resetting progress bar before Run", exc)
-    try:
-        if hasattr(app, "progress_text"):
-            app.progress_text.set("")
-    except Exception as exc:
-        _log_suppressed("Failed resetting progress label before Run", exc)
-    app.grbl.start_stream()
-    started = False
-    try:
-        started = bool(app.grbl.is_streaming())
-    except Exception as exc:
-        _log_suppressed("Failed checking GRBL streaming state after Run", exc)
-    if started:
-        app._job_started_at = datetime.now()
-        app._job_completion_notified = False
-        try:
-            if hasattr(app, "_start_job_accessories"):
-                app._start_job_accessories("job_run")
-        except Exception as exc:
-            _log_suppressed("Failed starting Kasa job accessories on Run", exc)
+        result = _job_service().start_job(app, allow_start_without_setup=True)
+    if result.outcome is JobStartOutcome.START_FAILED:
+        return
 
 
 def pause_job(app):
@@ -447,10 +420,4 @@ def resume_job(app):
 def stop_job(app):
     if not app._require_grbl_connection():
         return
-    try:
-        if hasattr(app, "_stop_job_accessories"):
-            app._stop_job_accessories("job_stop")
-    except Exception as exc:
-        _log_suppressed("Failed stopping Kasa job accessories on Stop/Reset", exc)
-    app.grbl.stop_stream()
-    invalidate_job_setup_state(app)
+    _job_service().stop_job(app)

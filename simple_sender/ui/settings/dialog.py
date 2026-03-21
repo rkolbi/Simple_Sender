@@ -25,6 +25,7 @@ import time
 from tkinter import ttk
 from typing import Any, Callable
 
+from simple_sender.ui.scrollable_container import build_scrollable_container
 from .sections import (
     build_auto_level_section,
     build_diagnostics_section,
@@ -729,25 +730,26 @@ def build_app_settings_tab(app, notebook):
     app._resume_app_settings_lazy_build = lambda: _schedule_app_settings_lazy_build(app)
     app._note_app_settings_interaction = lambda: _note_app_settings_interaction(app)
 
-    app.app_settings_canvas = tk.Canvas(sstab, highlightthickness=0)
-    app.app_settings_canvas.grid(row=1, column=0, sticky="nsew")
-    app.app_settings_scroll = ttk.Scrollbar(
-        sstab,
-        orient="vertical",
-        command=app.app_settings_canvas.yview,
+    scroll_host = ttk.Frame(sstab)
+    scroll_host.grid(row=1, column=0, columnspan=2, sticky="nsew")
+    scroll_container = build_scrollable_container(
+        scroll_host,
+        tk_module=tk,
+        ttk_module=ttk,
     )
-    app.app_settings_scroll.grid(row=1, column=1, sticky="ns")
+    app.app_settings_canvas = scroll_container.canvas
+    app.app_settings_scroll = scroll_container.scrollbar
 
     def _on_canvas_yview(first: str, last: str) -> None:
         _note_app_settings_interaction(app)
-        app.app_settings_scroll.set(first, last)
+        if app.app_settings_scroll is not None:
+            app.app_settings_scroll.set(first, last)
         _schedule_app_settings_sticky_header(app, force=False)
 
-    app.app_settings_canvas.configure(yscrollcommand=_on_canvas_yview)
-    app._app_settings_inner = ttk.Frame(app.app_settings_canvas)
-    app._app_settings_window = app.app_settings_canvas.create_window(
-        (0, 0), window=app._app_settings_inner, anchor="nw"
-    )
+    if app.app_settings_canvas is not None:
+        app.app_settings_canvas.configure(yscrollcommand=_on_canvas_yview)
+    app._app_settings_inner = scroll_container.content
+    app._app_settings_window = scroll_container.content_window
 
     def _on_inner_configure(_event=None) -> None:
         app._update_app_settings_scrollregion()
@@ -755,12 +757,14 @@ def build_app_settings_tab(app, notebook):
         _schedule_app_settings_sticky_header(app, force=False)
 
     def _on_canvas_configure(event) -> None:
-        app.app_settings_canvas.itemconfig(app._app_settings_window, width=event.width)
+        if app.app_settings_canvas is not None and app._app_settings_window is not None:
+            app.app_settings_canvas.itemconfig(app._app_settings_window, width=event.width)
         _mark_app_settings_header_cache_dirty(app)
         _schedule_app_settings_sticky_header(app, force=False)
 
     app._app_settings_inner.bind("<Configure>", _on_inner_configure)
-    app.app_settings_canvas.bind("<Configure>", _on_canvas_configure)
+    if app.app_settings_canvas is not None:
+        app.app_settings_canvas.bind("<Configure>", _on_canvas_configure)
     app._app_settings_inner.bind("<Enter>", lambda event: app._bind_app_settings_mousewheel())
     app._app_settings_inner.bind("<Leave>", lambda event: app._unbind_app_settings_mousewheel())
     app._app_settings_inner.grid_columnconfigure(0, weight=1)

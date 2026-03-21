@@ -20,18 +20,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Simple Sender - GRBL 1.1h CNC Controller.
+"""Shared user-facing text."""
 
-A minimal, reliable GRBL sender for 3-axis CNC machines with Python + Tkinter.
-"""
-
-__version__ = "2.7"
-__author__ = "Bob Kolbasowski"
-
-from .grbl_worker import GrblWorker
-from .utils import Settings
+from .messages import BusyMessages, DialogTitles, MachineStateMessages, StatusMessages
 
 __all__ = [
-    "GrblWorker",
-    "Settings",
+    "BusyMessages",
+    "DialogTitles",
+    "MachineStateMessages",
+    "StatusMessages",
 ]

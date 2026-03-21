@@ -27,6 +27,7 @@ import math
 import re
 from typing import Any, cast
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.utils.task_timing import record_task_timing
 
 
@@ -1609,7 +1610,8 @@ def load_gcode_from_path(app, path: str, module):
     deps = module
     if app.grbl.is_streaming():
         deps.messagebox.showwarning(
-            "Busy", "Stop the stream before loading a new G-code file."
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_LOADING_NEW_GCODE,
         )
         return
     if not deps.os.path.isfile(path):

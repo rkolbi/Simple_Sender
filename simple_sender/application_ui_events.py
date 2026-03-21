@@ -30,6 +30,7 @@ from typing import Any, cast
 
 # GUI imports
 import tkinter as tk
+from simple_sender.constants.messages import MachineStateMessages
 from simple_sender.ui.controls.toolbar import (
     on_recover_button_visibility_change,
     refresh_toolbar_action_focus,
@@ -168,7 +169,9 @@ class UiEventsMixin:
         app._macro_status_text = f"Macro: {text}"
         app._macro_status_scroll_index = 0
         app._macro_status_active = True
-        app._macro_status_width = getattr(app, "_machine_state_max_chars", 0) or (len("DISCONNECTED") + 2)
+        app._macro_status_width = getattr(app, "_machine_state_max_chars", 0) or (
+            len(MachineStateMessages.DISCONNECTED) + 2
+        )
         app._cancel_state_flash()
         app._apply_state_fg("#00c853")
         app._update_macro_status_display()

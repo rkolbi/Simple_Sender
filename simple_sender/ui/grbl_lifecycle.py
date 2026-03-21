@@ -28,6 +28,7 @@ import logging
 from collections import deque
 from tkinter import messagebox
 
+from simple_sender.constants.messages import MachineStateMessages, StatusMessages
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import disable_job_controls
@@ -468,14 +469,15 @@ def handle_connection_event(app, is_on: bool, port):
         except Exception:
             connect_settling_s = _STATUS_CONNECT_SETTLING_WINDOW_S
         _arm_status_connect_settling(app, duration_s=connect_settling_s)
-        app.machine_state.set(f"CONNECTED ({port})")
-        app._machine_state_text = f"CONNECTED ({port})"
+        connected_text = MachineStateMessages.connected(port)
+        app.machine_state.set(connected_text)
+        app._machine_state_text = connected_text
         try:
             app._ensure_state_label_width(app._machine_state_text)
         except Exception as exc:
             _log_suppressed("Failed ensuring machine-state label width after connect", exc)
         app._update_state_highlight(app._machine_state_text)
-        app.status.config(text=f"Connected: {port} (waiting for Grbl)")
+        app.status.config(text=StatusMessages.connected_waiting_for_grbl(port))
         app.btn_stop.config(state="normal")
         disable_job_controls(app)
         app.btn_alarm_recover.config(state="disabled")
@@ -545,14 +547,14 @@ def handle_connection_event(app, is_on: bool, port):
             app._update_unit_toggle_display()
         except Exception as exc:
             _log_suppressed("Failed refreshing unit toggle display after disconnect", exc)
-        app.machine_state.set("DISCONNECTED")
-        app._machine_state_text = "DISCONNECTED"
+        app.machine_state.set(MachineStateMessages.DISCONNECTED)
+        app._machine_state_text = MachineStateMessages.DISCONNECTED
         try:
             app._ensure_state_label_width(app._machine_state_text)
         except Exception as exc:
             _log_suppressed("Failed ensuring machine-state label width after disconnect", exc)
         app._update_state_highlight(app._machine_state_text)
-        app.status.config(text="Disconnected")
+        app.status.config(text=StatusMessages.DISCONNECTED)
         disable_job_controls(app)
         app.btn_stop.config(state="disabled")
         app.btn_alarm_recover.config(state="disabled")
@@ -595,14 +597,16 @@ def handle_ready_event(app, ready):
             disable_job_controls(app)
             app._set_manual_controls_enabled(False)
             if app._connected_port:
-                app.status.config(text=f"Connected: {app._connected_port} (waiting for Grbl)")
+                app.status.config(
+                    text=StatusMessages.connected_waiting_for_grbl(app._connected_port)
+                )
         apply_status_poll_profile(app)
         return
     if app._alarm_locked:
         return
     if app.connected and app._connected_port:
         _record_connection_timeline(app, "ready_true", f"port={app._connected_port}")
-        app.status.config(text=f"Connected: {app._connected_port}")
+        app.status.config(text=StatusMessages.connected(app._connected_port))
         try:
             ready_tail_s = float(
                 getattr(

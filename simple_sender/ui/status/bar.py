@@ -25,6 +25,7 @@ import sys
 from tkinter import ttk
 from typing import Any
 
+from simple_sender.constants.messages import StatusMessages
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import set_kb_id
 
@@ -167,7 +168,7 @@ def build_status_bar(app, before):
 
     app._set_stream_progress_visible = _set_stream_progress_visible
     app._stream_progress_visible = True
-    app.status = ttk.Label(status_bar, text="Disconnected", anchor="w")
+    app.status = ttk.Label(status_bar, text=StatusMessages.DISCONNECTED, anchor="w")
     app.status.pack(side="left", fill="x", expand=True)
     app._stream_progress_frame = ttk.Frame(status_bar)
     app._stream_progress_frame.pack(side="right", padx=(0, 12))

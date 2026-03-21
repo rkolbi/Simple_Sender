@@ -26,6 +26,7 @@ import time
 from collections import deque
 from typing import Any, cast
 
+from simple_sender.constants.messages import MachineStateMessages
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +417,7 @@ def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
     app.tool_reference_var = tk.StringVar(value="")
     app._tool_reference_last = None
 
-    app.machine_state = tk.StringVar(value="DISCONNECTED")
+    app.machine_state = tk.StringVar(value=MachineStateMessages.DISCONNECTED)
     app.wpos_x = tk.StringVar(value="0.000")
     app.wpos_y = tk.StringVar(value="0.000")
     app.wpos_z = tk.StringVar(value="0.000")
@@ -720,7 +721,7 @@ def _init_stream_and_override_state(
     app._feed_override_slider_last_position = 100
     app._spindle_override_slider_last_position = 100
 
-    app._machine_state_text = "DISCONNECTED"
+    app._machine_state_text = MachineStateMessages.DISCONNECTED
     app._grbl_setting_info = {}
     app._grbl_setting_keys = []
     app._last_sent_index = -1

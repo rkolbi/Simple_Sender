@@ -34,6 +34,7 @@ import types
 import array
 from tkinter import messagebox
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles, StatusMessages
 from simple_sender.gcode_parser import (
     clean_gcode_line,
     parse_gcode_lines,
@@ -288,7 +289,8 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
 def clear_gcode(app):
     if app.grbl.is_streaming():
         messagebox.showwarning(
-            "Busy", "Stop the stream before clearing the G-code file."
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_CLEARING_GCODE,
         )
         return
     macro_state_snapshot = _snapshot_macro_state(app)
@@ -464,7 +466,7 @@ def clear_gcode(app):
         _log_suppressed(
             "Failed resetting throughput UI state after clearing G-code", exc
         )
-    app.status.config(text="G-code cleared")
+    app.status.config(text=StatusMessages.GCODE_CLEARED)
     disable_job_controls(app)
     try:
         ready = bool(

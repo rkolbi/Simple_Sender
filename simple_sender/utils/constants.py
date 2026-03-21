@@ -28,6 +28,7 @@ constants used throughout the application.
 
 import re
 from typing import Dict, Tuple, Set
+from simple_sender.config.defaults import DEFAULT_APP_CONFIG
 from simple_sender.utils.platform_detect import detect_raspberry_pi
 
 # ============================================================================
@@ -37,25 +38,27 @@ from simple_sender.utils.platform_detect import detect_raspberry_pi
 BAUD_DEFAULT = 115200
 """Default baud rate for GRBL serial communication."""
 
-STATUS_POLL_DEFAULT = 0.2
+STATUS_POLL_DEFAULT = DEFAULT_APP_CONFIG.status_polling.default_interval
 """Default interval (seconds) between status queries."""
 
-STATUS_POLL_IDLE = 0.5
+STATUS_POLL_IDLE = DEFAULT_APP_CONFIG.status_polling.idle_interval
 """Status poll interval when machine is idle."""
 
-STATUS_POLL_RUNNING = 0.2
+STATUS_POLL_RUNNING = DEFAULT_APP_CONFIG.status_polling.running_interval
 """Status poll interval when machine is running."""
 
-STATUS_POLL_INTERVAL_MIN = 0.05
+STATUS_POLL_INTERVAL_MIN = DEFAULT_APP_CONFIG.status_polling.min_interval
 """Minimum allowed status poll interval (seconds)."""
 
-STATUS_QUERY_FAILURE_LIMIT_DEFAULT = 3
+STATUS_QUERY_FAILURE_LIMIT_DEFAULT = (
+    DEFAULT_APP_CONFIG.status_polling.failure_limit_default
+)
 """Default status query failure limit before disconnect."""
 
-STATUS_QUERY_FAILURE_LIMIT_MIN = 1
+STATUS_QUERY_FAILURE_LIMIT_MIN = DEFAULT_APP_CONFIG.status_polling.failure_limit_min
 """Minimum allowed status query failure limit."""
 
-STATUS_QUERY_FAILURE_LIMIT_MAX = 10
+STATUS_QUERY_FAILURE_LIMIT_MAX = DEFAULT_APP_CONFIG.status_polling.failure_limit_max
 """Maximum allowed status query failure limit."""
 
 # ============================================================================
@@ -185,16 +188,20 @@ GCODE_ULTRA_LARGE_REQUIRED_FREE_MULTIPLIER = 3
 GCODE_ULTRA_LARGE_REQUIRED_FREE_MARGIN_BYTES = 256 * 1024 * 1024
 """Additional free-space margin required for ultra-large temp/working files."""
 
-GCODE_STREAMING_LINE_THRESHOLD = 250_000
+GCODE_STREAMING_LINE_THRESHOLD = DEFAULT_APP_CONFIG.gcode_cache.streaming_line_threshold
 """Cleaned line count above which streaming mode is used."""
 
-GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT = 20_000
+GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT = DEFAULT_APP_CONFIG.gcode_cache.max_lines_default
 """Maximum cleaned lines retained in RAM for non-sample UI workflows."""
 
-GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER = 10_000
+GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER = (
+    DEFAULT_APP_CONFIG.gcode_cache.max_lines_low_power
+)
 """Lower in-RAM full-line cap for low-power profiles (Pi-class hardware)."""
 
-GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD = 50_000
+GCODE_IN_MEMORY_SEND_CACHE_THRESHOLD = (
+    DEFAULT_APP_CONFIG.gcode_cache.in_memory_send_cache_threshold
+)
 """Maximum line count for precomputing in-memory streaming send caches."""
 
 GCODE_LOAD_PROGRESS_INTERVAL = 0.25
@@ -257,10 +264,14 @@ GCODE_PREP_SAMPLE_INTERVAL_LINES = 250
 GCODE_PREP_SAMPLE_MAX_LINES = 5000
 """Hard cap on sampled lines retained for prepare-time top-view/stats analysis."""
 
-GCODE_PREP_FAST_SCAN_MAX_LINES_DEFAULT = 50_000
+GCODE_PREP_FAST_SCAN_MAX_LINES_DEFAULT = (
+    DEFAULT_APP_CONFIG.gcode_cache.prep_fast_scan_max_lines_default
+)
 """Default max raw lines scanned in fast prepare before background tasks."""
 
-GCODE_PREP_FAST_SCAN_MAX_LINES_LOW_POWER = 20_000
+GCODE_PREP_FAST_SCAN_MAX_LINES_LOW_POWER = (
+    DEFAULT_APP_CONFIG.gcode_cache.prep_fast_scan_max_lines_low_power
+)
 """Low-power max raw lines scanned in fast prepare before background tasks."""
 
 GCODE_PREP_STATS_SAMPLE_THRESHOLD_LINES = 100_000

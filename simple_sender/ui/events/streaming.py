@@ -26,6 +26,7 @@ import logging
 import tkinter as tk
 from typing import Callable
 
+from simple_sender.constants.messages import StatusMessages
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.stream_completion import (
     begin_deferred_completion_wait,
@@ -696,7 +697,11 @@ def handle_stream_state_event(app, evt):
                     name = os.path.basename(path)
                 if not name:
                     name = getattr(app.grbl, "_gcode_name", "") or ""
-                label = f"Streaming: {name}" if name else "Streaming..."
+                label = (
+                    StatusMessages.streaming_job(name)
+                    if name
+                    else StatusMessages.STREAMING
+                )
                 app.status.config(text=label)
             except (AttributeError, tk.TclError, TypeError) as exc:
                 logger.debug("Failed updating streaming status label: %s", exc)

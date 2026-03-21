@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # Simple Sender (GRBL G-code Sender)
 # Copyright (C) 2026 Bob Kolbasowski
 #
@@ -51,6 +51,46 @@ from simple_sender.utils.constants import (
 from simple_sender.utils.logging_config import get_log_dir
 from simple_sender.utils.task_timing import record_task_timing
 from .popup_utils import center_window
+from .diagnostics_bundle import (
+    collect_diagnostics_bundle_payload as _collect_diagnostics_bundle_payload_impl,
+    write_diagnostics_bundle_archive as _write_diagnostics_bundle_archive_impl,
+)
+from .diagnostics_bundle_exporter import (
+    build_recent_serial_window_from_log as _build_recent_serial_window_from_log_impl,
+    collect_streaming_bundle_artifacts as _collect_streaming_bundle_artifacts_impl,
+    find_named_log as _find_named_log_impl,
+    parse_serial_log_timestamp as _parse_serial_log_timestamp_impl,
+    write_bounded_log_tail_chunked as _write_bounded_log_tail_chunked_impl,
+)
+from .diagnostics_runtime_reporting import (
+    format_mb as _format_mb_impl,
+    format_runtime_metrics as _format_runtime_metrics_impl,
+)
+from .diagnostics_report_text import (
+    build_performance_report_text as _build_performance_report_text_impl,
+)
+from .diagnostics_performance_actions import (
+    apply_performance_test_preset as _apply_performance_test_preset_impl,
+    save_performance_report_to_logs as _save_performance_report_to_logs_impl,
+)
+from .diagnostics_preflight import (
+    evaluate_run_preflight as _evaluate_run_preflight_impl,
+    format_validation_summary as _format_validation_summary_impl,
+    get_bounds as _get_bounds_impl,
+    get_travel_limits as _get_travel_limits_impl,
+)
+from .diagnostics_session_text import (
+    build_session_diagnostics_lines as _build_session_diagnostics_lines_impl,
+)
+from .diagnostics_runtime_display import (
+    open_runtime_telemetry as _open_runtime_telemetry_impl,
+)
+from .diagnostics_report_export import (
+    export_session_diagnostics as _export_session_diagnostics_impl,
+)
+from .diagnostics_bundle_export import (
+    export_diagnostics_bundle as _export_diagnostics_bundle_impl,
+)
 
 CHECKLIST_ITEMS = [
     "Connect/disconnect: port list refreshes, status shows connected, $G and $$ populate settings.",
@@ -208,12 +248,7 @@ def _resolved_settings_path(app: Any) -> Path | None:
 
 
 def _format_mb(value_bytes: Any) -> str:
-    try:
-        if value_bytes is None:
-            return "n/a"
-        return f"{(float(value_bytes) / (1024.0 * 1024.0)):.2f} MB"
-    except (TypeError, ValueError):
-        return "n/a"
+    return cast(str, _format_mb_impl(value_bytes))
 
 
 def _pi_profile_enabled(app: Any) -> bool:
@@ -902,6 +937,14 @@ def _format_runtime_metrics(
     include_samples: bool,
     sample_limit: int = 20,
 ) -> list[str]:
+    return cast(
+        list[str],
+        _format_runtime_metrics_impl(
+            metrics,
+            include_samples=include_samples,
+            sample_limit=sample_limit,
+        ),
+    )
     if not metrics:
         return []
     lines: list[str] = []
@@ -1700,103 +1743,15 @@ def _format_runtime_metrics(
 
 
 def open_runtime_telemetry(app) -> None:
-    existing = getattr(app, "_runtime_telemetry_window", None)
-    if existing is not None:
-        try:
-            if existing.winfo_exists():
-                existing.lift()
-                existing.focus_force()
-                return
-        except Exception as exc:
-            _log_suppressed("Failed restoring existing runtime telemetry window", exc)
-    win = tk.Toplevel(app)
-    app._runtime_telemetry_window = win
-    app._runtime_telemetry_after_id = None
-    win.title("Runtime telemetry")
-    win.minsize(600, 360)
-    win.transient(app)
-    container = ttk.Frame(win, padding=12)
-    container.pack(fill="both", expand=True)
-    ttk.Label(
-        container, text="Runtime telemetry", font=("TkDefaultFont", 12, "bold")
-    ).pack(anchor="w")
-    ttk.Label(
-        container,
-        text="Live worker/queue counters. Refreshes every second while this window is open.",
-        wraplength=560,
-        justify="left",
-    ).pack(anchor="w", pady=(4, 10))
-    text = tk.Text(container, wrap="none", height=14, font=("TkFixedFont", 10))
-    text.pack(fill="both", expand=True)
-    text.configure(state="disabled")
-    last_rendered: dict[str, str | None] = {"text": None}
-    btn_row = ttk.Frame(container)
-    btn_row.pack(fill="x", pady=(10, 0))
-
-    def _render() -> None:
-        started = time.perf_counter()
-        metrics = _runtime_metrics(app)
-        if metrics:
-            lines = _format_runtime_metrics(
-                metrics, include_samples=True, sample_limit=12
-            )
-            body = "\n".join(lines) if lines else "Runtime telemetry unavailable."
-        else:
-            body = "Runtime telemetry unavailable."
-        if body == last_rendered["text"]:
-            return
-        last_rendered["text"] = body
-        text.configure(state="normal")
-        text.delete("1.0", "end")
-        text.insert("end", body)
-        text.configure(state="disabled")
-        elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
-        record_task_timing(
-            app,
-            "diagnostics.runtime_telemetry_refresh",
-            elapsed_ms,
-            success=True,
-        )
-
-    def _schedule_refresh() -> None:
-        if getattr(app, "_runtime_telemetry_window", None) is not win:
-            return
-        try:
-            if not win.winfo_exists():
-                return
-        except Exception:
-            return
-        try:
-            app._runtime_telemetry_after_id = win.after(
-                RUNTIME_TELEMETRY_REFRESH_MS,
-                _on_refresh_timer,
-            )
-        except Exception as exc:
-            _log_suppressed("Failed scheduling runtime telemetry refresh", exc)
-
-    def _on_refresh_timer() -> None:
-        if getattr(app, "_runtime_telemetry_window", None) is not win:
-            return
-        _render()
-        _schedule_refresh()
-
-    def _on_close() -> None:
-        after_id = getattr(app, "_runtime_telemetry_after_id", None)
-        if after_id is not None:
-            try:
-                win.after_cancel(after_id)
-            except Exception:
-                pass
-        app._runtime_telemetry_after_id = None
-        app._runtime_telemetry_window = None
-        win.destroy()
-
-    ttk.Button(btn_row, text="Refresh now", command=_render).pack(side="left")
-    ttk.Button(btn_row, text="Close", command=_on_close).pack(side="right")
-    win.protocol("WM_DELETE_WINDOW", _on_close)
-    _render()
-    _schedule_refresh()
-    center_window(win, app)
+    _open_runtime_telemetry_impl(
+        app,
+        runtime_metrics=_runtime_metrics,
+        format_runtime_metrics=_format_runtime_metrics,
+        log_suppressed=_log_suppressed,
+        record_task_timing=record_task_timing,
+        center_window=center_window,
+        refresh_ms=RUNTIME_TELEMETRY_REFRESH_MS,
+    )
 
 
 def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
@@ -1917,126 +1872,26 @@ def open_run_checklist(app):
 
 
 def _format_validation_summary(report) -> list[str]:
-    if report is None:
-        return []
-    summary = []
-    if getattr(report, "long_line_count", 0):
-        summary.append(f"Overlong lines: {report.long_line_count}")
-    unsupported_axes = getattr(report, "unsupported_axes", {})
-    if unsupported_axes:
-        axes = ", ".join(f"{k} x{v}" for k, v in unsupported_axes.items())
-        summary.append(f"Unsupported axes: {axes}")
-    unsupported_g = getattr(report, "unsupported_g_codes", {})
-    if unsupported_g:
-        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_g.items())
-        summary.append(f"Unsupported G-codes: {codes}")
-    unsupported_m = getattr(report, "unsupported_m_codes", {})
-    if unsupported_m:
-        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_m.items())
-        summary.append(f"Unsupported M-codes: {codes}")
-    grbl_warnings = getattr(report, "grbl_warnings", {})
-    if grbl_warnings:
-        warnings = ", ".join(f"{k} x{v}" for k, v in grbl_warnings.items())
-        summary.append(f"GRBL warnings: {warnings}")
-    unsupported_words = getattr(report, "unsupported_words", {})
-    if unsupported_words:
-        words = ", ".join(f"{k} x{v}" for k, v in unsupported_words.items())
-        summary.append(f"Unknown words: {words}")
-    hazards = sorted(getattr(report, "modal_hazards", set()))
-    if hazards:
-        summary.append(f"Modal hazards: {', '.join(hazards)}")
-    if getattr(report, "line_issue_count", 0):
-        summary.append(f"Line issues: {report.line_issue_count}")
-    return summary
+    return cast(list[str], _format_validation_summary_impl(report))
 
 
 def _get_bounds(app: Any):
-    parse_result = getattr(app, "_last_parse_result", None)
-    bounds = getattr(parse_result, "bounds", None) if parse_result else None
-    if not bounds:
-        quick_bounds = getattr(app, "_gcode_bounds_box", None)
-        if isinstance(quick_bounds, dict):
-            try:
-                bounds = (
-                    float(quick_bounds.get("min_x", 0.0) or 0.0),
-                    float(quick_bounds.get("max_x", 0.0) or 0.0),
-                    float(quick_bounds.get("min_y", 0.0) or 0.0),
-                    float(quick_bounds.get("max_y", 0.0) or 0.0),
-                    float(quick_bounds.get("min_z", 0.0) or 0.0),
-                    float(quick_bounds.get("max_z", 0.0) or 0.0),
-                )
-            except Exception:
-                bounds = None
-    if not bounds or len(bounds) < 6:
-        return None
-    return bounds
+    return _get_bounds_impl(app)
 
 
 def _get_travel_limits(app: Any) -> dict[str, float]:
-    data = (
-        getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
-    )
-    out: dict[str, float] = {}
-    for key, axis in (("$130", "x"), ("$131", "y"), ("$132", "z")):
-        raw = data.get(key)
-        if not raw:
-            continue
-        try:
-            out[axis] = float(raw[0])
-        except Exception:
-            continue
-    return out
+    return cast(dict[str, float], _get_travel_limits_impl(app))
 
 
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
-    failures: list[str] = []
-    warnings: list[str] = []
-    path = getattr(app, "_last_gcode_path", None)
-    has_job = bool(path)
-    if not has_job:
-        try:
-            has_job = bool(getattr(app.gview, "lines_count", 0))
-        except Exception:
-            has_job = False
-    if not has_job:
-        failures.append("No G-code job is loaded.")
-        return failures, warnings
-
-    if bool(getattr(app, "_alarm_locked", False)):
-        failures.append("Controller is in Alarm state. Clear alarm before running.")
-    if bool(getattr(app, "_homing_in_progress", False)):
-        failures.append("Homing is currently active. Wait until homing finishes.")
-    if not bool(getattr(app, "_grbl_ready", False)):
-        failures.append("GRBL is not ready yet. Wait for startup/status sync.")
-    if not bool(getattr(app, "_status_seen", False)):
-        failures.append("No live status has been received yet.")
-
-    bounds = _get_bounds(app)
-    if not bounds:
-        failures.append("Job bounds are unavailable (wait for parsing to complete).")
-    else:
-        minx, maxx, miny, maxy, minz, maxz = bounds
-        span_x = max(0.0, float(maxx) - float(minx))
-        span_y = max(0.0, float(maxy) - float(miny))
-        span_z = max(0.0, float(maxz) - float(minz))
-        travel = _get_travel_limits(app)
-        if travel:
-            if "x" in travel and span_x > travel["x"] + 1e-6:
-                failures.append(
-                    f"X span {span_x:.3f} mm exceeds machine travel $130={travel['x']:.3f} mm."
-                )
-            if "y" in travel and span_y > travel["y"] + 1e-6:
-                failures.append(
-                    f"Y span {span_y:.3f} mm exceeds machine travel $131={travel['y']:.3f} mm."
-                )
-            if "z" in travel and span_z > travel["z"] + 1e-6:
-                failures.append(
-                    f"Z span {span_z:.3f} mm exceeds machine travel $132={travel['z']:.3f} mm."
-                )
-        else:
-            warnings.append("Machine travel settings ($130/$131/$132) are unavailable.")
-
-    return failures, warnings
+    return cast(
+        tuple[list[str], list[str]],
+        _evaluate_run_preflight_impl(
+            app,
+            get_bounds=_get_bounds,
+            get_travel_limits=_get_travel_limits,
+        ),
+    )
 
 
 def run_preflight_check(app) -> None:
@@ -2068,478 +1923,56 @@ def run_preflight_check(app) -> None:
 
 
 def _build_performance_report_text(app: Any) -> str:
-    def _retention_snapshot_lines() -> list[str]:
-        metrics = _runtime_metrics(app)
-        if not metrics:
-            return []
-        formatted = _format_runtime_metrics(metrics, include_samples=False)
-        picks = [
-            line
-            for line in formatted
-            if (
-                "G-code storage mode:" in line
-                or "G-code line-cache policy:" in line
-                or "G-code retained footprint:" in line
-                or "File-backed source index:" in line
-                or "Stream read-ahead footprint:" in line
-            )
-        ]
-        if not picks:
-            return []
-        return ["", "Retention snapshot:"] + picks
-
-    perf_monitor = getattr(app, "_perf_monitor", None)
-    if perf_monitor is not None:
-        build_report = getattr(perf_monitor, "build_report_snapshot", None)
-        if callable(build_report):
-            try:
-                report = str(build_report() or "").strip()
-                if report:
-                    extra = _retention_snapshot_lines()
-                    if extra:
-                        return report + "\n" + "\n".join(extra)
-                    return report
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed building performance monitor report snapshot", exc
-                )
-
-    lines: list[str] = []
-    lines.append("=== Simple Sender Performance Snapshot ===")
-    lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
-    metrics = _runtime_metrics(app)
-    if metrics:
-        lines.extend(_format_runtime_metrics(metrics, include_samples=False))
-    else:
-        lines.append("Runtime telemetry unavailable.")
-    return "\n".join(lines)
-
-
-def apply_performance_test_preset(app) -> None:
-    try:
-        app._status_perf_metrics_enabled = True
-    except Exception as exc:
-        _log_suppressed(
-            "Failed enabling status perf-metric capture in diagnostics preset", exc
-        )
-    _set_var_value(app, "performance_profile_enabled", True)
-    _set_var_value(app, "performance_leak_watch_enabled", False)
-    _set_var_value(app, "performance_mode", True)
-    _set_var_value(app, "gui_logging_enabled", False)
-    _set_var_value(app, "status_poll_interval", PERF_TEST_STATUS_POLL_INTERVAL)
-
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        settings["performance_profile_enabled"] = True
-        settings["performance_leak_watch_enabled"] = False
-        settings["performance_mode"] = True
-        settings["gui_logging_enabled"] = False
-        settings["status_poll_interval"] = PERF_TEST_STATUS_POLL_INTERVAL
-
-    saver = getattr(app, "_save_settings", None)
-    if callable(saver):
-        try:
-            saver()
-        except Exception as exc:
-            _log_suppressed(
-                "Failed saving settings for diagnostics perf-test preset", exc
-            )
-            messagebox.showerror(
-                "Diagnostics preset", f"Failed to save settings:\n{exc}"
-            )
-            return
-    try:
-        app.ui_q.put(
-            ("log", "[diagnostics] Performance test preset applied (restart required).")
-        )
-    except Exception as exc:
-        _log_suppressed("Failed queueing diagnostics preset status log", exc)
-    messagebox.showinfo(
-        "Diagnostics preset",
-        (
-            "Performance test preset applied.\n\n"
-            "- Runtime performance profiling: ON\n"
-            "- Leak-watch snapshots: OFF\n"
-            "- Performance mode: ON\n"
-            "- GUI logging: OFF\n"
-            f"- Status poll interval: {PERF_TEST_STATUS_POLL_INTERVAL:.2f}s\n\n"
-            "Restart the app before the next run for clean benchmark numbers."
+    return cast(
+        str,
+        _build_performance_report_text_impl(
+            app,
+            runtime_metrics=_runtime_metrics,
+            format_runtime_metrics=_format_runtime_metrics,
+            log_suppressed=_log_suppressed,
         ),
     )
 
 
+def apply_performance_test_preset(app) -> None:
+    _apply_performance_test_preset_impl(
+        app,
+        set_var_value=_set_var_value,
+        log_suppressed=_log_suppressed,
+        showinfo=messagebox.showinfo,
+        showerror=messagebox.showerror,
+        perf_test_status_poll_interval=PERF_TEST_STATUS_POLL_INTERVAL,
+    )
+
+
 def save_performance_report_to_logs(app) -> None:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"simple_sender_performance_report_{timestamp}.txt"
-    path = get_log_dir() / filename
-    report = _build_performance_report_text(app)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        _log_suppressed("Failed creating logs directory for performance report", exc)
-    try:
-        with open(path, "w", encoding="utf-8", newline="\n") as outfile:
-            outfile.write(report)
-            outfile.write("\n")
-        messagebox.showinfo("Save performance report", f"Saved to:\n{path}")
-    except Exception as exc:
-        messagebox.showerror(
-            "Save performance report", f"Failed to write report:\n{exc}"
-        )
+    _save_performance_report_to_logs_impl(
+        app,
+        get_log_dir=get_log_dir,
+        build_performance_report_text=_build_performance_report_text,
+        log_suppressed=_log_suppressed,
+        showinfo=messagebox.showinfo,
+        showerror=messagebox.showerror,
+    )
 
 
 def _build_session_diagnostics_lines(app: Any) -> list[str]:
-    lines: list[str] = []
-    lines.append("Simple Sender diagnostics")
-    lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
-    lines.append("")
-    version_text = ""
-    try:
-        version_text = app.version_var.get()
-    except Exception:
-        version_text = ""
-    if version_text:
-        lines.append(f"Version: {version_text}")
-    lines.append(f"Connected: {getattr(app, 'connected', False)}")
-    lines.append(f"Port: {getattr(app, '_connected_port', '')}")
-    lines.append(f"Streaming: {getattr(app, '_stream_state', '')}")
-    lines.append(f"G-code path: {getattr(app, '_last_gcode_path', '')}")
-    last_stream_error_message = str(
-        getattr(app, "_last_stream_error_message", "") or ""
-    ).strip()
-    if last_stream_error_message:
-        last_stream_error_file = str(
-            getattr(app, "_last_stream_error_file_name", "") or ""
-        ).strip()
-        last_stream_error_line = int(
-            getattr(app, "_last_stream_error_line_number", 0) or 0
-        )
-        last_stream_error_line_text = str(
-            getattr(app, "_last_stream_error_line_text", "") or ""
-        ).strip()
-        lines.append("Last stream error: " + last_stream_error_message)
-        if last_stream_error_line > 0:
-            location = (
-                f"{last_stream_error_file} line {last_stream_error_line}"
-                if last_stream_error_file
-                else f"line {last_stream_error_line}"
-            )
-            lines.append(f"Last stream error location: {location}")
-        if last_stream_error_line_text:
-            lines.append(f"Last stream error line text: {last_stream_error_line_text}")
-        last_stream_error_hint = str(
-            getattr(app, "_last_stream_error_hint", "") or ""
-        ).strip()
-        if last_stream_error_hint:
-            lines.append(f"Last stream error hint: {last_stream_error_hint}")
-    jog_interp_stats = getattr(app, "_jog_dro_interp_stats", None)
-    if isinstance(jog_interp_stats, dict):
-        sync_count = int(jog_interp_stats.get("status_sync_count", 0) or 0)
-        jog_trace = getattr(app, "_jog_dro_trace", None)
-        jog_mode = "off"
-        jog_mode_var = getattr(app, "jog_dro_smoothing_mode", None)
-        if jog_mode_var is not None and hasattr(jog_mode_var, "get"):
-            try:
-                jog_mode = str(jog_mode_var.get() or "").strip().lower() or "off"
-            except Exception:
-                jog_mode = "off"
-        elif isinstance(getattr(app, "settings", None), dict):
-            jog_mode = str(getattr(app, "settings", {}).get("jog_dro_smoothing_mode", "off") or "").strip().lower() or "off"
-        jog_state = getattr(app, "_manual_jog_predict_state", None)
-        jog_source = ""
-        if isinstance(jog_state, dict):
-            jog_source = str(jog_state.get("source", "") or "").strip().lower()
-        jog_source_is_joystick = jog_source.startswith("joystick") or jog_source.startswith("jog_hold")
-        jog_mode_allows_source = bool(
-            jog_mode == "all_jog" or (jog_mode == "ui_jog_only" and not jog_source_is_joystick)
-        )
-        try:
-            jog_trace_count = int(len(jog_trace)) if isinstance(jog_trace, (deque, list)) else 0
-        except Exception:
-            jog_trace_count = 0
-        lines.append(
-            "Jog DRO interpolation: "
-            f"mode={jog_mode}, "
-            f"active={bool(jog_state and jog_mode_allows_source)}, "
-            f"samples={jog_trace_count}, "
-            f"status_sync={sync_count}"
-        )
-        if sync_count > 0:
-            lines.append(
-                "Jog DRO delta abs (report units): "
-                f"avg=({float(jog_interp_stats.get('delta_abs_avg_x', 0.0) or 0.0):.4f}, "
-                f"{float(jog_interp_stats.get('delta_abs_avg_y', 0.0) or 0.0):.4f}, "
-                f"{float(jog_interp_stats.get('delta_abs_avg_z', 0.0) or 0.0):.4f}), "
-                f"max=({float(jog_interp_stats.get('delta_abs_max_x', 0.0) or 0.0):.4f}, "
-                f"{float(jog_interp_stats.get('delta_abs_max_y', 0.0) or 0.0):.4f}, "
-                f"{float(jog_interp_stats.get('delta_abs_max_z', 0.0) or 0.0):.4f})"
-            )
-            lines.append(
-                "Jog DRO sync cadence (s): "
-                f"avg={float(jog_interp_stats.get('status_sync_interval_avg_s', 0.0) or 0.0):.3f}, "
-                f"max={float(jog_interp_stats.get('status_sync_interval_max_s', 0.0) or 0.0):.3f}; "
-                "prediction horizon (s): "
-                f"avg={float(jog_interp_stats.get('predict_horizon_avg_s', 0.0) or 0.0):.3f}, "
-                f"max={float(jog_interp_stats.get('predict_horizon_max_s', 0.0) or 0.0):.3f}"
-            )
-    try:
-        lines.append(f"Kasa status: {format_kasa_status_line(app)}")
-    except Exception as exc:
-        _log_suppressed("Failed appending Kasa status line to session diagnostics", exc)
-    auto_level_source_path = str(
-        getattr(app, "_auto_level_job_source_path", "") or ""
-    ).strip()
-    auto_level_source_hash = str(getattr(app, "_auto_level_job_hash", "") or "").strip()
-    auto_level_source_total = int(getattr(app, "_auto_level_job_total_lines", 0) or 0)
-    auto_level_source_exists = bool(
-        auto_level_source_path and os.path.isfile(auto_level_source_path)
+    return cast(
+        list[str],
+        _build_session_diagnostics_lines_impl(
+            app,
+            format_kasa_status_line=format_kasa_status_line,
+            log_suppressed=_log_suppressed,
+            effective_line_cache_cap_lines=_effective_line_cache_cap_lines,
+            viewer_window_line_count=_viewer_window_line_count,
+            format_validation_summary=_format_validation_summary,
+            runtime_metrics=_runtime_metrics,
+            format_runtime_metrics=_format_runtime_metrics,
+        ),
     )
-    lines.append(
-        "Auto-level source: "
-        f"exists={auto_level_source_exists}, lines={auto_level_source_total:,}, "
-        f"hash={auto_level_source_hash or 'n/a'}, path={auto_level_source_path or 'n/a'}"
-    )
-    prereq_snapshot = getattr(app, "_auto_level_prereq_snapshot", None)
-    if isinstance(prereq_snapshot, dict):
-        stage = str(prereq_snapshot.get("stage", "") or "n/a")
-        bounds_ready = bool(prereq_snapshot.get("bounds_ready", False))
-        width_mm = float(prereq_snapshot.get("xy_width_mm", 0.0) or 0.0)
-        height_mm = float(prereq_snapshot.get("xy_height_mm", 0.0) or 0.0)
-        lines.append(
-            "Auto-level prereq: "
-            f"stage={stage}, bounds_ready={bounds_ready}, "
-            f"size_mm={width_mm:.3f}x{height_mm:.3f}, "
-            f"grid_applicable={bool(prereq_snapshot.get('probe_grid_applicable', False))}"
-        )
-    lines.append(
-        f"G-code streaming mode: {getattr(app, '_gcode_streaming_mode', False)}"
-    )
-    total_lines = int(getattr(app, "_gcode_file_line_count", 0) or 0)
-    total_known = bool(getattr(app, "_gcode_file_line_count_known", False))
-    exec_lines = int(
-        getattr(app, "_gcode_executable_lines", 0)
-        or getattr(app, "_gcode_prepare_executable_total_lines", 0)
-        or getattr(app, "_gcode_total_lines", 0)
-        or 0
-    )
-    exec_known = bool(getattr(app, "_gcode_executable_lines_known", False))
-    motion_lines = int(
-        getattr(app, "_gcode_motion_lines", 0)
-        or getattr(app, "_gcode_prepare_motion_total_lines", 0)
-        or 0
-    )
-    motion_known = bool(getattr(app, "_gcode_motion_lines_known", False))
-    lines.append(
-        "G-code line counts: "
-        f"total={total_lines:,} ({'known' if total_known else 'estimated'}), "
-        f"executable={exec_lines:,} ({'known' if exec_known else 'estimated'}), "
-        f"motion={motion_lines:,} ({'known' if motion_known else 'estimated'})"
-    )
-    lines.append(
-        "SSMETA: "
-        f"{'present' if bool(getattr(app, '_gcode_ssmeta_present', False)) else 'not_found'}, "
-        f"dimensions_source={str(getattr(app, '_gcode_dimensions_source', 'scan') or 'scan')}, "
-        f"units_source={str(getattr(app, '_gcode_units_source', 'scan') or 'scan')}, "
-        f"scan_reduced={bool(getattr(app, '_gcode_ssmeta_scan_reduced', False))}"
-    )
-    storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip() or "none"
-    load_mode = str(getattr(app, "_gcode_load_mode", "") or "").strip() or "n/a"
-    index_mode = str(getattr(app, "_gcode_index_mode", "") or "").strip() or "n/a"
-    line_count_known = bool(getattr(app, "_gcode_source_line_count_known", True))
-    time_to_ready_ms = getattr(app, "_gcode_time_to_stream_ready_ms", None)
-    time_to_popup_ms = getattr(app, "_gcode_time_to_popup_close_ms", None)
-    cap_lines, cap_profile = _effective_line_cache_cap_lines(app)
-    cap_hit = bool(getattr(app, "_gcode_full_line_cache_cap_hit", False))
-    sample_cap = int(getattr(app, "_gcode_sample_line_cap", 0) or 0)
-    retained_lines = int(getattr(app, "_gcode_retained_line_count", 0) or 0)
-    if retained_lines <= 0:
-        retained = getattr(app, "_last_gcode_lines", None)
-        try:
-            retained_lines = int(len(retained)) if retained is not None else 0
-        except Exception:
-            retained_lines = 0
-    viewer_window_lines = _viewer_window_line_count(getattr(app, "gview", None))
-    storage_detail = (
-        f"{storage_mode}, load_mode={load_mode}, index_mode={index_mode}, "
-        f"line_count_known={line_count_known}"
-    )
-    try:
-        if time_to_ready_ms is not None:
-            storage_detail += f", time_to_stream_ready_ms={float(time_to_ready_ms):.2f}"
-    except (TypeError, ValueError):
-        pass
-    try:
-        if time_to_popup_ms is not None:
-            storage_detail += f", time_to_popup_close_ms={float(time_to_popup_ms):.2f}"
-    except (TypeError, ValueError):
-        pass
-    lines.append("G-code storage mode: " + storage_detail)
-    lines.append(
-        "G-code line-cache cap: "
-        f"{int(cap_lines):,} ({cap_profile}), cap_hit={cap_hit}, sample_cap={sample_cap:,}"
-    )
-    lines.append(
-        "G-code retained lines/window: " f"{retained_lines:,}/{viewer_window_lines:,}"
-    )
-    source_offsets = int(getattr(app, "_gcode_source_offset_count", 0) or 0)
-    source_offset_type = str(
-        getattr(app, "_gcode_source_offset_type", "") or ""
-    ).strip()
-    source_index_enabled = bool(getattr(app, "_gcode_offset_index_enabled", False))
-    lines.append(
-        "G-code source offsets: "
-        + (
-            f"{source_offsets:,} ({source_offset_type})"
-            if source_offset_type
-            else f"{source_offsets:,}"
-        )
-    )
-    lines.append(f"G-code source offset index enabled: {source_index_enabled}")
-    sample_lines = int(getattr(app, "_gcode_prepare_sample_line_count", 0) or 0)
-    sample_head = int(getattr(app, "_gcode_prepare_sample_head_lines", 0) or 0)
-    sample_tail = int(getattr(app, "_gcode_prepare_sample_tail_lines", 0) or 0)
-    sample_interval = int(getattr(app, "_gcode_prepare_sample_interval_lines", 0) or 0)
-    sample_max = int(getattr(app, "_gcode_prepare_sample_max_lines", 0) or 0)
-    prep_exec_total = int(getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0)
-    prep_motion_total = int(getattr(app, "_gcode_prepare_motion_total_lines", 0) or 0)
-    prep_sample_exec = int(
-        getattr(app, "_gcode_prepare_sampled_executable_lines", 0) or 0
-    )
-    prep_sample_motion = int(
-        getattr(app, "_gcode_prepare_sampled_motion_lines", 0) or 0
-    )
-    stats_mode = (
-        str(getattr(app, "_gcode_stats_compute_mode", "") or "").strip() or "n/a"
-    )
-    stats_scale = float(getattr(app, "_gcode_stats_sample_scale", 1.0) or 1.0)
-    stats_sample_lines = int(getattr(app, "_gcode_stats_sample_line_count", 0) or 0)
-    stats_sample_total = int(getattr(app, "_gcode_stats_sample_total_lines", 0) or 0)
-    stats_sample_executable = int(
-        getattr(app, "_gcode_stats_sample_executable_lines", 0) or 0
-    )
-    stats_sample_motion = int(getattr(app, "_gcode_stats_sample_motion_lines", 0) or 0)
-    stats_total_executable = int(
-        getattr(app, "_gcode_stats_executable_total_lines", 0) or 0
-    )
-    stats_total_motion = int(getattr(app, "_gcode_stats_motion_total_lines", 0) or 0)
-    stats_chunk_max_ms = float(getattr(app, "_gcode_stats_chunk_max_ms", 0.0) or 0.0)
-    stats_chunk_max_section = str(
-        getattr(app, "_gcode_stats_chunk_max_section", "") or "unknown"
-    )
-    stats_chunk_yields = int(getattr(app, "_gcode_stats_chunk_yield_count", 0) or 0)
-    lines.append(
-        "G-code prepare sample policy: "
-        f"sample_lines={sample_lines:,}, head={sample_head:,}, tail={sample_tail:,}, "
-        f"interval={sample_interval:,}, max={sample_max:,}"
-    )
-    lines.append(
-        "G-code prepare sampled counts: "
-        f"sample_exec={prep_sample_exec:,}, sample_motion={prep_sample_motion:,}, "
-        f"total_exec={prep_exec_total:,}, total_motion={prep_motion_total:,}"
-    )
-    lines.append(
-        "G-code prepare sampled modes: "
-        f"stats={stats_mode}, "
-        f"stats_scale={stats_scale:.2f}, stats_sample={stats_sample_lines:,}/{stats_sample_total:,}"
-    )
-    lines.append(
-        "Estimator sample coverage: "
-        f"sample_exec={stats_sample_executable:,}, sample_motion={stats_sample_motion:,}, "
-        f"total_exec={stats_total_executable:,}, total_motion={stats_total_motion:,}"
-    )
-    lines.append(
-        "G-code stats cooperative chunking: "
-        f"chunk_max_ms={stats_chunk_max_ms:.2f}, chunk_max_section={stats_chunk_max_section}, yields={stats_chunk_yields:,}"
-    )
-    lines.append(
-        "Post-load background tasks: "
-        f"{str(getattr(app, '_gcode_post_popup_background_tasks', 'none') or 'none')}"
-    )
-    lines.append(
-        f"Estimator confidence: {str(getattr(app, '_estimate_confidence', 'provisional') or 'provisional')}"
-    )
-    lines.append("")
-    report = getattr(app, "_gcode_validation_report", None)
-    report_summary = _format_validation_summary(report)
-    if report_summary:
-        lines.append("Validation summary:")
-        lines.extend(f"- {item}" for item in report_summary)
-        lines.append("")
-    metrics = _runtime_metrics(app)
-    if metrics:
-        lines.append("Runtime telemetry:")
-        lines.extend(
-            _format_runtime_metrics(metrics, include_samples=True, sample_limit=20)
-        )
-        lines.append("")
-    last_status = getattr(app, "_last_status_raw", "")
-    if last_status:
-        lines.append("Last status:")
-        lines.append(last_status.strip())
-        lines.append("")
-    history = getattr(app, "_status_history", [])
-    history_entries = list(history) if history else []
-    if history_entries:
-        lines.append("Recent status history:")
-        for ts, raw in history_entries[-50:]:
-            stamp = datetime.fromtimestamp(ts).isoformat(timespec="seconds")
-            lines.append(f"{stamp} {raw.strip()}")
-        lines.append("")
-    connection_history = getattr(app, "_connection_timeline", [])
-    connection_entries = list(connection_history) if connection_history else []
-    if connection_entries:
-        lines.append("Connection timeline:")
-        for entry in connection_entries[-80:]:
-            if not isinstance(entry, dict):
-                continue
-            ts = entry.get("ts")
-            try:
-                if isinstance(ts, (int, float)):
-                    stamp_ts = float(ts)
-                elif isinstance(ts, (str, bytes, bytearray)):
-                    stamp_ts = float(ts)
-                else:
-                    raise TypeError("unsupported timestamp type")
-                stamp = datetime.fromtimestamp(stamp_ts).isoformat(timespec="seconds")
-            except Exception:
-                stamp = str(ts or "n/a")
-            event = str(entry.get("event", "") or "unknown")
-            details = str(entry.get("details", "") or "")
-            if details:
-                lines.append(f"{stamp} {event} | {details}")
-            else:
-                lines.append(f"{stamp} {event}")
-        lines.append("")
-    console_lines = []
-    try:
-        console_lines = app.streaming_controller.get_console_lines()
-    except Exception:
-        console_lines = []
-    if console_lines:
-        lines.append("Recent console log:")
-        for entry, tag in console_lines[-200:]:
-            tag_text = f"[{tag}] " if tag else ""
-            lines.append(f"{tag_text}{entry}")
-        lines.append("")
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        lines.append("Settings:")
-        lines.append(json.dumps(settings, indent=2, sort_keys=True))
-        lines.append("")
-    return lines
-
 
 def _find_named_log(log_files: list[Path], filename: str) -> Path | None:
-    target = str(filename or "").strip().lower()
-    if not target:
-        return None
-    for path in log_files:
-        try:
-            if path.name.strip().lower() == target:
-                return path
-        except Exception:
-            continue
-    return None
+    return cast(Path | None, _find_named_log_impl(log_files, filename))
 
 
 def _write_bounded_log_tail_chunked(
@@ -2550,63 +1983,18 @@ def _write_bounded_log_tail_chunked(
     max_bytes: int,
     chunk_bytes: int = DIAG_BUNDLE_IO_CHUNK_BYTES,
 ) -> None:
-    cap = max(1, int(max_bytes))
-    chunk_size = max(4096, int(chunk_bytes))
-    try:
-        size = int(path.stat().st_size)
-    except Exception:
-        with archive.open(arcname, "w") as out_file:
-            out_file.write(b"")
-        return
-    if size <= 0:
-        with archive.open(arcname, "w") as out_file:
-            out_file.write(b"")
-        return
-    start = max(0, size - cap)
-    header_written = start > 0
-    header_bytes = b""
-    if header_written:
-        header_text = (
-            f"# BOUNDED TAIL EXPORT (last {cap:,} bytes)\n"
-            f"# Source: {path}\n"
-            f"# Total file size: {size:,} bytes\n\n"
-        )
-        header_bytes = header_text.encode("utf-8", errors="replace")
-    with archive.open(arcname, "w") as out_file:
-        if header_bytes:
-            out_file.write(header_bytes)
-        try:
-            with open(path, "rb") as in_file:
-                in_file.seek(start)
-                skip_partial_line = start > 0
-                while True:
-                    chunk = in_file.read(chunk_size)
-                    if not chunk:
-                        break
-                    if skip_partial_line:
-                        newline_idx = chunk.find(b"\n")
-                        if newline_idx < 0:
-                            continue
-                        chunk = chunk[newline_idx + 1 :]
-                        skip_partial_line = False
-                    if chunk:
-                        out_file.write(chunk)
-        except Exception as exc:
-            _log_suppressed(
-                "Failed reading/writing bounded log tail during diagnostics bundle export",
-                exc,
-            )
+    _write_bounded_log_tail_chunked_impl(
+        archive,
+        arcname=arcname,
+        path=path,
+        max_bytes=max_bytes,
+        chunk_bytes=chunk_bytes,
+        log_suppressed=_log_suppressed,
+    )
 
 
 def _parse_serial_log_timestamp(line: str) -> datetime | None:
-    text = str(line or "")
-    if len(text) < 23:
-        return None
-    stamp = text[:23]
-    try:
-        return datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f")
-    except Exception:
-        return None
+    return cast(datetime | None, _parse_serial_log_timestamp_impl(line))
 
 
 def _build_recent_serial_window_from_log(
@@ -2616,412 +2004,88 @@ def _build_recent_serial_window_from_log(
     max_lines: int = 8000,
     min_lines: int = 1200,
 ) -> str:
-    lines_tail: deque[str] = deque(maxlen=max_lines)
-    try:
-        with open(serial_log_path, "r", encoding="utf-8", errors="replace") as handle:
-            for raw in handle:
-                lines_tail.append(raw.rstrip("\r\n"))
-    except Exception as exc:
-        _log_suppressed(
-            "Failed reading serial.log for recent streaming window export", exc
-        )
-        return ""
-    if not lines_tail:
-        return ""
-    tail_lines = list(lines_tail)
-    newest_ts = None
-    for line in reversed(tail_lines):
-        ts = _parse_serial_log_timestamp(line)
-        if ts is not None:
-            newest_ts = ts
-            break
-    if newest_ts is None:
-        selected = tail_lines[-min(min_lines, len(tail_lines)) :]
-    else:
-        cutoff = newest_ts.timestamp() - max(60, int(window_minutes) * 60)
-        selected = []
-        for line in tail_lines:
-            ts = _parse_serial_log_timestamp(line)
-            if ts is None:
-                continue
-            if ts.timestamp() >= cutoff:
-                selected.append(line)
-        if len(selected) < min_lines:
-            selected = tail_lines[-min(min_lines, len(tail_lines)) :]
-    if not selected:
-        return ""
-    header = [
-        "# Simple Sender serial activity window",
-        f"# Source: {serial_log_path}",
-        f"# Exported: {datetime.now().isoformat(timespec='seconds')}",
-        f"# Lines: {len(selected)}",
-        "",
-    ]
-    return "\n".join(header + selected) + "\n"
+    return cast(
+        str,
+        _build_recent_serial_window_from_log_impl(
+            serial_log_path,
+            window_minutes=window_minutes,
+            max_lines=max_lines,
+            min_lines=min_lines,
+            log_suppressed=_log_suppressed,
+        ),
+    )
 
 
 def _collect_streaming_bundle_artifacts(
     runtime_metrics: dict[str, Any],
     log_files: list[Path],
 ) -> dict[str, str]:
-    artifacts: dict[str, str] = {}
-    serial_tail = runtime_metrics.get("serial_activity_tail")
-    if isinstance(serial_tail, list) and serial_tail:
-        artifacts["streaming/serial_activity_tail.json"] = (
-            _json_dump(serial_tail) + "\n"
-        )
-        window_lines = ["# Simple Sender serial activity tail", ""]
-        for entry in serial_tail:
-            if not isinstance(entry, dict):
-                continue
-            stamp = str(entry.get("timestamp", "") or "")
-            direction = str(entry.get("dir", "") or "")
-            line = str(entry.get("line", "") or "")
-            window_lines.append(f"{stamp} [{direction}] {line}")
-        artifacts["streaming/serial_activity_tail.log"] = "\n".join(window_lines) + "\n"
-    serial_log = _find_named_log(log_files, "serial.log")
-    if serial_log is not None:
-        window_text = _build_recent_serial_window_from_log(serial_log)
-        if window_text:
-            artifacts["streaming/serial_recent_window.log"] = window_text
-    perf_sample_trace = runtime_metrics.get("perf_sample_trace")
-    if isinstance(perf_sample_trace, list) and perf_sample_trace:
-        artifacts["streaming/perf_sample_trace.json"] = (
-            _json_dump(perf_sample_trace) + "\n"
-        )
-    jog_dro_trace = runtime_metrics.get("jog_dro_trace_tail")
-    if isinstance(jog_dro_trace, list) and jog_dro_trace:
-        artifacts["streaming/jog_dro_trace_tail.json"] = (
-            _json_dump(jog_dro_trace) + "\n"
-        )
-        trace_lines = ["# Jog DRO trace tail", ""]
-        for row in jog_dro_trace:
-            if not isinstance(row, dict):
-                continue
-            ts = str(row.get("ts", "") or "")
-            kind = str(row.get("kind", "") or "")
-            actual = row.get("actual_mpos")
-            est = row.get("est_mpos")
-            delta = row.get("delta")
-            trace_lines.append(
-                f"{ts} [{kind}] actual={actual} est={est} delta={delta}"
-            )
-        artifacts["streaming/jog_dro_trace_tail.log"] = "\n".join(trace_lines) + "\n"
-    jog_dro_stats = runtime_metrics.get("jog_dro_interp_stats")
-    if isinstance(jog_dro_stats, dict) and jog_dro_stats:
-        artifacts["streaming/jog_dro_interp_stats.json"] = (
-            _json_dump(jog_dro_stats) + "\n"
-        )
-    return artifacts
+    return cast(
+        dict[str, str],
+        _collect_streaming_bundle_artifacts_impl(
+            runtime_metrics,
+            log_files,
+            json_dump=_json_dump,
+            log_suppressed=_log_suppressed,
+        ),
+    )
 
 
 def _collect_diagnostics_bundle_payload(app: Any) -> dict[str, Any]:
-    build_info = _collect_build_info(app)
-    session_text = "\n".join(_build_session_diagnostics_lines(app)) + "\n"
-    perf_text = _build_performance_report_text(app).strip() + "\n"
-    runtime_metrics = _runtime_metrics(app)
-    runtime_metrics["build_info"] = dict(build_info)
-    runtime_metrics_json = _json_dump(runtime_metrics) + "\n"
-    connection_timeline_json = (
-        _json_dump(list(getattr(app, "_connection_timeline", []) or [])) + "\n"
-    )
-    system_info_text = _build_system_info_text(app, build_info=build_info)
-    settings_snapshot_json = _json_dump(getattr(app, "settings", {}) or {}) + "\n"
-    settings_path = _resolved_settings_path(app)
-    macro_assets = discover_macro_assets(app)
-    log_dir = get_log_dir()
-    try:
-        log_candidates = list(log_dir.iterdir())
-    except Exception as exc:
-        _log_suppressed("Failed enumerating log files for diagnostics bundle", exc)
-        log_candidates = []
-    log_files = sorted(
-        (
-            candidate
-            for candidate in log_candidates
-            if candidate.is_file()
-            and (
-                candidate.name.endswith(".log")
-                or ".log." in candidate.name
-                or candidate.name.startswith("simple_sender_performance_report_")
-                or candidate.name.startswith("simple_sender_diagnostics_")
-            )
+    return cast(
+        dict[str, Any],
+        _collect_diagnostics_bundle_payload_impl(
+            app,
+            collect_build_info=_collect_build_info,
+            build_session_diagnostics_lines=_build_session_diagnostics_lines,
+            build_performance_report_text=_build_performance_report_text,
+            runtime_metrics=_runtime_metrics,
+            json_dump=_json_dump,
+            build_system_info_text=_build_system_info_text,
+            resolved_settings_path=_resolved_settings_path,
+            discover_macro_assets=discover_macro_assets,
+            get_log_dir=get_log_dir,
+            collect_streaming_bundle_artifacts=_collect_streaming_bundle_artifacts,
+            log_suppressed=_log_suppressed,
+            bundle_log_max_files=DIAG_BUNDLE_LOG_MAX_FILES,
         ),
-        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
-        reverse=True,
-    )[: max(1, int(DIAG_BUNDLE_LOG_MAX_FILES))]
-    streaming_artifacts = _collect_streaming_bundle_artifacts(
-        runtime_metrics, log_files
     )
-    bundle_manifest: dict[str, Any] = {
-        "kind": "simple_sender_diagnostics_bundle",
-        "created": datetime.now().isoformat(timespec="seconds"),
-        "version": str(
-            getattr(getattr(app, "version_var", None), "get", lambda: "")() or ""
-        ),
-        "build": dict(build_info),
-        "files": {
-            "session_diagnostics": True,
-            "performance_report": True,
-            "runtime_metrics": True,
-            "connection_timeline": True,
-            "system_info": True,
-            "runtime_settings_snapshot": True,
-            "settings_file": bool(settings_path is not None),
-            "log_count": 0,
-            "macro_asset_count": 0,
-            "streaming_artifact_count": len(streaming_artifacts),
-        },
-    }
-    return {
-        "session_text": session_text,
-        "perf_text": perf_text,
-        "runtime_metrics_json": runtime_metrics_json,
-        "connection_timeline_json": connection_timeline_json,
-        "system_info_text": system_info_text,
-        "settings_snapshot_json": settings_snapshot_json,
-        "settings_path": settings_path,
-        "macro_assets": macro_assets,
-        "log_files": log_files,
-        "streaming_artifacts": streaming_artifacts,
-        "bundle_manifest": bundle_manifest,
-    }
 
 
 def _write_diagnostics_bundle_archive(out_path: Path, payload: dict[str, Any]) -> None:
-    bundle_manifest = dict(payload.get("bundle_manifest", {}) or {})
-    files_section = dict(bundle_manifest.get("files", {}) or {})
-    bundle_manifest["files"] = files_section
-    settings_path = payload.get("settings_path")
-    macro_assets = list(payload.get("macro_assets", []) or [])
-    log_files = list(payload.get("log_files", []) or [])
-    streaming_artifacts = dict(payload.get("streaming_artifacts", {}) or {})
-    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "session_diagnostics.txt", str(payload.get("session_text", ""))
-        )
-        archive.writestr("performance_report.txt", str(payload.get("perf_text", "")))
-        archive.writestr(
-            "runtime_metrics.json", str(payload.get("runtime_metrics_json", ""))
-        )
-        archive.writestr(
-            "connection_timeline.json", str(payload.get("connection_timeline_json", ""))
-        )
-        archive.writestr("system_info.txt", str(payload.get("system_info_text", "")))
-        archive.writestr(
-            "settings/runtime_settings_snapshot.json",
-            str(payload.get("settings_snapshot_json", "")),
-        )
-        if isinstance(settings_path, Path):
-            try:
-                archive.write(settings_path, arcname="settings/settings.json")
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed adding settings file to diagnostics bundle", exc
-                )
-        macro_added = 0
-        for source, name in macro_assets:
-            try:
-                archive.write(source, arcname=f"macros/{os.path.basename(name)}")
-                macro_added += 1
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed adding macro/checklist asset to diagnostics bundle", exc
-                )
-        log_added = 0
-        for log_path in log_files:
-            try:
-                _write_bounded_log_tail_chunked(
-                    archive,
-                    arcname=f"logs/{log_path.name}",
-                    path=log_path,
-                    max_bytes=DIAG_BUNDLE_LOG_TAIL_MAX_BYTES,
-                )
-                log_added += 1
-            except Exception as exc:
-                _log_suppressed("Failed adding log file to diagnostics bundle", exc)
-        streaming_added = 0
-        for arcname, content in streaming_artifacts.items():
-            try:
-                archive.writestr(str(arcname), str(content or ""))
-                streaming_added += 1
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed adding streaming artifact to diagnostics bundle", exc
-                )
-        files_section["log_count"] = log_added
-        files_section["macro_asset_count"] = macro_added
-        files_section["streaming_artifact_count"] = streaming_added
-        archive.writestr("manifest.json", _json_dump(bundle_manifest))
+    _write_diagnostics_bundle_archive_impl(
+        out_path,
+        payload,
+        json_dump=_json_dump,
+        write_bounded_log_tail_chunked=_write_bounded_log_tail_chunked,
+        log_suppressed=_log_suppressed,
+        bundle_log_tail_max_bytes=DIAG_BUNDLE_LOG_TAIL_MAX_BYTES,
+    )
 
 
 def export_diagnostics_bundle(app) -> None:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_name = f"simple_sender_diagnostics_bundle_{timestamp}.zip"
-    path = run_file_dialog(
+    _export_diagnostics_bundle_impl(
         app,
-        filedialog.asksaveasfilename,
-        title="Export diagnostics bundle",
-        defaultextension=".zip",
-        initialfile=default_name,
-        filetypes=(("Zip files", "*.zip"), ("All files", "*.*")),
+        run_file_dialog=run_file_dialog,
+        asksaveasfilename=filedialog.asksaveasfilename,
+        collect_diagnostics_bundle_payload=_collect_diagnostics_bundle_payload,
+        write_diagnostics_bundle_archive=_write_diagnostics_bundle_archive,
+        log_suppressed=_log_suppressed,
+        showinfo=messagebox.showinfo,
+        showerror=messagebox.showerror,
+        thread_cls=threading.Thread,
     )
-    if not path:
-        return
-    out_path = Path(path)
-    use_background_export = bool(getattr(app, "_diagnostics_bundle_async_export", True))
-    if use_background_export and callable(getattr(app, "after", None)):
-        if bool(getattr(app, "_diagnostics_bundle_export_inflight", False)):
-            messagebox.showinfo(
-                "Export diagnostics bundle",
-                "A diagnostics bundle export is already running.",
-            )
-            return
-        app._diagnostics_bundle_export_inflight = True
-        try:
-            app.ui_q.put(("log", "[diagnostics] Exporting diagnostics bundle..."))
-        except Exception:
-            pass
-
-        def _complete_export(error: Exception | None = None) -> None:
-            app._diagnostics_bundle_export_inflight = False
-            if error is None:
-                messagebox.showinfo(
-                    "Export diagnostics bundle", f"Saved to:\n{out_path}"
-                )
-                return
-            messagebox.showerror(
-                "Export diagnostics bundle", f"Failed to create bundle:\n{error}"
-            )
-
-        after = getattr(app, "after")
-
-        def _export_worker() -> None:
-            error: Exception | None = None
-            try:
-                if out_path.parent:
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                payload = _collect_diagnostics_bundle_payload(app)
-                _write_diagnostics_bundle_archive(out_path, payload)
-            except Exception as exc:
-                _log_suppressed("Failed exporting diagnostics bundle in background worker", exc)
-                error = exc
-            try:
-                after(0, lambda: _complete_export(error))
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed posting diagnostics bundle completion callback", exc
-                )
-                _complete_export(error)
-
-        try:
-            worker = threading.Thread(
-                target=_export_worker,
-                name="diagnostics-bundle-export",
-                daemon=True,
-            )
-            worker.start()
-            return
-        except Exception as exc:
-            app._diagnostics_bundle_export_inflight = False
-            _log_suppressed("Failed starting diagnostics bundle export thread", exc)
-
-    try:
-        if out_path.parent:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = _collect_diagnostics_bundle_payload(app)
-        _write_diagnostics_bundle_archive(out_path, payload)
-        messagebox.showinfo("Export diagnostics bundle", f"Saved to:\n{out_path}")
-    except Exception as exc:
-        messagebox.showerror(
-            "Export diagnostics bundle", f"Failed to create bundle:\n{exc}"
-        )
 
 
 def export_session_diagnostics(app) -> None:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_name = f"simple_sender_diagnostics_{timestamp}.txt"
-    path = run_file_dialog(
+    _export_session_diagnostics_impl(
         app,
-        filedialog.asksaveasfilename,
-        title="Export diagnostics",
-        defaultextension=".txt",
-        initialfile=default_name,
-        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
+        run_file_dialog=run_file_dialog,
+        asksaveasfilename=filedialog.asksaveasfilename,
+        build_session_diagnostics_lines=_build_session_diagnostics_lines,
+        log_suppressed=_log_suppressed,
+        showinfo=messagebox.showinfo,
+        showerror=messagebox.showerror,
+        thread_cls=threading.Thread,
     )
-    if not path:
-        return
-    out_path = str(path)
 
-    def _write_report_text(lines: list[str]) -> None:
-        dir_name = os.path.dirname(out_path)
-        if dir_name:
-            try:
-                os.makedirs(dir_name, exist_ok=True)
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed creating export directory for diagnostics report", exc
-                )
-        text = "\n".join(lines)
-        with open(out_path, "w", encoding="utf-8", newline="\n") as outfile:
-            for start in range(0, len(text), 16_384):
-                outfile.write(text[start : start + 16_384])
-
-    use_background_export = bool(
-        getattr(app, "_diagnostics_report_async_export", True)
-    )
-    after = getattr(app, "after", None)
-    if use_background_export and callable(after):
-        if bool(getattr(app, "_diagnostics_report_export_inflight", False)):
-            messagebox.showinfo(
-                "Export diagnostics",
-                "A diagnostics report export is already running.",
-            )
-            return
-        app._diagnostics_report_export_inflight = True
-
-        def _complete_export(error: Exception | None = None) -> None:
-            app._diagnostics_report_export_inflight = False
-            if error is None:
-                messagebox.showinfo("Export diagnostics", f"Saved to:\n{out_path}")
-                return
-            messagebox.showerror(
-                "Export diagnostics", f"Failed to write diagnostics:\n{error}"
-            )
-
-        def _export_worker() -> None:
-            error: Exception | None = None
-            try:
-                _write_report_text(_build_session_diagnostics_lines(app))
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed exporting diagnostics report in background worker", exc
-                )
-                error = exc
-            try:
-                after(0, lambda: _complete_export(error))
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed posting diagnostics report completion callback", exc
-                )
-                _complete_export(error)
-
-        try:
-            worker = threading.Thread(
-                target=_export_worker,
-                name="diagnostics-report-export",
-                daemon=True,
-            )
-            worker.start()
-            return
-        except Exception as exc:
-            app._diagnostics_report_export_inflight = False
-            _log_suppressed("Failed starting diagnostics report export thread", exc)
-
-    try:
-        _write_report_text(_build_session_diagnostics_lines(app))
-        messagebox.showinfo("Export diagnostics", f"Saved to:\n{out_path}")
-    except Exception as exc:
-        messagebox.showerror(
-            "Export diagnostics", f"Failed to write diagnostics:\n{exc}"
-        )

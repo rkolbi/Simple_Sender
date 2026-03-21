@@ -23,6 +23,7 @@
 import logging
 import time
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_source import FileGcodeSource
 from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
@@ -133,7 +134,8 @@ def apply_loaded_gcode(
         app._gcode_loading = False
         app._finish_gcode_loading()
         deps.messagebox.showwarning(
-            "Busy", "Stop the stream before loading a new G-code file."
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_LOADING_NEW_GCODE,
         )
         app.status.config(text="G-code load skipped (streaming)")
         return

@@ -25,7 +25,7 @@ import logging
 import threading
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from typing import cast
 
 from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
@@ -40,6 +40,28 @@ from simple_sender.utils.constants import (
     JOG_DRO_SMOOTHING_UI_JOG_ONLY,
     RT_STATUS,
 )
+from .status_parsing import _StatusFields
+from .status_parsing import _clone_status_fields as _clone_status_fields_impl
+from .status_parsing import _parse_status_fields as _parse_status_fields_impl
+from .status_parsing import _parse_xyz_triplet as _parse_xyz_triplet_impl
+from .status_parsing import _position_deadband_report_units as _position_deadband_report_units_impl
+from .status_parsing import _rounded_xyz as _rounded_xyz_impl
+from .status_parsing import _status_relaxed_idle_signature as _status_relaxed_idle_signature_impl
+from .status_parsing import _status_state_token as _status_state_token_impl
+from .status_parsing import _unit_scale_cached as _unit_scale_cached_impl
+from .status_parsing import _units_ratio as _units_ratio_impl
+from .status_machine_state import _format_hhmm as _format_hhmm_impl
+from .status_machine_state import _apply_machine_state_visuals as _apply_machine_state_visuals_impl
+from .status_machine_state import _machine_state_highlight_key as _machine_state_highlight_key_impl
+from .status_machine_state import _render_machine_state_text as _render_machine_state_text_impl
+from .status_machine_state import _resolve_display_state as _resolve_display_state_impl
+from .status_machine_state import _run_progress_pct_from_bytes as _run_progress_pct_from_bytes_impl
+from .status_machine_state import _run_progress_pct_from_lines as _run_progress_pct_from_lines_impl
+from .status_machine_state import _run_progress_text as _run_progress_text_impl
+from .status_machine_state import _status_allows_alarm_clear as _status_allows_alarm_clear_impl
+from .status_machine_state import _stream_latched_banner_state as _stream_latched_banner_state_impl
+from .status_units import _parse_modal_units as _parse_modal_units_impl
+from .status_units import _parse_report_units_setting as _parse_report_units_setting_impl
 from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 
 logger = logging.getLogger(__name__)
@@ -172,37 +194,11 @@ def _signal_thread_event(obj, attr_name: str) -> None:
 
 
 def _status_state_token(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    if text.startswith("<"):
-        text = text[1:]
-    end_idx = text.find("|")
-    if end_idx >= 0:
-        return text[:end_idx]
-    if text.endswith(">"):
-        text = text[:-1]
-    return text
+    return cast(str, _status_state_token_impl(raw))
 
 
 def _status_relaxed_idle_signature(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not (text.startswith("<") and text.endswith(">")):
-        return text
-    body = text[1:-1]
-    parts = [part.strip() for part in body.split("|") if part.strip()]
-    if not parts:
-        return text
-    state = str(parts[0] or "").strip()
-    if not state.lower().startswith("idle"):
-        return text
-    filtered = [state]
-    for part in parts[1:]:
-        upper = part.upper()
-        if upper.startswith("WCO:") or upper.startswith("OV:"):
-            continue
-        filtered.append(part)
-    return "|".join(filtered)
+    return cast(str, _status_relaxed_idle_signature_impl(raw))
 
 
 def _record_status_perf_metric(app, name: str, elapsed_ms: float) -> None:
@@ -275,11 +271,7 @@ def _status_apply_interval_ok(app, state_token: str) -> bool:
 
 
 def _status_allows_alarm_clear(app) -> bool:
-    if not bool(getattr(app, "_alarm_locked", False)):
-        return False
-    if not bool(getattr(app, "_alarm_latched", False)):
-        return True
-    return bool(getattr(app, "_alarm_clear_requested", False))
+    return cast(bool, _status_allows_alarm_clear_impl(app))
 
 
 def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
@@ -424,126 +416,20 @@ def _maybe_restore_pending_g90(app) -> None:
 
 
 def _parse_modal_units(app, raw: str) -> None:
-    line = raw.strip()
-    if not (line.startswith("[GC:") and line.endswith("]")):
-        return
-    tokens = line.strip("[]").split()
-    if not tokens:
-        return
-    modal_units = None
-    modal_state = {}
-    for token in tokens:
-        if token.startswith("GC:"):
-            token = token[3:]
-            if not token:
-                continue
-        if token in ("G20", "G21"):
-            modal_units = "inch" if token == "G20" else "mm"
-            modal_state["units"] = token
-            continue
-        if token in ("G90", "G91"):
-            modal_state["distance"] = token
-            continue
-        if token in ("G17", "G18", "G19"):
-            modal_state["plane"] = token
-            continue
-        if token in ("G93", "G94"):
-            modal_state["feedmode"] = token
-            continue
-        if token in ("G90.1", "G91.1"):
-            modal_state["arc"] = token
-            continue
-        if token in ("G54", "G55", "G56", "G57", "G58", "G59", "G59.1", "G59.2", "G59.3"):
-            modal_state["WCS"] = token
-            continue
-        if token in ("G0", "G1", "G2", "G3", "G38.2", "G38.3", "G38.4", "G38.5"):
-            modal_state["motion"] = token
-            continue
-        if token in ("M3", "M4", "M5"):
-            modal_state["spindle"] = token
-            continue
-        if token in ("M7", "M8", "M9"):
-            modal_state["coolant"] = token
-            continue
-        if token.startswith("T") and token[1:].isdigit():
-            modal_state["tool"] = str(int(token[1:]))
-    if modal_units:
-        app._modal_units = modal_units
-        try:
-            app._set_unit_mode(modal_units)
-        except Exception as exc:
-            _log_suppressed("Failed to apply modal unit mode", exc)
-    if modal_state or modal_units:
-        with app.macro_executor.macro_vars() as macro_vars:
-            for key, value in modal_state.items():
-                macro_vars[key] = value
-            macro_vars["_modal_seq"] = int(macro_vars.get("_modal_seq", 0) or 0) + 1
-        _signal_thread_event(app, "_modal_update_event")
+    _parse_modal_units_impl(
+        app,
+        raw,
+        log_suppressed=_log_suppressed,
+        signal_thread_event=_signal_thread_event,
+    )
 
 
 def _parse_report_units_setting(app, raw: str) -> None:
-    line = raw.strip()
-    if not line.startswith("$13="):
-        return
-    try:
-        raw_val = line.split("=", 1)[1].strip()
-        raw_val = raw_val.split(" ", 1)[0]
-        raw_val = raw_val.split("(", 1)[0].strip()
-        val = int(raw_val)
-    except Exception as exc:
-        _log_suppressed("Failed parsing $13 report-units setting", exc)
-        return
-    app._report_units = "inch" if val == 1 else "mm"
-    try:
-        app._update_unit_toggle_display()
-    except Exception as exc:
-        _log_suppressed("Failed updating unit toggle display from $13", exc)
-    try:
-        status_text = ""
-        try:
-            status_text = app.status.cget("text")
-        except Exception as exc:
-            _log_suppressed("Failed reading status label text for $13 update", exc)
-            status_text = ""
-        if getattr(app, "_connected_port", None) and status_text.startswith("Connected"):
-            app.status.config(
-                text=f"Connected: {app._connected_port} | Report: {app._report_units}"
-            )
-    except Exception as exc:
-        _log_suppressed("Failed updating connected status label after $13 update", exc)
-    try:
-        app._refresh_dro_display()
-    except Exception as exc:
-        _log_suppressed("Failed refreshing DRO display after $13 update", exc)
-
-
-@dataclass(slots=True)
-class _StatusFields:
-    state: str
-    wpos: str | None = None
-    mpos: str | None = None
-    feed: float | None = None
-    spindle: float | None = None
-    planner: int | None = None
-    rxbytes: int | None = None
-    wco: str | None = None
-    ov: str | None = None
-    pins: str | None = None
+    _parse_report_units_setting_impl(app, raw, log_suppressed=_log_suppressed)
 
 
 def _clone_status_fields(fields: _StatusFields) -> _StatusFields:
-    return _StatusFields(
-        state=str(fields.state or ""),
-        wpos=None if fields.wpos is None else str(fields.wpos),
-        mpos=None if fields.mpos is None else str(fields.mpos),
-        feed=None if fields.feed is None else float(fields.feed),
-        spindle=None if fields.spindle is None else float(fields.spindle),
-        planner=None if fields.planner is None else int(fields.planner),
-        rxbytes=None if fields.rxbytes is None else int(fields.rxbytes),
-        wco=None if fields.wco is None else str(fields.wco),
-        ov=None if fields.ov is None else str(fields.ov),
-        pins=None if fields.pins is None else str(fields.pins),
-    )
+    return cast(_StatusFields, _clone_status_fields_impl(fields))
 
 
 def _stream_status_positions_coalesce_active(app) -> bool:
@@ -759,158 +645,50 @@ def _queue_coalesced_status_positions_update(
 
 
 def _parse_status_fields(raw: str) -> _StatusFields:
-    parts = raw.strip("<>").split("|")
-    fields = _StatusFields(state=parts[0] if parts else "?")
-    for part in parts:
-        if part.startswith("WPos:"):
-            fields.wpos = part[5:]
-        elif part.startswith("MPos:"):
-            fields.mpos = part[5:]
-        elif part.startswith("FS:"):
-            try:
-                feed_str, spindle_str = part[3:].split(",", 1)
-                fields.feed = float(feed_str)
-                fields.spindle = float(spindle_str)
-            except ValueError as exc:
-                _log_suppressed("Failed parsing FS field from status line", exc)
-        elif part.startswith("Bf:"):
-            try:
-                planner_str, rx_str = part[3:].split(",", 1)
-                fields.planner = int(planner_str)
-                fields.rxbytes = int(rx_str)
-            except ValueError as exc:
-                _log_suppressed("Failed parsing Bf field from status line", exc)
-        elif part.startswith("WCO:"):
-            fields.wco = part[4:]
-        elif part.startswith("Ov:"):
-            fields.ov = part[3:]
-        elif part.startswith("Pn:"):
-            fields.pins = part[3:]
-    return fields
+    return cast(
+        _StatusFields,
+        _parse_status_fields_impl(raw, log_suppressed=_log_suppressed),
+    )
 
 
 def _resolve_display_state(app, state: str) -> str:
-    state_lower = state.lower()
-    display_state = "Homing" if state_lower.startswith("home") else state
-    if not getattr(app, "_homing_in_progress", False):
-        return display_state
-    if state_lower.startswith("home"):
-        app._homing_state_seen = True
-        return "Homing"
-    if state_lower.startswith("idle"):
-        start_ts = getattr(app, "_homing_start_ts", 0.0)
-        timeout_s = getattr(app, "_homing_timeout_s", 30.0)
-        elapsed = max(0.0, (time.time() - start_ts)) if start_ts else 0.0
-        timed_out = bool(start_ts) and elapsed > timeout_s
-        grace_elapsed = (not start_ts) or (elapsed >= _homing_idle_grace_seconds(app))
-        if getattr(app, "_homing_state_seen", False) or timed_out or grace_elapsed:
-            app._homing_in_progress = False
-            app._homing_state_seen = False
-            try:
-                app.grbl.clear_watchdog_ignore("homing")
-            except Exception as exc:
-                _log_suppressed("Failed clearing homing watchdog ignore on idle", exc)
-            return state
-        return "Homing"
-
-    app._homing_in_progress = False
-    app._homing_state_seen = False
-    try:
-        app.grbl.clear_watchdog_ignore("homing")
-    except Exception as exc:
-        context = (
-            "Failed clearing homing watchdog ignore on alarm/door"
-            if (state_lower.startswith("alarm") or state_lower.startswith("door"))
-            else "Failed clearing homing watchdog ignore on other state"
-        )
-        _log_suppressed(context, exc)
-    return state
+    return cast(
+        str,
+        _resolve_display_state_impl(
+            app,
+            state,
+            homing_idle_grace_seconds=_homing_idle_grace_seconds,
+            log_suppressed=_log_suppressed,
+        ),
+    )
 
 
 def _format_hhmm(seconds: int) -> str:
-    total_minutes = int(round(seconds / 60)) if seconds else 0
-    hours = total_minutes // 60
-    minutes = total_minutes % 60
-    return f"{hours:02d}:{minutes:02d}"
+    return cast(str, _format_hhmm_impl(seconds))
 
 
 def _run_progress_pct_from_bytes(app) -> float | None:
-    try:
-        file_size = int(
-            getattr(app, "_stream_progress_file_size_bytes", 0)
-            or getattr(app, "_gcode_file_size_bytes", 0)
-            or 0
-        )
-    except Exception:
-        file_size = 0
-    if file_size <= 0:
-        return None
-    try:
-        acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
-    except Exception:
-        acked = 0
-    acked = max(0, min(file_size, acked))
-    return max(0.0, min(100.0, (float(acked) / float(file_size)) * 100.0))
+    return cast(float | None, _run_progress_pct_from_bytes_impl(app))
 
 
 def _run_progress_pct_from_lines(app) -> tuple[float | None, bool]:
-    try:
-        total = int(getattr(app, "_gcode_executable_lines", 0) or 0)
-    except Exception:
-        total = 0
-    if total > 0:
-        known = bool(getattr(app, "_gcode_executable_lines_known", True))
-    else:
-        try:
-            total = int(getattr(app, "_gcode_total_lines", 0) or 0)
-        except Exception:
-            total = 0
-        known = bool(getattr(app, "_gcode_total_lines_known", True))
-    if total <= 0:
-        return None, False
-    try:
-        done = int(getattr(app, "_last_acked_index", -1) or -1) + 1
-    except Exception:
-        done = 0
-    done = max(0, min(total, done))
-    return max(0.0, min(100.0, (float(done) / float(total)) * 100.0)), bool(known)
+    return cast(tuple[float | None, bool], _run_progress_pct_from_lines_impl(app))
 
 
 def _run_progress_text(app) -> str:
-    line_pct, line_known = _run_progress_pct_from_lines(app)
-    byte_pct = _run_progress_pct_from_bytes(app)
-    if line_pct is not None and line_known:
-        pct = line_pct if byte_pct is None else min(line_pct, byte_pct)
-    elif byte_pct is not None:
-        pct = byte_pct
-    elif line_pct is not None:
-        pct = line_pct
-    else:
-        return "n/a"
-    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
-    if stream_state != "done" or done_pending_idle:
-        pct = min(pct, 99.9)
-    return f"{int(pct)}%"
+    return cast(str, _run_progress_text_impl(app))
 
 
 def _stream_latched_banner_state(app, state: str, display_state: str) -> str:
-    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    if stream_state == "running" or bool(getattr(app, "_stream_done_pending_idle", False)):
-        return "Run"
-    return str(display_state or state or "")
+    return cast(str, _stream_latched_banner_state_impl(app, state, display_state))
 
 
 def _render_machine_state_text(app, state: str, display_state: str) -> str:
-    state_lower = str(state or "").strip().lower()
-    display_lower = str(display_state or "").strip().lower()
-    if state_lower.startswith("run") or display_lower.startswith("run"):
-        return f"Run: {_run_progress_text(app)}"
-    return display_state
+    return cast(str, _render_machine_state_text_impl(app, state, display_state))
 
 
 def _machine_state_highlight_key(state: str) -> str:
-    return _status_state_token(state).strip().lower()
+    return cast(str, _machine_state_highlight_key_impl(state))
 
 
 def _apply_machine_state_visuals(
@@ -921,22 +699,16 @@ def _apply_machine_state_visuals(
     width_context: str,
     highlight_context: str,
 ) -> None:
-    rendered_changed = _set_var_if_changed(app.machine_state, rendered_state)
-    if rendered_changed:
-        try:
-            app._ensure_state_label_width(rendered_state)
-        except Exception as exc:
-            _log_suppressed(width_context, exc)
-    highlight_key = _machine_state_highlight_key(banner_state)
-    previous_highlight_key = str(
-        getattr(app, "_machine_state_highlight_key", "") or ""
+    _apply_machine_state_visuals_impl(
+        app,
+        rendered_state=rendered_state,
+        banner_state=banner_state,
+        width_context=width_context,
+        highlight_context=highlight_context,
+        set_var_if_changed=_set_var_if_changed,
+        machine_state_highlight_key=_machine_state_highlight_key,
+        log_suppressed=_log_suppressed,
     )
-    if highlight_key != previous_highlight_key:
-        setattr(app, "_machine_state_highlight_key", highlight_key)
-        try:
-            app._update_state_highlight(banner_state)
-        except Exception as exc:
-            _log_suppressed(highlight_context, exc)
 
 
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
@@ -1142,29 +914,25 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
 
 
 def _parse_xyz_triplet(text: str) -> list[float] | None:
-    parts = text.split(",")
-    if len(parts) < 3:
-        return None
-    try:
-        return [float(parts[0]), float(parts[1]), float(parts[2])]
-    except ValueError as exc:
-        _log_suppressed("Failed parsing XYZ triplet", exc)
-        return None
+    return cast(
+        list[float] | None,
+        _parse_xyz_triplet_impl(text, log_suppressed=_log_suppressed),
+    )
 
 
 def _unit_scale_cached(unit_mode: str) -> float:
-    return 25.4 if str(unit_mode or "").lower() == "inch" else 1.0
+    return cast(float, _unit_scale_cached_impl(unit_mode))
 
 
 def _position_deadband_report_units(report_units: str, modal_units: str) -> float:
-    # Use half of the displayed precision step to avoid churn from noise that
-    # cannot be represented in the DRO.
-    report_scale = _unit_scale_cached(report_units)
-    modal_scale = _unit_scale_cached(modal_units)
-    if report_scale <= 0:
-        return 1e-6
-    step_report = _DRO_DISPLAY_STEP * (modal_scale / report_scale)
-    return max(1e-6, step_report * 0.5)
+    return cast(
+        float,
+        _position_deadband_report_units_impl(
+            report_units,
+            modal_units,
+            dro_display_step=_DRO_DISPLAY_STEP,
+        ),
+    )
 
 
 def _set_var_if_changed(var, value: str) -> bool:
@@ -1250,20 +1018,11 @@ def _request_stop_status_refresh(app) -> None:
 
 
 def _units_ratio(from_units: str, to_units: str) -> float:
-    from_scale = _unit_scale_cached(from_units)
-    to_scale = _unit_scale_cached(to_units)
-    if to_scale <= 0.0:
-        return 1.0
-    return float(from_scale) / float(to_scale)
+    return cast(float, _units_ratio_impl(from_units, to_units))
 
 
 def _rounded_xyz(value: tuple[float, float, float] | None) -> list[float] | None:
-    if not isinstance(value, tuple) or len(value) < 3:
-        return None
-    try:
-        return [round(float(value[0]), 6), round(float(value[1]), 6), round(float(value[2]), 6)]
-    except Exception:
-        return None
+    return cast(list[float] | None, _rounded_xyz_impl(value))
 
 
 def _record_jog_dro_trace(app, kind: str, **payload: object) -> None:

@@ -27,6 +27,7 @@ import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Any
 
+from simple_sender.constants.messages import MachineStateMessages
 from simple_sender.ui.icons import (
     ICON_CONNECT,
     ICON_JOB_CLEAR,
@@ -643,7 +644,7 @@ def build_toolbar(app):
     except Exception as exc:
         _log_suppressed("Failed caching default state-label background", exc)
     try:
-        app._machine_state_max_chars = len("DISCONNECTED") + 2
+        app._machine_state_max_chars = len(MachineStateMessages.DISCONNECTED) + 2
         app.machine_state_label.config(width=app._machine_state_max_chars)
     except Exception as exc:
         _log_suppressed("Failed sizing machine-state label width", exc)

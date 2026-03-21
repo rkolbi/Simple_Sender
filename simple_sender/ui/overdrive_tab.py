@@ -23,6 +23,7 @@
 import tkinter as tk
 from tkinter import ttk
 
+from simple_sender.ui.scrollable_container import build_scrollable_container
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
@@ -96,6 +97,13 @@ def _run_spindle_on(app) -> None:
 def build_overdrive_tab(app, parent):
     container = ttk.Frame(parent)
     container.pack(fill="both", expand=True)
+    scroll_container = build_scrollable_container(
+        container,
+        tk_module=tk,
+        ttk_module=ttk,
+        bind_mousewheel_support=True,
+    )
+    content = scroll_container.content
 
     _bool_var = getattr(tk, "BooleanVar", None)
     if not callable(_bool_var):
@@ -142,7 +150,7 @@ def build_overdrive_tab(app, parent):
     if not hasattr(app, "_overdrive_validation_last_progress_pct"):
         app._overdrive_validation_last_progress_pct = -1.0
 
-    validate_frame = ttk.Labelframe(container, text="Validate G-code File", padding=8)
+    validate_frame = ttk.Labelframe(content, text="Validate G-code File", padding=8)
     validate_frame.pack(fill="x", pady=(0, 10))
 
     validate_btn_row = ttk.Frame(validate_frame)
@@ -288,7 +296,7 @@ def build_overdrive_tab(app, parent):
 
         app.overdrive_validation_results_text = _TextFallback()
 
-    tools_frame = ttk.Labelframe(container, text="Tools", padding=8)
+    tools_frame = ttk.Labelframe(content, text="Tools", padding=8)
     tools_frame.pack(fill="x", pady=(0, 10))
 
     app.btn_spoilboard = ttk.Button(
@@ -302,7 +310,7 @@ def build_overdrive_tab(app, parent):
     app._offline_controls.add(app.btn_spoilboard)
     apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
 
-    spindle_frame = ttk.Labelframe(container, text="Spindle Control", padding=8)
+    spindle_frame = ttk.Labelframe(content, text="Spindle Control", padding=8)
     spindle_frame.pack(fill="x", pady=(0, 10))
     spindle_btn_row = ttk.Frame(spindle_frame)
     spindle_btn_row.pack(fill="x")
@@ -364,17 +372,17 @@ def build_overdrive_tab(app, parent):
         "Save the Spindle ON RPM.",
     )
 
-    info_label = ttk.Label(container, textvariable=app.override_info_var, anchor="center")
+    info_label = ttk.Label(content, textvariable=app.override_info_var, anchor="center")
     info_label.pack(fill="x", pady=(0, 4))
     note_label = ttk.Label(
-        container,
+        content,
         text="Note: GRBL 1.1h feed/spindle overrides move in 10% steps.",
         anchor="center",
         wraplength=520,
     )
     note_label.pack(fill="x", pady=(0, 10))
 
-    feed_frame = ttk.Labelframe(container, text="Feed Override", padding=8)
+    feed_frame = ttk.Labelframe(content, text="Feed Override", padding=8)
     feed_frame.pack(fill="x", pady=(0, 10))
     feed_slider_row = ttk.Frame(feed_frame)
     feed_slider_row.pack(fill="x", pady=(0, 6))
@@ -415,7 +423,7 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_fo_reset, "Reset feed override to 100%.")
     attach_log_gcode(app.btn_fo_reset, "RT 0x90")
 
-    spindle_override_frame = ttk.Labelframe(container, text="Spindle Override", padding=8)
+    spindle_override_frame = ttk.Labelframe(content, text="Spindle Override", padding=8)
     spindle_override_frame.pack(fill="x", pady=(0, 10))
     spindle_slider_row = ttk.Frame(spindle_override_frame)
     spindle_slider_row.pack(fill="x", pady=(0, 6))

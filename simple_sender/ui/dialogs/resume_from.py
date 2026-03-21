@@ -26,6 +26,7 @@ from collections import deque
 from dataclasses import dataclass
 from tkinter import messagebox
 
+from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
 from simple_sender.types import LineSource
 
@@ -273,7 +274,10 @@ def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str]
 
 def resume_from_line(app, start_index: int, preamble: list[str]):
     if app.grbl.is_streaming():
-        messagebox.showwarning("Busy", "Stop the stream before resuming.")
+        messagebox.showwarning(
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_RESUMING,
+        )
         return
     if not app._require_grbl_connection():
         return

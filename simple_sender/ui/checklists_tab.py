@@ -30,18 +30,8 @@ from simple_sender.ui.checklist_files import (
     format_checklist_title,
     load_checklist_items,
 )
+from simple_sender.ui.scrollable_container import build_scrollable_container
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
-
-_WHEEL_DELTA_UNIT = 120
-
-
-def _is_descendant(widget, ancestor) -> bool:
-    current = widget
-    while current is not None:
-        if current is ancestor:
-            return True
-        current = getattr(current, "master", None)
-    return False
 
 
 def _build_checklist_section(
@@ -139,57 +129,15 @@ def build_checklists_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
     set_tab_tooltip(notebook, tab, "Run setup and safety checklists.")
     tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(0, weight=1)
-    canvas = tk.Canvas(tab, highlightthickness=0)
-    canvas.grid(row=0, column=0, sticky="nsew")
-    scroll = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-    scroll.grid(row=0, column=1, sticky="ns")
-    canvas.configure(yscrollcommand=scroll.set)
-    inner = ttk.Frame(canvas)
-    inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
-    wheel_remainder = 0.0
-    scroll_bound = False
-
-    def _update_scrollregion(_event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-
-    def _resize_width(event):
-        canvas.itemconfig(inner_window, width=event.width)
-
-    def _on_mousewheel(event):
-        nonlocal wheel_remainder
-        widget = getattr(event, "widget", None)
-        if widget is not None and not _is_descendant(widget, inner) and not _is_descendant(widget, canvas):
-            return
-        delta = 0
-        wheel_delta = getattr(event, "delta", 0) or 0
-        if wheel_delta:
-            wheel_remainder += float(wheel_delta)
-            steps = int(wheel_remainder / _WHEEL_DELTA_UNIT)
-            wheel_remainder -= float(steps * _WHEEL_DELTA_UNIT)
-            delta = -steps
-        elif getattr(event, "num", None) == 4:
-            delta = -1
-        elif getattr(event, "num", None) == 5:
-            delta = 1
-        if delta:
-            canvas.yview_scroll(delta, "units")
-            return "break"
-
-    def _bind_scroll():
-        nonlocal scroll_bound
-        if scroll_bound:
-            return
-        root = canvas.winfo_toplevel()
-        root.bind_all("<MouseWheel>", _on_mousewheel, add="+")
-        root.bind_all("<Button-4>", _on_mousewheel, add="+")
-        root.bind_all("<Button-5>", _on_mousewheel, add="+")
-        scroll_bound = True
-
-    inner.bind("<Configure>", _update_scrollregion)
-    canvas.bind("<Configure>", _resize_width)
-    _bind_scroll()
+    scroll_container = build_scrollable_container(
+        tab,
+        tk_module=tk,
+        ttk_module=ttk,
+        bind_mousewheel_support=True,
+    )
+    inner = scroll_container.content
 
     inner.grid_columnconfigure(0, weight=1)
     row = 0
-    _build_checklist_section(app, inner, row, on_layout_change=_update_scrollregion)
+    _build_checklist_section(app, inner, row, on_layout_change=scroll_container.update_scrollregion)
     return tab

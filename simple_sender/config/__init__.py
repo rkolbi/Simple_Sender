@@ -20,18 +20,22 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Simple Sender - GRBL 1.1h CNC Controller.
+"""Structured application configuration defaults."""
 
-A minimal, reliable GRBL sender for 3-axis CNC machines with Python + Tkinter.
-"""
-
-__version__ = "2.7"
-__author__ = "Bob Kolbasowski"
-
-from .grbl_worker import GrblWorker
-from .utils import Settings
+from .defaults import (
+    AppConfig,
+    DEFAULT_APP_CONFIG,
+    GCodeCacheConfig,
+    PiProfileConfig,
+    RASPBERRY_PI_APP_CONFIG,
+    StatusPollingConfig,
+)
 
 __all__ = [
-    "GrblWorker",
-    "Settings",
+    "AppConfig",
+    "DEFAULT_APP_CONFIG",
+    "GCodeCacheConfig",
+    "PiProfileConfig",
+    "RASPBERRY_PI_APP_CONFIG",
+    "StatusPollingConfig",
 ]
