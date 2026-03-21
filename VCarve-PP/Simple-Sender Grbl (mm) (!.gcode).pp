@@ -139,7 +139,7 @@ begin HEADER
 
 begin TOOLCHANGE
 
-"G4"
+"G4 P0.25"
 "VACUUM_OFF"
 "M5"
 "TC:[TOOLNAME]"
@@ -272,7 +272,7 @@ begin JET_TOOL_POWER
 
 begin FOOTER
 
-"G4"
+"G4 P0.25"
 "VACUUM_OFF"
 "M5"
 "G0[ZH]"
