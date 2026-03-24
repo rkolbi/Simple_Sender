@@ -386,7 +386,6 @@ class AppPerformanceMonitor:
         self._sample_once()
         report = self._build_report()
         if report:
-            print(report)
             logger.info("\n%s", report)
             if self._log_path:
                 try:

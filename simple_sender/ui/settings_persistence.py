@@ -272,6 +272,14 @@ def _build_ui_settings(
                 DEFAULT_SETTINGS.get("numeric_keypad_enabled", True),
             )
         ),
+        "developer_options_enabled": bool(
+            app.developer_options_enabled.get()
+            if hasattr(app, "developer_options_enabled")
+            else app.settings.get(
+                "developer_options_enabled",
+                DEFAULT_SETTINGS.get("developer_options_enabled", False),
+            )
+        ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
         "pi_profile_enabled": bool(
             app.pi_profile_enabled.get()

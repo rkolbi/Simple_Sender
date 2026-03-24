@@ -240,6 +240,7 @@ def _drain_app_settings_lazy_build_queue(app) -> None:
         app._app_settings_lazy_build_ids = pending_ids
 
     built_any = False
+    slice_budget_ms = max(0.0, float(_APP_SETTINGS_LAZY_BUILD_SLICE_MS))
     while queue:
         entry = queue.pop(0)
         pending_ids.discard(id(entry))
@@ -247,8 +248,11 @@ def _drain_app_settings_lazy_build_queue(app) -> None:
             continue
         if bool(entry.get("built", False)):
             continue
-        built_any = bool(_ensure_section_built(app, entry))
-        break
+        built_any = bool(_ensure_section_built(app, entry)) or built_any
+        if slice_budget_ms > 0.0:
+            elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+            if elapsed_ms >= slice_budget_ms:
+                break
 
     if built_any:
         _mark_app_settings_header_cache_dirty(app)
@@ -853,8 +857,8 @@ def build_app_settings_tab(app, notebook):
         "Interface",
         build_interface_section,
         mode="basic",
-        description="Startup behavior, performance/logging controls, status indicators, and quick button toggles.",
-        keywords=("startup", "fullscreen", "performance", "quick buttons"),
+        description="Startup behavior, performance mode, log viewer access, status indicators, and quick button toggles.",
+        keywords=("startup", "fullscreen", "performance", "logs", "quick buttons"),
     )
     _add_section(
         "Experimental",
@@ -941,8 +945,8 @@ def build_app_settings_tab(app, notebook):
         "Diagnostics",
         build_diagnostics_section,
         mode="advanced",
-        description="Preflight checks, diagnostic export, backup bundles, and large-file validation.",
-        keywords=("preflight", "report", "backup", "validation"),
+        description="Diagnostic export for all users plus developer-gated preflight, telemetry, backup, and large-file validation controls.",
+        keywords=("preflight", "report", "backup", "validation", "developer options"),
     )
 
     _start_category(

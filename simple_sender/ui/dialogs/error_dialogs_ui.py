@@ -28,6 +28,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.tk_vars import read_bool_var_attr
 from simple_sender.utils.grbl_errors import extract_grbl_code
 
 logger = logging.getLogger(__name__)
@@ -296,13 +297,7 @@ def _ensure_grbl_code_popup(app):
 
 
 def _get_bool_setting(app, attr: str, default: bool) -> bool:
-    var = getattr(app, attr, None)
-    if var is None:
-        return bool(default)
-    try:
-        return bool(var.get())
-    except Exception:
-        return bool(default)
+    return bool(read_bool_var_attr(app, attr, default=default))
 
 
 def _get_non_negative_float_setting(app, attr: str, default: float) -> float:

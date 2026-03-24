@@ -64,50 +64,77 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     diagnostics_frame = ttk.LabelFrame(parent, text="Diagnostics", padding=8)
     diagnostics_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     diagnostics_frame.grid_columnconfigure(1, weight=1)
-    ttk.Label(diagnostics_frame, text="Preflight check").grid(
-        row=0, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    app.btn_preflight_check = ttk.Button(
-        diagnostics_frame,
-        text="Run check",
-        command=app._run_preflight_check,
-    )
-    app.btn_preflight_check.grid(row=0, column=1, sticky="w", pady=4)
-    apply_tooltip(
-        app.btn_preflight_check,
-        "Scan loaded G-code for bounds and validation warnings.",
-    )
-    ttk.Label(diagnostics_frame, text="Export session diagnostics").grid(
-        row=1, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    app.btn_export_diagnostics = ttk.Button(
-        diagnostics_frame,
-        text="Save report",
-        command=app._export_session_diagnostics,
-    )
-    app.btn_export_diagnostics.grid(row=1, column=1, sticky="w", pady=4)
-    apply_tooltip(
-        app.btn_export_diagnostics,
-        "Save recent console/status history and settings to a text file.",
-    )
     ttk.Label(diagnostics_frame, text="Export diagnostics bundle").grid(
-        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_export_diagnostics_bundle = ttk.Button(
         diagnostics_frame,
         text="Save ZIP",
         command=app._export_diagnostics_bundle,
     )
-    app.btn_export_diagnostics_bundle.grid(row=2, column=1, sticky="w", pady=4)
+    app.btn_export_diagnostics_bundle.grid(row=0, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_export_diagnostics_bundle,
         "Create one ZIP with session diagnostics, performance report, and logs.",
     )
-    ttk.Label(diagnostics_frame, text="Runtime telemetry").grid(
+    app.developer_options_check = ttk.Checkbutton(
+        diagnostics_frame,
+        text="Developer Options",
+        variable=app.developer_options_enabled,
+    )
+    app.developer_options_check.grid(
+        row=1, column=0, columnspan=2, sticky="w", pady=(8, 0)
+    )
+    apply_tooltip(
+        app.developer_options_check,
+        "Show advanced diagnostics and developer-focused settings.",
+    )
+    developer_frame = ttk.Frame(diagnostics_frame)
+    developer_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+    developer_frame.grid_columnconfigure(1, weight=1)
+    app.diagnostics_developer_frame = developer_frame
+    app.logging_check = ttk.Checkbutton(
+        developer_frame,
+        text="Log GUI button actions",
+        variable=app.gui_logging_enabled,
+        command=app._on_gui_logging_change,
+    )
+    app.logging_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+    apply_tooltip(
+        app.logging_check,
+        "Record GUI button actions in the console log when enabled.",
+    )
+    ttk.Label(developer_frame, text="Preflight check").grid(
+        row=1, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.btn_preflight_check = ttk.Button(
+        developer_frame,
+        text="Run check",
+        command=app._run_preflight_check,
+    )
+    app.btn_preflight_check.grid(row=1, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_preflight_check,
+        "Scan loaded G-code for bounds and validation warnings.",
+    )
+    ttk.Label(developer_frame, text="Export session diagnostics").grid(
+        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.btn_export_diagnostics = ttk.Button(
+        developer_frame,
+        text="Save report",
+        command=app._export_session_diagnostics,
+    )
+    app.btn_export_diagnostics.grid(row=2, column=1, sticky="w", pady=4)
+    apply_tooltip(
+        app.btn_export_diagnostics,
+        "Save recent console/status history and settings to a text file.",
+    )
+    ttk.Label(developer_frame, text="Runtime telemetry").grid(
         row=3, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_runtime_telemetry = ttk.Button(
-        diagnostics_frame,
+        developer_frame,
         text="Open viewer",
         command=app._open_runtime_telemetry,
     )
@@ -116,11 +143,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_runtime_telemetry,
         "Open a live runtime telemetry window for queue depth and TX-loop counters.",
     )
-    ttk.Label(diagnostics_frame, text="Save final performance report").grid(
+    ttk.Label(developer_frame, text="Save final performance report").grid(
         row=4, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_save_performance_report = ttk.Button(
-        diagnostics_frame,
+        developer_frame,
         text="Save to Logs",
         command=app._save_performance_report_to_logs,
     )
@@ -129,11 +156,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_save_performance_report,
         "Write a timestamped performance report into the app Logs folder.",
     )
-    ttk.Label(diagnostics_frame, text="Apply perf-test preset").grid(
+    ttk.Label(developer_frame, text="Apply perf-test preset").grid(
         row=5, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_apply_perf_test_preset = ttk.Button(
-        diagnostics_frame,
+        developer_frame,
         text="Apply preset",
         command=app._apply_performance_test_preset,
     )
@@ -142,10 +169,10 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_apply_perf_test_preset,
         "Enable profiling, disable leak watch, and apply low-overhead runtime settings (restart required).",
     )
-    ttk.Label(diagnostics_frame, text="Backup bundle").grid(
+    ttk.Label(developer_frame, text="Backup bundle").grid(
         row=6, column=0, sticky="w", padx=(0, 10), pady=4
     )
-    backup_row = ttk.Frame(diagnostics_frame)
+    backup_row = ttk.Frame(developer_frame)
     backup_row.grid(row=6, column=1, sticky="w", pady=4)
     app.btn_export_backup_bundle = ttk.Button(
         backup_row,
@@ -168,7 +195,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         "Import settings and macro assets from a previously exported bundle.",
     )
     app.validate_streaming_check = ttk.Checkbutton(
-        diagnostics_frame,
+        developer_frame,
         text="Overdrive validation strict by default",
         variable=app.validate_streaming_gcode,
     )
@@ -179,11 +206,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.validate_streaming_check,
         "Default mode for Overdrive > Validate Loaded Job. Off = quick scan, On = full scan.",
     )
-    ttk.Label(diagnostics_frame, text="Sample-only threshold (lines)").grid(
+    ttk.Label(developer_frame, text="Sample-only threshold (lines)").grid(
         row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
-        diagnostics_frame,
+        developer_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
@@ -198,11 +225,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
             master=parent,
             value=max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
         )
-    ttk.Label(diagnostics_frame, text="Ultra-large threshold (MB)").grid(
+    ttk.Label(developer_frame, text="Ultra-large threshold (MB)").grid(
         row=9, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.ultra_large_size_threshold_mb_entry = ttk.Entry(
-        diagnostics_frame,
+        developer_frame,
         textvariable=app.ultra_large_size_threshold_mb,
         width=10,
     )
@@ -241,7 +268,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         )
     )
     app.ultra_large_size_threshold_info_label = ttk.Label(
-        diagnostics_frame,
+        developer_frame,
         textvariable=app.ultra_large_size_threshold_info_var,
     )
     app.ultra_large_size_threshold_info_label.grid(
@@ -258,7 +285,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     if not hasattr(app, "performance_profile_log_path"):
         app.performance_profile_log_path = tk.StringVar(master=parent, value="")
     app.performance_profile_check = ttk.Checkbutton(
-        diagnostics_frame,
+        developer_frame,
         text="Enable runtime performance profiling (restart required)",
         variable=app.performance_profile_enabled,
     )
@@ -270,7 +297,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         "Capture startup/CPU/RSS metrics and print a budget report on app exit.",
     )
     app.performance_leak_watch_check = ttk.Checkbutton(
-        diagnostics_frame,
+        developer_frame,
         text="Enable leak-watch snapshots (higher overhead)",
         variable=app.performance_leak_watch_enabled,
     )
@@ -281,11 +308,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.performance_leak_watch_check,
         "Take tracemalloc snapshots at key milestones and include growth deltas in the exit report.",
     )
-    ttk.Label(diagnostics_frame, text="Performance report log path").grid(
+    ttk.Label(developer_frame, text="Performance report log path").grid(
         row=13, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.performance_profile_log_path_entry = ttk.Entry(
-        diagnostics_frame,
+        developer_frame,
         textvariable=app.performance_profile_log_path,
         width=36,
     )
@@ -301,11 +328,11 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
             master=parent,
             value="enabled=False | device=none",
         )
-    ttk.Label(diagnostics_frame, text="Kasa status").grid(
+    ttk.Label(developer_frame, text="Kasa status").grid(
         row=14, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.kasa_status_line_diag_label = ttk.Label(
-        diagnostics_frame,
+        developer_frame,
         textvariable=app.kasa_status_line_var,
         justify="left",
         wraplength=560,
@@ -317,6 +344,40 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.kasa_status_line_diag_label,
         "Read-only Kasa status (enabled, selected device, and mapped outlet states).",
     )
+
+    def _sync_developer_options_visibility() -> None:
+        try:
+            enabled = bool(app.developer_options_enabled.get())
+        except Exception:
+            enabled = False
+        if enabled:
+            developer_frame.grid()
+        else:
+            developer_frame.grid_remove()
+        updater = getattr(app, "_update_app_settings_scrollregion", None)
+        if callable(updater):
+            try:
+                updater()
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed updating App Settings scrollregion after developer-options toggle",
+                    exc,
+                )
+
+    prior_trace = getattr(app, "developer_options_visibility_trace", None)
+    if prior_trace is not None:
+        try:
+            app.developer_options_enabled.trace_remove("write", prior_trace)
+        except Exception as exc:
+            _log_suppressed("Failed removing prior developer-options visibility trace", exc)
+    try:
+        app.developer_options_visibility_trace = app.developer_options_enabled.trace_add(
+            "write",
+            lambda *_args: _sync_developer_options_visibility(),
+        )
+    except Exception as exc:
+        _log_suppressed("Failed wiring developer-options visibility trace", exc)
+    _sync_developer_options_visibility()
     return row + 1
 
 

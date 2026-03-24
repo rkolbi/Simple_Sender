@@ -30,6 +30,8 @@ from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 logger = logging.getLogger(__name__)
 
 def setup_console_tags(app):
+    """Apply the standard tag palette used by the console text widget."""
+
     text_fg = "#111111"
     try:
         app.console.tag_configure("console_tx", background="#e5efff", foreground=text_fg)       # light blue
@@ -37,8 +39,8 @@ def setup_console_tags(app):
         app.console.tag_configure("console_status", background="#fff4d8", foreground=text_fg)   # light orange
         app.console.tag_configure("console_error", background="#ffe5e5", foreground=text_fg)    # light red
         app.console.tag_configure("console_alarm", background="#ffd8d8", foreground=text_fg)    # light red/darker
-    except Exception as exc:
-        logger.exception("Failed to configure console tags: %s", exc)
+    except Exception:
+        logger.exception("Failed to configure console tag palette")
 
 def send_console(app):
     s = app.cmd_entry.get().strip()

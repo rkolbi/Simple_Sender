@@ -71,8 +71,6 @@ def load_grbl_setting_info(app, base_dir: str):
             info = {}
             keys = []
 
-    load_grbl_setting_tooltips(info, base_dir)
-
     if not info:
         for idx in GRBL_SETTING_KEYS:
             key = f"${idx}"
@@ -84,6 +82,8 @@ def load_grbl_setting_info(app, base_dir: str):
                 "idx": idx,
             }
         keys = GRBL_SETTING_KEYS[:]
+
+    load_grbl_setting_tooltips(info, base_dir)
 
     pocket_overrides = {
         0: ("Step Pulse Length", "Length of the step pulse delivered to drivers."),

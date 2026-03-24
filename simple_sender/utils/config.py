@@ -54,6 +54,9 @@ from .exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+_VALID_BAUD_RATES = (9600, 19200, 38400, 57600, 115200, 230400)
+_VALID_UNIT_MODES = ("mm", "inch")
+_VALID_TOUCH_SCROLL_MODES = ("thumb_only", "thumb_and_swipe")
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "active_profile": "",
@@ -63,6 +66,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "current_line_mode": "machine",
     "default_spindle_rpm": 12000,
     "dry_run_sanitize_stream": False,
+    "developer_options_enabled": False,
     "error_dialog_burst_limit": 3,
     "error_dialog_burst_window": 30.0,
     "error_dialog_interval": 2.0,
@@ -213,10 +217,9 @@ def _repair_invalid_settings(
     """Repair known invalid values to defaults so load can continue safely."""
     repaired = copy.deepcopy(merged)
     repaired_keys: list[str] = []
-    valid_bauds = {9600, 19200, 38400, 57600, 115200, 230400}
 
     baud = repaired.get("baud_rate")
-    if baud not in valid_bauds:
+    if baud not in _VALID_BAUD_RATES:
         repaired["baud_rate"] = defaults["baud_rate"]
         repaired_keys.append("baud_rate")
 
@@ -226,7 +229,7 @@ def _repair_invalid_settings(
         repaired_keys.append("status_poll_interval")
 
     mode = repaired.get("unit_mode")
-    if mode not in ("mm", "inch"):
+    if mode not in _VALID_UNIT_MODES:
         repaired["unit_mode"] = defaults["unit_mode"]
         repaired_keys.append("unit_mode")
 
@@ -239,7 +242,7 @@ def _repair_invalid_settings(
         repaired_keys.append("jog_dro_smoothing_mode")
 
     touch_scroll_mode = str(repaired.get("touch_scroll_mode", "") or "").strip().lower()
-    if touch_scroll_mode not in {"thumb_only", "thumb_and_swipe"}:
+    if touch_scroll_mode not in _VALID_TOUCH_SCROLL_MODES:
         repaired["touch_scroll_mode"] = defaults.get(
             "touch_scroll_mode", "thumb_and_swipe"
         )
@@ -337,7 +340,7 @@ class Settings:
         """
         self.filepath = filepath or get_settings_path()
         self.data: Dict[str, Any] = self._get_defaults()
-        logger.info(f"Settings file: {self.filepath}")
+        logger.info("Settings file: %s", self.filepath)
 
     def _get_defaults(self) -> Dict[str, Any]:
         """Get default settings values.
@@ -376,22 +379,30 @@ class Settings:
             return True
 
         except SettingsValidationError as e:
-            logger.error(f"Invalid settings values: {e}")
+            logger.error(
+                "Invalid settings values while loading %s: %s",
+                self.filepath,
+                e,
+            )
             raise SettingsLoadError(f"Invalid settings: {e}")
 
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in settings file: {e}")
+            logger.error("Invalid JSON in settings file %s: %s", self.filepath, e)
             raise SettingsLoadError(f"Invalid JSON: {e}")
 
         except IOError as e:
-            logger.error(f"Failed to read settings file: {e}")
+            logger.error("Failed to read settings file %s: %s", self.filepath, e)
             raise SettingsLoadError(f"Failed to read file: {e}")
 
         except SettingsLoadError:
             raise
 
         except Exception as e:
-            logger.error(f"Unexpected error loading settings: {e}")
+            logger.error(
+                "Unexpected error loading settings from %s: %s",
+                self.filepath,
+                e,
+            )
             raise SettingsLoadError(f"Unexpected error: {e}")
 
     def save(self) -> None:
@@ -429,7 +440,11 @@ class Settings:
                 try:
                     shutil.copy2(filepath, backup_path)
                 except IOError as e:
-                    logger.warning(f"Failed to create backup: {e}")
+                    logger.warning(
+                        "Failed to create settings backup %s: %s",
+                        backup_path,
+                        e,
+                    )
 
             # Atomic rename
             assert temp_path is not None
@@ -451,7 +466,7 @@ class Settings:
             logger.info("Settings saved successfully")
 
         except IOError as e:
-            logger.error(f"Failed to write settings: {e}")
+            logger.error("Failed to write settings file %s: %s", filepath, e)
 
             # Try to restore backup
             if backup_path.exists():
@@ -468,7 +483,7 @@ class Settings:
             raise SettingsSaveError(f"Failed to save: {e}")
 
         except Exception as e:
-            logger.error(f"Unexpected error saving settings: {e}")
+            logger.error("Unexpected error saving settings to %s: %s", filepath, e)
             raise SettingsSaveError(f"Unexpected error: {e}")
 
         finally:
@@ -555,8 +570,7 @@ class Settings:
         # Validate specific settings
         if "baud_rate" in self.data:
             baud = self.data["baud_rate"]
-            valid_bauds = [9600, 19200, 38400, 57600, 115200, 230400]
-            if baud not in valid_bauds:
+            if baud not in _VALID_BAUD_RATES:
                 raise SettingsValidationError(f"Invalid baud rate: {baud}")
 
         if "status_poll_interval" in self.data:
@@ -566,7 +580,7 @@ class Settings:
 
         if "unit_mode" in self.data:
             mode = self.data["unit_mode"]
-            if mode not in ("mm", "inch"):
+            if mode not in _VALID_UNIT_MODES:
                 raise SettingsValidationError(f"Invalid unit mode: {mode}")
 
         return True
@@ -592,7 +606,7 @@ class Settings:
 
         self.data["recent_files"] = recent
 
-    def get_recent_files(self) -> list:
+    def get_recent_files(self) -> list[str]:
         """Get list of recent files.
 
         Returns:
@@ -614,7 +628,7 @@ class Settings:
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=2, sort_keys=True)
-            logger.info(f"Settings exported to {filepath}")
+            logger.info("Settings exported to %s", filepath)
         except IOError as e:
             raise SettingsSaveError(f"Failed to export: {e}")
 
@@ -639,7 +653,7 @@ class Settings:
             self.data = _repair_invalid_settings(merged, defaults)
             self.validate()
 
-            logger.info(f"Settings imported from {filepath}")
+            logger.info("Settings imported from %s", filepath)
 
         except SettingsValidationError as e:
             raise SettingsLoadError(f"Invalid settings: {e}")

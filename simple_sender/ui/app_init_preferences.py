@@ -65,6 +65,9 @@ def _init_behavior_preferences(
     app.numeric_keypad_enabled = tk.BooleanVar(
         value=setting("numeric_keypad_enabled", True)
     )
+    app.developer_options_enabled = tk.BooleanVar(
+        value=setting("developer_options_enabled", False)
+    )
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
     app.pi_profile_enabled = tk.BooleanVar(value=setting("pi_profile_enabled", False))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))

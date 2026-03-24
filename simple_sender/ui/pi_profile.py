@@ -29,6 +29,7 @@ import queue
 from tkinter import messagebox
 
 from simple_sender.config.defaults import DEFAULT_APP_CONFIG
+from simple_sender.ui.tk_vars import read_bool_pref, safe_set_var_attr
 from simple_sender.utils.platform_detect import detect_raspberry_pi
 
 logger = logging.getLogger(__name__)
@@ -86,19 +87,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) -> bool:
-    var = getattr(app, attr_name, None)
-    if var is not None:
-        try:
-            return bool(var.get())
-        except Exception:
-            pass
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        try:
-            return bool(settings.get(key, default))
-        except Exception:
-            return bool(default)
-    return bool(default)
+    return read_bool_pref(app, attr_name=attr_name, key=key, default=default)
 
 
 def is_pi_profile_enabled(app) -> bool:
@@ -111,15 +100,13 @@ def is_pi_profile_enabled(app) -> bool:
 
 
 def _set_var(app, attr_name: str, value) -> bool:
-    var = getattr(app, attr_name, None)
-    if var is None:
-        return False
-    try:
-        var.set(value)
-        return True
-    except Exception as exc:
-        _log_suppressed(f"Failed setting {attr_name} for Pi profile", exc)
-        return False
+    return safe_set_var_attr(
+        app,
+        attr_name,
+        value,
+        log_suppressed=_log_suppressed,
+        context=f"Failed setting {attr_name} for Pi profile",
+    )
 
 
 def _invoke_handler(app, handler_name: str) -> None:

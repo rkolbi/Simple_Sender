@@ -213,6 +213,8 @@ TEMP_FILE_BUFFER_SIZE = 64 * 1024
 GCODE_STATS_DEBOUNCE_MS = 75
 """Debounce window (ms) before launching background G-code stats calculation."""
 
+# Keep only a small number of recent stats entries so repeated tab switches stay
+# responsive without pinning many heavy parse results in memory.
 GCODE_STATS_CACHE_MAX_ENTRIES = 16
 """Maximum cached G-code stats entries kept in memory."""
 
@@ -258,6 +260,8 @@ GCODE_PREP_SAMPLE_HEAD_LINES = 1200
 GCODE_PREP_SAMPLE_TAIL_LINES = 600
 """Number of trailing cleaned lines retained for sampled prepare-time analysis."""
 
+# Sample densely enough to preserve job-shape context while still capping
+# prepare-time work on very large files.
 GCODE_PREP_SAMPLE_INTERVAL_LINES = 250
 """Periodic sampling stride (cleaned lines) for prepare-time analysis."""
 
@@ -286,6 +290,8 @@ GCODE_OFFSET_INDEX_MAX_LINES = 250_000
 GCODE_OFFSET_INDEX_SPARSE_MIN_LINES = 40_000
 """Minimum cleaned-line estimate before sparse index mode is selected."""
 
+# A 256-line stride keeps resume/seek lookups reasonably fast without building a
+# full offset table for larger jobs.
 GCODE_OFFSET_INDEX_SPARSE_STRIDE_LINES = 256
 """Stride (cleaned lines) for sparse offset anchors."""
 
@@ -581,6 +587,8 @@ TX_LOOP_IDLE_WAIT_S = 0.2
 UI_POLL_INTERVAL = 0.01
 """Main UI event loop polling interval (seconds)."""
 
+# Bound accessory work so misbehaving smart-plug traffic cannot grow an
+# unbounded background queue.
 KASA_TASK_QUEUE_MAXSIZE = 256
 """Maximum queued Kasa background tasks before new tasks are dropped."""
 

@@ -30,6 +30,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - `tests/ui/test_all_stop.py` now verifies reset-path invalidation for tool-reference setup state
 
 ### Changed
+- Stabilization baseline for the closed refactor cycle:
+  - the low-risk cleanup and preflight-service extraction work is now treated as complete
+  - the current codebase is the recommended stable baseline for subsequent bug-fix-only work
+  - compatibility-sensitive and timing-sensitive areas remain intentionally unchanged
 - Release-candidate reliability hardening for v2.6:
   - worker-thread UI updates for connect/disconnect, G-code parse, settings save paths, and log viewer actions now marshal through UI-thread queue helpers (`ui_post`) instead of direct cross-thread Tk calls
   - GRBL settings `Save Changes` now completes as send-plus-verify: edited values are sent, then confirmed against a follow-up `$$` capture before success is reported
@@ -94,8 +98,9 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - setup state is invalidated on connection/session resets and reset-style stop paths so stale setup does not silently carry across sessions
 
 ### Documentation
+- README now documents the stabilization baseline, the preflight service/facade boundary (`preflight_service.py` behind `diagnostics_preflight.py`), and expanded operator troubleshooting for preflight outcomes.
 - README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
-- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-19; coverage test stage reported `1148 passed, 2 skipped`).
+- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-23; coverage test stage reported `1282 passed, 2 skipped`).
 - README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
@@ -121,10 +126,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
 - Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
-### Baseline Validation (local, 2026-03-19)
-- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1148 passed, 2 skipped`)
-- `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 138`: PASS
-- `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`138` source files)
+### Baseline Validation (local, 2026-03-23)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1282 passed, 2 skipped`)
+- `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 142`: PASS
+- `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`142` source files)
 
 ## [1.8.0] - 2026-02-26
 

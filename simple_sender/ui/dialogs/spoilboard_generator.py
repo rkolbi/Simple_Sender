@@ -140,12 +140,14 @@ def _save_generated_gcode(
     *,
     default_name: str,
 ) -> str | None:
+    log_dir = get_log_dir()
+    initial_dir = str(log_dir) if log_dir is not None else os.path.expanduser("~")
     path = run_file_dialog(
         app,
         filedialog.asksaveasfilename,
         title="Save G-code",
         defaultextension=".nc",
-        initialdir=str(get_log_dir()),
+        initialdir=initial_dir,
         initialfile=default_name,
         filetypes=(("G-code", "*.nc *.gcode *.tap *.txt"), ("All files", "*.*")),
     )

@@ -20,6 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Resume-from-line helpers and cached modal preamble reconstruction."""
+
 import logging
 import threading
 from collections import deque
@@ -32,7 +34,11 @@ from simple_sender.types import LineSource
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+# Keep only a few recent line sources cached so repeated dialog use stays fast
+# without retaining many full job references.
 _RESUME_CACHE_MAX = 8
+# Checkpoint every 256 parsed lines to trade a small amount of cache state for
+# much faster repeated preamble rebuilds near the same region.
 _RESUME_CHECKPOINT_STRIDE = 256
 _resume_cache_lock = threading.Lock()
 _resume_preamble_cache: dict[int, tuple[object, "_ResumePreambleCache"]] = {}
@@ -104,6 +110,8 @@ class _ResumeModalState:
 
 
 class _ResumePreambleCache:
+    """Thread-safe checkpoint cache for modal resume preambles."""
+
     def __init__(self, lines: LineSource):
         self._lines = lines
         self._lock = threading.Lock()
@@ -113,7 +121,7 @@ class _ResumePreambleCache:
     @staticmethod
     def _safe_len(lines: LineSource) -> int | None:
         try:
-            return max(0, int(len(lines)))  # type: ignore[arg-type]
+            return max(0, int(len(lines)))
         except Exception:
             return None
 
@@ -129,6 +137,8 @@ class _ResumePreambleCache:
             self._checkpoints = {0: _ResumeModalState()}
 
     def get(self, stop_index: int) -> tuple[list[str], bool]:
+        """Return the reconstructed modal preamble up to ``stop_index``."""
+
         target = max(0, int(stop_index))
         with self._lock:
             self._reset_if_size_changed()
@@ -139,7 +149,7 @@ class _ResumePreambleCache:
             state = self._checkpoints[checkpoint].copy()
             for idx in range(checkpoint, target):
                 try:
-                    raw = self._lines[idx]  # type: ignore[index]
+                    raw = self._lines[idx]
                 except Exception:
                     break
                 _apply_line_to_state(state, raw)
@@ -152,8 +162,8 @@ class _ResumePreambleCache:
 
 def _get_resume_cache(lines: LineSource) -> _ResumePreambleCache | None:
     try:
-        len(lines)  # type: ignore[arg-type]
-        lines[0:0]  # type: ignore[index]
+        len(lines)
+        lines[0:0]
     except Exception:
         return None
     cache_key = id(lines)
@@ -263,6 +273,8 @@ def _build_resume_preamble_fallback(lines: LineSource, stop_index: int) -> tuple
 
 
 def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
+    """Build a best-effort modal restore preamble for resume-from-line."""
+
     cache = _get_resume_cache(lines)
     if cache is not None:
         try:
@@ -273,6 +285,8 @@ def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str]
 
 
 def resume_from_line(app, start_index: int, preamble: list[str]):
+    """Restart streaming from a specific line after UI-side safety checks."""
+
     if app.grbl.is_streaming():
         messagebox.showwarning(
             DialogTitles.BUSY,

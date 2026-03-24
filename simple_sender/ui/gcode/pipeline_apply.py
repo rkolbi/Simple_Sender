@@ -25,6 +25,7 @@ import time
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_source import FileGcodeSource
+from simple_sender.ui.tk_vars import read_bool_pref
 from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
 
@@ -81,19 +82,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) -> bool:
-    var = getattr(app, attr_name, None)
-    if var is not None:
-        try:
-            return bool(var.get())
-        except Exception:
-            pass
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        try:
-            return bool(settings.get(key, default))
-        except Exception:
-            return bool(default)
-    return bool(default)
+    return bool(read_bool_pref(app, attr_name=attr_name, key=key, default=default))
 
 
 def _pi_profile_enabled(app) -> bool:

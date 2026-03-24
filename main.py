@@ -19,13 +19,26 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+import logging
 import time
 
 
 def main() -> None:
     startup_started_at = time.perf_counter()
-    from simple_sender.utils.logging_config import setup_logging
-    setup_logging()
+    try:
+        from simple_sender.utils.logging_config import setup_logging
+
+        setup_logging()
+    except Exception as exc:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        logging.getLogger(__name__).warning(
+            "Logging bootstrap failed; continuing with basic logging: %s",
+            exc,
+        )
     from simple_sender.application import App
     App(startup_started_at=startup_started_at).mainloop()
 

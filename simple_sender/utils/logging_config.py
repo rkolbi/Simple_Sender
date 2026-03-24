@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
+import tempfile
 from pathlib import Path
 
 from .config import get_settings_path
@@ -42,20 +44,75 @@ def _handler_exists(logger: logging.Logger, name: str) -> bool:
     return False
 
 
-def get_log_dir() -> Path:
-    """Resolve the directory for log files (creates it if needed)."""
-    base_dir = Path(get_settings_path()).parent
-    log_dir = base_dir / LOG_DIRNAME
+def _probe_writable_directory(path: Path) -> bool:
     try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir
+        path.mkdir(parents=True, exist_ok=True)
     except Exception:
-        fallback = Path(get_preferred_temp_dir()) / "logs"
-        try:
-            fallback.mkdir(parents=True, exist_ok=True)
-            return fallback
-        except Exception:
-            return fallback
+        return False
+    if not path.exists() or not path.is_dir():
+        return False
+    try:
+        fd, probe_path = tempfile.mkstemp(
+            dir=str(path),
+            prefix=".simple_sender_write_probe_",
+            suffix=".tmp",
+        )
+    except Exception:
+        return False
+    try:
+        os.close(fd)
+        Path(probe_path).unlink(missing_ok=True)
+    except Exception:
+        return False
+    return True
+
+
+def _resolve_usable_log_dir(path: Path) -> Path | None:
+    return path if _probe_writable_directory(path) else None
+
+
+def get_log_dir() -> Path | None:
+    """Resolve a usable directory for log files."""
+    base_dir = Path(get_settings_path()).parent
+    log_dir = _resolve_usable_log_dir(base_dir / LOG_DIRNAME)
+    if log_dir is not None:
+        return log_dir
+    fallback = Path(get_preferred_temp_dir()) / LOG_DIRNAME
+    return _resolve_usable_log_dir(fallback)
+
+
+def _add_rotating_file_handler(
+    logger: logging.Logger,
+    *,
+    log_dir: Path | None,
+    handler_name: str,
+    filename: str,
+    level: int,
+    formatter: logging.Formatter,
+    max_bytes: int,
+    backup_count: int,
+    warn_logger: logging.Logger,
+) -> None:
+    if log_dir is None or _handler_exists(logger, handler_name):
+        return
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            log_dir / filename,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        warn_logger.warning(
+            "File logging disabled for %s: %s",
+            filename,
+            exc,
+        )
+        return
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
+    handler.set_name(handler_name)
+    logger.addHandler(handler)
 
 
 def setup_logging() -> logging.Logger:
@@ -75,67 +132,62 @@ def setup_logging() -> logging.Logger:
         console.set_name("simple_sender_console")
         root.addHandler(console)
 
-    if not _handler_exists(root, "simple_sender_app_file"):
-        app_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "simple_sender.log",
-            maxBytes=10_000_000,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        app_handler.setLevel(logging.DEBUG)
-        app_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
-        app_handler.set_name("simple_sender_app_file")
-        root.addHandler(app_handler)
-
-    if not _handler_exists(root, "simple_sender_error_file"):
-        error_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "errors.log",
-            maxBytes=2_000_000,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        error_handler.setLevel(logging.WARNING)
-        error_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s:%(lineno)d\n%(message)s\n")
-        )
-        error_handler.set_name("simple_sender_error_file")
-        root.addHandler(error_handler)
+    if log_dir is None:
+        root.warning("No writable log directory available; continuing with console-only logging.")
+    _add_rotating_file_handler(
+        root,
+        log_dir=log_dir,
+        handler_name="simple_sender_app_file",
+        filename="simple_sender.log",
+        level=logging.DEBUG,
+        formatter=logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
+        max_bytes=10_000_000,
+        backup_count=5,
+        warn_logger=root,
+    )
+    _add_rotating_file_handler(
+        root,
+        log_dir=log_dir,
+        handler_name="simple_sender_error_file",
+        filename="errors.log",
+        level=logging.WARNING,
+        formatter=logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d\n%(message)s\n"
+        ),
+        max_bytes=2_000_000,
+        backup_count=5,
+        warn_logger=root,
+    )
 
     serial_logger = logging.getLogger(f"{APP_LOGGER_NAME}.serial")
     serial_logger.setLevel(logging.DEBUG)
-    if not _handler_exists(serial_logger, "simple_sender_serial_file"):
-        serial_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "serial.log",
-            maxBytes=5_000_000,
-            backupCount=3,
-            encoding="utf-8",
-        )
-        serial_handler.setLevel(logging.DEBUG)
-        serial_handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        serial_handler.set_name("simple_sender_serial_file")
-        serial_logger.addHandler(serial_handler)
+    _add_rotating_file_handler(
+        serial_logger,
+        log_dir=log_dir,
+        handler_name="simple_sender_serial_file",
+        filename="serial.log",
+        level=logging.DEBUG,
+        formatter=logging.Formatter(
+            "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ),
+        max_bytes=5_000_000,
+        backup_count=3,
+        warn_logger=root,
+    )
 
     ui_logger = logging.getLogger(f"{APP_LOGGER_NAME}.ui")
     ui_logger.setLevel(logging.DEBUG)
-    if not _handler_exists(ui_logger, "simple_sender_ui_file"):
-        ui_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "ui.log",
-            maxBytes=5_000_000,
-            backupCount=3,
-            encoding="utf-8",
-        )
-        ui_handler.setLevel(logging.DEBUG)
-        ui_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
-        ui_handler.set_name("simple_sender_ui_file")
-        ui_logger.addHandler(ui_handler)
+    _add_rotating_file_handler(
+        ui_logger,
+        log_dir=log_dir,
+        handler_name="simple_sender_ui_file",
+        filename="ui.log",
+        level=logging.DEBUG,
+        formatter=logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
+        max_bytes=5_000_000,
+        backup_count=3,
+        warn_logger=root,
+    )
 
     return root

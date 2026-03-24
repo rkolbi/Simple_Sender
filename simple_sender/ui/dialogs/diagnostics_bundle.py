@@ -42,7 +42,7 @@ def collect_diagnostics_bundle_payload(
     build_system_info_text: Callable[..., str],
     resolved_settings_path: Callable[[Any], Path | None],
     discover_macro_assets: Callable[[Any], list[tuple[str, str]]],
-    get_log_dir: Callable[[], Path],
+    get_log_dir: Callable[[], Path | None],
     collect_streaming_bundle_artifacts: Callable[[dict[str, Any], list[Path]], dict[str, str]],
     log_suppressed: Callable[[str, BaseException], None],
     bundle_log_max_files: int,
@@ -61,11 +61,14 @@ def collect_diagnostics_bundle_payload(
     settings_path = resolved_settings_path(app)
     macro_assets = discover_macro_assets(app)
     log_dir = get_log_dir()
-    try:
-        log_candidates = list(log_dir.iterdir())
-    except Exception as exc:
-        log_suppressed("Failed enumerating log files for diagnostics bundle", exc)
+    if log_dir is None:
         log_candidates = []
+    else:
+        try:
+            log_candidates = list(log_dir.iterdir())
+        except Exception as exc:
+            log_suppressed("Failed enumerating log files for diagnostics bundle", exc)
+            log_candidates = []
     log_files = sorted(
         (
             candidate

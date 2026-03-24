@@ -20,6 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Optional Kasa accessory control helpers and background command routing."""
+
 from __future__ import annotations
 
 import asyncio
@@ -159,6 +161,8 @@ class SpindleCommandDetector:
 
 
 class PythonKasaController:
+    """Runtime adapter for the optional ``python-kasa`` dependency."""
+
     _DEFAULT_REQUEST_TIMEOUT_S = 15.0
 
     def __init__(self, *, request_timeout_s: float = _DEFAULT_REQUEST_TIMEOUT_S) -> None:
@@ -178,6 +182,8 @@ class PythonKasaController:
             return
         self._import_attempted = True
         try:
+            # ``python-kasa`` is optional and supported installs may not ship
+            # usable inline typing metadata.
             from kasa import Discover  # type: ignore
         except Exception as exc:  # pragma: no cover - exercised when dependency missing
             self._import_error = exc

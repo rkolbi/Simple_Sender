@@ -124,15 +124,31 @@ def _touch_scroll_allowed(app, widget) -> bool:
     if isinstance(
         widget,
         (
+            tk.Button,
+            tk.Checkbutton,
+            tk.Radiobutton,
             tk.Entry,
             tk.Text,
             tk.Listbox,
             tk.Spinbox,
+            ttk.Button,
+            ttk.Checkbutton,
             ttk.Entry,
             ttk.Combobox,
+            ttk.Radiobutton,
             ttk.Scale,
             ttk.Spinbox,
+            ttk.Treeview,
         ),
+    ):
+        return False
+    try:
+        klass = str(widget.winfo_class() or "").lower()
+    except Exception:
+        klass = ""
+    if any(
+        token in klass
+        for token in ("button", "checkbutton", "radiobutton", "treeview")
     ):
         return False
     if _is_scrollbar_widget(widget):

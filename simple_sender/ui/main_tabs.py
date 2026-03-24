@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 
 def update_tab_visibility(app, nb=None):
+    """Sync app-level tab state and tab-specific bindings from the active notebook tab."""
+
     if nb is None:
         nb = getattr(app, "notebook", None)
     if not nb:
@@ -45,7 +47,7 @@ def update_tab_visibility(app, nb=None):
         tab_id = nb.select()
         label = nb.tab(tab_id, "text")
     except Exception as exc:
-        logger.exception("Failed to update tab visibility: %s", exc)
+        logger.exception("Failed resolving active notebook tab while updating tab visibility")
         return
     try:
         app._active_tab_label = str(label)
@@ -59,7 +61,11 @@ def update_tab_visibility(app, nb=None):
     try:
         app._update_quick_button_visibility()
     except Exception as exc:
-        logger.debug("Failed updating quick-button visibility for active tab: %s", exc, exc_info=exc)
+        logger.debug(
+            "Failed updating quick-button visibility for active tab %r",
+            label,
+            exc_info=exc,
+        )
     try:
         if label == "App Settings":
             app._bind_app_settings_mousewheel()
@@ -74,7 +80,11 @@ def update_tab_visibility(app, nb=None):
             app._unbind_app_settings_mousewheel()
             app._unbind_app_settings_touch_scroll()
     except Exception as exc:
-        logger.debug("Failed updating App Settings input bindings: %s", exc, exc_info=exc)
+        logger.debug(
+            "Failed updating App Settings input bindings for active tab %r",
+            label,
+            exc_info=exc,
+        )
 
 
 def on_tab_changed(app, event):

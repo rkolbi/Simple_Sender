@@ -38,12 +38,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from simple_sender import __version__ as SIMPLE_SENDER_PACKAGE_VERSION
-from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.kasa_actions import format_kasa_status_line, kasa_status_snapshot
 from simple_sender.ui.macro_files import discover_macro_assets
 from simple_sender.ui.pi_profile import PI_PROFILE_STATUS_POLL_INTERVAL
 from simple_sender.ui.stream_completion import deferred_completion_wait_snapshot
+from simple_sender.ui.tk_vars import safe_set_var_attr
 from simple_sender.utils.constants import (
     GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT,
     GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER,
@@ -84,6 +84,12 @@ from .diagnostics_session_text import (
 )
 from .diagnostics_runtime_display import (
     open_runtime_telemetry as _open_runtime_telemetry_impl,
+)
+from .diagnostics_checklists import (
+    open_release_checklist as _open_release_checklist_impl,
+    open_run_checklist as _open_run_checklist_impl,
+    resolve_checklist_items as _resolve_checklist_items_impl,
+    resolve_checklist_items_any as _resolve_checklist_items_any_impl,
 )
 from .diagnostics_report_export import (
     export_session_diagnostics as _export_session_diagnostics_impl,
@@ -129,14 +135,7 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 def _set_var_value(app: Any, attr_name: str, value: Any) -> None:
-    var = getattr(app, attr_name, None)
-    setter = getattr(var, "set", None)
-    if not callable(setter):
-        return
-    try:
-        setter(value)
-    except Exception as exc:
-        _log_suppressed(f"Failed setting {attr_name}", exc)
+    safe_set_var_attr(app, attr_name, value, log_suppressed=_log_suppressed)
 
 
 def _json_dump(obj: Any) -> str:
@@ -1754,121 +1753,30 @@ def open_runtime_telemetry(app) -> None:
     )
 
 
-def _resolve_checklist_items(app, name: str, fallback: list[str]) -> list[str]:
-    path = find_named_checklist(app, name)
-    if not path:
-        return fallback
-    items = load_checklist_items(path)
-    if items is None:
-        return fallback
-    return cast(list[str], items)
+def _resolve_checklist_items(app: Any, name: str, fallback: list[str]) -> list[str]:
+    return cast(list[str], _resolve_checklist_items_impl(app, name, fallback))
 
 
 def _resolve_checklist_items_any(
-    app, names: list[str], fallback: list[str]
+    app: Any, names: list[str], fallback: list[str]
 ) -> list[str]:
-    for name in names:
-        path = find_named_checklist(app, name)
-        if not path:
-            continue
-        items = load_checklist_items(path)
-        if items is not None:
-            return cast(list[str], items)
-    return fallback
+    return cast(list[str], _resolve_checklist_items_any_impl(app, names, fallback))
 
 
-def open_release_checklist(app):
-    existing = getattr(app, "_release_checklist_window", None)
-    if existing is not None:
-        try:
-            if existing.winfo_exists():
-                existing.lift()
-                existing.focus_force()
-                return
-        except Exception as exc:
-            _log_suppressed("Failed restoring existing release checklist window", exc)
-    win = tk.Toplevel(app)
-    app._release_checklist_window = win
-    win.title("Release checklist")
-    win.minsize(560, 380)
-    win.transient(app)
-    container = ttk.Frame(win, padding=12)
-    container.pack(fill="both", expand=True)
-    title = ttk.Label(
-        container, text="Release checklist", font=("TkDefaultFont", 12, "bold")
+def open_release_checklist(app: Any) -> None:
+    _open_release_checklist_impl(
+        app,
+        fallback_items=CHECKLIST_ITEMS,
+        log_suppressed=_log_suppressed,
     )
-    title.pack(anchor="w")
-    ttk.Label(
-        container,
-        text="Use this quick pass before release to confirm the critical GRBL workflows.",
-        wraplength=520,
-        justify="left",
-    ).pack(anchor="w", pady=(4, 10))
-    items = _resolve_checklist_items(app, "release", CHECKLIST_ITEMS)
-    text = tk.Text(container, wrap="word", height=12)
-    text.pack(fill="both", expand=True)
-    if items:
-        text.insert("end", "\n".join(f"- {item}" for item in items))
-    else:
-        text.insert("end", "Checklist file is empty.")
-    text.configure(state="disabled")
-    center_window(win, app)
-
-    def _on_close():
-        app._release_checklist_window = None
-        win.destroy()
-
-    btn_row = ttk.Frame(container)
-    btn_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(btn_row, text="Close", command=_on_close).pack(side="right")
-    win.protocol("WM_DELETE_WINDOW", _on_close)
 
 
-def open_run_checklist(app):
-    existing = getattr(app, "_run_checklist_window", None)
-    if existing is not None:
-        try:
-            if existing.winfo_exists():
-                existing.lift()
-                existing.focus_force()
-                return
-        except Exception as exc:
-            _log_suppressed("Failed restoring existing run checklist window", exc)
-    win = tk.Toplevel(app)
-    app._run_checklist_window = win
-    win.title("Start Job checklist")
-    win.minsize(520, 320)
-    win.transient(app)
-    container = ttk.Frame(win, padding=12)
-    container.pack(fill="both", expand=True)
-    title = ttk.Label(
-        container, text="Start Job checklist", font=("TkDefaultFont", 12, "bold")
+def open_run_checklist(app: Any) -> None:
+    _open_run_checklist_impl(
+        app,
+        fallback_items=RUN_CHECKLIST_ITEMS,
+        log_suppressed=_log_suppressed,
     )
-    title.pack(anchor="w")
-    ttk.Label(
-        container,
-        text="Use this checklist before starting a job to reduce surprises.",
-        wraplength=480,
-        justify="left",
-    ).pack(anchor="w", pady=(4, 10))
-    items = _resolve_checklist_items_any(app, ["start-job", "run"], RUN_CHECKLIST_ITEMS)
-    text = tk.Text(container, wrap="word", height=10)
-    text.pack(fill="both", expand=True)
-    if items:
-        text.insert("end", "\n".join(f"- {item}" for item in items))
-    else:
-        text.insert("end", "Checklist file is empty.")
-    text.configure(state="disabled")
-    center_window(win, app)
-
-    def _on_close():
-        app._run_checklist_window = None
-        win.destroy()
-
-    btn_row = ttk.Frame(container)
-    btn_row.pack(fill="x", pady=(10, 0))
-    ttk.Button(btn_row, text="Close", command=_on_close).pack(side="right")
-    win.protocol("WM_DELETE_WINDOW", _on_close)
 
 
 def _format_validation_summary(report) -> list[str]:

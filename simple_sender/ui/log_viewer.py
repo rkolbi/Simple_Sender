@@ -65,7 +65,11 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _resolve_log_files(log_dir: Path, source: str) -> list[Path]:
+def _resolve_log_files(log_dir: Path | None, source: str) -> list[Path]:
+    """Return matching log files for a source, ordered oldest to newest."""
+
+    if log_dir is None:
+        return []
     bases = LOG_SOURCES.get(source, LOG_SOURCES["Application"])
     files: list[Path] = []
     for base in bases:
@@ -84,6 +88,8 @@ def _resolve_log_files(log_dir: Path, source: str) -> list[Path]:
 
 
 def _read_tail_lines(path: Path, limit: int) -> list[str]:
+    """Read the most recent decoded lines from a log file."""
+
     if limit <= 0:
         return []
     try:
@@ -391,7 +397,11 @@ class LogViewer(ttk.Frame):
         pending = self._refresh_pending
         stale = pending is not None and pending != request
         if error is not None:
-            _log_suppressed("Log Viewer refresh failed", error)
+            source, level = request
+            _log_suppressed(
+                f"Log Viewer refresh failed for source={source} level={level}",
+                error,
+            )
             if not stale:
                 self._render(["Failed to load logs."])
         elif not stale:
@@ -498,6 +508,7 @@ class LogViewer(ttk.Frame):
                             _log_suppressed("Failed adding log file to export archive", exc)
             except Exception as exc:
                 error = exc
+                _log_suppressed(f"Failed exporting logs archive to {out_path}", exc)
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             self._post_ui(
                 lambda: self._complete_export(

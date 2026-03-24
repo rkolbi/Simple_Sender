@@ -1,5 +1,5 @@
 ﻿# Simple Sender - Full Manual
-![Release: 2.7](https://img.shields.io/badge/release-2.7-blue)
+![Release: 2.7.1](https://img.shields.io/badge/release-2.7.1-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
@@ -53,6 +53,8 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - [Release Checklist](#release-checklist)
 - [Module Layout](#module-layout)
 - [Performance Profiling](#performance-profiling)
+- [Performance Notes](#performance-notes)
+- [Known Limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
 - [Change Summary (since 1.2)](#change-summary-since-12)
 - [FAQ](#faq)
@@ -82,6 +84,9 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 - **Experimental features:** **Auto-Level (Experimental)**, **Recover (Experimental)**, and **Resume From... (Experimental)** are optional UI features controlled in **App Settings > Experimental**.
+
+## Project Status
+Recent cleanup/refactor work was intentionally limited to low-risk maintainability improvements, preflight-service extraction, and documentation alignment. Compatibility-sensitive and timing-sensitive subsystems were left stable by design, the cleanup/refactor track is complete, and the current codebase is the recommended stabilization baseline for subsequent bug-fix-only work. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
 
 ## Requirements & Installation
 - Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
@@ -364,6 +369,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
 - **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
+- **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py`, while `simple_sender/ui/dialogs/diagnostics_preflight.py` remains the UI-facing compatibility facade used by diagnostics code.
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
@@ -911,7 +917,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 19, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1148 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 23, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1282 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -950,7 +956,7 @@ You can also use the resilient launcher helper: `python tools/run_ruff.py check 
 
 Validate mypy target manifest and README count note:
 ```powershell
-python tools/check_mypy_targets.py --expected-count 138
+python tools/check_mypy_targets.py --expected-count 142
 ```
 
 One-command local gate:
@@ -1049,15 +1055,41 @@ python tools/perf_microbench.py
   - background task timings (including `gcode.load.*`, `gcode.parse.sample`, and `gcode.stats.compute.*`)
   - optional tracemalloc growth deltas when leak-watch is enabled
 
+## Performance Notes
+- Python 3.11+ is the supported baseline; the project assumptions, tooling, and current typing gates are aligned to that version.
+- Raspberry Pi and other low-power systems benefit from leaving `Performance mode` enabled, especially while streaming or browsing large files.
+- Large G-code files are supported, but faster storage and more RAM reduce temp-file churn, background scan latency, and viewer refresh pressure.
+- Practical RAM guidance: lighter jobs can run on 2 GB-class systems, but 4 GB or more is the safer baseline if you routinely open very large files, keep diagnostics on, or run other services on the same machine.
+- Streaming and fast-load safeguards intentionally trade some immediate detail for responsiveness on ultra-large jobs; use the diagnostics and profiling tools when tuning those thresholds.
+- Runtime profiling hooks and diagnostics exports are the preferred way to confirm whether a machine is CPU-bound, memory-bound, or UI-queue bound before changing settings.
+
+## Known Limitations
+- Target platform is GRBL 1.1h, 3-axis. 4-axis controllers, grblHAL variants, and other controller dialects are out of scope.
+- macOS is not a primary tested platform for this release line; Linux and Windows remain the expected deployment targets.
+- Macro execution is powerful enough to run trusted shop automation, so macro files should be treated as trusted content only.
+- Kasa control depends on the optional `python-kasa` package and the local network environment; accessory automation is not required for core sender use.
+- `Resume From...`, `Recover`, and `Auto-Level` remain optional experimental workflows. Validate them on your machine before depending on them in production.
+- Very large files still rely on bounded caches and sampled background analysis in some paths by design; diagnostics may therefore show sampled or deferred work instead of full immediate scans.
+
 ## Troubleshooting
 - No ports: install driver, try another cable/port.
 - Connect fails: verify port/baud 115200; close other apps.
+- Windows COM checks: confirm the controller appears in Device Manager, unplug/replug to watch the COM number change, and make sure another sender is not already holding the port open.
+- Linux serial permissions: make sure your user can access the serial device (`dialout`, `uucp`, or the distro-equivalent group), then log out/in after changing group membership.
 - No $$: wait for ready/status; clear alarms; stop streaming.
 - Alarm: use $X/$H; reset + re-home if needed.
 - Run shows `Job Setup Not Completed`: run `Macro-3 (Job Setup)` to capture tool reference for this session, then try Run again. Use `Start Anyway` only when you intentionally accept the risk.
+- Preflight reports `No G-code job is loaded`: load or reload the job first, then rerun the check.
+- Preflight reports `Job bounds are unavailable`: wait for the load/parse pipeline to finish, then rerun the check; on very large files this can appear briefly while background analysis catches up.
+- Preflight warns that travel settings are unavailable: refresh or import GRBL settings so `$130/$131/$132` are populated before relying on travel checks.
+- Preflight reports out-of-bounds travel: compare the reported axis span to the machine travel in the GRBL settings table, then re-post/reposition the job or correct the controller settings if needed.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
+- Raspberry Pi feels sluggish: keep `Performance mode` enabled, avoid unnecessary background apps, prefer local SSD/fast SD storage, and use diagnostics export to see whether UI queue drain or file parsing is the bottleneck.
+- Large file handling feels slow: let the initial load/prepare finish, avoid repeated reloads during diagnostics capture, and expect some stats work to be sampled or deferred on ultra-large files.
+- Macro behavior is unexpected: confirm the macro came from a trusted source, review the sample view or Macro Manager contents, and re-test with the spindle off before relying on it.
+- Performance troubleshooting: use App Settings > Diagnostics to export a session bundle or save the runtime performance report before changing thresholds or polling intervals.
 - Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle (Save ZIP). For plain text only, use Export session diagnostics (Save report). Backup bundle export/import is for settings/macro/checklist transfer.
 
 ## Change Summary (since 1.2)
@@ -1095,10 +1127,11 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 138 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-19), and local/CI hooks now enforce `--expected-count 138`.
+5. Static typing gates currently run mypy against 142 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-23), and local/CI hooks now enforce `--expected-count 142`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
+9. Preflight business logic now lives in `simple_sender/services/preflight_service.py`, but `simple_sender/ui/dialogs/diagnostics_preflight.py` remains the stable facade used by diagnostics-facing UI code. Treat that split as the maintenance boundary unless a future change explicitly reopens architecture work.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
@@ -1400,7 +1433,13 @@ Macro UI is included below along with the rest of the interface.
 - Recommendation: decrease spacing for more accuracy, increase it for faster probing; Custom applies between the thresholds.
 
 ### App Settings: Diagnostics
-- Preflight check (Run check): scans the loaded job for bounds/validation warnings.
+- Preflight check (Run check): evaluates the loaded job for readiness, bounds availability, and machine-travel overruns using the current `$130/$131/$132` travel settings when available.
+- Preflight outcomes:
+  - No job loaded: blocking failure until a G-code file is loaded.
+  - Bounds unavailable: blocking failure while parsing/quick-bounds data is not ready yet.
+  - Travel limits unavailable: warning when `$130/$131/$132` are missing, blank, or unreadable.
+  - Out of bounds: blocking failure for each axis whose job span exceeds configured travel.
+  - Exact-limit edge cases: spans that land exactly on the configured travel limit are treated as in-bounds, with a small float-compare tolerance to avoid false positives from formatting noise.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.

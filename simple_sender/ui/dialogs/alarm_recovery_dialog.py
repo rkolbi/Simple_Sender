@@ -28,9 +28,14 @@ from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 
 logger = logging.getLogger(__name__)
+_ALARM_RECOVERY_WRAPLENGTH = 460
+_ALARM_RECOVERY_SECTION_PAD_Y = (0, 8)
+_ALARM_RECOVERY_BUTTON_PAD_X = (0, 6)
 
 
 def show_alarm_recovery(app) -> None:
+    """Open the alarm recovery dialog when an alarm lock is active."""
+
     if not app._alarm_locked:
         messagebox.showinfo("Alarm recovery", "No active alarm.")
         return
@@ -42,7 +47,12 @@ def show_alarm_recovery(app) -> None:
     dlg.resizable(False, False)
     frm = ttk.Frame(dlg, padding=12)
     frm.pack(fill="both", expand=True)
-    ttk.Label(frm, text=msg, wraplength=460, justify="left").pack(fill="x", pady=(0, 8))
+    ttk.Label(
+        frm,
+        text=msg,
+        wraplength=_ALARM_RECOVERY_WRAPLENGTH,
+        justify="left",
+    ).pack(fill="x", pady=_ALARM_RECOVERY_SECTION_PAD_Y)
     extra_lines = []
     last_status = getattr(app, "_last_status_raw", "") or ""
     if last_status:
@@ -54,48 +64,66 @@ def show_alarm_recovery(app) -> None:
         ttk.Label(
             frm,
             text="\n".join(extra_lines),
-            wraplength=460,
+            wraplength=_ALARM_RECOVERY_WRAPLENGTH,
             justify="left",
-        ).pack(fill="x", pady=(0, 8))
+        ).pack(fill="x", pady=_ALARM_RECOVERY_SECTION_PAD_Y)
     ttk.Label(
         frm,
         text="Suggested steps: Unlock ($X) to clear the alarm, then Home ($H) if required. "
         "If motion feels unsafe, use Reset (Ctrl-X).",
-        wraplength=460,
+        wraplength=_ALARM_RECOVERY_WRAPLENGTH,
         justify="left",
-    ).pack(fill="x", pady=(0, 10))
+        ).pack(fill="x", pady=(0, 10))
     btn_row = ttk.Frame(frm)
     btn_row.pack(fill="x")
 
-    def run_and_close(action):
+    def run_and_close(action, *, action_label: str) -> None:
         if not app._require_grbl_connection():
             return
         try:
             action()
-        except Exception as exc:
-            logger.exception("Alarm recovery action failed: %s", exc)
+        except Exception:
+            logger.exception("Alarm recovery action %r failed", action_label)
         try:
             dlg.destroy()
-        except Exception as exc:
-            logger.exception("Failed to close alarm recovery dialog: %s", exc)
+        except Exception:
+            logger.exception(
+                "Failed to close alarm recovery dialog after action %r",
+                action_label,
+            )
 
     def _reset_with_accessories_off() -> None:
         try:
             if hasattr(app, "_stop_job_accessories"):
                 app._stop_job_accessories("job_reset")
-        except Exception as exc:
-            logger.exception("Failed stopping Kasa job accessories before reset: %s", exc)
+        except Exception:
+            logger.exception("Failed stopping job accessories before alarm reset")
         app.grbl.reset()
         invalidate_job_setup_state(app)
 
-    ttk.Button(btn_row, text="Unlock ($X)", command=lambda: run_and_close(app.grbl.unlock)).pack(
-        side="left", padx=(0, 6)
+    ttk.Button(
+        btn_row,
+        text="Unlock ($X)",
+        command=lambda: run_and_close(app.grbl.unlock, action_label="Unlock ($X)"),
+    ).pack(
+        side="left",
+        padx=_ALARM_RECOVERY_BUTTON_PAD_X,
     )
-    ttk.Button(btn_row, text="Home ($H)", command=lambda: run_and_close(app._start_homing)).pack(
-        side="left", padx=(0, 6)
+    ttk.Button(
+        btn_row,
+        text="Home ($H)",
+        command=lambda: run_and_close(app._start_homing, action_label="Home ($H)"),
+    ).pack(
+        side="left",
+        padx=_ALARM_RECOVERY_BUTTON_PAD_X,
     )
-    ttk.Button(btn_row, text="Reset", command=lambda: run_and_close(_reset_with_accessories_off)).pack(
-        side="left", padx=(0, 6)
+    ttk.Button(
+        btn_row,
+        text="Reset",
+        command=lambda: run_and_close(_reset_with_accessories_off, action_label="Reset"),
+    ).pack(
+        side="left",
+        padx=_ALARM_RECOVERY_BUTTON_PAD_X,
     )
     ttk.Button(btn_row, text="Close", command=dlg.destroy).pack(side="left")
     dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)

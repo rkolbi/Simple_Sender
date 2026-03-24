@@ -152,6 +152,13 @@ def build_status_bar(app, before):
     status_bar = ttk.Frame(app, padding=(8, 0, 8, 6))
     status_bar.pack(side="bottom", fill="x", before=before)
 
+    def _refresh_buffer_bar_tooltip(*_args) -> None:
+        throughput_text = str(_value_from_var(getattr(app, "throughput_var", None), "") or "").strip()
+        buffer_text = str(_value_from_var(getattr(app, "buffer_fill", None), "") or "").strip()
+        tooltip_text = "\n".join(text for text in (throughput_text, buffer_text) if text)
+        if tooltip_text:
+            apply_tooltip(app.buffer_bar, tooltip_text)
+
     def _set_stream_progress_visible(visible: bool) -> None:
         frame = getattr(app, "_stream_progress_frame", None)
         if frame is None:
@@ -201,6 +208,12 @@ def build_status_bar(app, before):
         style="SimpleSender.Blue.Horizontal.TProgressbar",
     )
     app.buffer_bar.pack(side="right", padx=(6, 0))
+    _refresh_buffer_bar_tooltip()
+    try:
+        app.throughput_var.trace_add("write", _refresh_buffer_bar_tooltip)
+        app.buffer_fill.trace_add("write", _refresh_buffer_bar_tooltip)
+    except Exception:
+        pass
     app.error_dialog_status_label = ttk.Label(
         status_bar,
         textvariable=app.error_dialog_status_var,
@@ -211,13 +224,6 @@ def build_status_bar(app, before):
         app.error_dialog_status_label,
         "Shows when error dialogs are disabled or suppressed.",
     )
-    ttk.Label(status_bar, textvariable=app.buffer_fill, anchor="e").pack(side="right")
-    app.throughput_label = ttk.Label(
-        status_bar,
-        textvariable=app.throughput_var,
-        anchor="e",
-    )
-    app.throughput_label.pack(side="right", padx=(6, 0))
     app._build_led_panel(status_bar)
     app.btn_toggle_tips = ttk.Button(
         status_bar,

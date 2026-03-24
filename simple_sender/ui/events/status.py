@@ -1217,7 +1217,11 @@ def _schedule_manual_jog_prediction_tick(app) -> None:
 
 
 def _run_manual_jog_prediction_tick(app) -> None:
+    """Advance the UI-side jog prediction until the next real status sync."""
+
     app._manual_jog_predict_after_id = None
+    # Snapshot and validate the last prediction state before doing any
+    # interpolation work.
     state = getattr(app, "_manual_jog_predict_state", None)
     if not isinstance(state, dict):
         return
@@ -1250,6 +1254,8 @@ def _run_manual_jog_prediction_tick(app) -> None:
     ):
         _clear_manual_jog_prediction(app)
         return
+    # Derive a velocity vector from either the last observed status delta or
+    # the normalized jog direction plus reported speed.
     if isinstance(velocity_report_s, (list, tuple)) and len(velocity_report_s) >= 3:
         try:
             velocity_vec = (
@@ -1267,6 +1273,8 @@ def _run_manual_jog_prediction_tick(app) -> None:
         )
     else:
         velocity_vec = (0.0, 0.0, 0.0)
+    # Clamp interpolation to a short horizon so the UI prediction stays bounded
+    # and naturally yields back to real GRBL status data.
     prediction_horizon_s = _manual_jog_prediction_horizon_s(state)
     elapsed_s = max(0.0, time.monotonic() - anchor_ts)
     status_sync_interval_s = max(0.0, float(state.get("status_sync_interval_s", 0.0) or 0.0))
@@ -1705,6 +1713,8 @@ def _update_positions_and_macro_state(
     event_started_perf: float | None = None,
     noncritical_budget_ms: float = _STATUS_NONCRITICAL_BUDGET_MS,
 ) -> None:
+    """Update DROs, derived coordinates, and macro-visible status fields."""
+
     stream_busy_for_noncritical = _stream_active_or_finishing(app)
     reported_wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
     mpos_vals = _parse_xyz_triplet(fields.mpos) if fields.mpos else None
@@ -1714,6 +1724,8 @@ def _update_positions_and_macro_state(
     if wco_vals:
         app._wco_raw = tuple(wco_vals)
     else:
+        # GRBL can omit WCO on some status frames; reuse the last confirmed WCO
+        # so fresh MPos reports can still drive WPos/macro updates.
         cached_wco = getattr(app, "_wco_raw", None)
         if cached_wco and len(cached_wco) >= 3:
             wco_vals = [cached_wco[0], cached_wco[1], cached_wco[2]]
@@ -1737,6 +1749,9 @@ def _update_positions_and_macro_state(
     expected_wco = getattr(app, "_zero_all_pending_expected_wco_raw", None)
     expected_wco_tuple: tuple[float, float, float] | None = None
     if zero_all_pending_active:
+        # Zero-all can briefly race with stale or missing WCO frames. Keep the
+        # expected WCO latched until status reports confirm the new zero or the
+        # guard window expires.
         expected_wco_raw = (
             expected_wco
             if isinstance(expected_wco, (list, tuple)) and len(expected_wco) >= 3
@@ -1820,6 +1835,8 @@ def _update_positions_and_macro_state(
             return True
         return _status_event_elapsed_ms() >= max(1.0, float(noncritical_budget_ms))
 
+    # Derive whichever position space GRBL omitted so both DROs and macro state
+    # remain internally consistent from mixed MPos/WPos/WCO reports.
     macro_updates: dict[str, object] = {}
     wpos_calc = None
     mpos_calc = None
@@ -1981,6 +1998,8 @@ def _update_positions_and_macro_state(
         macro_updates["wcoz"] = to_modal(wco_vals[2])
     if fields.pins is not None:
         macro_updates["pins"] = fields.pins
+    # Override widgets are relatively expensive UI work, so they follow the
+    # same noncritical deferral path used for other streaming-time sync.
     ov_values: tuple[int, int, int] | None = None
     if fields.ov:
         feed_val = spindle_val = None
@@ -2040,6 +2059,8 @@ def _update_positions_and_macro_state(
         _apply_macro_status_updates,
         context="Failed updating macro status values",
     )
+    # LED updates are visually helpful but noncritical during a busy stream, so
+    # they can be deferred when status processing is already under pressure.
     probe_active = bool(pin_state & {"P"})
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
 
@@ -2061,6 +2082,8 @@ def _update_positions_and_macro_state(
 
 
 def handle_status_event(app, raw: str):
+    """Parse one status frame and apply state, position, and completion sync."""
+
     event_start = time.perf_counter()
     parse_elapsed_ms = 0.0
     apply_elapsed_ms = 0.0
@@ -2082,6 +2105,8 @@ def handle_status_event(app, raw: str):
             app._status_last_non_idle_ts = time.monotonic()
         except Exception as exc:
             _log_suppressed("Failed tracking last non-idle status timestamp", exc)
+    # Short-circuit exact duplicates first, then a relaxed idle signature that
+    # tolerates benign idle-only churn outside active streaming.
     if raw == previous_raw:
         app._status_seen = True
         app._status_duplicate_count = int(getattr(app, "_status_duplicate_count", 0) or 0) + 1
@@ -2141,6 +2166,8 @@ def handle_status_event(app, raw: str):
         history = deque(seed, maxlen=200)
         app._status_history = history
     history.append((now_ts, raw))
+    # Parse and apply the machine-state portion before touching heavier DRO and
+    # macro updates.
     parse_start = time.perf_counter()
     fields = _parse_status_fields(raw)
     if fields.feed is not None:
@@ -2186,6 +2213,8 @@ def handle_status_event(app, raw: str):
             0.0,
         )
     else:
+        # Position work can be deferred or coalesced while streaming so status
+        # handling does not outrun the UI queue.
         update_start = time.perf_counter()
         force_defer_positions = _status_positions_should_force_defer(
             app,
@@ -2215,6 +2244,8 @@ def handle_status_event(app, raw: str):
             "positions_macro",
             positions_elapsed_ms,
         )
+    # Completion sync stays last so it observes the latest state/position work
+    # from the current frame before deciding whether a run is actually done.
     finalize_start = time.perf_counter()
     _sync_deferred_stream_completion(app, fields.state)
     deferred_elapsed_ms = (time.perf_counter() - finalize_start) * 1000.0

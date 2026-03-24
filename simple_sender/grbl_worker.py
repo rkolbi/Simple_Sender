@@ -95,8 +95,13 @@ _RX_LOGGER_LOCK = threading.Lock()
 _REEXPORTED_GRBL_ERROR_HELPERS = (annotate_grbl_alarm, annotate_grbl_error)
 _REEXPORTED_REALTIME_CONSTANTS = (RT_RESUME, RT_JOG_CANCEL)
 TX_LINE_RATE_WINDOW_S = 5.0
+# Keep a short rolling window for diagnostics without growing runtime memory.
 QUEUE_DEPTH_SNAPSHOT_MAX = 64
+# Sample often enough to show short bursts while staying cheap on low-power
+# systems.
 QUEUE_DEPTH_SNAPSHOT_INTERVAL_S = 0.2
+# Retain enough recent serial activity for diagnostics exports while keeping the
+# ring buffer bounded.
 SERIAL_ACTIVITY_HISTORY_MAX = 20000
 
 
@@ -217,26 +222,27 @@ class GrblWorker(
     """
     
     def __init__(self, ui_event_q: queue.Queue):
-        """Initialize GRBL worker.
-        
-        Args:
-            ui_event_q: Queue for sending events to the UI thread
+        """Initialize worker state, queues, and bounded diagnostics storage.
+
+        The constructor only seeds state used by the connection, RX/TX/status,
+        streaming, and diagnostics paths. Thread creation still happens later in
+        ``connect()`` so object construction remains side-effect light.
         """
         self.ui_q = ui_event_q
         self.ser: Optional[SerialType] = None
         self._rx_logger = _get_rx_logger()
-        
-        # Worker threads
+
+        # Worker thread placeholders and shared shutdown signaling.
         self._rx_thread: Optional[threading.Thread] = None
         self._tx_thread: Optional[threading.Thread] = None
         self._status_thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
-        
-        # Buffer management
+
+        # Serial/buffer bookkeeping used by the TX and RX coordination paths.
         self._last_buffer_emit: Optional[Tuple[int, int, int]] = None
         self._last_buffer_emit_ts = 0.0
-        
-        # Streaming state
+
+        # Streaming state, pending items, and live-window caches.
         self._gcode: Sequence[str] = []
         self._gcode_payload_cache: Sequence[bytes | None] | None = None
         self._gcode_pause_reason_cache: Sequence[str | None] | None = None
@@ -277,8 +283,8 @@ class GrblWorker(
         self._stream_token = 0
         self._abort_writes = threading.Event()
         self._gcode_name: str | None = None
-        
-        # Throughput tracking
+
+        # Throughput, queue-depth, and serial-activity diagnostics.
         self._tx_bytes_window: deque[Tuple[float, int]] = deque()
         self._last_tx_emit_ts = 0.0
         self._tx_line_ts_window: deque[float] = deque()
@@ -297,23 +303,24 @@ class GrblWorker(
         self._serial_activity_history: deque[tuple[float, str, str]] = deque(
             maxlen=SERIAL_ACTIVITY_HISTORY_MAX
         )
-        
-        # Command queue
+
+        # Manual command queue and associated drop/backpressure accounting.
         self._outgoing_q: queue.Queue[str] = queue.Queue(maxsize=MANUAL_COMMAND_QUEUE_MAXSIZE)
         self._manual_source_queue: deque[str | None] = deque()
         self._purge_jog_queue = threading.Event()
         self._manual_queue_drop_count = 0
         self._manual_queue_drop_total = 0
         self._manual_queue_last_drop_notice_ts = 0.0
-        
-        # Thread synchronization
+
+        # Cross-thread coordination primitives shared by TX/status logic.
         self._stream_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._status_interval_lock = threading.Lock()
         self._tx_activity_evt = threading.Event()
         self._status_interval_changed_evt = threading.Event()
-        
-        # State flags
+
+        # Runtime state flags and timing counters used across connection,
+        # watchdog, and manual-motion status paths.
         self._status_poll_interval = STATUS_POLL_DEFAULT
         self._last_status_state_token = ""
         self._manual_motion_status_grace_until_ts = 0.0
@@ -838,8 +845,11 @@ class GrblWorker(
         self._queue_depth_snapshots.append((now, stream_depth, manual_depth, ui_depth))
 
     def get_runtime_metrics(self) -> dict[str, Any]:
+        """Return a bounded diagnostics snapshot for UI and export tooling."""
+
         now = time.time()
-        # Keep line-rate fresh if queried between send events.
+        # Refresh derived rates first so callers do not need to wait for another
+        # send event to get an up-to-date snapshot.
         if self._tx_line_ts_window:
             cutoff = now - TX_LINE_RATE_WINDOW_S
             while self._tx_line_ts_window and self._tx_line_ts_window[0] < cutoff:
@@ -849,6 +859,8 @@ class GrblWorker(
                 self._tx_lines_per_sec = float(len(self._tx_line_ts_window)) / span
             else:
                 self._tx_lines_per_sec = 0.0
+        # Capture a current queue-depth sample before formatting the diagnostic
+        # payload that feeds the metrics dialog/export paths.
         self._record_queue_depth_snapshot(now=now)
         snapshots = list(self._queue_depth_snapshots)
         queue_depth_last = {
@@ -907,6 +919,8 @@ class GrblWorker(
                 live_current_acked_index = int(self._live_current_acked[0])
         except Exception:
             live_current_acked_index = -1
+        # Return a compatibility-stable diagnostics shape used by UI reporting,
+        # exports, and tests.
         return {
             "tx_lines_per_sec": float(self._tx_lines_per_sec),
             "ok_latency_ms_last": float(self._ok_latency_ms_last),

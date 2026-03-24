@@ -26,6 +26,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from simple_sender.services.preflight_service import PreflightService
+
+_DEFAULT_PREFLIGHT_SERVICE = PreflightService()
+
 
 def format_validation_summary(report: Any) -> list[str]:
     if report is None:
@@ -62,41 +66,14 @@ def format_validation_summary(report: Any) -> list[str]:
 
 
 def get_bounds(app: Any):
-    parse_result = getattr(app, "_last_parse_result", None)
-    bounds = getattr(parse_result, "bounds", None) if parse_result else None
-    if not bounds:
-        quick_bounds = getattr(app, "_gcode_bounds_box", None)
-        if isinstance(quick_bounds, dict):
-            try:
-                bounds = (
-                    float(quick_bounds.get("min_x", 0.0) or 0.0),
-                    float(quick_bounds.get("max_x", 0.0) or 0.0),
-                    float(quick_bounds.get("min_y", 0.0) or 0.0),
-                    float(quick_bounds.get("max_y", 0.0) or 0.0),
-                    float(quick_bounds.get("min_z", 0.0) or 0.0),
-                    float(quick_bounds.get("max_z", 0.0) or 0.0),
-                )
-            except Exception:
-                bounds = None
-    if not bounds or len(bounds) < 6:
+    bounds = _DEFAULT_PREFLIGHT_SERVICE.get_bounds(app)
+    if bounds is None:
         return None
-    return bounds
+    return bounds.as_tuple()
 
 
 def get_travel_limits(app: Any) -> dict[str, float]:
-    data = (
-        getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
-    )
-    out: dict[str, float] = {}
-    for key, axis in (("$130", "x"), ("$131", "y"), ("$132", "z")):
-        raw = data.get(key)
-        if not raw:
-            continue
-        try:
-            out[axis] = float(raw[0])
-        except Exception:
-            continue
-    return out
+    return _DEFAULT_PREFLIGHT_SERVICE.get_travel_limits(app).as_dict()
 
 
 def evaluate_run_preflight(
@@ -105,51 +82,9 @@ def evaluate_run_preflight(
     get_bounds: Any,
     get_travel_limits: Any,
 ) -> tuple[list[str], list[str]]:
-    failures: list[str] = []
-    warnings: list[str] = []
-    path = getattr(app, "_last_gcode_path", None)
-    has_job = bool(path)
-    if not has_job:
-        try:
-            has_job = bool(getattr(app.gview, "lines_count", 0))
-        except Exception:
-            has_job = False
-    if not has_job:
-        failures.append("No G-code job is loaded.")
-        return failures, warnings
-
-    if bool(getattr(app, "_alarm_locked", False)):
-        failures.append("Controller is in Alarm state. Clear alarm before running.")
-    if bool(getattr(app, "_homing_in_progress", False)):
-        failures.append("Homing is currently active. Wait until homing finishes.")
-    if not bool(getattr(app, "_grbl_ready", False)):
-        failures.append("GRBL is not ready yet. Wait for startup/status sync.")
-    if not bool(getattr(app, "_status_seen", False)):
-        failures.append("No live status has been received yet.")
-
-    bounds = get_bounds(app)
-    if not bounds:
-        failures.append("Job bounds are unavailable (wait for parsing to complete).")
-    else:
-        minx, maxx, miny, maxy, minz, maxz = bounds
-        span_x = max(0.0, float(maxx) - float(minx))
-        span_y = max(0.0, float(maxy) - float(miny))
-        span_z = max(0.0, float(maxz) - float(minz))
-        travel = get_travel_limits(app)
-        if travel:
-            if "x" in travel and span_x > travel["x"] + 1e-6:
-                failures.append(
-                    f"X span {span_x:.3f} mm exceeds machine travel $130={travel['x']:.3f} mm."
-                )
-            if "y" in travel and span_y > travel["y"] + 1e-6:
-                failures.append(
-                    f"Y span {span_y:.3f} mm exceeds machine travel $131={travel['y']:.3f} mm."
-                )
-            if "z" in travel and span_z > travel["z"] + 1e-6:
-                failures.append(
-                    f"Z span {span_z:.3f} mm exceeds machine travel $132={travel['z']:.3f} mm."
-                )
-        else:
-            warnings.append("Machine travel settings ($130/$131/$132) are unavailable.")
-
-    return failures, warnings
+    service = PreflightService(
+        get_bounds=get_bounds,
+        get_travel_limits=get_travel_limits,
+    )
+    result = service.validate_job(app)
+    return list(result.failures), list(result.warnings)

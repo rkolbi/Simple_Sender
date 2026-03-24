@@ -20,6 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Height-map storage, interpolation, and summary statistics helpers."""
+
 from dataclasses import dataclass
 import bisect
 import math
@@ -27,6 +29,8 @@ import math
 
 @dataclass(frozen=True)
 class HeightMapStats:
+    """Aggregate statistics for a probed height map."""
+
     min_z: float
     max_z: float
     mean_z: float
@@ -39,6 +43,8 @@ class HeightMapStats:
 
 
 class HeightMap:
+    """Grid-backed probed surface model used by the auto-level workflow."""
+
     def __init__(self, xs: list[float], ys: list[float], *, invalid_points: list[tuple[int, int]] | None = None):
         if not xs or not ys:
             raise ValueError("HeightMap requires non-empty xs and ys")
@@ -107,6 +113,8 @@ class HeightMap:
         return True
 
     def stats(self) -> HeightMapStats | None:
+        """Summarize the currently collected valid probe points."""
+
         values: list[float] = []
         points: list[tuple[float, float, float]] = []
         for iy, row in enumerate(self._rows):
@@ -137,6 +145,8 @@ class HeightMap:
 
     @classmethod
     def from_dict(cls, data: dict) -> "HeightMap":
+        """Recreate a height map from serialized JSON-compatible data."""
+
         if not isinstance(data, dict):
             raise ValueError("Height map data must be a dict.")
         xs = data.get("xs")
@@ -173,6 +183,8 @@ class HeightMap:
         return height_map
 
     def interpolate(self, x: float, y: float, method: str = "bilinear") -> float | None:
+        """Interpolate a Z offset for a point within the probed grid."""
+
         if not self.is_complete():
             return None
         x = self._clamp(x, self.xs[0], self.xs[-1])
@@ -200,17 +212,13 @@ class HeightMap:
         z10 = self._value_at(ix1, iy0)
         z01 = self._value_at(ix0, iy1)
         z11 = self._value_at(ix1, iy1)
-        if None in (z00, z10, z01, z11):
+        if z00 is None or z10 is None or z01 is None or z11 is None:
             return None
-        z00 = float(z00)  # type: ignore[arg-type]
-        z10 = float(z10)  # type: ignore[arg-type]
-        z01 = float(z01)  # type: ignore[arg-type]
-        z11 = float(z11)  # type: ignore[arg-type]
         return (
-            (1 - tx) * (1 - ty) * z00
-            + tx * (1 - ty) * z10
-            + (1 - tx) * ty * z01
-            + tx * ty * z11
+            (1 - tx) * (1 - ty) * float(z00)
+            + tx * (1 - ty) * float(z10)
+            + (1 - tx) * ty * float(z01)
+            + tx * ty * float(z11)
         )
 
     def _interpolate_bicubic(
@@ -235,14 +243,14 @@ class HeightMap:
             p1 = self._value_at(ix0, iy)
             p2 = self._value_at(ix1, iy)
             p3 = self._value_at(ix2, iy)
-            if None in (p0, p1, p2, p3):
+            if p0 is None or p1 is None or p2 is None or p3 is None:
                 return self._interpolate_bilinear(ix0, ix1, tx, iy0, iy1, ty)
             values.append(
                 self._catmull_rom(
-                    float(p0),  # type: ignore[arg-type]
-                    float(p1),  # type: ignore[arg-type]
-                    float(p2),  # type: ignore[arg-type]
-                    float(p3),  # type: ignore[arg-type]
+                    float(p0),
+                    float(p1),
+                    float(p2),
+                    float(p3),
                     tx,
                 )
             )
@@ -465,6 +473,8 @@ def _count_outliers(residuals: list[float]) -> int:
     deviations = [abs(val - median) for val in residuals]
     mad = _median(deviations)
     if mad > 0:
+        # 4.4478 * MAD is a robust outlier threshold equivalent to roughly
+        # three standard deviations for normally distributed residuals.
         threshold = 4.4478 * mad
         return sum(1 for dev in deviations if dev > threshold)
     q1, q3 = _quartiles(deviations)

@@ -116,19 +116,8 @@ def _build_interface_performance_row(app, interface_frame, row: int) -> int:
 
 
 def _build_interface_logging_row(app, interface_frame, row: int) -> int:
-    app.logging_check = ttk.Checkbutton(
-        interface_frame,
-        text="Log GUI button actions",
-        variable=app.gui_logging_enabled,
-        command=app._on_gui_logging_change,
-    )
-    app.logging_check.grid(row=row, column=0, sticky="w", pady=(8, 0))
-    apply_tooltip(
-        app.logging_check,
-        "Record GUI button actions in the console log when enabled.",
-    )
     logs_btn_row = ttk.Frame(interface_frame)
-    logs_btn_row.grid(row=row + 1, column=0, sticky="w", pady=(6, 0))
+    logs_btn_row.grid(row=row, column=0, sticky="w", pady=(8, 0))
 
     def _show_logs() -> None:
         handler = getattr(app, "_show_logs_dialog", None)
@@ -147,7 +136,7 @@ def _build_interface_logging_row(app, interface_frame, row: int) -> int:
         app.view_logs_button,
         "Open the application log viewer and export logs for diagnostics.",
     )
-    return row + 2
+    return row + 1
 
 
 def _build_interface_indicators_row(app, interface_frame, row: int) -> int:

@@ -235,9 +235,9 @@ class Console(ttk.Frame):
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(self.get_text())
-            logger.info(f"Console exported to {filepath}")
+            logger.info("Console exported to %s", filepath)
         except IOError as e:
-            logger.error(f"Failed to export console: {e}")
+            logger.error("Failed to export console to %s: %s", filepath, e)
     
     # ========================================================================
     # INTERNAL METHODS
@@ -351,7 +351,7 @@ class Console(ttk.Frame):
             try:
                 self.on_command(command)
             except Exception as e:
-                logger.error(f"Command callback error: {e}")
+                logger.error("Console command callback failed for %r: %s", command, e)
                 self.log(f"Error: {e}", tag="error")
         
         return "break"

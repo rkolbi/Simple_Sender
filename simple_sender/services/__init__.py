@@ -8,12 +8,26 @@ from .job_service import (
     JobStopOutcome,
     JobStopResult,
 )
+from .preflight_service import (
+    BoundsInfo,
+    PreflightOutcome,
+    PreflightResult,
+    PreflightService,
+    TravelLimits,
+    TravelViolation,
+)
 
 __all__ = [
+    "BoundsInfo",
     "JobSetupService",
     "JobService",
     "JobStartOutcome",
     "JobStartResult",
     "JobStopOutcome",
     "JobStopResult",
+    "PreflightOutcome",
+    "PreflightResult",
+    "PreflightService",
+    "TravelLimits",
+    "TravelViolation",
 ]

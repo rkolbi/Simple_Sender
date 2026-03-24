@@ -91,7 +91,7 @@ def apply_performance_test_preset(
 def save_performance_report_to_logs(
     app: Any,
     *,
-    get_log_dir: Callable[[], Path],
+    get_log_dir: Callable[[], Path | None],
     build_performance_report_text: Callable[[Any], str],
     log_suppressed: Callable[[str, BaseException], None],
     showinfo: Callable[[str, str], None],
@@ -99,7 +99,14 @@ def save_performance_report_to_logs(
 ) -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"simple_sender_performance_report_{timestamp}.txt"
-    path = get_log_dir() / filename
+    log_dir = get_log_dir()
+    if log_dir is None:
+        showerror(
+            "Save performance report",
+            "No writable logs directory is available.",
+        )
+        return
+    path = log_dir / filename
     report = build_performance_report_text(app)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,4 +118,5 @@ def save_performance_report_to_logs(
             outfile.write("\n")
         showinfo("Save performance report", f"Saved to:\n{path}")
     except Exception as exc:
+        log_suppressed("Failed writing diagnostics performance report to logs", exc)
         showerror("Save performance report", f"Failed to write report:\n{exc}")
