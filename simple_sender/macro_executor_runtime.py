@@ -124,6 +124,12 @@ class MacroRunnerMixin(MacroExecutorState):
         if not self.grbl.is_connected():
             messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
             return False
+        if bool(getattr(self.app, "_stream_done_pending_idle", False)):
+            messagebox.showwarning(
+                "Macro blocked",
+                "Wait for the previous job to fully finish before running a macro.",
+            )
+            return False
         if self.grbl.is_streaming():
             allow_during_tool_change = bool(
                 allow_streaming_paused
@@ -184,6 +190,8 @@ class MacroRunnerMixin(MacroExecutorState):
         total_timeout_s = self._macro_total_timeout_s()
         self._alarm_event.clear()
         self._alarm_notified = False
+        self._manual_error_event.clear()
+        self._manual_error_message = ""
         aborted = False
         name = lines[0].strip() if lines else "Macro"
         self._macro_audit(
@@ -387,9 +395,17 @@ class MacroRunnerMixin(MacroExecutorState):
         self.ui_q.put(("log", f"{desc}: {message or 'alarm'}"))
         self._alarm_event.set()
 
+    def notify_manual_error(self, message: str | None):
+        text = str(message or "").strip() or "GRBL error"
+        self._manual_error_message = text
+        self._manual_error_event.set()
+
     def clear_alarm_notification(self):
         if self._alarm_event.is_set():
             self._alarm_event.clear()
+        if self._manual_error_event.is_set():
+            self._manual_error_event.clear()
+        self._manual_error_message = ""
         self._alarm_notified = False
 
     def cancel_macro(self, reason: str | None = None) -> bool:
@@ -407,20 +423,48 @@ class MacroRunnerMixin(MacroExecutorState):
             raise RuntimeError("Macro canceled.")
         if not self.grbl.is_connected():
             raise RuntimeError("Controller disconnected during macro execution.")
-        if hasattr(self.app, "_send_manual"):
-            self.app._send_manual(command, "macro")
+        self._manual_error_event.clear()
+        self._manual_error_message = ""
+        tracker = None
+        send_tracked = getattr(self.grbl, "send_immediate_tracked", None)
+        if callable(send_tracked):
+            tracker = send_tracked(command, source="macro")
+            if tracker is None:
+                raise RuntimeError(f"Controller rejected immediate macro command before send: {command}")
         else:
-            self.grbl.send_immediate(command)
+            accepted = True
+            if hasattr(self.app, "_send_manual"):
+                accepted = self.app._send_manual(command, "macro")
+            else:
+                accepted = self.grbl.send_immediate(command)
+            if accepted is False:
+                raise RuntimeError(f"Controller rejected immediate macro command before send: {command}")
         if wait_for_idle:
             line_timeout_s = self._macro_line_timeout_s()
             completion_timeout_s = 0.0
             if line_timeout_s > 0:
                 completion_timeout_s = max(30.0, float(line_timeout_s))
-            completed = self.grbl.wait_for_manual_completion(timeout_s=completion_timeout_s)
-            if not completed:
-                if self._alarm_event.is_set():
-                    raise RuntimeError("Macro canceled.")
-                raise TimeoutError("Command completion timed out.")
+            if tracker is not None:
+                completed = tracker.wait(timeout_s=completion_timeout_s)
+                if not completed:
+                    if self._alarm_event.is_set():
+                        raise RuntimeError("Macro canceled.")
+                    raise TimeoutError("Command completion timed out.")
+                if not bool(getattr(tracker, "success", False)):
+                    detail = str(getattr(tracker, "error", "") or "").strip() or "GRBL command rejected."
+                    raise RuntimeError(f"Macro command failed: {detail}")
+            else:
+                completed = self.grbl.wait_for_manual_completion(timeout_s=completion_timeout_s)
+                if not completed:
+                    if self._alarm_event.is_set():
+                        raise RuntimeError("Macro canceled.")
+                    if self._manual_error_event.is_set():
+                        detail = self._manual_error_message or "GRBL command rejected."
+                        raise RuntimeError(f"Macro command failed: {detail}")
+                    raise TimeoutError("Command completion timed out.")
             self._macro_wait_for_idle(timeout_s=max(0.0, float(line_timeout_s)))
             if self._alarm_event.is_set():
                 raise RuntimeError("Macro canceled.")
+            if tracker is None and self._manual_error_event.is_set():
+                detail = self._manual_error_message or "GRBL command rejected."
+                raise RuntimeError(f"Macro command failed: {detail}")

@@ -32,6 +32,7 @@ from typing import Sequence, cast
 
 from simple_sender.types import (
     GrblWorkerState,
+    ManualCommandResultTracker,
     ManualPendingItem,
     StreamPendingItem,
     StreamQueueItem,
@@ -324,33 +325,42 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._emit_live_gcode_window(force=True)
         logger.info(f"Resumed streaming from line {start_index}")
     
-    def pause_stream(self) -> None:
+    def pause_stream(self) -> bool | None:
         """Pause active stream (feed hold)."""
-        self._pause_stream()
+        return self._pause_stream()
     
-    def resume_stream(self) -> None:
+    def resume_stream(self) -> bool | None:
         """Resume paused stream (cycle start)."""
-        if self._streaming:
-            try:
-                self.resume()
-            except SerialWriteError as exc:
-                logger.error(f"Resume failed: {exc}")
-                self.ui_q.put(("log", f"[resume failed] {exc}"))
-                return
-            self._paused = False
-            self._signal_tx_activity()
-            self.ui_q.put(("stream_state", "running", None))
-            logger.info("Stream resumed")
-
-    def _pause_stream(self, reason: str | None = None) -> None:
         if not self._streaming:
-            return
+            return None
+        try:
+            accepted = self.resume()
+        except SerialWriteError as exc:
+            logger.error(f"Resume failed: {exc}")
+            self.ui_q.put(("log", f"[resume failed] {exc}"))
+            return False
+        if accepted is False:
+            self.ui_q.put(("log", "[resume failed] Cycle-start was not sent."))
+            return False
+        self._paused = False
+        self._signal_tx_activity()
+        self.ui_q.put(("stream_state", "running", None))
+        logger.info("Stream resumed")
+        return True
+
+    def _pause_stream(self, reason: str | None = None) -> bool | None:
+        if not self._streaming:
+            return None
         if not self._paused:
             try:
-                self.hold()
+                accepted = self.hold()
             except SerialWriteError as exc:
                 logger.error(f"Pause failed: {exc}")
                 self.ui_q.put(("log", f"[pause failed] {exc}"))
+                return False
+            if accepted is False:
+                self.ui_q.put(("log", "[pause failed] Feed hold was not sent."))
+                return False
         self._paused = True
         self._signal_tx_activity()
         self.ui_q.put(("stream_state", "paused", None))
@@ -359,12 +369,19 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             logger.info(f"Stream paused ({reason})")
         else:
             logger.info("Stream paused")
+        return True
     
-    def stop_stream(self) -> None:
+    def stop_stream(self) -> bool | None:
         """Stop active stream and reset."""
-        self.reset(emit_state=False)
+        if not (self._streaming or self._paused):
+            return None
+        accepted = self.reset(emit_state=False)
+        if accepted is False:
+            self.ui_q.put(("log", "[stop failed] Ctrl-X was not sent; stream state is unchanged."))
+            return False
         self.ui_q.put(("stream_state", "stopped", None))
         logger.info("Stream stopped")
+        return True
     
     # ========================================================================
     # STATUS MANAGEMENT
@@ -960,6 +977,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._purge_jog_queue.clear()
             pending: list[str] = []
             pending_sources: list[str | None] = []
+            pending_trackers = []
             try:
                 with self._stream_lock:
                     while True:
@@ -967,20 +985,34 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         pending_sources.append(
                             self._manual_source_queue.popleft() if self._manual_source_queue else None
                         )
+                        pending_trackers.append(
+                            self._manual_tracker_queue.popleft() if self._manual_tracker_queue else None
+                        )
             except queue.Empty:
                 pass
-            kept: list[tuple[str, str | None]] = []
+            kept: list[tuple[str, str | None, ManualCommandResultTracker | None]] = []
             for idx, cmd in enumerate(pending):
                 source = pending_sources[idx] if idx < len(pending_sources) else None
+                tracker = pending_trackers[idx] if idx < len(pending_trackers) else None
                 if isinstance(cmd, str) and cmd.lstrip().upper().startswith("$J="):
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual jog command was purged before completion.",
+                    )
                     continue
-                kept.append((cmd, source))
+                kept.append((cmd, source, tracker))
             with self._stream_lock:
-                for cmd, source in kept:
-                    self._enqueue_manual_command(cmd, source)
+                for cmd, source, tracker in kept:
+                    self._enqueue_manual_command(cmd, source, tracker=tracker)
             if self._manual_pending_item is not None:
                 line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
+                    self._resolve_manual_tracker(
+                        getattr(self._manual_pending_item, "tracker", None),
+                        success=False,
+                        error="Manual jog command was purged before completion.",
+                    )
                     self._manual_pending_item = None
             self._signal_tx_activity()
 
@@ -1015,6 +1047,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             "log",
             f"[manual] Line too long ({line_len} > {MAX_LINE_LENGTH}): {line}",
         ))
+        self._resolve_manual_tracker(
+            getattr(self._manual_pending_item, "tracker", None),
+            success=False,
+            error=f"Manual command line too long ({line_len} > {MAX_LINE_LENGTH}).",
+        )
         self._manual_pending_item = None
         return True
 
@@ -1034,6 +1071,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         payload: bytes,
         line_len: int,
         source: str | None,
+        tracker=None,
     ) -> tuple[bool, bool, int]:
         usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
         if line_len > usable and self._stream_buf_used <= 0:
@@ -1047,6 +1085,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 payload=payload,
                 line_len=line_len,
                 source=source,
+                tracker=tracker,
             )
             return False, True, usable
 
@@ -1060,6 +1099,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line=line,
                 manual_source=source,
                 queued_ts=time.time(),
+                manual_tracker=tracker,
             )
         )
         return False, False, usable
@@ -1073,12 +1113,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             payload: bytes | None = None
             line_len: int
             source: str | None
+            tracker = None
             if self._manual_pending_item is not None:
                 pending_item = self._manual_pending_item
                 line = pending_item.line
                 payload = pending_item.payload
                 line_len = pending_item.line_len
                 source = pending_item.source
+                tracker = getattr(pending_item, "tracker", None)
             else:
                 with self._stream_lock:
                     try:
@@ -1086,11 +1128,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     except queue.Empty:
                         return
                     source = self._manual_source_queue.popleft() if self._manual_source_queue else None
+                    tracker = self._manual_tracker_queue.popleft() if self._manual_tracker_queue else None
                 if not self._line_allowed_during_alarm(line):
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command was blocked during alarm state.",
+                    )
                     continue
 
                 line = line.strip()
                 if not line:
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command was empty.",
+                    )
                     continue
                 payload = self._build_line_payload(line)
                 if payload is None:
@@ -1098,6 +1151,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         "log",
                         f"[manual] Non-ASCII characters in line: {line}",
                     ))
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command contains non-ASCII characters.",
+                    )
                     self._manual_pending_item = None
                     continue
                 line_len = len(payload)
@@ -1118,6 +1176,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     payload=payload,
                     line_len=line_len,
                     source=source,
+                    tracker=tracker,
                 )
 
             if deferred:
@@ -1127,12 +1186,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     "log",
                     f"[manual] Line too long for buffer ({line_len} > {usable}): {line}",
                 ))
+                self._resolve_manual_tracker(
+                    tracker,
+                    success=False,
+                    error=f"Manual command line too long for GRBL buffer ({line_len} > {usable}).",
+                )
                 continue
 
             if self._abort_writes.is_set() and not allowed_alarm_cmd:
                 with self._stream_lock:
                     self._rollback_reserved_manual_locked(line_len)
                     self._manual_pending_item = None
+                self._resolve_manual_tracker(
+                    tracker,
+                    success=False,
+                    error="Manual command was aborted before transmission.",
+                )
                 self._emit_buffer_fill()
                 break
 
@@ -1153,8 +1222,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                             payload=payload,
                             line_len=line_len,
                             source=source,
+                            tracker=tracker,
                         )
                     else:
+                        self._resolve_manual_tracker(
+                            tracker,
+                            success=False,
+                            error="Manual command send failed after disconnect.",
+                        )
                         self._manual_pending_item = None
                 self._emit_buffer_fill()
                 break

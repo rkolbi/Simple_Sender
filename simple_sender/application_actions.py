@@ -80,8 +80,8 @@ class ActionsMixin:
     def refresh_ports(self, auto_connect: bool = False) -> None:
         refresh_ports(self, auto_connect)
 
-    def toggle_connect(self) -> None:
-        toggle_connect(self)
+    def toggle_connect(self):
+        return toggle_connect(self)
 
     def _start_connect_worker(
         self,
@@ -132,8 +132,8 @@ class ActionsMixin:
     def _save_console_log(self) -> None:
         save_console_log(self)
 
-    def _request_settings_dump(self) -> None:
-        request_settings_dump(self)
+    def _request_settings_dump(self) -> bool:
+        return bool(request_settings_dump(self))
 
     def _maybe_auto_reconnect(self) -> None:
         maybe_auto_reconnect(self)

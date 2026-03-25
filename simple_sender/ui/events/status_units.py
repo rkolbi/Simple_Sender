@@ -57,6 +57,32 @@ def _parse_modal_units(
             app._set_unit_mode(modal_units)
         except Exception as exc:
             log_suppressed("Failed to apply modal unit mode", exc)
+        setattr(app, "_pending_modal_sync", False)
+        setattr(app, "_modal_sync_inflight", False)
+        setattr(app, "_modal_sync_inflight_started_ts", 0.0)
+        setattr(app, "_modal_sync_retry_after_ts", 0.0)
+        pending_mode = getattr(app, "_pending_unit_mode", None)
+        if pending_mode is not None:
+            pending_mode = str(pending_mode)
+            if pending_mode != modal_units:
+                try:
+                    app.status.config(
+                        text=f"Unit change rejected: controller remains in {modal_units}"
+                    )
+                except Exception as exc:
+                    log_suppressed("Failed updating status after rejected unit sync", exc)
+                ui_q = getattr(app, "ui_q", None)
+                if ui_q is not None:
+                    try:
+                        ui_q.put(
+                            (
+                                "log",
+                                f"[units] Requested {pending_mode}, but controller remains {modal_units}.",
+                            )
+                        )
+                    except Exception as exc:
+                        log_suppressed("Failed logging rejected unit sync", exc)
+            setattr(app, "_pending_unit_mode", None)
     if modal_state or modal_units:
         with app.macro_executor.macro_vars() as macro_vars:
             for key, value in modal_state.items():

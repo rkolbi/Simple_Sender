@@ -20,8 +20,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import tkinter as tk
 import threading
+import tkinter as tk
 from tkinter import ttk, messagebox
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
@@ -42,7 +42,7 @@ __all__ = [
 
 
 def show_resume_dialog(app):
-    if app.grbl.is_streaming():
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_RESUMING_FROM_LINE,
@@ -95,6 +95,7 @@ def show_resume_dialog(app):
         row=0, column=2, sticky="w", padx=(8, 0), pady=4
     )
     sync_var = tk.BooleanVar(value=True)
+    sync_state = {"enabled": True}
     sync_chk = ttk.Checkbutton(frm, text="Send modal re-sync before resuming", variable=sync_var)
     sync_chk.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
     sample_var = tk.StringVar(value="")
@@ -108,6 +109,21 @@ def show_resume_dialog(app):
     preview_cache: dict[int, tuple[list[str], bool]] = {}
     preview_after_id: dict[str, str | None] = {"value": None}
     preview_seq = {"value": 0}
+    pending_resume_line: dict[str, int | None] = {"value": None}
+    start_btn_holder: dict[str, ttk.Button | None] = {"widget": None}
+
+    def _restore_start_button() -> None:
+        start_btn = start_btn_holder["widget"]
+        if start_btn is None:
+            return
+        try:
+            start_btn.config(state="normal")
+        except Exception:
+            pass
+
+    def _clear_pending_resume_start() -> None:
+        pending_resume_line["value"] = None
+        _restore_start_button()
 
     def _post_ui(func, *args, **kwargs) -> None:
         poster = getattr(app, "_post_ui_thread", None)
@@ -125,6 +141,17 @@ def show_resume_dialog(app):
             except Exception:
                 pass
 
+    def _sync_enabled() -> bool:
+        return bool(sync_state["enabled"])
+
+    def _sync_trace(*_args) -> None:
+        try:
+            sync_state["enabled"] = bool(sync_var.get())
+        except Exception:
+            sync_state["enabled"] = True
+
+    sync_var.trace_add("write", _sync_trace)
+
     def _render_preview(line_no: int, preamble: list[str], has_g92: bool) -> None:
         preview_cache[int(line_no)] = (list(preamble), bool(has_g92))
         try:
@@ -133,7 +160,7 @@ def show_resume_dialog(app):
             return
         if current_line != int(line_no):
             return
-        if sync_var.get():
+        if _sync_enabled():
             if preamble:
                 sample_var.set("Modal re-sync: " + " ".join(preamble))
             else:
@@ -146,6 +173,14 @@ def show_resume_dialog(app):
             )
         else:
             warning_var.set("")
+        if pending_resume_line["value"] == int(line_no):
+            pending_resume_line["value"] = None
+            _restore_start_button()
+            current_sync_enabled = _sync_enabled()
+            resume_preamble = list(preamble) if current_sync_enabled else []
+            app._resume_from_line(int(line_no) - 1, resume_preamble)
+            if bool(dlg.winfo_exists()):
+                dlg.destroy()
 
     def _schedule_preview(line_no: int) -> None:
         if preview_after_id["value"] is not None:
@@ -165,9 +200,31 @@ def show_resume_dialog(app):
                 return
 
             def worker() -> None:
-                preamble, has_g92 = app._build_resume_preamble(
-                    app._last_gcode_lines, int(line_no) - 1
-                )
+                try:
+                    preamble, has_g92 = app._build_resume_preamble(
+                        app._last_gcode_lines, int(line_no) - 1
+                    )
+                except Exception as exc:
+                    error_text = str(exc)
+
+                    def apply_preview_error() -> None:
+                        if not bool(dlg.winfo_exists()):
+                            return
+                        if int(preview_seq["value"]) != int(request_seq):
+                            return
+                        _clear_pending_resume_start()
+                        if _sync_enabled():
+                            sample_var.set("Modal re-sync: failed.")
+                        else:
+                            sample_var.set("Modal re-sync: disabled")
+                        warning_var.set("Resume preamble preview failed. Adjust settings and try again.")
+                        messagebox.showwarning(
+                            "Resume preview failed",
+                            f"Failed to build resume preamble:\n{error_text}",
+                        )
+
+                    _post_ui(apply_preview_error)
+                    return
 
                 def apply_preview() -> None:
                     if not bool(dlg.winfo_exists()):
@@ -184,21 +241,31 @@ def show_resume_dialog(app):
         preview_after_id["value"] = dlg.after(90, _start_worker)
 
     def update_sample():
+        pending_line = pending_resume_line["value"]
         try:
             line_no = int(line_var.get())
         except Exception:
+            _clear_pending_resume_start()
             sample_var.set("Enter a valid line number.")
             warning_var.set("")
             return
         if line_no < 1 or line_no > total_lines:
+            _clear_pending_resume_start()
             sample_var.set("Line number is out of range.")
             warning_var.set("")
             return
+        if pending_line is not None and int(pending_line) != int(line_no):
+            _clear_pending_resume_start()
         cached = preview_cache.get(int(line_no))
         if cached is not None:
             _render_preview(int(line_no), cached[0], cached[1])
             return
-        if sync_var.get():
+        current_sync_enabled = _sync_enabled()
+        if pending_line is not None and not current_sync_enabled:
+            sample_var.set("Modal re-sync: disabled")
+            warning_var.set("")
+            return
+        if current_sync_enabled:
             sample_var.set("Modal re-sync: calculating...")
         else:
             sample_var.set("Modal re-sync: disabled")
@@ -215,22 +282,38 @@ def show_resume_dialog(app):
             messagebox.showwarning("Resume", "Line number is out of range.")
             return
         preamble = []
-        if sync_var.get():
+        if _sync_enabled():
             cached = preview_cache.get(int(line_no))
             if cached is not None:
                 preamble = list(cached[0])
             else:
-                preamble, _ = app._build_resume_preamble(app._last_gcode_lines, line_no - 1)
+                pending_resume_line["value"] = int(line_no)
+                start_btn = start_btn_holder["widget"]
+                if start_btn is not None:
+                    try:
+                        start_btn.config(state="disabled")
+                    except Exception:
+                        pass
+                sample_var.set("Modal re-sync: calculating...")
+                warning_var.set("Resume will start after the preamble preview is ready.")
+                _schedule_preview(int(line_no))
+                return
         app._resume_from_line(line_no - 1, preamble)
         dlg.destroy()
 
+    def _on_sync_toggle() -> None:
+        _sync_trace()
+        update_sample()
+
     update_sample()
     line_entry.bind("<KeyRelease>", lambda _evt: update_sample())
-    sync_chk.config(command=update_sample)
+    sync_chk.config(command=_on_sync_toggle)
 
     btn_row = ttk.Frame(frm)
     btn_row.grid(row=4, column=0, columnspan=3, sticky="w")
-    ttk.Button(btn_row, text="Start Resume", command=on_start).pack(side="left", padx=(0, 6))
+    start_btn = ttk.Button(btn_row, text="Start Resume", command=on_start)
+    start_btn.pack(side="left", padx=(0, 6))
+    start_btn_holder["widget"] = start_btn
     ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="left")
     dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
     def _on_destroy(_event=None):

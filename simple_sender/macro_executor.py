@@ -48,6 +48,8 @@ class MacroExecutor(MacroPromptMixin, MacroStateMixin, MacroCommandMixin, MacroR
         self._current_macro_line: str = ""
         self._alarm_event = threading.Event()
         self._alarm_notified = False
+        self._manual_error_event = threading.Event()
+        self._manual_error_message = ""
         self._macro_saved_state = None
         self._macro_state_restored = False
         self._last_macro_run_success: bool | None = None

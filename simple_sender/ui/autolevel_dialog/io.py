@@ -23,11 +23,11 @@
 import logging
 import json
 import os
-import shutil
 from tkinter import filedialog, messagebox
 
 from simple_sender.autolevel.height_map import HeightMap
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.utils.atomic_files import atomic_copy_file, atomic_write_json, atomic_write_text
 from .helpers import update_stats_summary
 
 logger = logging.getLogger(__name__)
@@ -68,14 +68,13 @@ def save_leveled(app, status_var) -> None:
         return
     try:
         if leveled:
-            with open(save_path, "w", encoding="utf-8") as f:
-                for line in leveled:
-                    f.write(line.rstrip("\n"))
-                    f.write("\n")
+            cleaned_lines = [str(line).rstrip("\n") for line in leveled]
+            data = "\n".join(cleaned_lines).rstrip("\n") + "\n"
+            atomic_write_text(save_path, data, encoding="utf-8")
         else:
             if not leveled_path or not os.path.isfile(leveled_path):
                 raise FileNotFoundError("Leveled file not found.")
-            shutil.copyfile(leveled_path, save_path)
+            atomic_copy_file(leveled_path, save_path)
     except Exception as exc:
         messagebox.showerror("Save leveled G-code", str(exc))
         return
@@ -109,8 +108,7 @@ def save_height_map(app, status_var) -> None:
     if not save_path:
         return
     try:
-        with open(save_path, "w", encoding="utf-8") as f:
-            json.dump(height_map.to_dict(), f, indent=2, ensure_ascii=True)
+        atomic_write_json(save_path, height_map.to_dict(), indent=2, ensure_ascii=True)
     except Exception as exc:
         messagebox.showerror("Save height map", str(exc))
         return

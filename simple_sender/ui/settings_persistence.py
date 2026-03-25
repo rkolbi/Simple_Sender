@@ -61,6 +61,10 @@ def load_settings(app) -> dict:
         file_size,
     )
     try:
+        app._settings_load_warning_message = ""
+    except Exception:
+        pass
+    try:
         loaded = app._settings_store.load()
         if not loaded:
             logger.info("No settings file found; using defaults.")
@@ -70,12 +74,41 @@ def load_settings(app) -> dict:
             bool(loaded),
         )
         app._settings_store.validate()
+        repaired_keys = list(getattr(app._settings_store, "last_load_repaired_keys", []) or [])
+        if repaired_keys:
+            warning = (
+                "Some settings values were invalid and were repaired to defaults for this session.\n\n"
+                f"Repaired keys: {', '.join(repaired_keys)}\n\n"
+                f"Original settings file was left unchanged at:\n{settings_path or '<unknown>'}"
+            )
+            try:
+                app._settings_load_warning_message = warning
+            except Exception:
+                pass
     except SettingsLoadError as exc:
         logger.error(f"Failed to load settings: {exc}")
         app._settings_store.reset_to_defaults()
+        warning = (
+            "Settings could not be loaded, so defaults were used for this session.\n\n"
+            f"{exc}\n\n"
+            f"Original settings file was left unchanged at:\n{settings_path or '<unknown>'}"
+        )
+        try:
+            app._settings_load_warning_message = warning
+        except Exception:
+            pass
     except Exception as exc:
         logger.error(f"Unexpected error loading settings: {exc}")
         app._settings_store.reset_to_defaults()
+        warning = (
+            "Settings could not be loaded, so defaults were used for this session.\n\n"
+            f"{exc}\n\n"
+            f"Original settings file was left unchanged at:\n{settings_path or '<unknown>'}"
+        )
+        try:
+            app._settings_load_warning_message = warning
+        except Exception:
+            pass
     return cast(dict, app._settings_store.data)
 
 
@@ -470,16 +503,72 @@ def _read_outlet_setting(
     return outlet
 
 
+def _coerce_outlet_setting(value: object, *, default: int) -> int:
+    raw_value: str | bytes | bytearray | int | float
+    if isinstance(value, (str, bytes, bytearray, int, float)):
+        raw_value = value
+    else:
+        return int(default)
+    try:
+        outlet = int(raw_value)
+    except Exception:
+        return int(default)
+    if outlet not in (1, 2):
+        return int(default)
+    return outlet
+
+
+def _coerce_nonnegative_float_setting(value: object, *, default: float) -> float:
+    raw_value: str | bytes | bytearray | int | float
+    if isinstance(value, (str, bytes, bytearray, int, float)):
+        raw_value = value
+    else:
+        return float(default)
+    try:
+        parsed = float(raw_value)
+    except Exception:
+        return float(default)
+    return max(0.0, float(parsed))
+
+
 def _build_kasa_settings(app) -> dict[str, object]:
     if not sys.platform.startswith("linux"):
+        existing = dict(DEFAULT_SETTINGS)
+        if isinstance(getattr(app, "settings", None), dict):
+            existing.update(app.settings)
         return {
-            "kasa_enabled": False,
-            "kasa_device_identifier": "",
-            "vacuum_enabled": False,
-            "vacuum_off_delay_sec": 0.0,
-            "vacuum_outlet": 1,
-            "light_enabled": False,
-            "light_outlet": 2,
+            "kasa_enabled": bool(existing.get("kasa_enabled", DEFAULT_SETTINGS["kasa_enabled"])),
+            "kasa_device_identifier": str(
+                existing.get(
+                    "kasa_device_identifier",
+                    DEFAULT_SETTINGS["kasa_device_identifier"],
+                )
+                or ""
+            ).strip(),
+            "vacuum_enabled": bool(
+                existing.get("vacuum_enabled", DEFAULT_SETTINGS["vacuum_enabled"])
+            ),
+            "vacuum_off_delay_sec": max(
+                0.0,
+                _coerce_nonnegative_float_setting(
+                    existing.get(
+                        "vacuum_off_delay_sec",
+                        DEFAULT_SETTINGS["vacuum_off_delay_sec"],
+                    ),
+                    default=float(DEFAULT_SETTINGS["vacuum_off_delay_sec"]),
+                ),
+            ),
+            "vacuum_outlet": _coerce_outlet_setting(
+                existing.get("vacuum_outlet", DEFAULT_SETTINGS["vacuum_outlet"]),
+                default=1,
+            ),
+            "light_enabled": bool(
+                existing.get("light_enabled", DEFAULT_SETTINGS["light_enabled"])
+            ),
+            "light_outlet": _coerce_outlet_setting(
+                existing.get("light_outlet", DEFAULT_SETTINGS["light_outlet"]),
+                default=2,
+            ),
         }
 
     kasa_enabled_var = getattr(app, "kasa_enabled", None)

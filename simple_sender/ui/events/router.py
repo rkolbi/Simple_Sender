@@ -78,6 +78,26 @@ def _cleanup_streaming_source(source: Any, *, context: str) -> None:
             _log_suppressed(f"{context}: failed removing streamed temp file", exc)
 
 
+def _signal_gcode_load_result(
+    app: Any,
+    *,
+    token: int,
+    success: bool,
+    path: str | None = None,
+    error: str | None = None,
+) -> None:
+    app._gcode_load_last_result_token = int(token)
+    app._gcode_load_last_result_success = bool(success)
+    app._gcode_load_last_result_error = str(error or "")
+    app._gcode_load_last_result_path = str(path or "")
+    evt = getattr(app, "_gcode_load_result_event", None)
+    if evt is not None and hasattr(evt, "set"):
+        try:
+            evt.set()
+        except Exception as exc:
+            _log_suppressed("Failed signaling G-code load result event", exc)
+
+
 def _loaded_stream_signature(
     *,
     path: str,
@@ -210,6 +230,7 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
             return
         (
             generation,
+            token,
             signature,
             path,
             source,
@@ -278,6 +299,7 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
 
         def _phase_finalize() -> None:
             app._gcode_loaded_stream_last_signature = signature
+            _signal_gcode_load_result(app, token=token, success=True, path=path)
             perf_monitor = getattr(app, "_perf_monitor", None)
             if perf_monitor is not None:
                 try:
@@ -319,6 +341,13 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
                         source,
                         context=f"Deferred gcode_loaded_stream {phase_name} failure",
                     )
+                _signal_gcode_load_result(
+                    app,
+                    token=token,
+                    success=False,
+                    path=path,
+                    error=str(exc),
+                )
                 _set_load_settling(app, False)
                 _finalize_metrics(aborted=True, reason=f"phase_failed:{phase_name}")
                 if getattr(app, "_gcode_loaded_stream_pending", None):
@@ -443,6 +472,14 @@ def _handle_manual_error_event(app: Any, msg: str, source: str | None) -> None:
     raw_msg = str(msg)
     annotated = annotate_grbl_error(raw_msg)
     label = str(source).strip() if source else ""
+    if label.lower() == "macro":
+        macro_executor = getattr(app, "macro_executor", None)
+        notify_manual_error = getattr(macro_executor, "notify_manual_error", None)
+        if callable(notify_manual_error):
+            try:
+                notify_manual_error(annotated)
+            except Exception as exc:
+                _log_suppressed("Failed notifying macro executor of manual error", exc)
     show_jog_limit_hint = _is_jog_source(label) and (_is_error_15(raw_msg) or _is_error_15(annotated))
     key = (label.lower(), str(annotated), bool(show_jog_limit_hint))
     now = time.monotonic()
@@ -943,7 +980,12 @@ def handle_gcode_loaded(app, evt):
     validated = bool(evt[5]) if len(evt) > 5 else False
     report = evt[6] if len(evt) > 6 else None
     app._gcode_validation_report = report
-    app._apply_loaded_gcode(path, lines, lines_hash=lines_hash, validated=validated)
+    try:
+        app._apply_loaded_gcode(path, lines, lines_hash=lines_hash, validated=validated)
+    except Exception as exc:
+        _signal_gcode_load_result(app, token=token, success=False, path=path, error=str(exc))
+        raise
+    _signal_gcode_load_result(app, token=token, success=True, path=path)
     perf_monitor = getattr(app, "_perf_monitor", None)
     if perf_monitor is not None:
         try:
@@ -978,13 +1020,14 @@ def handle_gcode_loaded_stream(app, evt):
             signature[0] or "<none>",
             signature[1] or "<none>",
         )
+        _signal_gcode_load_result(app, token=token, success=True, path=path)
         _cleanup_streaming_source(source, context="Idempotent gcode_loaded_stream skip")
         return
     generation = int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0) + 1
     app._gcode_loaded_stream_apply_generation = generation
     pending = getattr(app, "_gcode_loaded_stream_pending", None)
     if pending and isinstance(pending, tuple) and len(pending) >= 4:
-        stale_source = pending[3]
+        stale_source = pending[4]
         if stale_source is not source:
             logger.info(
                 "[ui] gcode_loaded_stream coalesced: job=%s hash=%s reason=pending_apply_replaced",
@@ -994,6 +1037,7 @@ def handle_gcode_loaded_stream(app, evt):
             _cleanup_streaming_source(stale_source, context="Coalesced gcode_loaded_stream apply")
     app._gcode_loaded_stream_pending = (
         generation,
+        token,
         signature,
         path,
         source,
@@ -1031,6 +1075,7 @@ def handle_gcode_load_invalid(
         orig = f"{total_lines}" if total_lines is not None else "?"
         cleaned = f"{cleaned_lines}" if cleaned_lines is not None else "?"
         msg += f"\nFile lines: {orig} (non-empty: {cleaned})."
+    _signal_gcode_load_result(app, token=token, success=False, error=msg)
     messagebox.showerror("Open G-code", msg)
     app.status.config(text="G-code load failed")
 
@@ -1054,6 +1099,7 @@ def handle_gcode_load_invalid_command(
     msg = "GRBL system commands ($...) are not allowed inside G-code jobs."
     if line_no is not None:
         msg += f"\nFirst at line {line_no}: {text}"
+    _signal_gcode_load_result(app, token=token, success=False, error=msg)
     messagebox.showerror("Open G-code", msg)
     app.status.config(text="G-code load failed")
 
@@ -1061,6 +1107,7 @@ def handle_gcode_load_invalid_command(
 def handle_gcode_load_error(app, token, _path, err):
     if token != app._gcode_load_token:
         return
+    _signal_gcode_load_result(app, token=token, success=False, error=str(err))
     app._gcode_validation_report = None
     _clear_autolevel_restore(app)
     app._gcode_loading = False

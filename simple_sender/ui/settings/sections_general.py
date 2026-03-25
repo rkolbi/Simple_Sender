@@ -942,20 +942,44 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         )
         if not confirm:
             return
-        try:
-            app._save_settings()
-        except (
-            AttributeError,
-            OSError,
-            RuntimeError,
-            TypeError,
-            ValueError,
-            tk.TclError,
-        ) as exc:
-            _log_suppressed("Failed saving settings before Linux power action", exc)
+        proceed_without_saving = False
+        while True:
+            try:
+                app._save_settings()
+                break
+            except (
+                AttributeError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                tk.TclError,
+            ) as exc:
+                _log_suppressed("Failed saving settings before Linux power action", exc)
+                choice = messagebox.askyesnocancel(
+                    "Settings Save Failed",
+                    (
+                        f"Settings could not be saved before {label.lower()}.\n\n"
+                        f"{exc}\n\n"
+                        f"Yes: {label} without saving\n"
+                        "No: Retry save\n"
+                        "Cancel: Keep running"
+                    ),
+                )
+                if choice is True:
+                    proceed_without_saving = True
+                    break
+                if choice is None:
+                    _log_status(f"[system] {label} canceled after settings save failure")
+                    return
         try:
             subprocess.Popen(["systemctl", action])
-            _log_status(f"[system] {label} requested")
+            status_text = (
+                f"[system] {label} requested without saving latest settings"
+                if proceed_without_saving
+                else f"[system] {label} requested"
+            )
+            _log_status(status_text)
             return
         except (OSError, ValueError) as exc:
             _log_suppressed(
@@ -968,7 +992,12 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         )
         try:
             subprocess.Popen(fallback_args)
-            _log_status(f"[system] {label} requested")
+            status_text = (
+                f"[system] {label} requested without saving latest settings"
+                if proceed_without_saving
+                else f"[system] {label} requested"
+            )
+            _log_status(status_text)
         except (OSError, ValueError) as exc:
             _log_status(f"[system] {label} failed: {exc}")
 

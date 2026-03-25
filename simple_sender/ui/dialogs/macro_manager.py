@@ -361,6 +361,19 @@ class _MacroManagerDialog:
             body=body,
         )
 
+    def _restore_slot_state(
+        self,
+        slot: int,
+        state: tuple[str, str, str, str, str, bool],
+    ) -> None:
+        name, tip, color, text_color, body, had_content = state
+        if had_content:
+            self._write_slot(slot, name, tip, color, text_color, body)
+            return
+        if not self._macro_dir:
+            raise RuntimeError("No writable macro directory found.")
+        remove_macro_slot(self._macro_dir, slot)
+
     def save_current(self) -> None:
         if not self._macro_dir:
             messagebox.showwarning("Macro Manager", "No writable macro directory found.")
@@ -399,9 +412,12 @@ class _MacroManagerDialog:
         ):
             return
         try:
-            remove_macro_slot(self._macro_dir, self._selected_slot)
+            removed = remove_macro_slot(self._macro_dir, self._selected_slot)
         except Exception as exc:
             messagebox.showerror("Macro Manager", f"Failed to delete macro:\n{exc}")
+            return
+        if not removed:
+            messagebox.showwarning("Macro Manager", "Macro slot is already empty.")
             return
         self.refresh()
         self.slot_list.selection_clear(0, "end")
@@ -423,6 +439,18 @@ class _MacroManagerDialog:
             messagebox.showwarning("Macro Manager", "Macro name cannot be empty.")
             return
         if not self._validate_editor_colors(color, text_color):
+            return
+        tgt_name, tgt_tip, tgt_color, tgt_text_color, tgt_body, tgt_path = self._slot_data.get(
+            target,
+            ("", "", "", "", "", None),
+        )
+        target_has_content = bool(
+            tgt_name or tgt_tip or tgt_color or tgt_text_color or tgt_body or tgt_path
+        )
+        if target_has_content and not messagebox.askyesno(
+            "Macro Manager",
+            f"Macro-{target} already contains a macro. Overwrite it?",
+        ):
             return
         try:
             self._write_slot(target, name, tip, color, text_color, body)
@@ -451,13 +479,25 @@ class _MacroManagerDialog:
             target,
             ("", "", "", "", "", None),
         )
+        src_state = (src_name, src_tip, src_color, src_text_color, src_body, True)
+        tgt_had_content = bool(
+            tgt_name or tgt_tip or tgt_color or tgt_text_color or tgt_body or tgt_path
+        )
+        tgt_state = (tgt_name, tgt_tip, tgt_color, tgt_text_color, tgt_body, tgt_had_content)
         try:
             self._write_slot(target, src_name, src_tip, src_color, src_text_color, src_body)
-            if tgt_name or tgt_tip or tgt_color or tgt_text_color or tgt_body or tgt_path:
+            if tgt_had_content:
                 self._write_slot(source, tgt_name, tgt_tip, tgt_color, tgt_text_color, tgt_body)
             else:
-                remove_macro_slot(self._macro_dir, source)
+                removed = remove_macro_slot(self._macro_dir, source)
+                if not removed:
+                    raise OSError(f"Failed deleting moved source slot Macro-{source}.")
         except Exception as exc:
+            try:
+                self._restore_slot_state(source, src_state)
+                self._restore_slot_state(target, tgt_state)
+            except Exception as rollback_exc:
+                _log_suppressed("Failed rolling back partially applied macro reorder", rollback_exc)
             messagebox.showerror("Macro Manager", f"Failed to reorder macro:\n{exc}")
             return
         self.refresh()

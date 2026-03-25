@@ -84,6 +84,25 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _post_ui_callback(app, callback, *, context: str) -> bool:
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(callback)
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", callback, (), {}))
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via ui_q", exc)
+    _log_suppressed(context, RuntimeError("ui thread unavailable"))
+    return False
+
+
 @dataclass(frozen=True)
 class AutoLevelDialogDependencies:
     tk_module: Any
@@ -849,7 +868,11 @@ class AutoLevelDialogController:
                 self.progress_bar.configure(value=done)
                 self.status_var.set(f"Probing {done}/{total}")
 
-            self.app.after(0, update)
+            _post_ui_callback(
+                self.app,
+                update,
+                context="Failed posting auto-level probe progress callback",
+            )
 
         def on_done(ok: bool, reason: str | None) -> None:
             def finish() -> None:
@@ -884,7 +907,11 @@ class AutoLevelDialogController:
                         message = f"{message} (pending G90 restore)"
                     self.status_var.set(message)
 
-            self.app.after(0, finish)
+            _post_ui_callback(
+                self.app,
+                finish,
+                context="Failed posting auto-level probe completion callback",
+            )
 
         started = self.app.auto_level_runner.start(
             grid,
@@ -963,7 +990,11 @@ class AutoLevelDialogController:
                 self.progress_bar.configure(value=done)
                 self.status_var.set(f"Test probe {done}/{total}")
 
-            self.app.after(0, update)
+            _post_ui_callback(
+                self.app,
+                update,
+                context="Failed posting auto-level test-probe progress callback",
+            )
 
         def on_done(ok: bool, reason: str | None) -> None:
             def finish() -> None:
@@ -1007,7 +1038,11 @@ class AutoLevelDialogController:
                     )
                     self.status_var.set(message)
 
-            self.app.after(0, finish)
+            _post_ui_callback(
+                self.app,
+                finish,
+                context="Failed posting auto-level test-probe completion callback",
+            )
 
         started = self.app.auto_level_runner.start(
             test_grid,
@@ -1116,44 +1151,83 @@ class AutoLevelDialogController:
         _ = line_count
         method = self.interp_var.get().strip().lower()
 
+        action_states = {
+            "apply": self.apply_btn.cget("state") if self.apply_btn is not None else "disabled",
+            "save_map": self.save_map_btn.cget("state") if self.save_map_btn is not None else "disabled",
+            "save": self.save_btn.cget("state") if self.save_btn is not None else "disabled",
+            "revert": self.revert_btn.cget("state") if self.revert_btn is not None else "disabled",
+        }
         self.status_var.set("Applying height map to file...")
         self._set_controls_enabled(False)
         self.apply_btn.config(state="disabled")
 
         def worker() -> None:
+            removed_previous_temp = False
             old_path = getattr(self.app, "_auto_level_leveled_path", None)
             if getattr(self.app, "_auto_level_leveled_temp", False) and old_path:
                 try:
                     os.remove(old_path)
+                    removed_previous_temp = True
                 except OSError as exc:
                     _log_suppressed("Failed removing previous temporary leveled file before regeneration", exc)
-            output_path = self._make_output_path(path)
-            header_lines = self._header_lines_for(path)
-            log_fn = None
-            ui_q = getattr(self.app, "ui_q", None)
-            if ui_q is not None:
-                def _log_fn(msg: str) -> None:
-                    ui_q.put(("log", msg))
+            try:
+                output_path = self._make_output_path(path)
+                header_lines = self._header_lines_for(path)
+                log_fn = None
+                ui_q = getattr(self.app, "ui_q", None)
+                if ui_q is not None:
+                    def _log_fn(msg: str) -> None:
+                        ui_q.put(("log", msg))
 
-                log_fn = _log_fn
+                    log_fn = _log_fn
 
-            result, is_temp, fallback_warning = self.deps.apply_auto_level_to_path_fn(
-                source_path=source_path,
-                source_lines=source_lines,
-                output_path=output_path,
-                temp_path_fn=self._make_temp_path,
-                height_map=height_map,
-                arc_step_rad=arc_step,
-                interpolation=method,
-                header_lines=header_lines,
-                streaming_mode=self.streaming_mode,
-                log_fn=log_fn,
-            )
+                result, is_temp, fallback_warning = self.deps.apply_auto_level_to_path_fn(
+                    source_path=source_path,
+                    source_lines=source_lines,
+                    output_path=output_path,
+                    temp_path_fn=self._make_temp_path,
+                    height_map=height_map,
+                    arc_step_rad=arc_step,
+                    interpolation=method,
+                    header_lines=header_lines,
+                    streaming_mode=self.streaming_mode,
+                    log_fn=log_fn,
+                )
+            except Exception as exc:
+                _log_suppressed("Auto-Level apply worker failed unexpectedly", exc)
+                result = LevelFileResult(None, 0, str(exc), False)
+                is_temp = False
+                fallback_warning = None
+
+            def _restore_action_states() -> None:
+                try:
+                    if self.apply_btn is not None:
+                        self.apply_btn.config(state=action_states["apply"])
+                    if self.save_map_btn is not None:
+                        self.save_map_btn.config(state=action_states["save_map"])
+                    if self.save_btn is not None:
+                        self.save_btn.config(state=action_states["save"])
+                    if self.revert_btn is not None:
+                        self.revert_btn.config(state=action_states["revert"])
+                except Exception as exc:
+                    _log_suppressed("Failed restoring auto-level action button states", exc)
 
             def on_done() -> None:
                 self._set_controls_enabled(True)
                 if result.error:
-                    self.status_var.set("")
+                    _restore_action_states()
+                    if removed_previous_temp:
+                        self.app._auto_level_leveled_lines = None
+                        self.app._auto_level_leveled_path = None
+                        self.app._auto_level_leveled_temp = False
+                        self.app._auto_level_leveled_name = None
+                        restore_state = getattr(self.app, "_auto_level_restore", None)
+                        if isinstance(restore_state, dict):
+                            restore_state["leveled_lines"] = None
+                            restore_state["leveled_path"] = None
+                            restore_state["leveled_temp"] = False
+                            restore_state["leveled_name"] = None
+                    self.status_var.set("Auto-Level apply failed.")
                     self.deps.messagebox.showerror("Auto-Level", result.error)
                     return
                 if (
@@ -1208,9 +1282,14 @@ class AutoLevelDialogController:
                     if not is_temp
                     else "Loading leveled file (temporary)..."
                 )
-                self.app._load_gcode_from_path(result.output_path)
+                if result.output_path:
+                    self.app._load_gcode_from_path(result.output_path)
 
-            self.app.after(0, on_done)
+            _post_ui_callback(
+                self.app,
+                on_done,
+                context="Failed posting auto-level apply completion callback",
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 

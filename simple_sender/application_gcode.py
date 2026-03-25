@@ -93,7 +93,7 @@ class GcodeMixin:
         reset_gcode_view_for_run(self)
 
     def _load_gcode_from_path(self, path: str):
-        load_gcode_from_path(self, path)
+        return load_gcode_from_path(self, path)
 
     def _apply_loaded_gcode(
         self,

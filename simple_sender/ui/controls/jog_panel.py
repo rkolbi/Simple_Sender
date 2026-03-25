@@ -131,8 +131,10 @@ def _jog_axis_to_target(
     dx, dy, dz = _axis_components(axis, delta)
     if abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON and abs(dz) < JOG_FEED_EPSILON:
         return False
-    jog_move(dx, dy, dz, source=source)
-    return True
+    result = jog_move(dx, dy, dz, source=source)
+    # Preserve legacy callback compatibility: explicit False means rejection,
+    # while older side-effect-only helpers may still return None.
+    return result is not False
 
 
 def _bind_position_column_sync(app, align) -> None:
@@ -694,7 +696,7 @@ def build_jog_panel(app, parent):
     def j(dx, dy, dz, *, source=None):
         if not app.grbl.is_connected():
             app.streaming_controller.log("Jog ignored - GRBL is not connected.")
-            return
+            return False
         try:
             mark_manual_motion = getattr(app, "_mark_manual_motion_activity", None)
             if callable(mark_manual_motion):
@@ -703,6 +705,15 @@ def build_jog_panel(app, parent):
             _log_suppressed("Failed marking manual motion activity for status poll boost", exc)
         feed = _jog_feed_for_move(dx, dy, dz)
         source_tag = source or getattr(app, "_manual_input_source", None) or "jog"
+        accepted = False
+        try:
+            accepted = bool(
+                app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source_tag)
+            )
+        except Exception:
+            raise
+        if not accepted:
+            return False
         try:
             start_predict = getattr(app, "_start_manual_jog_prediction", None)
             if callable(start_predict):
@@ -716,7 +727,7 @@ def build_jog_panel(app, parent):
                 )
         except Exception as exc:
             _log_suppressed("Failed starting manual jog DRO interpolation", exc)
-        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source=source_tag)
+        return True
 
     def jog_cmd(dx, dy, dz):
         feed = _jog_feed_for_move(dx, dy, dz)

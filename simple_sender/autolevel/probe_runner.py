@@ -190,9 +190,12 @@ class AutoLevelProbeRunner:
             self._queue_force_g90("streaming")
             return
         try:
-            self.app.grbl.send_immediate("G90", source="autolevel")
+            accepted = self.app.grbl.send_immediate("G90", source="autolevel")
         except Exception:
             self._queue_force_g90("send failed")
+            return
+        if accepted is False:
+            self._queue_force_g90("send rejected")
 
     def _queue_force_g90(self, reason: str) -> None:
         if getattr(self.app, "_pending_force_g90", False):
@@ -273,13 +276,34 @@ class AutoLevelProbeRunner:
         if self._cancel.is_set():
             return False
         try:
-            self.app.grbl.send_immediate(command, source="autolevel")
+            accepted = self.app.grbl.send_immediate(command, source="autolevel")
         except Exception:
+            self._log(f"[autolevel] Command send failed: {command}")
+            return False
+        if accepted is False:
+            self._log(
+                f"[autolevel] Command rejected before send: {command} ({self._rejection_reason()})."
+            )
             return False
         completed = self.app.grbl.wait_for_manual_completion(timeout_s=timeout_s)
         if not completed:
             return False
         return self._wait_for_idle(timeout_s)
+
+    def _rejection_reason(self) -> str:
+        try:
+            if not self.app.grbl.is_connected():
+                return "controller disconnected"
+        except Exception:
+            pass
+        if bool(getattr(self.app, "_alarm_locked", False)):
+            return "controller alarm is active"
+        try:
+            if self.app.grbl.is_streaming():
+                return "controller is busy streaming"
+        except Exception:
+            pass
+        return "controller rejected the command"
 
     def _wait_for_idle(self, timeout_s: float) -> bool:
         start = time.monotonic()

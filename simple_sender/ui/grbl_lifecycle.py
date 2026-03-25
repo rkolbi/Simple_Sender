@@ -32,6 +32,7 @@ from simple_sender.constants.messages import MachineStateMessages, StatusMessage
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import disable_job_controls
+from simple_sender.ui.modal_sync import clear_modal_sync_state, request_modal_state_sync
 from simple_sender.utils.constants import (
     STATUS_POLL_DEFAULT,
     STATUS_POLL_IDLE,
@@ -72,6 +73,63 @@ def _signal_thread_event(obj, attr_name: str) -> None:
             evt.set()
         except Exception as exc:
             _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
+
+
+def _post_ui(app, func, *args, **kwargs) -> None:
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(func, *args, **kwargs)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed posting reconnect callback via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", func, args, kwargs))
+            return
+        except Exception as exc:
+            _log_suppressed("Failed posting reconnect callback via ui_q", exc)
+
+
+def _report_modal_sync_failure(app, message: str) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    try:
+        app.status.config(text=text)
+    except Exception:
+        pass
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("log", f"[status] {text}"))
+        except Exception:
+            pass
+
+
+def _schedule_reconnect_resume(app, *, start_index: int) -> None:
+    try:
+        app.status.config(text=f"Preparing reconnect resume from line {int(start_index) + 1}...")
+    except Exception:
+        pass
+
+    def worker() -> None:
+        preamble, _has_g92 = app._build_resume_preamble(app._last_gcode_lines, int(start_index))
+
+        def apply_resume() -> None:
+            if bool(getattr(app, "_closing", False)):
+                return
+            try:
+                if not bool(getattr(app, "connected", False)):
+                    return
+            except Exception:
+                return
+            app._resume_from_line(int(start_index), preamble)
+
+        _post_ui(app, apply_resume)
+
+    threading.Thread(target=worker, name="reconnect-resume-preamble", daemon=True).start()
 
 
 def _record_connection_timeline(app, event: str, details: str = "") -> None:
@@ -460,6 +518,10 @@ def handle_connection_event(app, is_on: bool, port):
             app._alarm_locked = False
             app._alarm_message = ""
         app._pending_settings_refresh = True
+        app._pending_modal_sync = True
+        app._modal_sync_inflight = False
+        app._modal_sync_inflight_started_ts = 0.0
+        app._modal_sync_retry_after_ts = 0.0
         app._status_seen = False
         try:
             connect_settling_s = float(
@@ -535,6 +597,8 @@ def handle_connection_event(app, is_on: bool, port):
             app._alarm_clear_requested = False
             app._alarm_message = ""
         app._pending_settings_refresh = False
+        clear_modal_sync_state(app)
+        setattr(app, "_pending_unit_mode", None)
         app._status_seen = False
         app._status_connect_settling_until_ts = 0.0
         app._report_units = None
@@ -619,10 +683,12 @@ def handle_ready_event(app, ready):
         except Exception:
             ready_tail_s = _STATUS_CONNECT_SETTLING_READY_TAIL_S
         _arm_status_connect_settling(app, duration_s=ready_tail_s)
-        try:
-            app._send_manual("$G", "status")
-        except Exception as exc:
-            _log_suppressed("Failed requesting modal state with $G after ready", exc)
+        request_modal_state_sync(
+            app,
+            source="status",
+            failure_status="Connected, but modal-state sync is pending retry.",
+            failure_log="[status] Connected, but $G modal sync was rejected; retry pending.",
+        )
         if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
             app._resume_after_disconnect = False
             total_lines = (
@@ -641,8 +707,7 @@ def handle_ready_event(app, ready):
                 label = f" '{job_name}'" if job_name else ""
                 prompt = f"Resume interrupted job{label} from line {start_index + 1}?"
                 if messagebox.askyesno("Resume job", prompt):
-                    preamble, _ = app._build_resume_preamble(app._last_gcode_lines, start_index)
-                    app._resume_from_line(start_index, preamble)
+                    _schedule_reconnect_resume(app, start_index=start_index)
             app._resume_from_index = None
             app._resume_job_name = None
     apply_status_poll_profile(app)

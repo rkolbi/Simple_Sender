@@ -94,10 +94,11 @@ def all_stop_action(app):
     except Exception as exc:
         _log_suppressed("Failed stopping Kasa job accessories during ALL STOP", exc)
     mode = app.all_stop_mode.get()
+    action_applied = False
     if mode == "reset":
-        app.grbl.reset()
+        action_applied = bool(app.grbl.reset())
     elif mode == "stop_reset":
-        app.grbl.stop_stream()
+        action_applied = bool(app.grbl.stop_stream())
         stop_stream_resets = False
         stop_stream_resets_checker = getattr(app.grbl, "stop_stream_performs_reset", None)
         if callable(stop_stream_resets_checker):
@@ -110,10 +111,22 @@ def all_stop_action(app):
                 )
                 stop_stream_resets = True
         if not stop_stream_resets:
-            app.grbl.reset()
+            action_applied = bool(app.grbl.reset()) or bool(action_applied)
+        elif not action_applied:
+            action_applied = bool(app.grbl.reset())
     else:
-        app.grbl.stop_stream()
-    invalidate_job_setup_state(app)
+        action_applied = bool(app.grbl.stop_stream())
+    if action_applied:
+        invalidate_job_setup_state(app)
+        return
+    try:
+        app.status.config(text="ALL STOP warning: controller did not accept stop/reset")
+    except Exception:
+        pass
+    try:
+        app.ui_q.put(("log", "[all stop] Stop/reset command was not sent; setup state was preserved."))
+    except Exception:
+        pass
 
 
 def all_stop_gcode_label(app) -> str:

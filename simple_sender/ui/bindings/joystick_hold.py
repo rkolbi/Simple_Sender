@@ -388,6 +388,26 @@ def send_hold_jog(app):
             stop_predict(reason="joystick_hold_start")
     except Exception as exc:
         _log_suppressed("Failed stopping active jog DRO interpolation before joystick hold jog", exc)
+    accepted = False
+    try:
+        accepted = bool(
+            app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source="joystick")
+        )
+    except Exception as exc:
+        logger.exception("Failed to send joystick hold jog: %s", exc)
+        app._joystick_hold_last_ts = time.monotonic()
+        try:
+            app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
+        except Exception as schedule_exc:
+            _log_suppressed("Failed scheduling joystick hold retry after send failure", schedule_exc)
+        return
+    if not accepted:
+        app._joystick_hold_last_ts = time.monotonic()
+        try:
+            app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
+        except Exception as schedule_exc:
+            _log_suppressed("Failed scheduling joystick hold retry after jog rejection", schedule_exc)
+        return
     try:
         start_predict = getattr(app, "_start_manual_jog_prediction", None)
         if callable(start_predict) and _joystick_jog_prediction_enabled(app):
@@ -401,16 +421,6 @@ def send_hold_jog(app):
             )
     except Exception as exc:
         _log_suppressed("Failed starting joystick jog DRO interpolation", exc)
-    try:
-        app.grbl.jog(dx, dy, dz, feed, app.unit_mode.get(), source="joystick")
-    except Exception as exc:
-        logger.exception("Failed to send joystick hold jog: %s", exc)
-        app._joystick_hold_last_ts = time.monotonic()
-        try:
-            app._joystick_hold_after_id = app.after(JOYSTICK_HOLD_REPEAT_MS, app._send_hold_jog)
-        except Exception as schedule_exc:
-            _log_suppressed("Failed scheduling joystick hold retry after send failure", schedule_exc)
-        return
     app._joystick_hold_jog_sent = True
 
 

@@ -1058,8 +1058,13 @@ def start_job_accessories(app, *, source: str = "job_run") -> None:
     outlets = _selected_job_outlets(app)
     active_outlets: set[int] = set()
     for outlet_id in outlets:
-        _set_job_outlet_state(app, outlet_id, True, source=source)
-        active_outlets.add(int(outlet_id))
+        if _set_job_outlet_state(app, outlet_id, True, source=source):
+            active_outlets.add(int(outlet_id))
+        else:
+            log_kasa_message(
+                app,
+                f"Job accessory start rejected for outlet {int(outlet_id)}.",
+            )
     app._kasa_job_active_outlets = active_outlets
     app._kasa_job_running = bool(active_outlets)
 
@@ -1083,18 +1088,27 @@ def stop_job_accessories(app, *, source: str = "job_stop") -> None:
         )
     except Exception:
         vacuum_off_delay_s = 0.0
+    remaining_active = set(int(outlet_id) for outlet_id in outlet_ids)
     for outlet_id in outlet_ids:
+        accepted = False
         if vacuum_enabled and int(outlet_id) == int(vacuum_outlet):
-            _request_vacuum_off_with_delay(
+            accepted = _request_vacuum_off_with_delay(
                 app,
                 outlet_id=int(outlet_id),
                 source=str(source or "job_stop"),
                 delay_s=float(vacuum_off_delay_s),
             )
+        else:
+            accepted = _set_job_outlet_state(app, outlet_id, False, source=source)
+        if not accepted:
+            log_kasa_message(
+                app,
+                f"Job accessory stop rejected for outlet {int(outlet_id)}.",
+            )
             continue
-        _set_job_outlet_state(app, outlet_id, False, source=source)
-    app._kasa_job_active_outlets = set()
-    app._kasa_job_running = False
+        remaining_active.discard(int(outlet_id))
+    app._kasa_job_active_outlets = remaining_active
+    app._kasa_job_running = bool(remaining_active)
 
 
 def handle_stream_spindle_state(app, is_on: bool) -> None:

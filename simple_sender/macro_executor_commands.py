@@ -49,6 +49,8 @@ class MacroCommandMixin(MacroExecutorState):
             macro_send=self._macro_send,
             parse_timeout=self._parse_timeout,
             wait_for_connection_state=self._wait_for_connection_state,
+            wait_for_ready_state=self._wait_for_grbl_ready_state,
+            wait_for_gcode_load_result=self._wait_for_gcode_load_result,
             macro_restore_state=self._macro_restore_state,
             parse_macro_prompt=self._parse_macro_prompt,
             macro_cancelled=lambda: bool(

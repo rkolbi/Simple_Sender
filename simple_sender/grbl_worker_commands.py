@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 
-from simple_sender.types import GrblWorkerState
+from simple_sender.types import GrblWorkerState, ManualCommandResultTracker
 
 from .utils.constants import (
     DEFAULT_SPINDLE_RPM,
@@ -52,39 +52,17 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 class GrblWorkerCommandMixin(GrblWorkerState):
-    def _mark_manual_motion_status_grace(self, duration_s: float = 2.0) -> None:
-        try:
-            duration = max(0.1, float(duration_s))
-        except Exception:
-            duration = 2.0
-        now = time.time()
-        until_ts = now + duration
-        try:
-            current_until = float(getattr(self, "_manual_motion_status_grace_until_ts", 0.0) or 0.0)
-        except Exception:
-            current_until = 0.0
-        if until_ts > current_until:
-            self._manual_motion_status_grace_until_ts = float(until_ts)
-        changed_evt = getattr(self, "_status_interval_changed_evt", None)
-        if isinstance(changed_evt, threading.Event):
-            try:
-                changed_evt.set()
-            except Exception as exc:
-                _log_suppressed("Failed signaling status thread after manual-motion grace update", exc)
-
-    def send_immediate(self, command: str, *, source: str | None = None) -> bool:
-        """Send command immediately (bypasses streaming).
-        
-        Used for manual console commands and UI buttons.
-        Respects alarm state - only allows $X and $H during alarm.
-        
-        Args:
-            command: G-code or GRBL command to send
-        """
+    def send_immediate_tracked(
+        self,
+        command: str,
+        *,
+        source: str | None = None,
+    ) -> ManualCommandResultTracker | None:
+        """Send a manual command and return a completion tracker when accepted."""
         if not self.is_connected():
             logger.warning("Cannot send command - not connected")
-            return False
-        
+            return None
+
         allow_stream_paused_macro = bool(
             source == "macro"
             and self._streaming
@@ -97,8 +75,8 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                 self.ui_q.put(("log", f"[manual blocked] {command.strip()} (streaming active)"))
             except Exception as exc:
                 _log_suppressed("Failed queueing blocked manual-command log while streaming", exc)
-            return False
-        
+            return None
+
         if source:
             self._last_manual_source = str(source)
         elif not self._last_manual_source:
@@ -106,16 +84,15 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         command_source = self._last_manual_source
         command = command.strip()
         if not command:
-            return False
+            return None
         cmd_upper = command.upper()
         if cmd_upper.startswith("$J="):
             self._mark_manual_motion_status_grace()
 
-        # During alarm, only allow unlock and home commands
         if self._alarm_active:
             if not (cmd_upper.startswith("$X") or cmd_upper.startswith("$H")):
                 logger.warning(f"Command '{command}' blocked during alarm")
-                return False
+                return None
 
         if cmd_upper.startswith("$H"):
             try:
@@ -146,20 +123,62 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                         _log_suppressed("Failed queueing watchdog settings-dump grace log", exc)
                 except Exception as exc:
                     _log_suppressed("Failed configuring watchdog settings-dump grace window", exc)
-        
+
+        tracker = ManualCommandResultTracker(
+            command_id=int(self._next_manual_command_id()),
+            command=command,
+            source=command_source,
+        )
         with self._stream_lock:
-            self._enqueue_manual_command(command, command_source)
-        return True
+            accepted = self._enqueue_manual_command(
+                command,
+                command_source,
+                tracker=tracker,
+            )
+        if not accepted:
+            return None
+        return tracker
+
+    def _mark_manual_motion_status_grace(self, duration_s: float = 2.0) -> None:
+        try:
+            duration = max(0.1, float(duration_s))
+        except Exception:
+            duration = 2.0
+        now = time.time()
+        until_ts = now + duration
+        try:
+            current_until = float(getattr(self, "_manual_motion_status_grace_until_ts", 0.0) or 0.0)
+        except Exception:
+            current_until = 0.0
+        if until_ts > current_until:
+            self._manual_motion_status_grace_until_ts = float(until_ts)
+        changed_evt = getattr(self, "_status_interval_changed_evt", None)
+        if isinstance(changed_evt, threading.Event):
+            try:
+                changed_evt.set()
+            except Exception as exc:
+                _log_suppressed("Failed signaling status thread after manual-motion grace update", exc)
+
+    def send_immediate(self, command: str, *, source: str | None = None) -> bool:
+        """Send command immediately (bypasses streaming).
+        
+        Used for manual console commands and UI buttons.
+        Respects alarm state - only allows $X and $H during alarm.
+        
+        Args:
+            command: G-code or GRBL command to send
+        """
+        return self.send_immediate_tracked(command, source=source) is not None
     
-    def unlock(self) -> None:
+    def unlock(self) -> bool:
         """Send unlock command ($X) to clear alarm state."""
-        self.send_immediate("$X")
+        return bool(self.send_immediate("$X"))
     
-    def home(self) -> None:
+    def home(self) -> bool:
         """Send home command ($H) to run homing cycle."""
-        self.send_immediate("$H")
+        return bool(self.send_immediate("$H"))
     
-    def reset(self, emit_state: bool = True) -> None:
+    def reset(self, emit_state: bool = True) -> bool:
         """Send soft reset (Ctrl-X).
         
         Immediately halts all motion and resets GRBL state.
@@ -169,10 +188,16 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         """
         self._abort_writes.set()
         try:
-            self.send_realtime(RT_RESET)
+            accepted = self.send_realtime(RT_RESET)
         except SerialWriteError as exc:
             logger.error(f"Reset failed: {exc}")
             self.ui_q.put(("log", f"[reset failed] {exc}"))
+            self._abort_writes.clear()
+            return False
+        if accepted is False:
+            self.ui_q.put(("log", "[reset failed] Ctrl-X was not sent."))
+            self._abort_writes.clear()
+            return False
         # Reset local state
         self._ready = False
         self._alarm_active = False
@@ -199,18 +224,25 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         if emit_state and was_streaming:
             self.ui_q.put(("stream_state", "stopped", None))
         self._abort_writes.clear()
+        return True
     
-    def hold(self) -> None:
+    def hold(self) -> bool:
         """Send feed hold command (!) to pause motion."""
+        accepted = self.send_realtime(RT_HOLD)
+        if accepted is False:
+            return False
         self._mark_manual_motion_status_grace(duration_s=2.5)
-        self.send_realtime(RT_HOLD)
+        return True
     
-    def resume(self) -> None:
+    def resume(self) -> bool:
         """Send cycle start command (~) to resume motion."""
+        accepted = self.send_realtime(RT_RESUME)
+        if accepted is False:
+            return False
         self._mark_manual_motion_status_grace(duration_s=1.5)
-        self.send_realtime(RT_RESUME)
+        return True
     
-    def spindle_on(self, rpm: int = DEFAULT_SPINDLE_RPM) -> None:
+    def spindle_on(self, rpm: int = DEFAULT_SPINDLE_RPM) -> bool:
         """Turn spindle on at specified RPM.
         
         Args:
@@ -220,13 +252,13 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             ValueError: If RPM is invalid
         """
         rpm = validate_rpm(rpm)
-        self.send_immediate(f"M3 S{rpm}")
-    
-    def spindle_off(self) -> None:
+        return bool(self.send_immediate(f"M3 S{rpm}"))
+
+    def spindle_off(self) -> bool:
         """Turn spindle off."""
-        self.send_immediate("M5")
+        return bool(self.send_immediate("M5"))
     
-    def jog_cancel(self) -> None:
+    def jog_cancel(self) -> bool:
         """Cancel active jog command."""
         now = time.time()
         inflight = bool(getattr(self, "_jog_cancel_inflight", False))
@@ -234,13 +266,16 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         resend_after = max(0.1, float(getattr(self, "_jog_cancel_retry_timeout_s", 1.5) or 1.5))
         debounce_s = max(0.05, float(getattr(self, "_jog_cancel_debounce_s", 0.6) or 0.6))
         if inflight and (now - last_sent) < debounce_s:
-            return
+            return False
         if inflight and (now - last_sent) < resend_after:
-            return
+            return False
+        accepted = self.send_realtime(RT_JOG_CANCEL)
+        if accepted is False:
+            return False
         self._mark_manual_motion_status_grace(duration_s=1.5)
-        self.send_realtime(RT_JOG_CANCEL)
         self._jog_cancel_inflight = True
         self._jog_cancel_last_sent_ts = float(now)
+        return True
 
     def cancel_pending_jogs(self) -> None:
         """Remove queued jog commands from the manual queue."""
@@ -271,7 +306,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         unit_mode: str,
         *,
         source: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Execute incremental jog move.
         
         Args:
@@ -307,7 +342,7 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         grace_s = max(2.0, min(180.0, float(expected_s) + 2.0))
         self._mark_manual_motion_status_grace(duration_s=grace_s)
         cmd_source = source if source else "jog"
-        self.send_immediate(cmd, source=cmd_source)
+        return bool(self.send_immediate(cmd, source=cmd_source))
     
     # ========================================================================
     # G-CODE STREAMING

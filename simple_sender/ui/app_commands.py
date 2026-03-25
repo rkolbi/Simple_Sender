@@ -29,7 +29,7 @@ from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
-from simple_sender.services.job_service import JobService, JobStartOutcome
+from simple_sender.services.job_service import JobService, JobStartOutcome, JobStopOutcome
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import (
@@ -37,6 +37,7 @@ from simple_sender.ui.job_setup_state import (
     has_valid_job_setup_state,
     invalidate_job_setup_state,
 )
+from simple_sender.ui.preflight_gate import run_preflight_gate
 from simple_sender.utils.constants import BAUD_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,41 @@ def _job_service() -> JobService:
         invalidate_job_setup_state=invalidate_job_setup_state,
         log_suppressed=_log_suppressed,
     )
+
+
+def _report_operator_message(
+    app,
+    *,
+    status_text: str | None = None,
+    log_text: str | None = None,
+) -> None:
+    if status_text:
+        try:
+            app.status.config(text=status_text)
+        except Exception as exc:
+            _log_suppressed("Failed updating operator status text", exc)
+    if log_text:
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is None:
+            return
+        try:
+            ui_q.put(("log", log_text))
+        except Exception as exc:
+            _log_suppressed("Failed queueing operator message", exc)
+
+
+def _run_preflight(app) -> bool:
+    return bool(run_preflight_gate(app, action_label="Run", messagebox_module=messagebox))
+
+
+def _report_start_failure(app, detail: str | None) -> None:
+    message = detail or "GRBL did not enter streaming state after the Run command."
+    _report_operator_message(
+        app,
+        status_text=f"Run failed: {message}",
+        log_text=f"[run] Start failed: {message}",
+    )
+    messagebox.showwarning("Run failed", message)
 
 
 def ensure_serial_available(app, serial_available: bool, serial_error: str | None = None) -> bool:
@@ -219,7 +255,8 @@ def _sync_connection_controls(app) -> None:
     except Exception as exc:
         _log_suppressed("Failed reading streaming state while syncing connection controls", exc)
         is_streaming = False
-    btn_state = "disabled" if is_streaming else "normal"
+    busy = bool(is_streaming or getattr(app, "_stream_done_pending_idle", False))
+    btn_state = "disabled" if busy else "normal"
     label = "Disconnect" if connected else "Connect"
     try:
         app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state=btn_state)
@@ -230,26 +267,26 @@ def _sync_connection_controls(app) -> None:
     except Exception as exc:
         _log_suppressed("Failed syncing refresh button state", exc)
     try:
-        app.port_combo.config(state="disabled" if is_streaming else "readonly")
+        app.port_combo.config(state="disabled" if busy else "readonly")
     except Exception as exc:
         _log_suppressed("Failed syncing port combobox state", exc)
 
 
 def toggle_connect(app):
     if not app._ensure_serial_available():
-        return
+        return False
     if getattr(app, "_connecting", False):
         _set_connection_controls_pending(app, "Connecting...")
-        return
+        return False
     if getattr(app, "_disconnecting", False):
         _set_connection_controls_pending(app, "Disconnecting...")
-        return
-    if app.grbl.is_streaming():
+        return False
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_DISCONNECTING,
         )
-        return
+        return False
     is_connected = bool(getattr(app, "connected", False))
     try:
         is_connected = is_connected or bool(app.grbl.is_connected())
@@ -264,17 +301,18 @@ def toggle_connect(app):
         app._auto_reconnect_blocked = True
         _set_connection_controls_pending(app, "Disconnecting...")
         app._start_disconnect_worker()
-        return
+        return True
     app._user_disconnect = False
     app._auto_reconnect_blocked = False
     port = app.current_port.get().strip()
     if not port:
         _sync_connection_controls(app)
         messagebox.showwarning("No port", "No serial port selected.")
-        return
+        return False
     _set_connection_controls_pending(app, "Connecting...")
     _append_connection_timeline_event(app, "connect_requested", f"port={port}")
     app._start_connect_worker(port)
+    return True
 
 
 def start_connect_worker(
@@ -375,7 +413,7 @@ def start_disconnect_worker(app):
 
 
 def open_gcode(app):
-    if app.grbl.is_streaming():
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_LOADING_NEW_GCODE,
@@ -396,28 +434,81 @@ def open_gcode(app):
 def run_job(app):
     if not app._require_grbl_connection():
         return
+    if not _run_preflight(app):
+        return
     result = _job_service().start_job(app)
     if result.outcome is JobStartOutcome.SETUP_CONFIRMATION_REQUIRED:
         if not confirm_job_start_without_setup(app):
             return
+        if not _run_preflight(app):
+            return
         result = _job_service().start_job(app, allow_start_without_setup=True)
     if result.outcome is JobStartOutcome.START_FAILED:
+        _report_start_failure(app, result.detail)
         return
 
 
 def pause_job(app):
     if not app._require_grbl_connection():
         return
-    app.grbl.pause_stream()
+    result = app.grbl.pause_stream()
+    if result is True:
+        return
+    if result is False:
+        _report_operator_message(
+            app,
+            status_text="Pause failed: controller did not accept feed hold",
+            log_text="[job] Pause failed: controller did not accept feed hold.",
+        )
+        return
+    _report_operator_message(
+        app,
+        status_text="Pause ignored: no active job is running",
+        log_text="[job] Pause ignored: no active job is running.",
+    )
 
 
 def resume_job(app):
     if not app._require_grbl_connection():
         return
-    app.grbl.resume_stream()
+    result = app.grbl.resume_stream()
+    if result is True:
+        return
+    if result is False:
+        _report_operator_message(
+            app,
+            status_text="Resume failed: controller did not accept cycle start",
+            log_text="[job] Resume failed: controller did not accept cycle start.",
+        )
+        return
+    _report_operator_message(
+        app,
+        status_text="Resume ignored: no active job is running",
+        log_text="[job] Resume ignored: no active job is running.",
+    )
 
 
 def stop_job(app):
     if not app._require_grbl_connection():
         return
-    _job_service().stop_job(app)
+    result = _job_service().stop_job(app)
+    if result.outcome is JobStopOutcome.STOPPED:
+        _report_operator_message(
+            app,
+            status_text="Job stopped",
+            log_text="[job] Stop Job completed.",
+        )
+        return
+    message = result.detail or "Stop Job did not stop an active job."
+    if result.outcome is JobStopOutcome.NOTHING_ACTIVE:
+        _report_operator_message(
+            app,
+            status_text=message,
+            log_text=f"[job] Stop Job ignored: {message}",
+        )
+        return
+    _report_operator_message(
+        app,
+        status_text=f"Stop Job failed: {message}",
+        log_text=f"[job] Stop Job failed: {message}",
+    )

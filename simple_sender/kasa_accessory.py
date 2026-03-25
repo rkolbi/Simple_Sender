@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 _KASA_COMMAND_RETRY_MAX_ATTEMPTS = 3
 _KASA_COMMAND_RETRY_BASE_DELAY_S = 0.2
 _KASA_COMMAND_RETRY_MAX_DELAY_S = 1.0
+_KASA_DUPLICATE_REQUEST_WINDOW_S = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,7 +408,7 @@ class AccessoryRouter:
         self._stop_evt = threading.Event()
         self._state_lock = threading.Lock()
         self._last_spindle_state: bool | None = None
-        self._last_requested_by_outlet: dict[tuple[str, int], bool] = {}
+        self._last_requested_by_outlet: dict[tuple[str, int], tuple[bool, float]] = {}
         self._cached_device_identifier: str | None = None
         self._cached_device_handle: DeviceHandle | None = None
         self._worker = threading.Thread(target=self._worker_loop, name="kasa-worker", daemon=True)
@@ -432,7 +433,10 @@ class AccessoryRouter:
 
     def shutdown(self, timeout: float = 1.0) -> None:
         self._stop_evt.set()
-        self._task_q.put(None)
+        try:
+            queue.Queue.put_nowait(self._task_q, None)
+        except queue.Full:
+            self._log_warning("Kasa shutdown requested while task queue is full; waiting for worker to drain.")
         self._worker.join(timeout=max(0.0, float(timeout)))
 
     def wait_for_idle(self, timeout: float = 2.0) -> bool:
@@ -474,7 +478,14 @@ class AccessoryRouter:
         description: str,
         on_success: Callable[[Any], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
-    ) -> None:
+    ) -> bool:
+        if self._stop_evt.is_set():
+            err = RuntimeError(f"Kasa worker is shutting down; rejecting task '{description}'.")
+            if on_error is not None:
+                self._invoke_callback(on_error, err)
+            else:
+                self._log_warning(str(err))
+            return False
         task = _WorkerTask(
             func=func,
             on_success=on_success,
@@ -484,9 +495,13 @@ class AccessoryRouter:
         try:
             self._task_q.put_nowait(task)
         except queue.Full:
-            self._log_warning(
-                f"Kasa task queue full; dropping task '{description}'."
-            )
+            err = RuntimeError(f"Kasa task queue full; dropping task '{description}'.")
+            if on_error is not None:
+                self._invoke_callback(on_error, err)
+            else:
+                self._log_warning(str(err))
+            return False
+        return True
 
     def _invoke_callback(self, callback: Callable[..., None], *args: Any) -> None:
         try:
@@ -496,7 +511,12 @@ class AccessoryRouter:
 
     def _worker_loop(self) -> None:
         while True:
-            task = self._task_q.get()
+            try:
+                task = self._task_q.get(timeout=0.1)
+            except queue.Empty:
+                if self._stop_evt.is_set():
+                    return
+                continue
             try:
                 if task is None:
                     return
@@ -593,10 +613,16 @@ class AccessoryRouter:
             return False
         desired = bool(on)
         state_key = (device_identifier, outlet)
+        request_ts = time.monotonic()
         with self._state_lock:
-            if self._last_requested_by_outlet.get(state_key) is desired:
-                return False
-            self._last_requested_by_outlet[state_key] = desired
+            last_request = self._last_requested_by_outlet.get(state_key)
+            if last_request is not None:
+                last_desired, last_ts = last_request
+                if (
+                    last_desired is desired
+                    and (request_ts - last_ts) < _KASA_DUPLICATE_REQUEST_WINDOW_S
+                ):
+                    return False
 
         def _task() -> None:
             last_error: Exception | None = None
@@ -630,6 +656,8 @@ class AccessoryRouter:
             raise last_error
 
         def _on_success(_: Any) -> None:
+            with self._state_lock:
+                self._last_requested_by_outlet[state_key] = (desired, time.monotonic())
             self._emit_command_result(
                 OutletCommandResult(
                     outlet_id=outlet,
@@ -641,6 +669,8 @@ class AccessoryRouter:
             )
 
         def _on_error(exc: Exception) -> None:
+            with self._state_lock:
+                self._last_requested_by_outlet.pop(state_key, None)
             self._log_warning(f"Kasa outlet {outlet} command failed ({source}): {exc}")
             self._emit_command_result(
                 OutletCommandResult(
@@ -652,12 +682,16 @@ class AccessoryRouter:
                 )
             )
 
-        self._submit_task(
+        accepted = self._submit_task(
             _task,
             description=f"set_outlet_state:{outlet}:{desired}",
             on_success=_on_success,
             on_error=_on_error,
         )
+        if not accepted:
+            return False
+        with self._state_lock:
+            self._last_requested_by_outlet[state_key] = (desired, request_ts)
         return True
 
     def on_spindle_state_change(self, is_on: bool) -> None:

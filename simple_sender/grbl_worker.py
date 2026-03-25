@@ -36,7 +36,12 @@ from logging.handlers import RotatingFileHandler
 from collections import deque
 from typing import Any, Optional, Sequence, Tuple, TYPE_CHECKING, TypeAlias
 
-from .types import ManualPendingItem, StreamPendingItem, StreamQueueItem
+from .types import (
+    ManualCommandResultTracker,
+    ManualPendingItem,
+    StreamPendingItem,
+    StreamQueueItem,
+)
 from .grbl_worker_commands import GrblWorkerCommandMixin
 from .grbl_worker_connection import (
     GrblWorkerConnectionMixin,
@@ -307,6 +312,8 @@ class GrblWorker(
         # Manual command queue and associated drop/backpressure accounting.
         self._outgoing_q: queue.Queue[str] = queue.Queue(maxsize=MANUAL_COMMAND_QUEUE_MAXSIZE)
         self._manual_source_queue: deque[str | None] = deque()
+        self._manual_tracker_queue: deque[ManualCommandResultTracker | None] = deque()
+        self._manual_command_id_seq = 0
         self._purge_jog_queue = threading.Event()
         self._manual_queue_drop_count = 0
         self._manual_queue_drop_total = 0
@@ -585,7 +592,7 @@ class GrblWorker(
             logger.error(f"Error during cleanup: {e}")
         return False  # Don't suppress exceptions
     
-    def send_realtime(self, command: bytes) -> None:
+    def send_realtime(self, command: bytes) -> bool:
         """Send real-time command (no newline).
         
         Real-time commands are processed immediately by GRBL without
@@ -599,7 +606,7 @@ class GrblWorker(
         """
         if not self.is_connected():
             logger.warning("Cannot send real-time command - not connected")
-            return
+            return False
         ser = self.ser
         if ser is None:
             raise SerialWriteError("Serial port not connected")
@@ -620,6 +627,7 @@ class GrblWorker(
                     if written <= 0:
                         raise timeout_exc("Write returned 0 bytes")
                     total += written
+            return True
         except timeout_exc as e:
             raise SerialWriteError(f"Write timeout: {e}") from e
         except serial_exc as e:
@@ -631,12 +639,22 @@ class GrblWorker(
     def _clear_outgoing(self) -> None:
         """Clear the outgoing command queue."""
         with self._stream_lock:
+            self._resolve_queued_manual_trackers_locked(
+                self._manual_tracker_queue,
+                error="Manual command was cleared before completion.",
+            )
             while True:
                 try:
                     self._outgoing_q.get_nowait()
                 except queue.Empty:
                     break
             self._manual_source_queue.clear()
+            self._manual_tracker_queue.clear()
+            self._resolve_manual_tracker(
+                getattr(self._manual_pending_item, "tracker", None),
+                success=False,
+                error="Manual command was cleared before completion.",
+            )
             self._manual_pending_item = None
             self._manual_queue_drop_count = 0
             self._manual_queue_drop_total = 0
@@ -663,14 +681,52 @@ class GrblWorker(
             f"[manual queue] Dropped {dropped} command(s); queue is full (total {total}).",
         ))
 
-    def _enqueue_manual_command(self, command: str, source: str | None) -> bool:
+    def _next_manual_command_id(self) -> int:
+        with self._stream_lock:
+            self._manual_command_id_seq = int(self._manual_command_id_seq) + 1
+            return int(self._manual_command_id_seq)
+
+    @staticmethod
+    def _resolve_manual_tracker(
+        tracker: ManualCommandResultTracker | None,
+        *,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        if tracker is None or bool(getattr(tracker, "completed", False)):
+            return
+        tracker.resolve(success=bool(success), error=error)
+
+    def _resolve_queued_manual_trackers_locked(
+        self,
+        trackers: deque[ManualCommandResultTracker | None],
+        *,
+        error: str,
+    ) -> None:
+        while trackers:
+            tracker = trackers.popleft()
+            self._resolve_manual_tracker(tracker, success=False, error=error)
+
+    def _enqueue_manual_command(
+        self,
+        command: str,
+        source: str | None,
+        *,
+        tracker: ManualCommandResultTracker | None = None,
+    ) -> bool:
         """Queue a manual command without blocking worker locks."""
         try:
             self._outgoing_q.put_nowait(command)
         except queue.Full:
+            self._resolve_manual_tracker(
+                tracker,
+                success=False,
+                error="Manual command queue is full.",
+            )
             self._record_manual_queue_drop()
             return False
         self._manual_source_queue.append(source)
+        self._manual_tracker_queue.append(tracker)
         try:
             self._tx_activity_evt.set()
         except Exception as exc:
@@ -680,9 +736,20 @@ class GrblWorker(
     def _reset_stream_buffer(self) -> None:
         """Reset streaming buffer state."""
         with self._stream_lock:
+            for queued_item in self._stream_line_queue:
+                self._resolve_manual_tracker(
+                    getattr(queued_item, "manual_tracker", None),
+                    success=False,
+                    error="Manual command was interrupted before completion.",
+                )
             self._stream_buf_used = 0
             self._stream_line_queue.clear()
             self._stream_pending_item = None
+            self._resolve_manual_tracker(
+                getattr(self._manual_pending_item, "tracker", None),
+                success=False,
+                error="Manual command was interrupted before completion.",
+            )
             self._manual_pending_item = None
             self._live_acked_ring.clear()
             self._live_current_acked = None
@@ -690,6 +757,11 @@ class GrblWorker(
             self._live_window_dirty = True
             self._live_window_last_emit_ts = 0.0
             self._manual_source_queue.clear()
+            self._resolve_queued_manual_trackers_locked(
+                self._manual_tracker_queue,
+                error="Manual command was interrupted before completion.",
+            )
+            self._manual_tracker_queue.clear()
             self._resume_preamble.clear()
             self._rx_window = RX_BUFFER_SIZE
             self._send_index = 0

@@ -35,6 +35,7 @@ from typing import Any
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
+from simple_sender.utils.atomic_files import atomic_write_text
 from simple_sender.utils.logging_config import get_log_dir
 
 MM_PER_INCH = 25.4
@@ -153,8 +154,7 @@ def _save_generated_gcode(
     )
     if not path:
         return None
-    with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(gcode_text)
+    atomic_write_text(path, gcode_text, encoding="utf-8", newline="")
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(path)
     except Exception as exc:

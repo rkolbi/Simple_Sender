@@ -32,6 +32,7 @@ from typing import Callable, Optional, Set
 import logging
 from collections import deque
 
+from simple_sender.utils.atomic_files import atomic_write_text
 from simple_sender.utils.constants import (
     MAX_CONSOLE_LINES,
     CONSOLE_BATCH_DELAY_MS,
@@ -233,8 +234,7 @@ class Console(ttk.Frame):
             filepath: Destination file path
         """
         try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(self.get_text())
+            atomic_write_text(filepath, self.get_text(), encoding="utf-8")
             logger.info("Console exported to %s", filepath)
         except IOError as e:
             logger.error("Failed to export console to %s: %s", filepath, e)

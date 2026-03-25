@@ -90,6 +90,32 @@ def _refresh_status_after_zero(app) -> None:
         _log_suppressed("Failed requesting immediate status refresh after zero command", exc)
 
 
+def _report_zero_command_rejected(app, command: str) -> None:
+    text = f"Zero command rejected: {command}"
+    try:
+        app.status.config(text=text)
+    except Exception:
+        pass
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("log", f"[zero] {text}"))
+        except Exception:
+            pass
+
+
+def _send_zero_command(app, command: str) -> bool:
+    accepted = True
+    try:
+        accepted = app._send_manual(command, "zero")
+    except Exception:
+        accepted = False
+    if accepted is False:
+        _report_zero_command_rejected(app, command)
+        return False
+    return True
+
+
 def _mark_zero_manual_activity(app) -> None:
     marker = getattr(app, "_mark_manual_motion_activity", None)
     if not callable(marker):
@@ -225,9 +251,10 @@ def zero_x(app):
         return
     cmd = zeroing_gcode(app, "X")
     if cmd:
+        if not _send_zero_command(app, cmd):
+            return
         _clear_zero_all_pending_latch(app)
         _mark_zero_manual_activity(app)
-        app._send_manual(cmd, "zero")
         _apply_local_wpos_zero(app, "X")
         _refresh_status_after_zero(app)
 
@@ -237,9 +264,10 @@ def zero_y(app):
         return
     cmd = zeroing_gcode(app, "Y")
     if cmd:
+        if not _send_zero_command(app, cmd):
+            return
         _clear_zero_all_pending_latch(app)
         _mark_zero_manual_activity(app)
-        app._send_manual(cmd, "zero")
         _apply_local_wpos_zero(app, "Y")
         _refresh_status_after_zero(app)
 
@@ -249,9 +277,10 @@ def zero_z(app):
         return
     cmd = zeroing_gcode(app, "Z")
     if cmd:
+        if not _send_zero_command(app, cmd):
+            return
         _clear_zero_all_pending_latch(app)
         _mark_zero_manual_activity(app)
-        app._send_manual(cmd, "zero")
         _apply_local_wpos_zero(app, "Z")
         _refresh_status_after_zero(app)
 
@@ -261,9 +290,10 @@ def zero_all(app):
         return
     cmd = zeroing_gcode(app, "XYZ")
     if cmd:
+        if not _send_zero_command(app, cmd):
+            return
         _set_zero_all_pending_latch(app)
         _mark_zero_manual_activity(app)
-        app._send_manual(cmd, "zero")
         _apply_local_wpos_zero(app, "XYZ")
         _refresh_status_after_zero(app)
 
@@ -271,5 +301,6 @@ def zero_all(app):
 def goto_zero(app):
     if not app._require_grbl_connection():
         return
-    app._send_manual("G90 G0 X0 Y0", "zero")
-    app._send_manual("G0 Z0", "zero")
+    if not _send_zero_command(app, "G90 G0 X0 Y0"):
+        return
+    _send_zero_command(app, "G0 Z0")

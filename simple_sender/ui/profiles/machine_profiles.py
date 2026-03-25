@@ -23,6 +23,8 @@
 import logging
 from tkinter import messagebox
 
+from simple_sender.ui.ui_actions import request_unit_mode_change
+
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -71,6 +73,13 @@ def load_machine_profiles(app) -> list[dict]:
     return profiles
 
 
+def _saved_active_profile(app) -> str:
+    settings = getattr(app, "settings", {})
+    if not isinstance(settings, dict):
+        return ""
+    return str(settings.get("active_profile", "") or "").strip()
+
+
 def get_profile_by_name(app, name: str):
     if not name:
         return None
@@ -108,7 +117,10 @@ def refresh_profile_combo(app):
         app.profile_combo["values"] = names
     current = app.active_profile_name.get()
     if current not in names:
-        if names:
+        saved = _saved_active_profile(app)
+        if saved in names:
+            app.active_profile_name.set(saved)
+        elif names:
             app.active_profile_name.set(names[0])
         else:
             app.active_profile_name.set("")
@@ -150,11 +162,98 @@ def on_profile_units_change(app, _event=None):
 
 def apply_profile_units(app, profile: dict | None):
     if not profile:
-        return
+        return True
     units = profile.get("units", "mm")
     if units not in ("mm", "inch"):
         units = "mm"
-    app._set_unit_mode(units)
+    return bool(request_unit_mode_change(app, str(units), source="profile"))
+
+
+def _persist_machine_profiles(app) -> bool:
+    try:
+        if not isinstance(getattr(app, "settings", None), dict):
+            app.settings = {}
+        app.settings["machine_profiles"] = list(app._machine_profiles)
+        app.settings["active_profile"] = str(app.active_profile_name.get() or "").strip()
+    except Exception as exc:
+        _log_suppressed("Failed syncing machine profiles into settings state", exc)
+        return False
+    saver = getattr(app, "_save_settings", None)
+    if callable(saver):
+        try:
+            saver()
+        except Exception as exc:
+            _log_suppressed("Failed persisting machine profiles to disk", exc)
+            return False
+    return True
+
+
+def _persist_active_profile_selection(app) -> bool:
+    try:
+        if not isinstance(getattr(app, "settings", None), dict):
+            app.settings = {}
+        app.settings["active_profile"] = str(app.active_profile_name.get() or "").strip()
+    except Exception as exc:
+        _log_suppressed("Failed syncing active machine profile into settings state", exc)
+        return False
+    saver = getattr(app, "_save_settings", None)
+    if callable(saver):
+        try:
+            saver()
+        except Exception as exc:
+            _log_suppressed("Failed persisting active machine profile selection", exc)
+            return False
+    return True
+
+
+def _status_text(app) -> str:
+    try:
+        return str(app.status.cget("text") or "")
+    except Exception:
+        return ""
+
+
+def _report_profile_persistence_failure(app, action: str, name: str) -> None:
+    message = (
+        f"Profile {action} in memory only: settings could not be saved. "
+        f"The change for '{name}' will not survive restart."
+    )
+    try:
+        messagebox.showwarning("Profile", message)
+    except Exception as exc:
+        _log_suppressed("Failed showing machine-profile persistence warning", exc)
+    try:
+        app.status.config(text=message)
+    except Exception as exc:
+        _log_suppressed("Failed updating status text for machine-profile persistence warning", exc)
+
+
+def _report_profile_status(
+    app,
+    *,
+    action: str,
+    name: str,
+    persisted: bool,
+    unit_change_ok: bool,
+) -> None:
+    if not persisted:
+        _report_profile_persistence_failure(app, action, name)
+        return
+    if unit_change_ok:
+        try:
+            app.status.config(text=f"Profile {action}: {name}")
+        except Exception as exc:
+            _log_suppressed("Failed updating machine-profile success status", exc)
+        return
+    current_status = _status_text(app).strip()
+    if current_status:
+        combined = f"Profile {action}: {name}. {current_status}"
+    else:
+        combined = f"Profile {action}: {name}, but unit change confirmation is still pending or failed."
+    try:
+        app.status.config(text=combined)
+    except Exception as exc:
+        _log_suppressed("Failed updating machine-profile mixed-result status", exc)
 
 
 def on_profile_select(app, _event=None):
@@ -162,10 +261,13 @@ def on_profile_select(app, _event=None):
     profile = get_profile_by_name(app, name)
     if not profile:
         return
+    persisted = _persist_active_profile_selection(app)
     apply_profile_to_vars(app, profile)
     apply_profile_units(app, profile)
     if app._last_gcode_lines:
         app._update_gcode_stats(app._last_gcode_lines)
+    if not persisted:
+        _report_profile_persistence_failure(app, "selected", name)
 
 
 def new_profile(app):
@@ -230,16 +332,23 @@ def save_profile(app):
     if not found:
         app._machine_profiles.append(profile)
     app.active_profile_name.set(name)
+    persisted = _persist_machine_profiles(app)
     refresh_profile_combo(app)
     try:
         app.profile_combo.set(name)
     except Exception as exc:
         _log_suppressed("Failed selecting saved machine profile in combobox", exc)
     apply_profile_to_vars(app, profile)
-    apply_profile_units(app, profile)
+    unit_change_ok = apply_profile_units(app, profile)
     if app._last_gcode_lines:
         app._update_gcode_stats(app._last_gcode_lines)
-    app.status.config(text=f"Profile saved: {name}")
+    _report_profile_status(
+        app,
+        action="saved",
+        name=name,
+        persisted=bool(persisted),
+        unit_change_ok=bool(unit_change_ok),
+    )
 
 
 def delete_profile(app):
@@ -251,10 +360,18 @@ def delete_profile(app):
         return
     app._machine_profiles = [p for p in app._machine_profiles if p.get("name") != name]
     refresh_profile_combo(app)
+    persisted = _persist_machine_profiles(app)
     profile = get_profile_by_name(app, app.active_profile_name.get())
     apply_profile_to_vars(app, profile)
+    unit_change_ok = True
     if profile:
-        apply_profile_units(app, profile)
+        unit_change_ok = apply_profile_units(app, profile)
     if app._last_gcode_lines:
         app._update_gcode_stats(app._last_gcode_lines)
-    app.status.config(text=f"Profile deleted: {name}")
+    _report_profile_status(
+        app,
+        action="deleted",
+        name=name,
+        persisted=bool(persisted),
+        unit_change_ok=bool(unit_change_ok),
+    )

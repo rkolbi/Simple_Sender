@@ -30,6 +30,14 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - `tests/ui/test_all_stop.py` now verifies reset-path invalidation for tool-reference setup state
 
 ### Changed
+- 2026-03-25 pre-release stabilization pass:
+  - realtime control paths (`Pause`, `Resume`, `Stop`, `Reset`, `ALL STOP`, alarm-recovery Reset, and the matching macro actions) now return explicit accepted/failed outcomes instead of silently looking like success when nothing was sent to GRBL
+  - backup-bundle import/export now uses the hardened settings import/export path, stages file changes safely, detects macro/checklist overwrite collisions before commit, and applies async import completion back to the UI on success
+  - machine-profile, Pi-profile, and interface-setting persistence flows now distinguish durable success from in-memory-only changes, and startup settings repair/reset paths now surface operator-visible warnings instead of silent normalization
+  - close/cancel-close behavior now defers shutdown state until the operator actually commits to exit, keeping canceled close attempts fully recoverable
+  - macro startup/load/connect flows now use truthful result tracking (`$G` startup snapshot completion, real loader-token/result handling, blocked `OPEN`/`CLOSE` detection, truthful `SENDHEX` / `SAFE` failures)
+  - deferred post-run `done pending idle` state is now treated consistently as busy across macro start, probing, settings refresh, profile/unit changes, load/clear/connect/disconnect, and related recovery-sensitive actions
+  - Macro Manager slot save/move/delete/duplicate workflows and several export/save paths now use safer atomic-write or failure-aware handling to reduce destructive partial updates
 - Stabilization baseline for the closed refactor cycle:
   - the low-risk cleanup and preflight-service extraction work is now treated as complete
   - the current codebase is the recommended stable baseline for subsequent bug-fix-only work
@@ -98,9 +106,14 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - setup state is invalidated on connection/session resets and reset-style stop paths so stale setup does not silently carry across sessions
 
 ### Documentation
+- README now reflects the 2026-03-25 pre-release stabilization work:
+  - realtime control actions only acknowledge accepted sends
+  - backup-bundle import validates settings, warns about repairs/collisions, and completes the async success path visibly
+  - deferred-completion busy protection now covers macro start, probing, and settings refresh
+  - the local release-gate baseline now reflects the latest `run_tests.bat` run (`1418 passed, 2 skipped`)
 - README now documents the stabilization baseline, the preflight service/facade boundary (`preflight_service.py` behind `diagnostics_preflight.py`), and expanded operator troubleshooting for preflight outcomes.
 - README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
-- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-23; coverage test stage reported `1282 passed, 2 skipped`).
+- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-25; coverage test stage reported `1418 passed, 2 skipped`).
 - README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
@@ -120,14 +133,20 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README and `simple_sender/macros/readme.md` now document the Job Setup Run warning, operator workflow expectations, and setup-state invalidation behavior.
 
 ### Fixed
+- Release-candidate truthfulness/durability fixes from 2026-03-25:
+  - fixed macro `LOAD` runtime result tracking so the real application wrapper returns the loader token/result used by the hardened macro wait path
+  - fixed macro startup `$G` false timeouts by resolving tracked modal-snapshot requests on `[GC:...]` receipt in the shared worker path
+  - fixed the async backup-bundle import success path so successful imports now refresh UI state and show completion results
+  - fixed shutdown save-failure handling so canceling close no longer leaves shutdown-side state behind
+  - fixed stale-state Stop Job and realtime recovery/control paths that could previously imply success or invalidate setup state when no real controller action occurred
 - Progress reporting now clamps to `100%` when stream state reaches `done`, including runtime metrics/diagnostics export fields.
 - `grbl_worker_status` status-wait tracing now normalizes trace payload types before serializing/logging so mypy remains clean on strict checks while preserving runtime diagnostics behavior.
 - Shutdown sequencing now remains best-effort across all steps: a settings-save failure no longer skips GRBL disconnect and final resource cleanup.
 - Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
 - Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
-### Baseline Validation (local, 2026-03-23)
-- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1282 passed, 2 skipped`)
+### Baseline Validation (local, 2026-03-25)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1418 passed, 2 skipped`)
 - `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 142`: PASS
 - `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`142` source files)
 

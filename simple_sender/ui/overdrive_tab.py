@@ -34,6 +34,7 @@ from simple_sender.ui.overdrive_validation import (
     refresh_validation_controls,
     start_validation,
 )
+from simple_sender.ui.override_controls import send_override_realtime
 from simple_sender.utils.constants import (
     DEFAULT_SPINDLE_RPM,
     RT_FO_MINUS_10,
@@ -91,7 +92,45 @@ def _current_spindle_rpm(app) -> int:
 
 def _run_spindle_on(app) -> None:
     rpm = _save_spindle_control_rpm_setting(app)
-    app._confirm_and_run("Spindle ON", lambda: app.grbl.spindle_on(rpm))
+    def _command() -> None:
+        accepted = bool(app.grbl.spindle_on(rpm))
+        if accepted:
+            return
+        try:
+            app.status.config(text=f"Spindle ON rejected: controller did not accept M3 S{rpm}")
+        except Exception:
+            pass
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("log", f"[spindle] Controller rejected M3 S{rpm}; spindle remains unchanged."))
+            except Exception:
+                pass
+
+    app._confirm_and_run("Spindle ON", _command)
+
+
+def _run_spindle_off(app) -> None:
+    def _command() -> None:
+        accepted = bool(app.grbl.spindle_off())
+        if accepted:
+            return
+        try:
+            app.status.config(text="Spindle OFF rejected: controller did not accept M5")
+        except Exception:
+            pass
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("log", "[spindle] Controller rejected M5; spindle remains unchanged."))
+            except Exception:
+                pass
+
+    app._confirm_and_run("Spindle OFF", _command)
+
+
+def _run_override_button(app, command: bytes, *, label: str) -> None:
+    send_override_realtime(app, command, label=label)
 
 
 def build_overdrive_tab(app, parent):
@@ -328,7 +367,7 @@ def build_overdrive_tab(app, parent):
     app.btn_spindle_off = ttk.Button(
         spindle_btn_row,
         text="Spindle OFF",
-        command=lambda: app._confirm_and_run("Spindle OFF", app.grbl.spindle_off),
+        command=lambda: _run_spindle_off(app),
     )
     set_kb_id(app.btn_spindle_off, "spindle_off")
     app.btn_spindle_off.pack(side="left")
@@ -399,7 +438,11 @@ def build_overdrive_tab(app, parent):
 
     feed_btn_row = ttk.Frame(feed_frame)
     feed_btn_row.pack(fill="x")
-    app.btn_fo_plus = ttk.Button(feed_btn_row, text="+10%", command=lambda: app.grbl.send_realtime(RT_FO_PLUS_10))
+    app.btn_fo_plus = ttk.Button(
+        feed_btn_row,
+        text="+10%",
+        command=lambda: _run_override_button(app, RT_FO_PLUS_10, label="Feed override +10%"),
+    )
     set_kb_id(app.btn_fo_plus, "feed_override_plus_10")
     app.btn_fo_plus.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_fo_plus)
@@ -407,7 +450,11 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_fo_plus, "Increase feed override by 10%.")
     attach_log_gcode(app.btn_fo_plus, "RT 0x91")
 
-    app.btn_fo_minus = ttk.Button(feed_btn_row, text="-10%", command=lambda: app.grbl.send_realtime(RT_FO_MINUS_10))
+    app.btn_fo_minus = ttk.Button(
+        feed_btn_row,
+        text="-10%",
+        command=lambda: _run_override_button(app, RT_FO_MINUS_10, label="Feed override -10%"),
+    )
     set_kb_id(app.btn_fo_minus, "feed_override_minus_10")
     app.btn_fo_minus.pack(side="left", expand=True, fill="x", padx=6)
     app._manual_controls.append(app.btn_fo_minus)
@@ -415,7 +462,11 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_fo_minus, "Decrease feed override by 10%.")
     attach_log_gcode(app.btn_fo_minus, "RT 0x92")
 
-    app.btn_fo_reset = ttk.Button(feed_btn_row, text="Reset", command=lambda: app.grbl.send_realtime(RT_FO_RESET))
+    app.btn_fo_reset = ttk.Button(
+        feed_btn_row,
+        text="Reset",
+        command=lambda: _run_override_button(app, RT_FO_RESET, label="Feed override reset"),
+    )
     set_kb_id(app.btn_fo_reset, "feed_override_reset")
     app.btn_fo_reset.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_fo_reset)
@@ -440,7 +491,11 @@ def build_overdrive_tab(app, parent):
 
     spindle_btn_row = ttk.Frame(spindle_override_frame)
     spindle_btn_row.pack(fill="x")
-    app.btn_so_plus = ttk.Button(spindle_btn_row, text="+10%", command=lambda: app.grbl.send_realtime(RT_SO_PLUS_10))
+    app.btn_so_plus = ttk.Button(
+        spindle_btn_row,
+        text="+10%",
+        command=lambda: _run_override_button(app, RT_SO_PLUS_10, label="Spindle override +10%"),
+    )
     set_kb_id(app.btn_so_plus, "spindle_override_plus_10")
     app.btn_so_plus.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_so_plus)
@@ -448,7 +503,11 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_so_plus, "Increase spindle override by 10%.")
     attach_log_gcode(app.btn_so_plus, "RT 0x9A")
 
-    app.btn_so_minus = ttk.Button(spindle_btn_row, text="-10%", command=lambda: app.grbl.send_realtime(RT_SO_MINUS_10))
+    app.btn_so_minus = ttk.Button(
+        spindle_btn_row,
+        text="-10%",
+        command=lambda: _run_override_button(app, RT_SO_MINUS_10, label="Spindle override -10%"),
+    )
     set_kb_id(app.btn_so_minus, "spindle_override_minus_10")
     app.btn_so_minus.pack(side="left", expand=True, fill="x", padx=6)
     app._manual_controls.append(app.btn_so_minus)
@@ -456,7 +515,11 @@ def build_overdrive_tab(app, parent):
     apply_tooltip(app.btn_so_minus, "Decrease spindle override by 10%.")
     attach_log_gcode(app.btn_so_minus, "RT 0x9B")
 
-    app.btn_so_reset = ttk.Button(spindle_btn_row, text="Reset", command=lambda: app.grbl.send_realtime(RT_SO_RESET))
+    app.btn_so_reset = ttk.Button(
+        spindle_btn_row,
+        text="Reset",
+        command=lambda: _run_override_button(app, RT_SO_RESET, label="Spindle override reset"),
+    )
     set_kb_id(app.btn_so_reset, "spindle_override_reset")
     app.btn_so_reset.pack(side="left", expand=True, fill="x")
     app._manual_controls.append(app.btn_so_reset)

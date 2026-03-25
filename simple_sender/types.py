@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import deque
 from typing import Any, Callable, Iterator, Protocol, Sequence, TypeAlias, overload
 from typing import Literal
@@ -96,6 +96,7 @@ class StreamQueueItem:
     manual_source: str | None = None
     queued_ts: float = 0.0
     file_end_offset: int | None = None
+    manual_tracker: "ManualCommandResultTracker | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,28 @@ class ManualPendingItem:
     payload: bytes
     line_len: int
     source: str | None = None
+    tracker: "ManualCommandResultTracker | None" = None
+
+
+@dataclass(slots=True)
+class ManualCommandResultTracker:
+    command_id: int
+    command: str
+    source: str | None = None
+    success: bool | None = None
+    error: str | None = None
+    completed: bool = False
+    _event: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    def resolve(self, *, success: bool, error: str | None = None) -> None:
+        self.success = bool(success)
+        self.error = str(error or "").strip() or None
+        self.completed = True
+        self._event.set()
+
+    def wait(self, timeout_s: float = 0.0) -> bool:
+        timeout = max(0.0, float(timeout_s))
+        return bool(self._event.wait(timeout))
 
 
 class GrblWorkerState:
@@ -145,6 +168,8 @@ class GrblWorkerState:
 
     _outgoing_q: queue.Queue[str]
     _manual_source_queue: deque[str | None]
+    _manual_tracker_queue: deque[ManualCommandResultTracker | None]
+    _manual_command_id_seq: int
     _purge_jog_queue: threading.Event
     _abort_writes: threading.Event
     _manual_queue_drop_count: int
@@ -199,19 +224,19 @@ class GrblWorkerState:
     def is_connected(self) -> bool:
         raise NotImplementedError
 
-    def send_realtime(self, command: bytes) -> None:
+    def send_realtime(self, command: bytes) -> bool:
         raise NotImplementedError
 
     def suspend_watchdog(self, seconds: float, reason: str | None = None) -> None:
         raise NotImplementedError
 
-    def reset(self, emit_state: bool = True) -> None:
+    def reset(self, emit_state: bool = True) -> bool:
         raise NotImplementedError
 
-    def hold(self) -> None:
+    def hold(self) -> bool:
         raise NotImplementedError
 
-    def resume(self) -> None:
+    def resume(self) -> bool:
         raise NotImplementedError
 
     def _reset_stream_buffer(self) -> None:
@@ -226,7 +251,25 @@ class GrblWorkerState:
     def _emit_live_gcode_window(self, *, force: bool = False) -> None:
         raise NotImplementedError
 
-    def _enqueue_manual_command(self, command: str, source: str | None) -> bool:
+    def _next_manual_command_id(self) -> int:
+        raise NotImplementedError
+
+    def _resolve_manual_tracker(
+        self,
+        tracker: ManualCommandResultTracker | None,
+        *,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def _enqueue_manual_command(
+        self,
+        command: str,
+        source: str | None,
+        *,
+        tracker: ManualCommandResultTracker | None = None,
+    ) -> bool:
         raise NotImplementedError
 
     def _emit_exception(self, context: str, exc: BaseException) -> None:
@@ -247,7 +290,7 @@ class GrblWorkerState:
     def _maybe_pause_after_ack(self, idx: int | None) -> None:
         raise NotImplementedError
 
-    def _pause_stream(self, reason: str | None = None) -> None:
+    def _pause_stream(self, reason: str | None = None) -> bool | None:
         raise NotImplementedError
 
     def _format_stream_error(self, raw_error: str, idx: int | None, line_text: str | None) -> str:
@@ -280,6 +323,8 @@ class MacroExecutorState:
     _macro_lock: threading.Lock
     _alarm_event: threading.Event
     _alarm_notified: bool
+    _manual_error_event: threading.Event
+    _manual_error_message: str
     _current_macro_line: str
 
     _macro_vars_lock: threading.Lock
@@ -303,6 +348,12 @@ class MacroExecutorState:
         raise NotImplementedError
 
     def _wait_for_connection_state(self, target: bool, timeout_s: float = 10.0) -> bool:
+        raise NotImplementedError
+
+    def _wait_for_grbl_ready_state(self, timeout_s: float = 10.0) -> bool:
+        raise NotImplementedError
+
+    def _wait_for_gcode_load_result(self, token: int, timeout_s: float = 120.0) -> bool:
         raise NotImplementedError
 
     def _macro_wait_for_idle(self, timeout_s: float = 30.0) -> None:

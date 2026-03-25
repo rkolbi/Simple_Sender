@@ -130,14 +130,16 @@ def _log_status(app, text: str) -> None:
         _log_suppressed("Failed updating status label for Pi profile", exc)
 
 
-def _save_settings_safe(app) -> None:
+def _save_settings_safe(app) -> bool:
     saver = getattr(app, "_save_settings", None)
     if not callable(saver):
-        return
+        return True
     try:
         saver()
+        return True
     except Exception as exc:
         _log_suppressed("Failed saving settings while applying Pi profile policy", exc)
+        return False
 
 
 def apply_pi_profile(
@@ -173,46 +175,63 @@ def apply_pi_profile(
             app._auto_reconnect_check_idle_interval_s = 1.25
         except Exception as exc:
             _log_suppressed("Failed restoring default idle maintenance/reconnect intervals for Pi profile", exc)
-        if emit_status:
-            _log_status(app, "[settings] Pi profile disabled")
+        persisted = True
         if save_settings:
-            _save_settings_safe(app)
+            persisted = bool(_save_settings_safe(app))
+        if emit_status or not persisted:
+            text = (
+                "[settings] Pi profile disabled"
+                if persisted
+                else "[settings] Pi profile disabled in memory only; settings save failed"
+            )
+            _log_status(app, text)
         return
 
-    _set_var(app, "performance_mode", True)
-    _invoke_handler(app, "_on_performance_mode_change")
+    previous_defer = bool(getattr(app, "_defer_ui_settings_save", False))
+    app._defer_ui_settings_save = True
     try:
-        app._ui_queue_idle_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS
-        app._ui_queue_idle_max_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS
-        app._ui_queue_idle_backoff_step_ms = PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_MS
-        app._ui_queue_idle_streak = 0
-    except Exception as exc:
-        _log_suppressed("Failed applying UI queue idle interval for Pi profile", exc)
-    try:
-        app._joystick_poll_interval_ms = PI_PROFILE_JOYSTICK_POLL_INTERVAL_MS
-        app._joystick_poll_idle_max_interval_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS
-        app._joystick_poll_idle_backoff_step_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS
-        app._joystick_poll_idle_streak = 0
-    except Exception as exc:
-        _log_suppressed("Failed applying joystick polling intervals for Pi profile", exc)
-    try:
-        app._ui_maintenance_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S
-        app._ui_maintenance_quiet_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_QUIET_IDLE_INTERVAL_S
-        app._auto_reconnect_check_idle_interval_s = PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S
-    except Exception as exc:
-        _log_suppressed("Failed applying idle maintenance/reconnect intervals for Pi profile", exc)
-    _set_var(app, "gui_logging_enabled", False)
-    _invoke_handler(app, "_on_gui_logging_change")
-    _set_var(app, "validate_streaming_gcode", False)
-    _set_var(app, "streaming_line_threshold", PI_PROFILE_STREAMING_LINE_THRESHOLD)
-    _set_var(app, "status_poll_interval", PI_PROFILE_STATUS_POLL_INTERVAL)
-    _invoke_handler(app, "_on_status_interval_change")
-    _set_var(app, "show_autolevel_overlay", False)
-    _invoke_handler(app, "_on_autolevel_overlay_change")
-    if emit_status:
-        _log_status(app, "[settings] Pi profile enabled")
+        _set_var(app, "performance_mode", True)
+        _invoke_handler(app, "_on_performance_mode_change")
+        try:
+            app._ui_queue_idle_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_MS
+            app._ui_queue_idle_max_interval_ms = PI_PROFILE_UI_QUEUE_IDLE_MAX_INTERVAL_MS
+            app._ui_queue_idle_backoff_step_ms = PI_PROFILE_UI_QUEUE_IDLE_BACKOFF_STEP_MS
+            app._ui_queue_idle_streak = 0
+        except Exception as exc:
+            _log_suppressed("Failed applying UI queue idle interval for Pi profile", exc)
+        try:
+            app._joystick_poll_interval_ms = PI_PROFILE_JOYSTICK_POLL_INTERVAL_MS
+            app._joystick_poll_idle_max_interval_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_MAX_INTERVAL_MS
+            app._joystick_poll_idle_backoff_step_ms = PI_PROFILE_JOYSTICK_POLL_IDLE_BACKOFF_STEP_MS
+            app._joystick_poll_idle_streak = 0
+        except Exception as exc:
+            _log_suppressed("Failed applying joystick polling intervals for Pi profile", exc)
+        try:
+            app._ui_maintenance_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_IDLE_INTERVAL_S
+            app._ui_maintenance_quiet_idle_interval_s = PI_PROFILE_UI_MAINTENANCE_QUIET_IDLE_INTERVAL_S
+            app._auto_reconnect_check_idle_interval_s = PI_PROFILE_UI_RECONNECT_IDLE_INTERVAL_S
+        except Exception as exc:
+            _log_suppressed("Failed applying idle maintenance/reconnect intervals for Pi profile", exc)
+        _set_var(app, "gui_logging_enabled", False)
+        _invoke_handler(app, "_on_gui_logging_change")
+        _set_var(app, "validate_streaming_gcode", False)
+        _set_var(app, "streaming_line_threshold", PI_PROFILE_STREAMING_LINE_THRESHOLD)
+        _set_var(app, "status_poll_interval", PI_PROFILE_STATUS_POLL_INTERVAL)
+        _invoke_handler(app, "_on_status_interval_change")
+        _set_var(app, "show_autolevel_overlay", False)
+        _invoke_handler(app, "_on_autolevel_overlay_change")
+    finally:
+        app._defer_ui_settings_save = previous_defer
+    persisted = True
     if save_settings:
-        _save_settings_safe(app)
+        persisted = bool(_save_settings_safe(app))
+    if emit_status or not persisted:
+        text = (
+            "[settings] Pi profile enabled"
+            if persisted
+            else "[settings] Pi profile enabled in memory only; settings save failed"
+        )
+        _log_status(app, text)
 
 
 def apply_pi_profile_from_state(
@@ -265,5 +284,7 @@ def offer_pi_profile_if_recommended(app) -> bool:
         _set_var(app, "pi_profile_enabled", True)
         settings["pi_profile_enabled"] = True
         apply_pi_profile(app, enabled=True, save_settings=False, emit_status=True)
-    _save_settings_safe(app)
+    persisted = bool(_save_settings_safe(app))
+    if accepted and not persisted:
+        _log_status(app, "[settings] Pi profile enabled in memory only; settings save failed")
     return accepted

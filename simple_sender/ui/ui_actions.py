@@ -32,6 +32,7 @@ from simple_sender.ui.alarm_state import mark_alarm_clear_requested
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
+from simple_sender.ui.modal_sync import request_modal_state_sync
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -43,6 +44,24 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _persist_ui_setting_change(app, *, failure_text: str) -> bool:
+    if bool(getattr(app, "_defer_ui_settings_save", False)):
+        return True
+    saver = getattr(app, "_save_settings", None)
+    if not callable(saver):
+        return True
+    try:
+        saver()
+        return True
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed saving settings after immediate UI setting change", exc)
+        try:
+            app.status.config(text=failure_text)
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            pass
+        return False
 
 
 def toggle_tooltips(app):
@@ -67,6 +86,10 @@ def on_gui_logging_change(app):
         app.streaming_controller.handle_log(f"[settings] GUI logging {status}")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed logging GUI logging setting change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="GUI logging changed for this session only; settings save failed",
+    )
 
 
 def on_theme_change(app, *_):
@@ -84,6 +107,10 @@ def on_theme_change(app, *_):
         app._apply_scrollbar_width()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed applying configured scrollbar width after theme change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Theme changed for this session only; settings save failed",
+    )
 
 
 _UI_SCALE_NAMED_FONTS = (
@@ -266,6 +293,10 @@ def on_scrollbar_width_change(app, _event=None):
         app.status.config(text=f"Scrollbar width: {choice}")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for scrollbar width change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Scrollbar width changed for this session only; settings save failed",
+    )
 
 
 def on_ui_scale_change(app, _event=None):
@@ -274,10 +305,10 @@ def on_ui_scale_change(app, _event=None):
         app.status.config(text=f"UI scale: {scale:.2f}x")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for UI scale change", exc)
-    try:
-        app._save_settings()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-        _log_suppressed("Failed saving settings after UI scale change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="UI scale changed for this session only; settings save failed",
+    )
 
 
 def on_touch_scroll_mode_change(app, _event=None):
@@ -314,6 +345,10 @@ def on_touch_scroll_mode_change(app, _event=None):
         )
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for touch-scroll mode change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Touch scroll mode changed for this session only; settings save failed",
+    )
 
 
 def _is_widget_disabled(widget) -> bool:
@@ -510,6 +545,10 @@ def on_performance_mode_change(app):
             status_label.config(text=f"Performance mode: {'On' if new_val else 'Off'}")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating status text for performance mode change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Performance mode changed for this session only; settings save failed",
+    )
 
 
 def toggle_console_pos_status(app):
@@ -539,26 +578,73 @@ def on_autolevel_overlay_change(app):
         app._update_quick_button_visibility()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed refreshing quick-button visibility after Auto-Level overlay change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Auto-Level overlay changed for this session only; settings save failed",
+    )
 
 
-def toggle_unit_mode(app):
-    if app._stream_state in ("running", "paused") or bool(
+def request_unit_mode_change(app, new_mode: str, *, source: str = "units") -> bool:
+    if new_mode not in ("mm", "inch"):
+        return False
+    current_mode = str(app.unit_mode.get() or "")
+    if new_mode == current_mode:
+        return True
+    stream_busy = False
+    try:
+        stream_busy = bool(app.grbl.is_streaming())
+    except Exception:
+        stream_busy = False
+    if stream_busy or str(getattr(app, "_stream_state", "") or "") in ("running", "paused") or bool(
         getattr(app, "_stream_done_pending_idle", False)
     ):
         try:
-            app.status.config(text="Unit toggle disabled while streaming")
-        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-            _log_suppressed("Failed updating status text when unit toggle blocked", exc)
-        return
-    new_mode = "inch" if app.unit_mode.get() == "mm" else "mm"
+            app.status.config(text="Unit change disabled while streaming")
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            pass
+        return False
     if app.grbl.is_connected():
         gcode = "G20" if new_mode == "inch" else "G21"
-        app._send_manual(gcode, "units")
+        accepted = True
+        try:
+            accepted = app._send_manual(gcode, source)
+        except Exception:
+            accepted = False
+        if accepted is False:
+            try:
+                app.status.config(text=f"Unit change rejected: controller did not accept {gcode}")
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+                pass
+            ui_q = getattr(app, "ui_q", None)
+            if ui_q is not None:
+                try:
+                    ui_q.put(("log", f"[units] Controller rejected {gcode}; UI mode unchanged."))
+                except Exception:
+                    pass
+            return False
+        app._pending_unit_mode = new_mode
+        try:
+            app.status.config(text=f"Unit change requested: waiting for {gcode} confirmation")
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            pass
+        request_modal_state_sync(
+            app,
+            source="status",
+            failure_status="Unit change sent, but modal confirmation is pending retry.",
+            failure_log="[units] Unit change sent, but $G modal sync was rejected; retry pending.",
+        )
+        return True
     app._set_unit_mode(new_mode)
+    return True
+
+
+def toggle_unit_mode(app):
+    new_mode = "inch" if app.unit_mode.get() == "mm" else "mm"
+    request_unit_mode_change(app, new_mode, source="units")
 
 def start_homing(app):
     if not require_grbl_connection(app):
-        return
+        return False
     if app._stream_state in ("running", "paused") or bool(
         getattr(app, "_stream_done_pending_idle", False)
     ):
@@ -566,7 +652,25 @@ def start_homing(app):
             app.status.config(text="Homing blocked while streaming")
         except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
             _log_suppressed("Failed updating status text when homing blocked", exc)
-        return
+        return False
+    try:
+        accepted = bool(app.grbl.home())
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        accepted = False
+    if not accepted:
+        try:
+            app.status.config(text="Homing rejected: controller did not accept $H")
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            pass
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("log", "[home] Controller rejected $H; homing was not started."))
+            except Exception:
+                pass
+        app._homing_in_progress = False
+        app._homing_state_seen = False
+        return False
     app._homing_in_progress = True
     app._homing_state_seen = False
     app._homing_start_ts = time.time()
@@ -574,11 +678,7 @@ def start_homing(app):
     app.machine_state.set("Homing")
     app._update_state_highlight("Homing")
     mark_alarm_clear_requested(app)
-    try:
-        app.grbl.home()
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        app._homing_in_progress = False
-        app._homing_state_seen = False
+    return True
 
 def confirm_and_run(app, label: str, func):
     try:
@@ -812,13 +912,17 @@ def run_if_connected(app, func):
     except Exception:
         name = ""
     if name in {"unlock", "home"}:
-        mark_alarm_clear_requested(app)
+        accepted = func()
+        if accepted is True:
+            mark_alarm_clear_requested(app)
+        return
     func()
 
 
 def send_manual(app, command: str, source: str) -> bool:
     cmd = str(command or "").strip()
     upper = cmd.upper()
-    if upper.startswith("$X") or upper.startswith("$H"):
+    accepted = bool(app.grbl.send_immediate(cmd, source=source))
+    if accepted and (upper.startswith("$X") or upper.startswith("$H")):
         mark_alarm_clear_requested(app)
-    return bool(app.grbl.send_immediate(cmd, source=source))
+    return accepted

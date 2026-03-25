@@ -34,6 +34,7 @@ from simple_sender.utils.constants import MACRO_GPAT, MACRO_PROMPT_TIMEOUT, RT_S
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_MACRO_LOAD_TIMEOUT_S = 120.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -143,6 +144,8 @@ def _handle_named_macro_command(
     macro_send: Callable[[str], Any],
     parse_timeout: Callable[[list[str], float], float],
     wait_for_connection_state: Callable[[bool, float], bool],
+    wait_for_ready_state: Callable[[float], bool],
+    wait_for_gcode_load_result: Callable[[int, float], bool],
     macro_restore_state: Callable[[], bool],
 ) -> bool | None:
     if cmd in ("ABSOLUTE", "ABS"):
@@ -152,19 +155,33 @@ def _handle_named_macro_command(
         macro_send("G91")
         return True
     if cmd == "HOME":
-        app._call_on_ui_thread(app._start_homing, timeout=None)
+        started = bool(app._call_on_ui_thread(app._start_homing, timeout=None))
+        if not started:
+            ui_q.put(("log", "[macro] HOME blocked or rejected; homing did not start."))
+            return False
         return True
     if cmd == "OPEN":
         if not app.connected:
-            app._call_on_ui_thread(app.toggle_connect)
+            started = app._call_on_ui_thread(app.toggle_connect)
+            if started is False:
+                ui_q.put(("log", "[macro] OPEN blocked; connection transition did not start."))
+                return False
             timeout_s = parse_timeout(cmd_parts, 10.0)
             if not wait_for_connection_state(True, timeout_s):
                 ui_q.put(("log", f"[macro] OPEN timed out after {timeout_s:.1f}s"))
                 return False
+        else:
+            timeout_s = parse_timeout(cmd_parts, 10.0)
+        if not wait_for_ready_state(timeout_s):
+            ui_q.put(("log", f"[macro] OPEN timed out waiting for GRBL ready after {timeout_s:.1f}s"))
+            return False
         return True
     if cmd == "CLOSE":
         if app.connected:
-            app._call_on_ui_thread(app.toggle_connect)
+            started = app._call_on_ui_thread(app.toggle_connect)
+            if started is False:
+                ui_q.put(("log", "[macro] CLOSE blocked; disconnect transition did not start."))
+                return False
             timeout_s = parse_timeout(cmd_parts, 10.0)
             if not wait_for_connection_state(False, timeout_s):
                 ui_q.put(("log", f"[macro] CLOSE timed out after {timeout_s:.1f}s"))
@@ -182,14 +199,31 @@ def _handle_named_macro_command(
         app._call_on_ui_thread(app._on_close)
         return True
     if cmd == "LOAD" and len(cmd_parts) > 1:
-        app._call_on_ui_thread(
+        path = " ".join(cmd_parts[1:]).strip()
+        token = app._call_on_ui_thread(
             app._load_gcode_from_path,
-            " ".join(cmd_parts[1:]),
+            path,
             timeout=None,
         )
+        if not token:
+            ui_q.put(("log", f"[macro] LOAD blocked or failed to start for: {path}"))
+            return False
+        if not wait_for_gcode_load_result(int(token), _MACRO_LOAD_TIMEOUT_S):
+            result_token = int(getattr(app, "_gcode_load_last_result_token", -1) or -1)
+            result_success = getattr(app, "_gcode_load_last_result_success", None)
+            detail = ""
+            if result_token == int(token) and result_success is False:
+                detail = str(getattr(app, "_gcode_load_last_result_error", "") or "").strip()
+            if not detail:
+                detail = f"G-code load did not complete within {_MACRO_LOAD_TIMEOUT_S:.1f}s."
+            ui_q.put(("log", f"[macro] LOAD failed for '{path}': {detail}"))
+            return False
         return True
     if cmd == "UNLOCK":
-        grbl.unlock()
+        accepted = bool(grbl.unlock())
+        if not accepted:
+            ui_q.put(("log", "[macro] UNLOCK blocked or rejected by GRBL."))
+            return False
         return True
     if cmd == "RESET":
         try:
@@ -197,13 +231,22 @@ def _handle_named_macro_command(
                 app._stop_job_accessories("job_reset")
         except Exception:
             pass
-        grbl.reset()
+        accepted = grbl.reset()
+        if accepted is False:
+            ui_q.put(("log", "[macro] RESET blocked or rejected; Ctrl-X was not sent."))
+            return False
         return True
     if cmd in ("PAUSE", "FEEDHOLD"):
-        grbl.hold()
+        accepted = grbl.hold()
+        if accepted is False:
+            ui_q.put(("log", "[macro] PAUSE blocked or rejected; feed hold was not sent."))
+            return False
         return True
     if cmd == "RESUME":
-        grbl.resume()
+        accepted = grbl.resume()
+        if accepted is False:
+            ui_q.put(("log", "[macro] RESUME blocked or rejected; cycle start was not sent."))
+            return False
         return True
     if cmd == "STOP":
         try:
@@ -211,36 +254,20 @@ def _handle_named_macro_command(
                 app._stop_job_accessories("job_stop")
         except Exception:
             pass
-        grbl.stop_stream()
+        accepted = grbl.stop_stream()
+        if accepted is not True:
+            ui_q.put(("log", "[macro] STOP blocked or failed; no active stream was stopped."))
+            return False
         return True
     if cmd == "RUN":
-        try:
-            app._kasa_last_stream_line_index = -1
-        except Exception:
-            pass
-        accessory_router = getattr(app, "accessory_router", None)
-        if accessory_router is not None:
-            reset_debounce = getattr(accessory_router, "reset_debounce", None)
-            if callable(reset_debounce):
-                try:
-                    reset_debounce()
-                except Exception:
-                    pass
-        try:
-            grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
-        except Exception:
-            pass
-        grbl.start_stream()
+        app._call_on_ui_thread(app.run_job, timeout=None)
         try:
             started = bool(grbl.is_streaming())
         except Exception:
             started = False
-        if started:
-            try:
-                if hasattr(app, "_start_job_accessories"):
-                    app._start_job_accessories("job_run")
-            except Exception:
-                pass
+        if not started:
+            ui_q.put(("log", "[macro] RUN blocked or failed to enter streaming state."))
+            return False
         return True
     if cmd in ("STATE_RETURN", "STATE-RETURN"):
         return macro_restore_state()
@@ -250,10 +277,14 @@ def _handle_named_macro_command(
     if cmd == "SENDHEX" and len(cmd_parts) > 1:
         try:
             b = bytes([int(cmd_parts[1], 16)])
-            grbl.send_realtime(b)
+            accepted = grbl.send_realtime(b)
+            if accepted is False:
+                ui_q.put(("log", "[macro] SENDHEX failed: realtime command was not sent."))
+                return False
         except Exception as exc:
             logger.exception("Macro SENDHEX failed: %s", exc)
             ui_q.put(("log", f"[macro] SENDHEX failed: {exc}"))
+            return False
         return True
     if cmd == "SAFE" and len(cmd_parts) > 1:
         try:
@@ -262,6 +293,7 @@ def _handle_named_macro_command(
         except Exception as exc:
             logger.exception("Macro SAFE failed: %s", exc)
             ui_q.put(("log", f"[macro] SAFE failed: {exc}"))
+            return False
         return True
     if cmd == "SET0":
         macro_send("G92 X0 Y0 Z0")
@@ -301,6 +333,8 @@ def execute_macro_command(
     macro_send: Callable[[str], Any],
     parse_timeout: Callable[[list[str], float], float],
     wait_for_connection_state: Callable[[bool, float], bool],
+    wait_for_ready_state: Callable[[float], bool],
+    wait_for_gcode_load_result: Callable[[int, float], bool],
     macro_restore_state: Callable[[], bool],
     parse_macro_prompt: Callable[[str, dict[str, Any] | None], tuple[str, str, list[str], str, dict[str, str | None]]],
     macro_cancelled: Callable[[], bool] | None = None,
@@ -358,22 +392,36 @@ def execute_macro_command(
         macro_send=macro_send,
         parse_timeout=parse_timeout,
         wait_for_connection_state=wait_for_connection_state,
+        wait_for_ready_state=wait_for_ready_state,
+        wait_for_gcode_load_result=wait_for_gcode_load_result,
         macro_restore_state=macro_restore_state,
     )
     if command_result is not None:
         return command_result
 
     if s.startswith("!"):
-        grbl.hold()
+        accepted = grbl.hold()
+        if accepted is False:
+            ui_q.put(("log", "[macro] FEEDHOLD blocked or rejected; feed hold was not sent."))
+            return False
         return True
     if s.startswith("~"):
-        grbl.resume()
+        accepted = grbl.resume()
+        if accepted is False:
+            ui_q.put(("log", "[macro] RESUME blocked or rejected; cycle start was not sent."))
+            return False
         return True
     if s.startswith("?"):
-        grbl.send_realtime(RT_STATUS)
+        accepted = grbl.send_realtime(RT_STATUS)
+        if accepted is False:
+            ui_q.put(("log", "[macro] STATUS blocked or rejected; realtime status query was not sent."))
+            return False
         return True
     if s.startswith("\x18"):
-        grbl.reset()
+        accepted = grbl.reset()
+        if accepted is False:
+            ui_q.put(("log", "[macro] RESET blocked or rejected; Ctrl-X was not sent."))
+            return False
         return True
 
     if s.startswith("$") or s.startswith("@") or s.startswith("{"):

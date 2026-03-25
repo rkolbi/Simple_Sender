@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import glob
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from simple_sender.utils.constants import MACRO_EXTS, MACRO_PREFIXES
@@ -111,6 +113,8 @@ def write_macro_slot(
 ) -> str:
     os.makedirs(macro_dir, exist_ok=True)
     path = macro_slot_path(macro_dir, index)
+    path_obj = Path(path)
+    temp_path: Path | None = None
     lines = [
         str(name).strip(),
         str(tip).strip(),
@@ -121,18 +125,49 @@ def write_macro_slot(
     if body_text:
         lines.extend(body_text.split("\n"))
     text = "\n".join(lines).rstrip("\n") + "\n"
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(text)
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=macro_dir,
+            prefix=f"{path_obj.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        assert temp_path is not None
+        temp_path.replace(path_obj)
+        if os.name != "nt":
+            try:
+                dir_fd = os.open(macro_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except Exception:
+                pass
+    finally:
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
     return path
 
 
-def remove_macro_slot(macro_dir: str, index: int) -> None:
+def remove_macro_slot(macro_dir: str, index: int) -> bool:
     canonical = macro_slot_path(macro_dir, index)
     candidates = [canonical]
     for prefix in MACRO_PREFIXES:
         for ext in MACRO_EXTS:
             candidates.append(os.path.join(macro_dir, f"{prefix}{int(index)}{ext}"))
     seen: set[str] = set()
+    removed_any = False
+    failures: list[tuple[str, BaseException]] = []
     for candidate in candidates:
         key = os.path.normcase(os.path.abspath(candidate))
         if key in seen:
@@ -141,8 +176,16 @@ def remove_macro_slot(macro_dir: str, index: int) -> None:
         if os.path.isfile(candidate):
             try:
                 os.remove(candidate)
-            except Exception:
-                continue
+                removed_any = True
+            except Exception as exc:
+                failures.append((candidate, exc))
+    if failures:
+        if removed_any:
+            failed_paths = ", ".join(path for path, _exc in failures)
+            raise OSError(f"Partially removed macro slot; failed deleting: {failed_paths}")
+        path, exc = failures[0]
+        raise OSError(f"Failed deleting macro slot file {path}: {exc}") from exc
+    return removed_any
 
 
 def discover_macro_assets(app: Any) -> list[tuple[str, str]]:

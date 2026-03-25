@@ -28,10 +28,12 @@ import logging
 import os
 import sys
 import time
+from functools import partial
 from typing import Any, TYPE_CHECKING
 
 # GUI imports
 import tkinter as tk
+from tkinter import messagebox
 
 # Refactored module imports
 from simple_sender import __version__
@@ -242,6 +244,16 @@ class App(tk.Tk):
         # Top + main layout
         self._build_toolbar()
         self._build_main()
+        startup_settings_warning = str(getattr(self, "_settings_load_warning_message", "") or "").strip()
+        if startup_settings_warning:
+            self.after(
+                0,
+                partial(
+                    messagebox.showwarning,
+                    "Settings Warning",
+                    startup_settings_warning,
+                ),
+            )
         self._bind_touch_command_feedback()
         self._init_screen_lock_guard()
         self._set_manual_controls_enabled(False)

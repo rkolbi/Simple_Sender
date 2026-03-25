@@ -39,6 +39,10 @@ from simple_sender.utils.constants import (
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_SETTINGS_VERIFY_RETRY_FAILURE_KEYS = (
+    "Controller rejected $$ verification dump",
+    "Failed requesting $$ verification dump",
+)
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -124,6 +128,7 @@ class GRBLSettingsController:
         self._settings_saving = False
         self._settings_prev_state: dict[str, Any] = {}
         self._settings_pending_confirmation: dict[str, str] = {}
+        self._settings_verify_failed: dict[str, str] = {}
 
     def _post_ui(self, func, *args, **kwargs) -> None:
         poster = getattr(self.app, "_post_ui_thread", None)
@@ -204,6 +209,7 @@ class GRBLSettingsController:
         self.settings_tree.bind("<Leave>", self._settings_tooltip_hide)
         self.settings_tip = ToolTip(self.settings_tree, "")
         self.settings_tree.tag_configure("edited", background="#fff5c2")
+        self.settings_tree.tag_configure("verify_failed", background="#ffd9b3")
 
     def start_capture(self, header: str = "Requesting $$...") -> None:
         self._settings_capture = True
@@ -261,7 +267,9 @@ class GRBLSettingsController:
         if not self.app.grbl.is_connected():
             messagebox.showwarning("Not connected", "Connect to GRBL first.")
             return
-        if self.app.grbl.is_streaming():
+        if self.app.grbl.is_streaming() or bool(
+            getattr(self.app, "_stream_done_pending_idle", False)
+        ):
             messagebox.showwarning("Busy", "Stop the stream before saving settings.")
             return
         if not self._settings_edited:
@@ -316,6 +324,8 @@ class GRBLSettingsController:
         self._settings_edited = {}
         self._settings_saving = False
         self._set_settings_edit_enabled(True)
+        for key, _value in changes:
+            self._settings_verify_failed.pop(str(key), None)
         self._settings_pending_confirmation = {
             str(key): str(value).strip()
             for key, value in changes
@@ -328,15 +338,23 @@ class GRBLSettingsController:
         except Exception as exc:
             _log_suppressed("Failed updating status while verifying settings save", exc)
         try:
-            self.app._request_settings_dump()
+            accepted = self.app._request_settings_dump()
+            if accepted is False:
+                raise RuntimeError(_SETTINGS_VERIFY_RETRY_FAILURE_KEYS[0])
         except Exception as exc:
             logger.exception("Failed requesting settings verification dump: %s", exc)
-            self._finish_settings_save_failed("Failed requesting $$ verification dump")
+            error_message = str(exc).strip() or _SETTINGS_VERIFY_RETRY_FAILURE_KEYS[1]
+            if error_message == _SETTINGS_VERIFY_RETRY_FAILURE_KEYS[0]:
+                self._finish_settings_save_failed(error_message)
+            else:
+                self._finish_settings_save_failed(_SETTINGS_VERIFY_RETRY_FAILURE_KEYS[1])
 
     def _finish_settings_save_failed(self, message: str | None = None) -> None:
-        self._settings_pending_confirmation = {}
         self._settings_saving = False
         self._set_settings_edit_enabled(True)
+        if self._settings_pending_confirmation:
+            self._restore_retryable_pending_settings(self._settings_pending_confirmation)
+            self._settings_pending_confirmation = {}
         if message:
             try:
                 self.app.status.config(text=f"Settings save failed: {message}")
@@ -386,6 +404,13 @@ class GRBLSettingsController:
             if not _settings_values_match_for_verify(key, expected, actual):
                 mismatches.append((key, expected, actual))
         if mismatches:
+            self._restore_retryable_pending_settings(
+                {key: expected for key, expected, _actual in mismatches}
+            )
+            for key, expected, _actual in mismatches:
+                self._settings_verify_failed[key] = expected
+                self._settings_baseline[key] = expected
+                self._update_setting_row_tags(key)
             summary = ", ".join(
                 f"{key} expected {expected!r} got {actual!r}"
                 for key, expected, actual in mismatches[:3]
@@ -407,6 +432,8 @@ class GRBLSettingsController:
             return
         for key, expected in pending.items():
             actual = str(self._settings_values.get(key, "")).strip()
+            self._settings_verify_failed.pop(key, None)
+            self._settings_edited.pop(key, None)
             self._settings_baseline[key] = actual if actual != "" else expected
             self._update_setting_row_tags(key)
         self.app.ui_q.put(
@@ -445,10 +472,23 @@ class GRBLSettingsController:
             item_id = self.settings_tree.insert("", "end", values=(key, name, value, units, desc))
             self._settings_items[key] = item_id
         self._settings_baseline = dict(self._settings_values)
+        for key, expected in self._settings_verify_failed.items():
+            if key in self._settings_baseline:
+                self._settings_baseline[key] = expected
         for key in self._settings_items:
             self._update_setting_row_tags(key)
         self.app.status.config(text=f"Settings: {len(items)} values")
         self._verify_pending_settings_confirmation()
+
+    def _restore_retryable_pending_settings(self, pending: dict[str, str]) -> None:
+        for key, value in pending.items():
+            setting_key = str(key).strip()
+            if not setting_key:
+                continue
+            attempted = str(value).strip()
+            self._settings_edited[setting_key] = attempted
+            if setting_key in self._settings_items:
+                self._update_setting_row_tags(setting_key)
 
     def _update_rapid_rates(self) -> None:
         rx = parse_setting_float(self._settings_data, "$110")
@@ -563,33 +603,36 @@ class GRBLSettingsController:
         key, item = self._settings_entry_meta.pop(entry, (None, None))
         tree = self.settings_tree
         try:
-            if key and item and tree:
-                new_val = entry.get().strip()
-                if new_val:
-                    idx = parse_setting_index(key)
-                    if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
-                        try:
-                            val_num = float(new_val)
-                        except Exception:
-                            messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
-                            return
-                        limits = GRBL_SETTING_LIMITS.get(idx)
-                        if limits:
-                            lo, hi = limits
-                            if lo is not None and val_num < lo:
-                                messagebox.showwarning("Out of range", f"Setting {key} must be >= {lo}.")
-                                return
-                            if hi is not None and val_num > hi:
-                                messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
-                                return
-                tree.set(item, "value", new_val)
-                self._settings_values[key] = new_val
-                baseline = self._settings_baseline.get(key, "")
-                if new_val == baseline and key in self._settings_edited:
-                    self._settings_edited.pop(key, None)
-                else:
-                    self._settings_edited[key] = new_val
-                self._update_setting_row_tags(key)
+            if key is None or item is None or tree is None:
+                return
+            new_val = entry.get().strip()
+            idx = parse_setting_index(key) if new_val else None
+            if key in self._settings_verify_failed:
+                self._settings_verify_failed.pop(key, None)
+                self._settings_baseline[key] = self._settings_values.get(key, "")
+            if idx is not None and idx not in GRBL_NON_NUMERIC_SETTINGS:
+                try:
+                    val_num = float(new_val)
+                except Exception:
+                    messagebox.showwarning("Invalid value", f"Setting {key} must be numeric.")
+                    return
+                limits = GRBL_SETTING_LIMITS.get(idx)
+                if limits:
+                    lo, hi = limits
+                    if lo is not None and val_num < lo:
+                        messagebox.showwarning("Out of range", f"Setting {key} must be >= {lo}.")
+                        return
+                    if hi is not None and val_num > hi:
+                        messagebox.showwarning("Out of range", f"Setting {key} must be <= {hi}.")
+                        return
+            tree.set(item, "value", new_val)
+            self._settings_values[key] = new_val
+            baseline = self._settings_baseline.get(key, "")
+            if new_val == baseline and key in self._settings_edited:
+                self._settings_edited.pop(key, None)
+            else:
+                self._settings_edited[key] = new_val
+            self._update_setting_row_tags(key)
         finally:
             self._settings_entry_meta.pop(entry, None)
             try:
@@ -618,6 +661,11 @@ class GRBLSettingsController:
         current = self._settings_values.get(key, "")
         baseline = self._settings_baseline.get(key, "")
         tags = list(self.settings_tree.item(item, "tags"))
+        if key in self._settings_verify_failed:
+            if "verify_failed" not in tags:
+                tags.append("verify_failed")
+        else:
+            tags = [t for t in tags if t != "verify_failed"]
         if current != baseline:
             if "edited" not in tags:
                 tags.append("edited")
@@ -644,6 +692,7 @@ class GRBLSettingsController:
         tooltip = info.get("tooltip", "")
         baseline_val = self._settings_baseline.get(key, "")
         current_val = self._settings_values.get(key, "")
+        verify_failed_expected = self._settings_verify_failed.get(key)
         limits = GRBL_SETTING_LIMITS.get(idx, None) if idx is not None else None
         allow_text = bool(idx is not None and idx in GRBL_NON_NUMERIC_SETTINGS)
         value_line = (
@@ -660,6 +709,8 @@ class GRBLSettingsController:
             parts.append(f"Units: {units}")
         if allow_text:
             parts.append("Allows text values")
+        if verify_failed_expected is not None:
+            parts.append(f"Verification failed: controller did not keep attempted value {verify_failed_expected}")
         if limits:
             lo, hi = limits
             if lo is not None and hi is not None:

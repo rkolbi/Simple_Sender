@@ -29,6 +29,42 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+def _post_ui_callback(
+    app: Any,
+    callback,
+    *,
+    log_suppressed: Callable[[str, BaseException], None],
+) -> None:
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(callback)
+            return
+        except Exception as exc:
+            log_suppressed(
+                "Failed posting diagnostics bundle callback via _post_ui_thread",
+                exc,
+            )
+    after = getattr(app, "after", None)
+    if callable(after):
+        try:
+            after(0, callback)
+            return
+        except Exception as exc:
+            log_suppressed("Failed posting diagnostics bundle callback to UI thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", callback, (), {}))
+            return
+        except Exception as exc:
+            log_suppressed("Failed posting diagnostics bundle callback via ui_q", exc)
+    log_suppressed(
+        "Dropping diagnostics bundle callback because no safe UI post path is available",
+        RuntimeError("ui thread unavailable"),
+    )
+
+
 def export_diagnostics_bundle(
     app: Any,
     *,
@@ -91,13 +127,11 @@ def export_diagnostics_bundle(
                     "Failed exporting diagnostics bundle in background worker", exc
                 )
                 error = exc
-            try:
-                after(0, lambda: _complete_export(error))
-            except Exception as exc:
-                log_suppressed(
-                    "Failed posting diagnostics bundle completion callback", exc
-                )
-                _complete_export(error)
+            _post_ui_callback(
+                app,
+                lambda: _complete_export(error),
+                log_suppressed=log_suppressed,
+            )
 
         try:
             worker = thread_cls(

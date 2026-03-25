@@ -86,7 +86,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - **Experimental features:** **Auto-Level (Experimental)**, **Recover (Experimental)**, and **Resume From... (Experimental)** are optional UI features controlled in **App Settings > Experimental**.
 
 ## Project Status
-Recent cleanup/refactor work was intentionally limited to low-risk maintainability improvements, preflight-service extraction, and documentation alignment. Compatibility-sensitive and timing-sensitive subsystems were left stable by design, the cleanup/refactor track is complete, and the current codebase is the recommended stabilization baseline for subsequent bug-fix-only work. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
+The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the pre-release candidate intended for operational machine checks, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
 
 ## Requirements & Installation
 - Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
@@ -368,7 +368,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
-- **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics).
+- **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics). Backup-bundle import validates settings through the same repair/import path used elsewhere, warns when imported values were repaired, and requires explicit confirmation before overwriting colliding macro/checklist assets.
 - **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py`, while `simple_sender/ui/dialogs/diagnostics_preflight.py` remains the UI-facing compatibility facade used by diagnostics code.
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
@@ -377,7 +377,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Worker-thread UI marshaling:** Background workers post UI updates through the UI queue/UI-thread helpers instead of calling Tk widgets directly, reducing cross-thread Tk risk during connect/load/settings/log operations.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 - **Job Setup run gate:** Run checks the same `macro.state.TOOL_REFERENCE` value used by the Tool Ref display. If the value is missing/blank/invalid (`None`, unknown text, NaN, etc.), it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
-- **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that reset assumptions (including ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
+- **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that actually reset assumptions (including accepted ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
@@ -393,10 +393,11 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Lean runtime model:** The sender does not render Top View/Spatial geometry during load; UI remains focused on readiness, dimensions, and estimate output.
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
-- **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
+- **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line. Preview generation is debounced and computed on a background worker, and may briefly show `Modal re-sync: calculating...` while updating.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; Live G-code window updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
+- **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
 
 ### Line length limitations and CAM guidance
 - Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
@@ -444,6 +445,7 @@ Macro file header format:
 
 Manual macro launches are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed. The streamed `TC:<tool name>` sender directive is the built-in exception: it pauses the stream and reuses the existing tool-change macro workflow.
 `App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
+Macro execution now uses stricter startup/result truthfulness: startup modal capture waits on the real `$G` completion signal, `LOAD` waits for actual load completion/failure, `OPEN`/`CLOSE` fail fast when the underlying connect/disconnect transition never started, and local-command helpers such as `SENDHEX` / `SAFE` fail the macro if their local action fails.
 
 In the image below, macro files **Macro-1** through **Macro-4** are present in the macros folder, so they appear in the button bar; **Macro-5** through **Macro-8** are missing, so those buttons aren’t shown.
 
@@ -917,7 +919,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 23, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1282 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 25, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1418 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -1127,7 +1129,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 142 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-23), and local/CI hooks now enforce `--expected-count 142`.
+5. Static typing gates currently run mypy against 142 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-25), and local/CI hooks now enforce `--expected-count 142`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -1157,6 +1159,8 @@ The sender exposes a curated subset of GRBL's real-time, system, and motion comm
 | Jog cancel | `0x85` | Stops a `$J=` jog (bound to **JOG STOP**). |
 | Feed override +10%/-10%/reset | `0x91` / `0x92` / `0x90` | Matches the buttons in the Feed Override panel. |
 | Spindle override +10%/-10%/reset | `0x9A` / `0x9B` / `0x99` | Tied to the Spindle Override controls. |
+
+Realtime control buttons now report disconnected/unsent actions truthfully instead of silently behaving like success. That applies to Pause/Resume/Stop/Reset, ALL STOP, alarm-recovery Reset, and override-control actions that send GRBL realtime bytes.
 
 ### System (`$`) commands
 | Command | Syntax | Example |
@@ -1443,7 +1447,7 @@ Macro UI is included below along with the rest of the interface.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
-- Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip.
+- Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip. Import validates settings before replacing the live copy, reports repaired values, and asks before replacing colliding macro/checklist assets.
 - Overdrive validation strict by default: sets default mode for **Overdrive -> Validate Loaded Job** (`Off=quick`, `On=full scan`).
 - Sample-only threshold (lines): cleaned line count threshold for aggressive sampled prepare behavior (set `0` to disable line-based trigger).
 - Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (sample-only + skip full validation); set `0` to disable.

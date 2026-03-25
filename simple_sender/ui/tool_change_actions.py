@@ -165,23 +165,34 @@ def _restore_macro_timeouts_for_tool_change(
     )
 
 
-def _wait_for_macro_finish(app) -> bool:
+def _tool_change_workflow_timeout_s(app) -> float:
+    try:
+        timeout_s = float(getattr(app, "_tool_change_workflow_timeout_s", 1800.0) or 0.0)
+    except Exception:
+        timeout_s = 1800.0
+    return max(30.0, timeout_s)
+
+
+def _wait_for_macro_finish(app, *, timeout_s: float) -> str:
     executor = getattr(app, "macro_executor", None)
     lock = getattr(executor, "_macro_lock", None)
     if lock is None or not hasattr(lock, "locked"):
-        return False
+        return "failed"
+    started_at = time.monotonic()
     while True:
         try:
             if not bool(lock.locked()):
                 break
         except Exception:
-            return False
+            return "failed"
         if _all_stop_cancel_requested(app):
-            return False
+            return "cancelled"
         if bool(getattr(app, "_closing", False)):
-            return False
+            return "closed"
+        if timeout_s > 0.0 and (time.monotonic() - started_at) >= timeout_s:
+            return "timed_out"
         time.sleep(0.1)
-    return bool(getattr(executor, "_last_macro_run_success", False))
+    return "success" if bool(getattr(executor, "_last_macro_run_success", False)) else "failed"
 
 
 def _tool_change_macro_prompt_cancelled(app) -> bool:
@@ -206,6 +217,7 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
         return
     started = False
     succeeded = False
+    timed_out = False
     try:
         try:
             with app.macro_executor.macro_vars() as macro_vars:
@@ -228,7 +240,10 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
             )
         )
         if started:
-            succeeded = _wait_for_macro_finish(app)
+            workflow_timeout_s = _tool_change_workflow_timeout_s(app)
+            wait_status = _wait_for_macro_finish(app, timeout_s=workflow_timeout_s)
+            succeeded = wait_status == "success"
+            timed_out = wait_status == "timed_out"
     except Exception as exc:
         _log_suppressed("Tool-change workflow failed", exc)
         started = False
@@ -244,6 +259,14 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
     reason = "Tool-change macro failed."
     if _all_stop_cancel_requested(app):
         reason = "Canceled by ALL STOP."
+    elif timed_out:
+        cancel_macro = getattr(app.macro_executor, "cancel_macro", None)
+        if callable(cancel_macro):
+            try:
+                cancel_macro("Tool-change workflow timed out.")
+            except Exception as exc:
+                _log_suppressed("Failed canceling timed-out tool-change macro", exc)
+        reason = "Tool-change workflow timed out."
     elif _tool_change_macro_prompt_cancelled(app):
         reason = "Tool change canceled by user."
     app.grbl.complete_stream_tool_change(False, reason)

@@ -31,6 +31,7 @@ from tkinter import messagebox
 from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
 from simple_sender.types import LineSource
+from simple_sender.ui.preflight_gate import run_preflight_gate
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -284,10 +285,24 @@ def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str]
     return _build_resume_preamble_fallback(lines, stop_index)
 
 
+def _report_resume_failure(app, message: str) -> None:
+    try:
+        app.status.config(text=f"Resume failed: {message}")
+    except Exception as exc:
+        _log_suppressed("Failed updating status text for Resume From failure", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("log", f"[resume] {message}"))
+        except Exception as exc:
+            _log_suppressed("Failed queueing Resume From failure message", exc)
+    messagebox.showwarning("Resume failed", message)
+
+
 def resume_from_line(app, start_index: int, preamble: list[str]):
     """Restart streaming from a specific line after UI-side safety checks."""
 
-    if app.grbl.is_streaming():
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_RESUMING,
@@ -312,6 +327,9 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
     if start_index < 0 or start_index >= total_lines:
         messagebox.showwarning("Resume", "Line number is out of range.")
         return
+    if not run_preflight_gate(app, action_label="Resume", messagebox_module=messagebox):
+        return
+    prior_kasa_stream_line_index = getattr(app, "_kasa_last_stream_line_index", None)
     try:
         app._kasa_last_stream_line_index = int(start_index) - 1
     except (AttributeError, TypeError, ValueError) as exc:
@@ -325,6 +343,22 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
             except Exception as exc:
                 _log_suppressed("Failed resetting Kasa debounce state before resume-from", exc)
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
+    app.grbl.start_stream_from(start_index, preamble)
+    started = False
+    try:
+        started = bool(app.grbl.is_streaming())
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL streaming state after Resume From", exc)
+    if not started:
+        try:
+            app._kasa_last_stream_line_index = prior_kasa_stream_line_index
+        except Exception as exc:
+            _log_suppressed("Failed restoring Kasa stream-line index after Resume From failure", exc)
+        _report_resume_failure(
+            app,
+            "GRBL did not enter streaming state after Resume From.",
+        )
+        return
     app._clear_pending_ui_updates()
     app.gview.clear_highlights()
     app._last_sent_index = start_index - 1
@@ -337,15 +371,8 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
         pct = int(round((start_index / total_lines) * 100))
         app.progress_pct.set(pct)
     app.status.config(text=f"Resuming at line {start_index + 1}")
-    app.grbl.start_stream_from(start_index, preamble)
-    started = False
     try:
-        started = bool(app.grbl.is_streaming())
+        if hasattr(app, "_start_job_accessories"):
+            app._start_job_accessories("job_resume")
     except Exception as exc:
-        _log_suppressed("Failed checking GRBL streaming state after Resume From", exc)
-    if started:
-        try:
-            if hasattr(app, "_start_job_accessories"):
-                app._start_job_accessories("job_resume")
-        except Exception as exc:
-            _log_suppressed("Failed starting Kasa job accessories on Resume From", exc)
+        _log_suppressed("Failed starting Kasa job accessories on Resume From", exc)

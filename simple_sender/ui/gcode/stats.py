@@ -46,6 +46,7 @@ from simple_sender.utils.constants import (
 from simple_sender.utils.task_timing import record_task_timing
 
 logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
 
 _LIVE_ESTIMATE_DISPLAY_INTERVAL_S = 1.0
 _LIVE_ESTIMATE_DISPLAY_EMA_ALPHA = 0.2
@@ -68,6 +69,14 @@ _TOKEN_AXIS_WORD = re.compile(r"[XYZ][-+]?(?:\d+(?:\.\d*)?|\.\d+)?", re.IGNORECA
 
 _ESTIMATE_CONFIDENCE_PROVISIONAL = "provisional"
 _ESTIMATE_CONFIDENCE_CONFIDENT = "confident"
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    key = (context, type(exc).__name__)
+    if key in _logged_suppressed:
+        return
+    _logged_suppressed.add(key)
+    logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
 def _confidence_badge(raw: str | None) -> str:
@@ -848,6 +857,25 @@ def apply_gcode_stats(app, token: int, stats: dict | None, rate_source: str | No
     refresh_gcode_stats_display(app)
 
 
+def _post_ui_callback(app, callback, *, context: str) -> bool:
+    poster = getattr(app, "_post_ui_thread", None)
+    if callable(poster):
+        try:
+            poster(callback)
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", callback, (), {}))
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via ui_q", exc)
+    _log_suppressed(context, RuntimeError("ui thread unavailable"))
+    return False
+
+
 def get_fallback_rapid_rate(app) -> float | None:
     raw = app.fallback_rapid_rate.get().strip()
     if not raw:
@@ -1435,11 +1463,12 @@ def update_gcode_stats(
                     success = True
                 except Exception as exc:
                     if keep_running("worker_error_apply"):
-                        app.after(
-                            0,
+                        _post_ui_callback(
+                            app,
                             lambda: apply_gcode_stats(
                                 app, pending_token, None, pending_rate_source
                             ),
+                            context="Failed posting G-code stats error callback",
                         )
                         app.ui_q.put(("log", f"[stats] Estimate failed: {exc}"))
                     return
@@ -1455,11 +1484,12 @@ def update_gcode_stats(
                         except StopIteration:
                             break
                         cache.pop(oldest_key, None)
-                app.after(
-                    0,
+                _post_ui_callback(
+                    app,
                     lambda: apply_gcode_stats(
                         app, pending_token, stats, pending_rate_source
                     ),
+                    context="Failed posting G-code stats completion callback",
                 )
             finally:
                 _safe_close_source(pending_cleanup_source)

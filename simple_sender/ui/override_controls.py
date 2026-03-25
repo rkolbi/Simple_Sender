@@ -28,6 +28,49 @@ from simple_sender.utils.constants import (
 )
 
 
+def _report_override_feedback(app, *, status_text: str, log_text: str) -> None:
+    status = getattr(app, "status", None)
+    if status is not None:
+        try:
+            status.config(text=status_text)
+        except Exception:
+            pass
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("log", log_text))
+        except Exception:
+            pass
+
+
+def send_override_realtime(app, command: bytes, *, label: str) -> bool:
+    grbl = getattr(app, "grbl", None)
+    if grbl is None or not grbl.is_connected():
+        _report_override_feedback(
+            app,
+            status_text=f"{label} unavailable: connect to GRBL first",
+            log_text=f"[override] {label} ignored: not connected.",
+        )
+        return False
+    try:
+        accepted = grbl.send_realtime(command)
+    except Exception as exc:
+        _report_override_feedback(
+            app,
+            status_text=f"{label} failed: {exc}",
+            log_text=f"[override] {label} failed: {exc}",
+        )
+        return False
+    if accepted is False:
+        _report_override_feedback(
+            app,
+            status_text=f"{label} failed: realtime command was not sent",
+            log_text=f"[override] {label} failed: realtime command was not sent.",
+        )
+        return False
+    return True
+
+
 def normalize_override_slider_value(raw_value, minimum=10, maximum=200):
     try:
         value = float(raw_value)
@@ -72,7 +115,9 @@ def handle_override_slider_change(
     if target == last:
         return
     delta = target - last
-    send_override_delta(app, delta, plus_cmd, minus_cmd)
+    result = send_override_delta(app, delta, plus_cmd, minus_cmd)
+    if result is False:
+        return
     setattr(app, last_attr, target)
     display_var.set(f"{target}%")
     set_override_scale(app, scale_attr, target, lock_attr)
@@ -105,15 +150,18 @@ def on_spindle_override_slider(app, raw_value):
 
 
 def send_override_delta(app, delta, plus_cmd, minus_cmd):
-    if not app.grbl.is_connected() or delta == 0:
-        return
+    if delta == 0:
+        return True
     step = 10
     while delta >= step:
-        app.grbl.send_realtime(plus_cmd)
+        if not send_override_realtime(app, plus_cmd, label="Feed/spindle override"):
+            return False
         delta -= step
     while delta <= -step:
-        app.grbl.send_realtime(minus_cmd)
+        if not send_override_realtime(app, minus_cmd, label="Feed/spindle override"):
+            return False
         delta += step
+    return True
 
 
 def set_feed_override_slider_value(app, value):

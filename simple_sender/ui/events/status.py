@@ -63,6 +63,7 @@ from .status_machine_state import _stream_latched_banner_state as _stream_latche
 from .status_units import _parse_modal_units as _parse_modal_units_impl
 from .status_units import _parse_report_units_setting as _parse_report_units_setting_impl
 from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
+from simple_sender.ui.modal_sync import modal_sync_retry_ready, request_modal_state_sync
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -378,6 +379,33 @@ def _schedule_request_settings_dump(app) -> None:
     _run()
 
 
+def _schedule_request_modal_state_sync(app) -> None:
+    if bool(getattr(app, "_modal_sync_deferred_pending", False)):
+        return
+
+    def _run() -> None:
+        app._modal_sync_deferred_pending = False
+        request_modal_state_sync(
+            app,
+            source="status",
+            failure_status="Modal-state sync is pending retry.",
+            failure_log="[status] $G modal sync was rejected; retry pending.",
+            timeout_status="Modal-state sync timed out; retrying.",
+            timeout_log="[status] $G modal sync timed out; retry pending.",
+        )
+
+    after = getattr(app, "after", None)
+    if callable(after):
+        try:
+            app._modal_sync_deferred_pending = True
+            after(0, _run)
+            return
+        except Exception as exc:
+            app._modal_sync_deferred_pending = False
+            _log_suppressed("Failed scheduling deferred modal-state sync", exc)
+    _run()
+
+
 def _homing_idle_grace_seconds(app) -> float:
     interval = 0.2
     poll_interval = getattr(app, "status_poll_interval", None)
@@ -404,13 +432,15 @@ def _maybe_restore_pending_g90(app) -> None:
     if app.grbl.is_streaming() or _stream_active_or_finishing(app):
         return
     try:
-        app.grbl.send_immediate("G90", source="autolevel")
+        accepted = app.grbl.send_immediate("G90", source="autolevel")
     except Exception as exc:
         _log_suppressed("Failed to restore pending G90", exc)
         return
+    if accepted is False:
+        return
     app._pending_force_g90 = False
     try:
-        app.ui_q.put(("log", "[autolevel] Restored G90 after alarm clear."))
+        app.ui_q.put(("log", "[autolevel] Requested pending G90 restore after alarm clear."))
     except Exception as exc:
         _log_suppressed("Failed to queue G90 restore log message", exc)
 
@@ -752,6 +782,17 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
             return False
         app._pending_settings_refresh = False
         _schedule_request_settings_dump(app)
+    if (
+        modal_sync_retry_ready(
+            app,
+            timeout_status="Modal-state sync timed out; retrying.",
+            timeout_log="[status] $G modal sync timed out; retry pending.",
+        )
+        and app._grbl_ready
+        and not app._alarm_locked
+    ):
+        if not (_stream_active_or_finishing(app) or app.grbl.is_streaming()):
+            _schedule_request_modal_state_sync(app)
     controls_allowed = bool(
         app.connected
         and app._grbl_ready

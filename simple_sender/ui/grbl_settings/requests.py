@@ -24,21 +24,45 @@ import time
 from tkinter import messagebox
 
 
+def _report_settings_refresh_failure(app, message: str) -> None:
+    text = str(message or "").strip() or "Settings refresh failed."
+    try:
+        app.status.config(text=text)
+    except Exception:
+        pass
+    try:
+        app.streaming_controller.log(f"[{time.strftime('%H:%M:%S')}] {text}")
+    except Exception:
+        pass
+
+
 def request_settings_dump(app):
     if not app.grbl.is_connected():
         messagebox.showwarning("Not connected", "Connect to GRBL first.")
         return
     stream_state = getattr(app, "_stream_state", None)
-    streaming_active = app.grbl.is_streaming() or stream_state in ("running", "paused")
+    streaming_active = (
+        app.grbl.is_streaming()
+        or stream_state in ("running", "paused")
+        or bool(getattr(app, "_stream_done_pending_idle", False))
+    )
     if streaming_active:
         app._pending_settings_refresh = True
         try:
-            app.status.config(text="Settings refresh queued (streaming active)")
+            if bool(getattr(app, "_stream_done_pending_idle", False)):
+                app.status.config(text="Settings refresh queued (job completion pending)")
+            else:
+                app.status.config(text="Settings refresh queued (streaming active)")
         except Exception:
             pass
         messagebox.showwarning(
             "Busy",
-            "Stop the stream before requesting settings. The refresh will run once streaming stops.",
+            (
+                "Wait for the current job to fully finish before requesting settings. "
+                "The refresh will run once streaming stops."
+                if bool(getattr(app, "_stream_done_pending_idle", False))
+                else "Stop the stream before requesting settings. The refresh will run once streaming stops."
+            ),
         )
         return
     if not app._grbl_ready:
@@ -47,10 +71,22 @@ def request_settings_dump(app):
         return
     if app._alarm_locked:
         messagebox.showwarning("Alarm", "Clear alarm before requesting settings.")
-        return
+        return False
+    accepted = True
+    try:
+        accepted = app._send_manual("$$", "settings")
+    except Exception:
+        accepted = False
+    if accepted is False:
+        app._pending_settings_refresh = False
+        _report_settings_refresh_failure(
+            app,
+            "Settings refresh failed: controller rejected $$ request.",
+        )
+        return False
     app._pending_settings_refresh = False
     app.streaming_controller.log(
         f"[{time.strftime('%H:%M:%S')}] Settings refresh requested ($$)."
     )
     app.settings_controller.start_capture("Requesting $$...")
-    app._send_manual("$$", "settings")
+    return True

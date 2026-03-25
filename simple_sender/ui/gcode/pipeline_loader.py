@@ -1608,18 +1608,27 @@ def _stream_from_disk(
 
 def load_gcode_from_path(app, path: str, module):
     deps = module
-    if app.grbl.is_streaming():
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         deps.messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_LOADING_NEW_GCODE,
         )
-        return
+        return None
     if not deps.os.path.isfile(path):
         deps.messagebox.showerror("Open G-code", "File not found.")
-        return
+        return None
     app.settings["last_gcode_dir"] = deps.os.path.dirname(path)
     app._gcode_load_token += 1
     token = app._gcode_load_token
+    if getattr(app, "_gcode_load_result_event", None) is None:
+        try:
+            app._gcode_load_result_event = deps.threading.Event()
+        except Exception:
+            app._gcode_load_result_event = None
+    app._gcode_load_last_result_token = -1
+    app._gcode_load_last_result_success = None
+    app._gcode_load_last_result_error = ""
+    app._gcode_load_last_result_path = ""
     app._gcode_loading = True
     try:
         app._gcode_load_started_at = deps.time.perf_counter()
@@ -1670,3 +1679,4 @@ def load_gcode_from_path(app, path: str, module):
             app.ui_q.put(("gcode_load_error", token, path, str(exc)))
 
     deps.threading.Thread(target=worker, daemon=True).start()
+    return token

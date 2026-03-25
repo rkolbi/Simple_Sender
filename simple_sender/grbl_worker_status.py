@@ -66,6 +66,27 @@ def _annotate_alarm(message: str) -> str:
 
 
 class GrblWorkerStatusMixin(GrblWorkerState):
+    def _resolve_modal_query_tracker(self, line: str) -> None:
+        if not str(line or "").startswith("[GC:"):
+            return
+        tracker = None
+        with self._stream_lock:
+            if self._stream_line_queue:
+                queued_item = self._stream_line_queue[0]
+                if not bool(getattr(queued_item, "is_gcode", False)):
+                    command = str(getattr(queued_item, "line", "") or "").strip().upper()
+                    if command == "$G":
+                        tracker = getattr(queued_item, "manual_tracker", None)
+        if tracker is None:
+            return
+        self._resolve_manual_tracker(tracker, success=True)
+        wake_evt = getattr(self, "_tx_activity_evt", None)
+        if wake_evt is not None:
+            try:
+                wake_evt.set()
+            except Exception as exc:
+                _log_suppressed("Failed signaling TX activity after modal-query response", exc)
+
     def _manual_motion_status_active(
         self,
         *,
@@ -558,6 +579,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         self._log_rx_line(line)
         if self._settings_dump_active and line.startswith("$") and "=" in line:
             self._settings_dump_seen = True
+        self._resolve_modal_query_tracker(line)
         if line_lower == "ok":
             ok_summary = self._note_ok_log(now)
             if ok_summary:
@@ -605,6 +627,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             err_idx = None
             err_line = None
             err_source = None
+            manual_tracker = None
 
             with self._stream_lock:
                 if self._stream_line_queue:
@@ -615,6 +638,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         self._record_ack_latency(max(0.0, (now - queued_ts) * 1000.0))
                     if line_lower.startswith("error"):
                         err_source = getattr(queued_item, "manual_source", None)
+                    manual_tracker = getattr(queued_item, "manual_tracker", None)
                     
                     if queued_item.is_gcode and self._streaming:
                         self._ack_index += 1
@@ -638,6 +662,15 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             err_line = queued_item.line
             
             self._emit_buffer_fill()
+            if manual_tracker is not None:
+                if line_lower.startswith("error"):
+                    self._resolve_manual_tracker(
+                        manual_tracker,
+                        success=False,
+                        error=line,
+                    )
+                else:
+                    self._resolve_manual_tracker(manual_tracker, success=True)
             wake_evt = getattr(self, "_tx_activity_evt", None)
             if wake_evt is not None:
                 try:

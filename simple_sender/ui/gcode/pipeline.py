@@ -170,7 +170,7 @@ def _restore_macro_state(app, snapshot: dict[str, object] | None) -> None:
 
 
 def load_gcode_from_path(app, path: str):
-    _load_gcode_from_path(app, path, module=sys.modules[__name__])
+    return _load_gcode_from_path(app, path, module=sys.modules[__name__])
 
 
 def apply_loaded_gcode(
@@ -287,7 +287,7 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
 
 
 def clear_gcode(app):
-    if app.grbl.is_streaming():
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         messagebox.showwarning(
             DialogTitles.BUSY,
             BusyMessages.STOP_STREAM_BEFORE_CLEARING_GCODE,

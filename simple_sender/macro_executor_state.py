@@ -150,3 +150,85 @@ class MacroStateMixin(MacroExecutorState):
                 except Exception:
                     pass
             time.sleep(max(0.0, min(wait_s, 0.1)))
+
+    def _wait_for_grbl_ready_state(self, timeout_s: float = 10.0) -> bool:
+        start = time.monotonic()
+        cancel_event = getattr(self, "_alarm_event", None)
+        conn_evt = getattr(self.app, "_connection_state_event", None)
+        status_evt = getattr(self.app, "_status_update_event", None)
+        while True:
+            if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
+                return False
+            if getattr(self.app, "_closing", False):
+                return False
+            if bool(getattr(self.app, "connected", False)) and bool(
+                getattr(self.app, "_grbl_ready", False)
+            ):
+                return True
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
+                return False
+            wait_s = 0.5
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            signaled = False
+            for evt in (status_evt, conn_evt):
+                if not isinstance(evt, threading.Event):
+                    continue
+                try:
+                    signaled = bool(evt.wait(wait_s))
+                except Exception:
+                    signaled = False
+                if signaled:
+                    try:
+                        evt.clear()
+                    except Exception:
+                        pass
+                    break
+            if not signaled:
+                time.sleep(max(0.0, min(wait_s, 0.1)))
+
+    def _wait_for_gcode_load_result(self, token: int, timeout_s: float = 120.0) -> bool:
+        start = time.monotonic()
+        cancel_event = getattr(self, "_alarm_event", None)
+        result_evt = getattr(self.app, "_gcode_load_result_event", None)
+        while True:
+            if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
+                return False
+            if getattr(self.app, "_closing", False):
+                return False
+            try:
+                result_token = int(
+                    getattr(self.app, "_gcode_load_last_result_token", -1) or -1
+                )
+            except Exception:
+                result_token = -1
+            result_success = getattr(self.app, "_gcode_load_last_result_success", None)
+            if result_token == int(token) and result_success is not None:
+                return bool(result_success)
+            try:
+                active_token = int(getattr(self.app, "_gcode_load_token", 0) or 0)
+            except Exception:
+                active_token = 0
+            if active_token > int(token) and not bool(
+                getattr(self.app, "_gcode_loading", False)
+            ):
+                return False
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
+                return False
+            wait_s = 0.5
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            if isinstance(result_evt, threading.Event):
+                try:
+                    signaled = bool(result_evt.wait(wait_s))
+                except Exception:
+                    signaled = False
+                if signaled:
+                    try:
+                        result_evt.clear()
+                    except Exception:
+                        pass
+                    continue
+            time.sleep(max(0.0, min(wait_s, 0.1)))

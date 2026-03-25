@@ -118,6 +118,8 @@ def update_stats_summary(height_map: HeightMap | None, stats_var: tk.StringVar) 
 def probe_connection_state(app) -> tuple[bool, str]:
     if not getattr(app, "connected", False):
         return False, "Connect to enable probing."
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return False, "Wait for the previous job to fully finish before probing."
     grbl = getattr(app, "grbl", None)
     if grbl is not None:
         try:

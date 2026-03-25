@@ -409,7 +409,6 @@ def _apply_complete_ui(app: Any, run_id: int, result: _ValidationScanResult) -> 
 
     app._overdrive_validation_running = False
     app._overdrive_validation_cancel_event = None
-    app._overdrive_validation_worker = None
 
     bar = getattr(app, "overdrive_validation_progress_bar", None)
     if bar is not None:

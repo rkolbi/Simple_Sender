@@ -19,6 +19,7 @@ class JobStartResult:
     """Result returned by the bounded job-start service."""
 
     outcome: JobStartOutcome
+    detail: str | None = None
 
     @property
     def started(self) -> bool:
@@ -28,6 +29,8 @@ class JobStartResult:
 class JobStopOutcome(Enum):
     """Explicit outcomes for the bounded job-stop workflow."""
 
+    NOTHING_ACTIVE = "nothing_active"
+    STOP_FAILED = "stop_failed"
     STOPPED = "stopped"
 
 
@@ -36,6 +39,7 @@ class JobStopResult:
     """Result returned by the bounded job-stop service."""
 
     outcome: JobStopOutcome
+    detail: str | None = None
 
     @property
     def stopped(self) -> bool:
@@ -68,17 +72,35 @@ class JobService:
             return JobStartResult(JobStartOutcome.SETUP_CONFIRMATION_REQUIRED)
         self._reset_accessory_router_state(app)
         self._apply_stream_start_settings(app)
-        self._reset_stream_progress_state(app)
         app.grbl.start_stream()
         started = self._stream_started(app)
         if not started:
-            return JobStartResult(JobStartOutcome.START_FAILED)
+            return JobStartResult(
+                JobStartOutcome.START_FAILED,
+                detail=self._build_start_failure_detail(app),
+            )
+        self._reset_stream_progress_state(app)
         self._apply_post_start_bookkeeping(app)
         return JobStartResult(JobStartOutcome.STARTED)
 
     def stop_job(self, app: Any) -> JobStopResult:
+        if not self._job_has_real_active_or_finishing_state(app):
+            return JobStopResult(
+                JobStopOutcome.NOTHING_ACTIVE,
+                detail="No active job was running.",
+            )
+        stop_result = app.grbl.stop_stream()
+        if stop_result is False:
+            return JobStopResult(
+                JobStopOutcome.STOP_FAILED,
+                detail="GRBL did not accept the Stop Job request.",
+            )
+        if self._job_has_real_active_or_finishing_state(app):
+            return JobStopResult(
+                JobStopOutcome.STOP_FAILED,
+                detail="GRBL did not leave its active job state after Stop Job.",
+            )
         self._stop_job_accessories(app)
-        app.grbl.stop_stream()
         self._invalidate_job_setup_state(app)
         return JobStopResult(JobStopOutcome.STOPPED)
 
@@ -100,7 +122,6 @@ class JobService:
 
     def _apply_stream_start_settings(self, app: Any) -> None:
         app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
-        app._reset_gcode_view_for_run()
 
     def _reset_stream_progress_state(self, app: Any) -> None:
         try:
@@ -130,7 +151,18 @@ class JobService:
             self._log_suppressed("Failed checking GRBL streaming state after Run", exc)
         return started
 
+    def _build_start_failure_detail(self, app: Any) -> str:
+        try:
+            if not bool(app.grbl.is_connected()):
+                return "GRBL disconnected before the job could start."
+        except Exception as exc:
+            self._log_suppressed("Failed checking GRBL connection state after Run", exc)
+        if not bool(getattr(app, "_grbl_ready", True)):
+            return "GRBL is no longer ready to stream."
+        return "GRBL did not enter streaming state after the Run command."
+
     def _apply_post_start_bookkeeping(self, app: Any) -> None:
+        app._reset_gcode_view_for_run()
         app._job_started_at = self._now_factory()
         app._job_completion_notified = False
         try:
@@ -145,3 +177,13 @@ class JobService:
                 app._stop_job_accessories("job_stop")
         except Exception as exc:
             self._log_suppressed("Failed stopping Kasa job accessories on Stop/Reset", exc)
+
+    def _job_has_real_active_or_finishing_state(self, app: Any) -> bool:
+        try:
+            if bool(app.grbl.is_streaming()):
+                return True
+        except Exception as exc:
+            self._log_suppressed("Failed checking GRBL streaming state for Stop Job", exc)
+        if bool(getattr(app, "_stream_done_pending_idle", False)):
+            return True
+        return False

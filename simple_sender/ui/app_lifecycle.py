@@ -98,6 +98,31 @@ def tk_report_callback_exception(app, exc, val, tb):
 
 
 def on_close(app):
+    save_context = "Failed saving settings during shutdown"
+    while True:
+        try:
+            app._save_settings()
+            break
+        except Exception as exc:
+            _report_shutdown_failure(app, save_context, exc)
+            try:
+                choice = messagebox.askyesnocancel(
+                    "Settings Save Failed",
+                    (
+                        "Settings could not be saved before closing.\n\n"
+                        f"{exc}\n\n"
+                        "Yes: Exit without saving\n"
+                        "No: Retry save\n"
+                        "Cancel: Keep the application open"
+                    ),
+                )
+            except Exception as prompt_exc:
+                _log_suppressed("Failed showing shutdown settings-save warning dialog", prompt_exc)
+                choice = True
+            if choice is True:
+                break
+            if choice is None:
+                return
     app._closing = True
     for event_name in ("_connection_state_event", "_status_update_event", "_modal_update_event"):
         evt = getattr(app, event_name, None)
@@ -127,10 +152,6 @@ def on_close(app):
             accessory_router.shutdown(timeout=1.0)
         except Exception as exc:
             _log_suppressed("Failed shutting down accessory router during app close", exc)
-    try:
-        app._save_settings()
-    except Exception as exc:
-        _report_shutdown_failure(app, "Failed saving settings during shutdown", exc)
     try:
         disconnect_fn = getattr(app.grbl, "disconnect")
         try:

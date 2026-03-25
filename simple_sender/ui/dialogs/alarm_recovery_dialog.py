@@ -81,9 +81,16 @@ def show_alarm_recovery(app) -> None:
         if not app._require_grbl_connection():
             return
         try:
-            action()
+            accepted = action()
         except Exception:
             logger.exception("Alarm recovery action %r failed", action_label)
+            return
+        if accepted is False:
+            messagebox.showwarning(
+                "Alarm recovery",
+                f"{action_label} did not start. The alarm is still active.",
+            )
+            return
         try:
             dlg.destroy()
         except Exception:
@@ -92,14 +99,17 @@ def show_alarm_recovery(app) -> None:
                 action_label,
             )
 
-    def _reset_with_accessories_off() -> None:
+    def _reset_with_accessories_off() -> bool:
         try:
             if hasattr(app, "_stop_job_accessories"):
                 app._stop_job_accessories("job_reset")
         except Exception:
             logger.exception("Failed stopping job accessories before alarm reset")
-        app.grbl.reset()
+        accepted = bool(app.grbl.reset())
+        if not accepted:
+            return False
         invalidate_job_setup_state(app)
+        return True
 
     ttk.Button(
         btn_row,

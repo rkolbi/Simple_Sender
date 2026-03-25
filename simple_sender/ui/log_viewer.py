@@ -26,6 +26,7 @@ import logging
 import re
 import threading
 import time
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.utils.atomic_files import atomic_replace_path
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.logging_config import get_log_dir
 
@@ -497,8 +499,17 @@ class LogViewer(ttk.Frame):
             error: Exception | None = None
             written_files = 0
             failed_files: list[tuple[str, str]] = []
+            temp_path: Path | None = None
             try:
-                with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=str(out_path.parent),
+                    prefix=f"{out_path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
+                with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                     for log_path in log_files:
                         try:
                             archive.write(log_path, arcname=log_path.name)
@@ -506,9 +517,17 @@ class LogViewer(ttk.Frame):
                         except Exception as exc:
                             failed_files.append((log_path.name, str(exc)))
                             _log_suppressed("Failed adding log file to export archive", exc)
+                assert temp_path is not None
+                atomic_replace_path(temp_path, out_path)
             except Exception as exc:
                 error = exc
                 _log_suppressed(f"Failed exporting logs archive to {out_path}", exc)
+            finally:
+                if temp_path is not None and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             self._post_ui(
                 lambda: self._complete_export(

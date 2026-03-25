@@ -212,7 +212,7 @@ def _deep_merge_defaults(
 
 
 def _repair_invalid_settings(
-    merged: Dict[str, Any], defaults: Dict[str, Any]
+    merged: Dict[str, Any], defaults: Dict[str, Any], *, repaired_keys_out: list[str] | None = None
 ) -> Dict[str, Any]:
     """Repair known invalid values to defaults so load can continue safely."""
     repaired = copy.deepcopy(merged)
@@ -249,6 +249,8 @@ def _repair_invalid_settings(
         repaired_keys.append("touch_scroll_mode")
 
     if repaired_keys:
+        if repaired_keys_out is not None:
+            repaired_keys_out.extend(sorted(set(repaired_keys)))
         logger.warning(
             "Repaired invalid settings value(s): %s",
             ", ".join(sorted(set(repaired_keys))),
@@ -340,6 +342,8 @@ class Settings:
         """
         self.filepath = filepath or get_settings_path()
         self.data: Dict[str, Any] = self._get_defaults()
+        self.last_load_repaired_keys: list[str] = []
+        self.last_import_repaired_keys: list[str] = []
         logger.info("Settings file: %s", self.filepath)
 
     def _get_defaults(self) -> Dict[str, Any]:
@@ -361,6 +365,7 @@ class Settings:
         """
         if not os.path.exists(self.filepath):
             logger.info("No settings file found, using defaults")
+            self.last_load_repaired_keys = []
             return False
 
         try:
@@ -372,7 +377,13 @@ class Settings:
             # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
             merged = _deep_merge_defaults(defaults, loaded_data)
-            self.data = _repair_invalid_settings(merged, defaults)
+            repaired_keys: list[str] = []
+            self.data = _repair_invalid_settings(
+                merged,
+                defaults,
+                repaired_keys_out=repaired_keys,
+            )
+            self.last_load_repaired_keys = repaired_keys
             self.validate()
 
             logger.info("Settings loaded successfully")
@@ -414,27 +425,9 @@ class Settings:
             SettingsSaveError: If save fails
         """
         filepath = Path(self.filepath)
-        temp_path: Path | None = None
         backup_path = Path(str(filepath) + SETTINGS_BACKUP_SUFFIX)
 
         try:
-            # Ensure directory exists
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write to a unique temporary file first to avoid multi-instance collisions.
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=str(filepath.parent),
-                prefix=f"{filepath.name}.",
-                suffix=SETTINGS_TEMP_SUFFIX,
-                delete=False,
-            ) as temp_file:
-                temp_path = Path(temp_file.name)
-                json.dump(self.data, temp_file, indent=2, sort_keys=True)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-
             # Create backup of existing file
             if filepath.exists():
                 try:
@@ -445,23 +438,7 @@ class Settings:
                         backup_path,
                         e,
                     )
-
-            # Atomic rename
-            assert temp_path is not None
-            temp_path.replace(filepath)
-            if os.name != "nt":
-                try:
-                    dir_fd = os.open(str(filepath.parent), os.O_RDONLY)
-                    try:
-                        os.fsync(dir_fd)
-                    finally:
-                        os.close(dir_fd)
-                except Exception as fsync_exc:
-                    logger.debug(
-                        "Directory fsync skipped/failed for settings save: %s",
-                        fsync_exc,
-                        exc_info=fsync_exc,
-                    )
+            self._write_json_atomically(filepath, self.data)
 
             logger.info("Settings saved successfully")
 
@@ -486,8 +463,38 @@ class Settings:
             logger.error("Unexpected error saving settings to %s: %s", filepath, e)
             raise SettingsSaveError(f"Unexpected error: {e}")
 
+    def _write_json_atomically(self, filepath: Path, payload: Dict[str, Any]) -> None:
+        temp_path: Path | None = None
+        try:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(filepath.parent),
+                prefix=f"{filepath.name}.",
+                suffix=SETTINGS_TEMP_SUFFIX,
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                json.dump(payload, temp_file, indent=2, sort_keys=True)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            assert temp_path is not None
+            temp_path.replace(filepath)
+            if os.name != "nt":
+                try:
+                    dir_fd = os.open(str(filepath.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except Exception as fsync_exc:
+                    logger.debug(
+                        "Directory fsync skipped/failed for settings save: %s",
+                        fsync_exc,
+                        exc_info=fsync_exc,
+                    )
         finally:
-            # Clean up temp file
             if temp_path is not None and temp_path.exists():
                 try:
                     temp_path.unlink()
@@ -626,13 +633,14 @@ class Settings:
             SettingsSaveError: If export fails
         """
         try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=2, sort_keys=True)
+            self._write_json_atomically(Path(filepath), self.data)
             logger.info("Settings exported to %s", filepath)
         except IOError as e:
             raise SettingsSaveError(f"Failed to export: {e}")
+        except Exception as e:
+            raise SettingsSaveError(f"Unexpected export error: {e}")
 
-    def import_from_file(self, filepath: str) -> None:
+    def import_from_file(self, filepath: str) -> list[str]:
         """Import settings from a file.
 
         Args:
@@ -641,6 +649,7 @@ class Settings:
         Raises:
             SettingsLoadError: If import fails
         """
+        self.last_import_repaired_keys = []
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 imported_data = json.load(f)
@@ -650,10 +659,17 @@ class Settings:
             # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
             merged = _deep_merge_defaults(defaults, imported_data)
-            self.data = _repair_invalid_settings(merged, defaults)
+            repaired_keys: list[str] = []
+            self.data = _repair_invalid_settings(
+                merged,
+                defaults,
+                repaired_keys_out=repaired_keys,
+            )
+            self.last_import_repaired_keys = repaired_keys
             self.validate()
 
             logger.info("Settings imported from %s", filepath)
+            return list(repaired_keys)
 
         except SettingsValidationError as e:
             raise SettingsLoadError(f"Invalid settings: {e}")

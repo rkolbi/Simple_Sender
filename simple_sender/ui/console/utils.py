@@ -26,6 +26,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.utils.atomic_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,13 @@ def send_console(app):
     s = app.cmd_entry.get().strip()
     if not s:
         return
+    accepted = True
     if s == "$$" and hasattr(app, "_request_settings_dump"):
-        app._request_settings_dump()
+        accepted = bool(app._request_settings_dump())
     else:
-        app._send_manual(s, "console")
-    app.cmd_entry.delete(0, "end")
+        accepted = bool(app._send_manual(s, "console"))
+    if accepted:
+        app.cmd_entry.delete(0, "end")
 
 def clear_console_log(app):
     if not messagebox.askyesno("Clear console", "Clear the console log?"):
@@ -83,7 +86,6 @@ def save_console_log(app):
     ]
     data = "\n".join(data_lines)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data)
+        atomic_write_text(path, data, encoding="utf-8")
     except Exception as e:
         messagebox.showerror("Save failed", str(e))
