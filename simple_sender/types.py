@@ -133,7 +133,9 @@ class ManualCommandResultTracker:
         self._event.set()
 
     def wait(self, timeout_s: float = 0.0) -> bool:
-        timeout = max(0.0, float(timeout_s))
+        timeout = float(timeout_s)
+        if timeout <= 0.0:
+            return bool(self._event.wait())
         return bool(self._event.wait(timeout))
 
 
