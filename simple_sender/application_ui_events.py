@@ -219,6 +219,14 @@ class UiEventsMixin:
             except Exception as exc:
                 _log_suppressed("Failed canceling macro-status scroll timer", exc)
         app._macro_status_after_id = None
+        cached_state = str(getattr(app, "_machine_state_text", "") or "")
+        stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+        stream_busy = stream_state in {"running", "paused"} or bool(
+            getattr(app, "_stream_done_pending_idle", False)
+        )
+        if (not stream_busy) and cached_state.strip().lower().startswith("run"):
+            self._clear_manual_control_transient_states()
+            return
         app.machine_state.set(app._machine_state_text)
         try:
             app._ensure_state_label_width(app._machine_state_text)

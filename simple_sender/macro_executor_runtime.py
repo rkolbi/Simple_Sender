@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+import types
 from tkinter import messagebox
 
 from simple_sender.utils.constants import (
@@ -214,6 +215,18 @@ class MacroRunnerMixin(MacroExecutorState):
                 self._macro_local_vars = {"app": self.app, "os": os}
                 self._macro_vars["app"] = self.app
                 self._macro_vars["os"] = os
+                self._macro_vars["prompt_choice"] = ""
+                self._macro_vars["prompt_choice_key"] = None
+                self._macro_vars["prompt_choice_label"] = ""
+                self._macro_vars["prompt_index"] = -1
+                self._macro_vars["prompt_cancelled"] = False
+                macro_ns = self._macro_vars.get("macro")
+                if isinstance(macro_ns, types.SimpleNamespace):
+                    setattr(macro_ns, "prompt_choice", "")
+                    setattr(macro_ns, "prompt_choice_key", None)
+                    setattr(macro_ns, "prompt_choice_label", "")
+                    setattr(macro_ns, "prompt_index", -1)
+                    setattr(macro_ns, "prompt_cancelled", False)
             self._macro_state_restored = False
             self._macro_saved_state = None
             with self._macro_vars_lock:

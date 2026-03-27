@@ -33,6 +33,7 @@ from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
 from simple_sender.ui.modal_sync import request_modal_state_sync
+from simple_sender.ui.theme_helpers import apply_toggle_indicator_style
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -251,6 +252,10 @@ def apply_ui_scale(app, value: float | None = None) -> float:
         app.update_idletasks()
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed updating idle tasks after UI scale change", exc)
+    try:
+        apply_toggle_indicator_style(app)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed refreshing toggle indicator style after UI scale change", exc)
     return scale
 
 
@@ -423,7 +428,10 @@ def _pulse_command_widget(widget) -> None:
         if callable(state):
             def _clear_state_pulse() -> None:
                 try:
-                    state(["!pressed", "!selected", "!active"])
+                    # Preserve the widget's real toggle state. Clearing "selected"
+                    # here makes ttk checkbuttons/radiobuttons lie about their
+                    # bound variable value after a click.
+                    state(["!pressed", "!active"])
                 except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
                     _log_suppressed("Failed clearing pressed-state pulse for touch feedback", exc)
 
