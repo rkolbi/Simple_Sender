@@ -5,6 +5,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+- No unreleased changes yet.
+
+## [2.7.1] - 2026-03-27
+
 ### Added
 - Auto-Level dialog `Test Probe` action:
   - runs a single-point probe at the current XY using the active probe settings
@@ -110,10 +114,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - realtime control actions only acknowledge accepted sends
   - backup-bundle import validates settings, warns about repairs/collisions, and completes the async success path visibly
   - deferred-completion busy protection now covers macro start, probing, and settings refresh
-  - the local release-gate baseline now reflects the latest `run_tests.bat` run (`1418 passed, 2 skipped`)
+  - the local release-gate baseline now reflects the latest `run_tests.bat` run (`1433 passed, 3 skipped`)
 - README now documents the stabilization baseline, the preflight service/facade boundary (`preflight_service.py` behind `diagnostics_preflight.py`), and expanded operator troubleshooting for preflight outcomes.
 - README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
-- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-25; coverage test stage reported `1418 passed, 2 skipped`).
+- README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-27; coverage test stage reported `1433 passed, 3 skipped`).
 - README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
 - `tools/profile_performance.py` now includes `--mode unified-load` with optional `--source-scan` timing for source iteration and indexed access costs.
@@ -145,8 +149,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
 - Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
-### Baseline Validation (local, 2026-03-25)
-- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1418 passed, 2 skipped`)
+### Baseline Validation (local, 2026-03-27)
+- `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1433 passed, 3 skipped`)
 - `.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 142`: PASS
 - `.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: PASS (`142` source files)
 

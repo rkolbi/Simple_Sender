@@ -38,6 +38,7 @@ from simple_sender.ui.pi_profile import (
     PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS as _PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS,
     apply_pi_profile,
 )
+from simple_sender.utils.exceptions import SettingsSaveError
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 
@@ -951,6 +952,7 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
                 AttributeError,
                 OSError,
                 RuntimeError,
+                SettingsSaveError,
                 TypeError,
                 ValueError,
                 tk.TclError,

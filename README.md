@@ -86,7 +86,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - **Experimental features:** **Auto-Level (Experimental)**, **Recover (Experimental)**, and **Resume From... (Experimental)** are optional UI features controlled in **App Settings > Experimental**.
 
 ## Project Status
-The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the pre-release candidate intended for operational machine checks, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
+The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the release-ready stable build for day-to-day machine use, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
 
 ## Requirements & Installation
 - Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
@@ -919,7 +919,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 25, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1418 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 27, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1433 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell

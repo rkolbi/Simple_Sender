@@ -709,6 +709,8 @@ def save_settings(app):
         label="GRBL popup dedupe",
     )
 
+    previous_settings = getattr(app, "settings", None)
+    previous_store_data = getattr(getattr(app, "_settings_store", None), "data", None)
     data = dict(app.settings) if isinstance(app.settings, dict) else {}
     last_port = ""
     try:
@@ -763,6 +765,12 @@ def save_settings(app):
             file_mtime if file_mtime is not None else "n/a",
         )
     except SettingsSaveError as exc:
+        app.settings = previous_settings if isinstance(previous_settings, dict) else {}
+        app._settings_store.data = (
+            previous_store_data
+            if isinstance(previous_store_data, dict)
+            else app.settings
+        )
         try:
             app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
             app.status.config(text="Settings save failed")
@@ -770,12 +778,21 @@ def save_settings(app):
             _log_suppressed(
                 "Failed reporting SettingsSaveError to UI queue/status", log_exc
             )
+        raise
     except Exception as exc:
+        app.settings = previous_settings if isinstance(previous_settings, dict) else {}
+        app._settings_store.data = (
+            previous_store_data
+            if isinstance(previous_store_data, dict)
+            else app.settings
+        )
+        wrapped_exc = SettingsSaveError(str(exc) or "Unexpected settings save error")
         try:
-            app.ui_q.put(("log", f"[settings] Save failed: {exc}"))
+            app.ui_q.put(("log", f"[settings] Save failed: {wrapped_exc}"))
             app.status.config(text="Settings save failed")
         except Exception as log_exc:
             _log_suppressed(
                 "Failed reporting unexpected settings-save error to UI queue/status",
                 log_exc,
             )
+        raise wrapped_exc from exc
