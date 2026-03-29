@@ -29,7 +29,13 @@ from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
-from simple_sender.services.job_service import JobService, JobStartOutcome, JobStopOutcome
+from simple_sender.services.job_service import (
+    DryRunStartDecision,
+    JobService,
+    JobStartOutcome,
+    JobStopOutcome,
+)
+from simple_sender.ui.dry_run_start_prompt import confirm_dry_run_start_mode
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import (
@@ -91,7 +97,26 @@ def _job_service() -> JobService:
         has_valid_job_setup_state=has_valid_job_setup_state,
         invalidate_job_setup_state=invalidate_job_setup_state,
         log_suppressed=_log_suppressed,
+        confirm_dry_run_start=_confirm_dry_run_start,
+        set_dry_run_enabled=_set_dry_run_enabled,
     )
+
+
+def _confirm_dry_run_start(app: Any) -> DryRunStartDecision:
+    if getattr(app, "tk", None) is None:
+        return DryRunStartDecision.CONTINUE_DRY_RUN
+    decision = confirm_dry_run_start_mode(app, messagebox_module=messagebox)
+    if isinstance(decision, DryRunStartDecision):
+        return decision
+    return DryRunStartDecision.CANCEL
+
+
+def _set_dry_run_enabled(app: Any, enabled: bool) -> None:
+    dry_run_enabled = bool(enabled)
+    app.dry_run_sanitize_stream.set(dry_run_enabled)
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        settings["dry_run_sanitize_stream"] = dry_run_enabled
 
 
 def _report_operator_message(
@@ -443,6 +468,14 @@ def run_job(app):
         if not _run_preflight(app):
             return
         result = _job_service().start_job(app, allow_start_without_setup=True)
+    if result.outcome is JobStartOutcome.CANCELED:
+        message = result.detail or "Run canceled before job start."
+        _report_operator_message(
+            app,
+            status_text=message,
+            log_text=f"[run] {message}",
+        )
+        return
     if result.outcome is JobStartOutcome.START_FAILED:
         _report_start_failure(app, result.detail)
         return

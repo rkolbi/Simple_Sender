@@ -72,7 +72,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in a dedicated File Info tab.
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
-- Resume From... (**Experimental**) dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present).
+- Resume From... (**Experimental**) dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present), including the same Dry Run confirmation safeguard policy used by Run.
 - Run safety gate for Job Setup: Run checks the current tool-reference offset state and warns with **Job Setup Not Completed** when setup is invalid.
 - Tooltips for every control; disabled buttons explain why (streaming, disconnected, alarm).
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
@@ -270,7 +270,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Check the Live G-code window plus the job dimensions/estimate block for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
-   - Use **Resume From... (Experimental)** to start at a specific line with modal re-sync if you need to continue a job.
+   - Use **Resume From... (Experimental)** to start at a specific line with modal re-sync if you need to continue a job. When Dry Run is enabled, Resume now prompts before any resume-side effects are applied.
 5) **App safety options**
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
    - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
@@ -283,7 +283,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
    - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
 7) **Start and monitor**
-   - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**.
+   - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
    - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight and deep validation tools from App Settings/Overdrive when you want extra review before cutting.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. Optional deep validation is now manual via **Overdrive -> Validate Loaded Job** (quick or strict), so Start/Run never blocks on a pre-run validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
@@ -302,7 +302,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 2) Wait for GRBL banner + first status (Ready/Idle).
 3) Read Job file; optional Clear Job to unload.
 4) Run **Macro-3 (Job Setup)** and verify the tool reference label is populated.
-5) Run (Training Wheels may confirm). If setup state is missing/invalid, either rerun Job Setup or choose Start Anyway intentionally.
+5) Run (Training Wheels may confirm). If setup state is missing/invalid, either rerun Job Setup or choose Start Anyway intentionally. If Dry Run is enabled, choose run mode explicitly from the pre-start Dry Run prompt.
 6) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
@@ -378,6 +378,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 - **Job Setup run gate:** Run checks the same `macro.state.TOOL_REFERENCE` value used by the Tool Ref display. If the value is missing/blank/invalid (`None`, unknown text, NaN, etc.), it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
 - **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that actually reset assumptions (including accepted ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
+- **Dry Run confirmation guard:** When Dry Run is enabled, both Run and Resume paths require an explicit operator choice before stream start/resume side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
@@ -394,7 +395,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
-- **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line. Preview generation is debounced and computed on a background worker, and may briefly show `Modal re-sync: calculating...` while updating.
+- **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line. Preview generation is debounced and computed on a background worker, and may briefly show `Modal re-sync: calculating...` while updating. If Dry Run is enabled, Resume prompts before any resume-side effects and supports continue-in-dry-run, switch-to-normal-and-resume, or cancel.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; Live G-code window updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
@@ -919,7 +920,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 27, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1433 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Current local release-gate baseline (validated on March 28, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1455 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -1534,6 +1535,7 @@ Macro UI is included below along with the rest of the interface.
 - Sample text: read-only summary of modal re-sync; during recalculation it can show `Modal re-sync: calculating...`.
 - Warning text: warns if G92 offsets exist before the target line.
 - Start Resume: begins streaming from the selected line.
+- Dry Run prompt: when Dry Run is enabled, Resume requires an explicit choice before resuming (`Continue in Dry Run`, `Switch to Normal Run and Resume`, `Cancel`).
 - Cancel: closes without changes.
 
 ### Macro Sample Dialog

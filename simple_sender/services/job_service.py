@@ -9,9 +9,18 @@ from typing import Any, Callable
 class JobStartOutcome(Enum):
     """Explicit outcomes for the bounded job-start workflow."""
 
+    CANCELED = "canceled"
     SETUP_CONFIRMATION_REQUIRED = "setup_confirmation_required"
     START_FAILED = "start_failed"
     STARTED = "started"
+
+
+class DryRunStartDecision(Enum):
+    """Operator-selected Dry Run behavior at job start."""
+
+    CONTINUE_DRY_RUN = "continue_dry_run"
+    SWITCH_TO_NORMAL_RUN = "switch_to_normal_run"
+    CANCEL = "cancel"
 
 
 @dataclass(frozen=True)
@@ -55,11 +64,23 @@ class JobService:
         has_valid_job_setup_state: Callable[[Any], bool],
         invalidate_job_setup_state: Callable[[Any], None],
         log_suppressed: Callable[[str, BaseException], None],
+        confirm_dry_run_start: Callable[[Any], DryRunStartDecision] | None = None,
+        set_dry_run_enabled: Callable[[Any, bool], None] | None = None,
         now_factory: Callable[[], datetime] = datetime.now,
     ) -> None:
         self._has_valid_job_setup_state = has_valid_job_setup_state
         self._invalidate_job_setup_state = invalidate_job_setup_state
         self._log_suppressed = log_suppressed
+        self._confirm_dry_run_start = (
+            confirm_dry_run_start
+            if confirm_dry_run_start is not None
+            else self._default_confirm_dry_run_start
+        )
+        self._set_dry_run_enabled = (
+            set_dry_run_enabled
+            if set_dry_run_enabled is not None
+            else self._default_set_dry_run_enabled
+        )
         self._now_factory = now_factory
 
     def start_job(
@@ -70,6 +91,9 @@ class JobService:
     ) -> JobStartResult:
         if not allow_start_without_setup and not self._has_valid_job_setup_state(app):
             return JobStartResult(JobStartOutcome.SETUP_CONFIRMATION_REQUIRED)
+        dry_run_guard_result = self._resolve_dry_run_start_guard(app)
+        if dry_run_guard_result is not None:
+            return dry_run_guard_result
         self._reset_accessory_router_state(app)
         self._apply_stream_start_settings(app)
         app.grbl.start_stream()
@@ -122,6 +146,61 @@ class JobService:
 
     def _apply_stream_start_settings(self, app: Any) -> None:
         app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
+
+    def _resolve_dry_run_start_guard(self, app: Any) -> JobStartResult | None:
+        if not self._is_dry_run_enabled(app):
+            return None
+        try:
+            decision = self._confirm_dry_run_start(app)
+        except Exception as exc:
+            self._log_suppressed("Failed confirming Dry Run start mode", exc)
+            return JobStartResult(
+                JobStartOutcome.CANCELED,
+                detail="Dry Run confirmation could not be completed.",
+            )
+        if decision is DryRunStartDecision.CONTINUE_DRY_RUN:
+            return None
+        if decision is DryRunStartDecision.SWITCH_TO_NORMAL_RUN:
+            try:
+                self._set_dry_run_enabled(app, False)
+            except Exception as exc:
+                self._log_suppressed("Failed switching Dry Run setting before Run", exc)
+                return JobStartResult(
+                    JobStartOutcome.CANCELED,
+                    detail="Dry Run could not be switched off before Run.",
+                )
+            return None
+        return JobStartResult(
+            JobStartOutcome.CANCELED,
+            detail="Run canceled before job start.",
+        )
+
+    @staticmethod
+    def _is_dry_run_enabled(app: Any) -> bool:
+        dry_run_var = getattr(app, "dry_run_sanitize_stream", None)
+        getter = getattr(dry_run_var, "get", None)
+        if callable(getter):
+            return bool(getter())
+        return bool(dry_run_var)
+
+    @staticmethod
+    def _default_confirm_dry_run_start(_app: Any) -> DryRunStartDecision:
+        return DryRunStartDecision.CONTINUE_DRY_RUN
+
+    @staticmethod
+    def _default_set_dry_run_enabled(app: Any, enabled: bool) -> None:
+        dry_run_enabled = bool(enabled)
+        dry_run_var = getattr(app, "dry_run_sanitize_stream", None)
+        setter = getattr(dry_run_var, "set", None)
+        if callable(setter):
+            setter(dry_run_enabled)
+        settings = getattr(app, "settings", None)
+        if isinstance(settings, dict):
+            settings["dry_run_sanitize_stream"] = dry_run_enabled
+        grbl = getattr(app, "grbl", None)
+        runtime_setter = getattr(grbl, "set_dry_run_sanitize", None)
+        if callable(runtime_setter):
+            runtime_setter(dry_run_enabled)
 
     def _reset_stream_progress_state(self, app: Any) -> None:
         try:

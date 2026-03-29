@@ -30,7 +30,9 @@ from tkinter import messagebox
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
+from simple_sender.services.job_service import DryRunStartDecision
 from simple_sender.types import LineSource
+from simple_sender.ui.dry_run_start_prompt import confirm_dry_run_start_mode
 from simple_sender.ui.preflight_gate import run_preflight_gate
 
 logger = logging.getLogger(__name__)
@@ -299,6 +301,56 @@ def _report_resume_failure(app, message: str) -> None:
     messagebox.showwarning("Resume failed", message)
 
 
+def _report_resume_message(app, message: str) -> None:
+    try:
+        app.status.config(text=message)
+    except Exception as exc:
+        _log_suppressed("Failed updating status text for Resume From message", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is None:
+        return
+    try:
+        ui_q.put(("log", f"[resume] {message}"))
+    except Exception as exc:
+        _log_suppressed("Failed queueing Resume From message", exc)
+
+
+def _is_dry_run_enabled(app) -> bool:
+    dry_run_var = getattr(app, "dry_run_sanitize_stream", None)
+    getter = getattr(dry_run_var, "get", None)
+    if callable(getter):
+        return bool(getter())
+    return bool(dry_run_var)
+
+
+def _set_dry_run_enabled(app, enabled: bool) -> None:
+    dry_run_enabled = bool(enabled)
+    dry_run_var = getattr(app, "dry_run_sanitize_stream", None)
+    setter = getattr(dry_run_var, "set", None)
+    if callable(setter):
+        setter(dry_run_enabled)
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        settings["dry_run_sanitize_stream"] = dry_run_enabled
+    grbl = getattr(app, "grbl", None)
+    runtime_setter = getattr(grbl, "set_dry_run_sanitize", None)
+    if callable(runtime_setter):
+        runtime_setter(dry_run_enabled)
+
+
+def _confirm_dry_run_resume_start(app) -> DryRunStartDecision:
+    if getattr(app, "tk", None) is None:
+        return DryRunStartDecision.CONTINUE_DRY_RUN
+    decision = confirm_dry_run_start_mode(
+        app,
+        normal_run_action="Resume",
+        messagebox_module=messagebox,
+    )
+    if isinstance(decision, DryRunStartDecision):
+        return decision
+    return DryRunStartDecision.CANCEL
+
+
 def resume_from_line(app, start_index: int, preamble: list[str]):
     """Restart streaming from a specific line after UI-side safety checks."""
 
@@ -329,6 +381,23 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
         return
     if not run_preflight_gate(app, action_label="Resume", messagebox_module=messagebox):
         return
+    if _is_dry_run_enabled(app):
+        try:
+            decision = _confirm_dry_run_resume_start(app)
+        except Exception as exc:
+            _log_suppressed("Failed confirming Dry Run mode before Resume From", exc)
+            _report_resume_message(app, "Resume canceled before streaming start.")
+            return
+        if decision is DryRunStartDecision.CANCEL:
+            _report_resume_message(app, "Resume canceled before streaming start.")
+            return
+        if decision is DryRunStartDecision.SWITCH_TO_NORMAL_RUN:
+            try:
+                _set_dry_run_enabled(app, False)
+            except Exception as exc:
+                _log_suppressed("Failed switching Dry Run off before Resume From", exc)
+                _report_resume_failure(app, "Dry Run could not be switched off before Resume From.")
+                return
     prior_kasa_stream_line_index = getattr(app, "_kasa_last_stream_line_index", None)
     try:
         app._kasa_last_stream_line_index = int(start_index) - 1

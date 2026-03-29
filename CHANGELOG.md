@@ -5,7 +5,18 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
-- No unreleased changes yet.
+### Changed
+- Dry Run safeguard policy now applies consistently to resume flows:
+  - `Resume From...` now uses the same explicit Dry Run decision model as Run when Dry Run is enabled
+  - reconnect-resume routes through the same guarded resume path, so recovery resumes cannot bypass the Dry Run decision
+  - canceling the Dry Run resume prompt now leaves resume state truthful and pre-resume side effects unapplied
+- Dry Run confirmation dialog now supports action-specific wording for normal-mode continuation:
+  - Run continues to use `Switch to Normal Run and Start`
+  - Resume uses `Switch to Normal Run and Resume`
+
+### Documentation
+- README now documents the unified Dry Run safeguard behavior across Run and Resume paths, including reconnect-resume inheritance.
+- README local release-gate baseline was refreshed to the latest full `run_tests.bat` run (`1455 passed, 3 skipped` on 2026-03-28).
 
 ## [2.7.1] - 2026-03-27
 

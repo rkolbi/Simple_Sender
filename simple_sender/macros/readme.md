@@ -41,6 +41,7 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 - During file streaming, `TC:<tool name>` is handled as a sender directive (not GRBL G-code): the app pauses the stream, runs Macro-4 to move to the tool setter, then shows a single swap/cancel prompt, re-measures when resumed, and continues when complete.
 - During file streaming, exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines are sender directives that trigger configured vacuum outlet actions and are never sent to GRBL.
 - Run-button safety gate: starting a job checks the same `macro.state.TOOL_REFERENCE` state behind the Tool Ref label. If it is missing/invalid, the app shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
+- Dry Run safeguards: when Dry Run is enabled, both Run and Resume paths prompt before start/resume side effects (`Continue in Dry Run`, `Switch to Normal Run and Start/Resume`, `Cancel`).
 - Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab (with collapsible checklist titles) and release/start-job checklist dialogs.
 
 ## Core Directives

@@ -2,6 +2,7 @@
 
 from .job_setup_service import JobSetupService
 from .job_service import (
+    DryRunStartDecision,
     JobService,
     JobStartOutcome,
     JobStartResult,
@@ -19,6 +20,7 @@ from .preflight_service import (
 
 __all__ = [
     "BoundsInfo",
+    "DryRunStartDecision",
     "JobSetupService",
     "JobService",
     "JobStartOutcome",
