@@ -29,6 +29,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable
 
+from simple_sender.ui.theme_helpers import bind_text_display_theme, text_display_theme_options
+
 
 def open_runtime_telemetry(
     app: Any,
@@ -67,7 +69,11 @@ def open_runtime_telemetry(
         justify="left",
     ).pack(anchor="w", pady=(4, 10))
     text = tk.Text(container, wrap="none", height=14, font=("TkFixedFont", 10))
+    themed_options = text_display_theme_options(app)
+    if themed_options:
+        text.configure(themed_options)
     text.pack(fill="both", expand=True)
+    bind_text_display_theme(app, text)
     text.configure(state="disabled")
     last_rendered: dict[str, str | None] = {"text": None}
     btn_row = ttk.Frame(container)

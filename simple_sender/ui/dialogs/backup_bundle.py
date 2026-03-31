@@ -90,32 +90,50 @@ class _BundleImportResult:
     overwritten_assets: list[str] = field(default_factory=list)
 
 
-def _post_ui_callback(app: Any, callback) -> None:
+def _protect_imported_settings_until_restart(app: Any) -> None:
+    try:
+        app._settings_save_blocked_until_restart = True
+        app._settings_save_block_log_emitted = False
+        app._settings_save_block_message = (
+            "Restart required before saving more settings changes. "
+            "Imported settings on disk are protected until restart."
+        )
+    except Exception as exc:
+        _log_suppressed("Failed marking imported settings as restart-protected", exc)
+
+
+def _post_ui_callback(app: Any, callback, *, on_drop=None) -> bool:
     poster = getattr(app, "_post_ui_thread", None)
     if callable(poster):
         try:
             poster(callback)
-            return
+            return True
         except Exception as exc:
             _log_suppressed("Failed posting backup-bundle callback via _post_ui_thread", exc)
     after = getattr(app, "after", None)
     if callable(after):
         try:
             after(0, callback)
-            return
+            return True
         except Exception as exc:
             _log_suppressed("Failed posting backup-bundle callback to UI thread", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:
             ui_q.put(("ui_post", callback, (), {}))
-            return
+            return True
         except Exception as exc:
             _log_suppressed("Failed posting backup-bundle callback via ui_q", exc)
     _log_suppressed(
         "Dropping backup-bundle callback because no safe UI post path is available",
         RuntimeError("ui thread unavailable"),
     )
+    if callable(on_drop):
+        try:
+            on_drop()
+        except Exception as exc:
+            _log_suppressed("Failed running backup-bundle drop-path cleanup", exc)
+    return False
 
 
 def _write_backup_bundle_archive(
@@ -354,7 +372,11 @@ def export_backup_bundle(app: Any) -> None:
                 )
             except Exception as exc:
                 error = exc
-            _post_ui_callback(app, lambda: _complete_export(error))
+            _post_ui_callback(
+                app,
+                lambda: _complete_export(error),
+                on_drop=lambda: setattr(app, "_backup_bundle_export_inflight", False),
+            )
 
         try:
             worker = threading.Thread(
@@ -448,6 +470,8 @@ def import_backup_bundle(app: Any) -> None:
     started_at = time.perf_counter()
 
     def _apply_import_result(result: _BundleImportResult) -> None:
+        if result.imported_settings:
+            _protect_imported_settings_until_restart(app)
         if result.imported_macros:
             try:
                 panel = getattr(app, "macro_panel", None)
@@ -469,7 +493,15 @@ def import_backup_bundle(app: Any) -> None:
                 + ", ".join(result.overwritten_assets[:5])
                 + (", ..." if len(result.overwritten_assets) > 5 else "")
             )
-        notes.append("Restart the app to fully apply imported settings/checklists.")
+        if result.imported_settings:
+            notes.append(
+                "Restart the app to fully apply imported settings/checklists."
+            )
+            notes.append(
+                "Settings saves are paused until restart so the imported settings cannot be overwritten."
+            )
+        elif result.imported_macros:
+            notes.append("Restart the app to fully apply imported checklists if needed.")
         try:
             app.status.config(text=f"Backup bundle imported: {os.path.basename(path)}")
         except Exception as exc:
@@ -507,7 +539,11 @@ def import_backup_bundle(app: Any) -> None:
                 )
             except Exception as exc:
                 error = exc
-            _post_ui_callback(app, lambda: _complete_import(result, error))
+            _post_ui_callback(
+                app,
+                lambda: _complete_import(result, error),
+                on_drop=lambda: setattr(app, "_backup_bundle_import_inflight", False),
+            )
 
         try:
             worker = threading.Thread(

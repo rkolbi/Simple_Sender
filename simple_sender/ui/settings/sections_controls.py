@@ -42,6 +42,8 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     macro_frame = ttk.LabelFrame(parent, text="Macros", padding=8)
     macro_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     macro_frame.grid_columnconfigure(1, weight=1)
+    if not hasattr(app, "disable_macro_timeouts"):
+        app.disable_macro_timeouts = tk.BooleanVar(master=parent, value=False)
     app.macros_allow_python_check = ttk.Checkbutton(
         macro_frame,
         text="Allow macro scripting (Python/eval)",
@@ -79,16 +81,28 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         app.macro_total_timeout_entry,
         "Maximum allowed time for a full macro run in seconds. Set 0 to disable.",
     )
+    app.disable_macro_timeouts_check = ttk.Checkbutton(
+        macro_frame,
+        text="Disable Macro Timeouts",
+        variable=app.disable_macro_timeouts,
+    )
+    app.disable_macro_timeouts_check.grid(
+        row=3, column=0, columnspan=3, sticky="w", pady=(6, 2)
+    )
+    apply_tooltip(
+        app.disable_macro_timeouts_check,
+        "When enabled, macros will wait indefinitely instead of timing out.",
+    )
 
     ttk.Label(macro_frame, text="Probe Z start (machine, mm)").grid(
-        row=3, column=0, sticky="w", pady=4
+        row=4, column=0, sticky="w", pady=4
     )
     app.macro_probe_z_location_entry = ttk.Entry(
         macro_frame,
         textvariable=app.macro_probe_z_location,
         width=12,
     )
-    app.macro_probe_z_location_entry.grid(row=3, column=1, sticky="w", pady=4)
+    app.macro_probe_z_location_entry.grid(row=4, column=1, sticky="w", pady=4)
     attach_numeric_keypad(app.macro_probe_z_location_entry, allow_decimal=True)
     apply_tooltip(
         app.macro_probe_z_location_entry,
@@ -96,14 +110,14 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     )
 
     ttk.Label(macro_frame, text="Probe safety margin (mm)").grid(
-        row=4, column=0, sticky="w", pady=4
+        row=5, column=0, sticky="w", pady=4
     )
     app.macro_probe_safety_margin_entry = ttk.Entry(
         macro_frame,
         textvariable=app.macro_probe_safety_margin,
         width=12,
     )
-    app.macro_probe_safety_margin_entry.grid(row=4, column=1, sticky="w", pady=4)
+    app.macro_probe_safety_margin_entry.grid(row=5, column=1, sticky="w", pady=4)
     attach_numeric_keypad(app.macro_probe_safety_margin_entry, allow_decimal=True)
     apply_tooltip(
         app.macro_probe_safety_margin_entry,
@@ -114,7 +128,7 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         text="Open Macro Manager",
         command=app._open_macro_manager,
     )
-    app.btn_open_macro_manager.grid(row=5, column=0, sticky="w", pady=(6, 2))
+    app.btn_open_macro_manager.grid(row=6, column=0, sticky="w", pady=(6, 2))
     apply_tooltip(
         app.btn_open_macro_manager,
         "Edit, duplicate, and reorder Macro-1..Macro-8 from inside the app.",
@@ -125,7 +139,7 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
         wraplength=560,
         justify="left",
-    ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(2, 0))
+    ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(2, 0))
     return row + 1
 
 

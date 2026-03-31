@@ -23,6 +23,8 @@
 import logging
 import os
 
+from simple_sender.ui.theme_helpers import plain_tk_theme_defaults
+
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _FILE_DIALOG_ACTIVE_ATTR = "_file_dialog_active"
@@ -30,7 +32,7 @@ _FILE_DIALOG_MIN_SCALE = 1.4
 _FILE_DIALOG_MAX_SCALE = 3.0
 _FILE_DIALOG_MIN_WIDTH = 540
 _FILE_DIALOG_MIN_HEIGHT = 360
-_FILE_DIALOG_RESIZE_POLL_MS = 60
+_FILE_DIALOG_RESIZE_POLL_MS = 20
 _FILE_DIALOG_WINDOW_CLASSES = frozenset({"TkFDialog", "TkMotifFDialog", "TkChooseDir"})
 
 
@@ -98,6 +100,144 @@ def _dialog_parent_path(parent) -> str:
         return "."
 
 
+def _dialog_widget_config_map(app) -> dict[str, dict[str, object]]:
+    defaults = plain_tk_theme_defaults(app)
+    button_bg = defaults["frame_bg"]
+    return {
+        "TkFDialog": {
+            "-background": defaults["frame_bg"],
+        },
+        "TkMotifFDialog": {
+            "-background": defaults["frame_bg"],
+        },
+        "TkChooseDir": {
+            "-background": defaults["frame_bg"],
+        },
+        "Frame": {
+            "-background": defaults["frame_bg"],
+        },
+        "Label": {
+            "-background": defaults["frame_bg"],
+            "-foreground": defaults["fg"],
+        },
+        "Button": {
+            "-background": button_bg,
+            "-activebackground": defaults["selection_bg"],
+            "-foreground": defaults["fg"],
+            "-activeforeground": defaults["selection_fg"],
+            "-highlightbackground": defaults["border"],
+        },
+        "Checkbutton": {
+            "-background": defaults["frame_bg"],
+            "-activebackground": defaults["selection_bg"],
+            "-foreground": defaults["fg"],
+            "-activeforeground": defaults["selection_fg"],
+            "-selectcolor": defaults["text_bg"],
+            "-highlightbackground": defaults["border"],
+        },
+        "Radiobutton": {
+            "-background": defaults["frame_bg"],
+            "-activebackground": defaults["selection_bg"],
+            "-foreground": defaults["fg"],
+            "-activeforeground": defaults["selection_fg"],
+            "-selectcolor": defaults["text_bg"],
+            "-highlightbackground": defaults["border"],
+        },
+        "Menubutton": {
+            "-background": button_bg,
+            "-activebackground": defaults["selection_bg"],
+            "-foreground": defaults["fg"],
+            "-activeforeground": defaults["selection_fg"],
+            "-highlightbackground": defaults["border"],
+        },
+        "Entry": {
+            "-background": defaults["text_bg"],
+            "-foreground": defaults["fg"],
+            "-insertbackground": defaults["accent"],
+            "-selectbackground": defaults["selection_bg"],
+            "-selectforeground": defaults["selection_fg"],
+            "-highlightbackground": defaults["border"],
+            "-highlightcolor": defaults["accent"],
+        },
+        "Listbox": {
+            "-background": defaults["text_bg"],
+            "-foreground": defaults["fg"],
+            "-selectbackground": defaults["selection_bg"],
+            "-selectforeground": defaults["selection_fg"],
+            "-highlightbackground": defaults["border"],
+            "-highlightcolor": defaults["accent"],
+            "-activestyle": "none",
+        },
+        "Text": {
+            "-background": defaults["text_bg"],
+            "-foreground": defaults["fg"],
+            "-insertbackground": defaults["accent"],
+            "-selectbackground": defaults["selection_bg"],
+            "-selectforeground": defaults["selection_fg"],
+            "-highlightbackground": defaults["border"],
+            "-highlightcolor": defaults["accent"],
+        },
+        "Canvas": {
+            "-background": defaults["frame_bg"],
+            "-highlightbackground": defaults["frame_bg"],
+            "-highlightcolor": defaults["border"],
+        },
+        "Scrollbar": {
+            "-activebackground": defaults["selection_bg"],
+            "-background": button_bg,
+            "-troughcolor": defaults["text_bg"],
+            "-highlightbackground": defaults["border"],
+            "-width": int(getattr(app, "_scrollbar_width_px", 16) or 16),
+        },
+    }
+
+
+def _configure_tk_widget(app, widget_path: str, options: dict[str, object]) -> None:
+    for option, value in options.items():
+        try:
+            app.tk.call(widget_path, "configure", option, value)
+        except Exception:
+            continue
+
+
+def _theme_dialog_canvas_items(app, canvas_path: str, defaults: dict[str, object]) -> None:
+    for tag_name, color in (
+        ("text", defaults["fg"]),
+        ("selectionText", defaults["selection_fg"]),
+    ):
+        try:
+            app.tk.call(canvas_path, "itemconfigure", tag_name, "-fill", color)
+        except Exception:
+            continue
+
+
+def _theme_linux_dialog_widgets(app, dialog_path: str) -> None:
+    config_map = _dialog_widget_config_map(app)
+    defaults = plain_tk_theme_defaults(app)
+    pending = [str(dialog_path)]
+    visited: set[str] = set()
+    while pending:
+        widget_path = str(pending.pop())
+        if widget_path in visited:
+            continue
+        visited.add(widget_path)
+        try:
+            widget_class = str(app.tk.call("winfo", "class", widget_path))
+        except Exception:
+            widget_class = ""
+        options = config_map.get(widget_class)
+        if isinstance(options, dict) and options:
+            _configure_tk_widget(app, widget_path, options)
+        if widget_class == "Canvas":
+            _theme_dialog_canvas_items(app, widget_path, defaults)
+        try:
+            children = app.tk.splitlist(app.tk.call("winfo", "children", widget_path))
+        except Exception:
+            children = ()
+        for child in children:
+            pending.append(str(child))
+
+
 def _start_linux_dialog_resize_watch(app, *, parent):
     # Resize Tk-managed file dialogs on Linux so file lists remain usable.
     if not hasattr(app, "after"):
@@ -106,7 +246,7 @@ def _start_linux_dialog_resize_watch(app, *, parent):
     root_path = _dialog_parent_path(parent)
     stop = {"done": False}
     after_id = {"value": None}
-    resized: set[str] = set()
+    dialogs: set[str] = set()
 
     def _tick() -> None:
         if stop["done"]:
@@ -117,21 +257,24 @@ def _start_linux_dialog_resize_watch(app, *, parent):
             children = ()
         for child in children:
             child_path = str(child)
-            if child_path in resized:
-                continue
             try:
                 cls = str(app.tk.call("winfo", "class", child_path))
             except Exception:
                 continue
             if cls not in _FILE_DIALOG_WINDOW_CLASSES:
                 continue
-            resized.add(child_path)
+            dialogs.add(child_path)
+        for dialog_path in tuple(dialogs):
             try:
-                app.tk.call("wm", "minsize", child_path, _FILE_DIALOG_MIN_WIDTH, _FILE_DIALOG_MIN_HEIGHT)
+                _theme_linux_dialog_widgets(app, dialog_path)
+            except Exception as exc:
+                _log_suppressed("Failed applying Linux file dialog theme", exc)
+            try:
+                app.tk.call("wm", "minsize", dialog_path, _FILE_DIALOG_MIN_WIDTH, _FILE_DIALOG_MIN_HEIGHT)
                 app.tk.call(
                     "wm",
                     "geometry",
-                    child_path,
+                    dialog_path,
                     f"{_FILE_DIALOG_MIN_WIDTH}x{_FILE_DIALOG_MIN_HEIGHT}",
                 )
             except Exception as exc:

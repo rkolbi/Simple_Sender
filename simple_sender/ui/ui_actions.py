@@ -33,7 +33,13 @@ from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
 from simple_sender.ui.modal_sync import request_modal_state_sync
-from simple_sender.ui.theme_helpers import apply_toggle_indicator_style
+from simple_sender.ui.theme_helpers import (
+    apply_toggle_indicator_style,
+    bind_scrollbar_theme,
+    bind_text_display_theme,
+    refresh_theme_widgets,
+    text_display_theme_options,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -114,6 +120,23 @@ def on_theme_change(app, *_):
     )
 
 
+def on_optional_tab_visibility_change(app) -> None:
+    sync_tabs = getattr(app, "_sync_optional_tab_visibility", None)
+    if callable(sync_tabs):
+        try:
+            sync_tabs()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+            _log_suppressed("Failed syncing optional notebook tab visibility", exc)
+    try:
+        app.status.config(text="Tab visibility updated")
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for tab visibility change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Tab visibility changed for this session only; settings save failed",
+    )
+
+
 _UI_SCALE_NAMED_FONTS = (
     "TkDefaultFont",
     "TkTextFont",
@@ -139,14 +162,16 @@ _TOUCH_FEEDBACK_CANVAS_HIGHLIGHT = "#1b8bd8"
 def _style_scrollbar_width(style) -> int | None:
     if style is None:
         return None
-    try:
-        value = style.lookup("TScrollbar", "width")
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        return None
-    try:
-        return int(value)
-    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
-        return None
+    for option in ("width", "arrowsize"):
+        try:
+            value = style.lookup("TScrollbar", option)
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            continue
+        try:
+            return int(value)
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            continue
+    return None
 
 def _coerce_scrollbar_width(value, default: str = "wide") -> str:
     if value is None:
@@ -276,9 +301,16 @@ def apply_scrollbar_width(app, value: str | None = None) -> str:
     else:
         width = _SCROLLBAR_WIDTHS.get(choice, _SCROLLBAR_WIDTHS["wide"])
     try:
+        app._scrollbar_width_px = int(width)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        pass
+    try:
         app.style.configure("TScrollbar", width=width)
+        app.style.configure("TScrollbar", arrowsize=width)
         app.style.configure("Vertical.TScrollbar", width=width)
+        app.style.configure("Vertical.TScrollbar", arrowsize=width)
         app.style.configure("Horizontal.TScrollbar", width=width)
+        app.style.configure("Horizontal.TScrollbar", arrowsize=width)
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed applying scrollbar width styles", exc)
     try:
@@ -289,6 +321,10 @@ def apply_scrollbar_width(app, value: str | None = None) -> str:
         app.settings["scrollbar_width"] = choice
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
         _log_suppressed("Failed persisting scrollbar width setting", exc)
+    try:
+        refresh_theme_widgets(app)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed refreshing theme-managed widgets after scrollbar width change", exc)
     return choice
 
 
@@ -848,8 +884,13 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         container = ttk.Frame(win, padding=12)
         container.pack(fill="both", expand=True)
         text = tk.Text(container, wrap="word", height=18)
+        themed_options = text_display_theme_options(app)
+        if themed_options:
+            text.configure(themed_options)
         vsb = ttk.Scrollbar(container, orient="vertical", command=text.yview)
+        bind_scrollbar_theme(app, vsb)
         text.configure(yscrollcommand=vsb.set)
+        bind_text_display_theme(app, text)
         text.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         container.grid_rowconfigure(0, weight=1)

@@ -58,11 +58,7 @@ class GcodeViewer(ttk.Frame):
         super().__init__(parent)
 
         self.text = tk.Text(self, wrap="none", height=18, undo=False)
-        self.text.configure(
-            background=COLOR_GCODE_BG,
-            foreground=COLOR_GCODE_TEXT,
-            insertbackground=COLOR_GCODE_TEXT,
-        )
+        self.apply_theme_palette(None)
 
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
@@ -74,14 +70,36 @@ class GcodeViewer(ttk.Frame):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        self.text.tag_configure("current", background=COLOR_GCODE_CURRENT, foreground=COLOR_GCODE_TEXT)
-
         self.lines_count = 0
         self._sent_upto = -1
         self._acked_upto = -1
         self._current_idx = -1
         self._live_mode = True
         self._live_current_row: int | None = None
+
+    def apply_theme_palette(self, palette: dict[str, str] | None) -> None:
+        colors = dict(palette) if isinstance(palette, dict) else {}
+        bg = colors.get("text_pane_bg", COLOR_GCODE_BG)
+        fg = colors.get("text_pane_fg", COLOR_GCODE_TEXT)
+        selection_bg = colors.get("selection_bg", COLOR_GCODE_CURRENT)
+        selection_fg = colors.get("selection_fg", fg)
+        current_bg = colors.get("text_pane_current_line_bg", COLOR_GCODE_CURRENT)
+        border = colors.get("text_pane_border", bg)
+        insert = colors.get("text_pane_insert", fg)
+        self.text.configure(
+            background=bg,
+            foreground=fg,
+            insertbackground=insert,
+            selectbackground=selection_bg,
+            selectforeground=selection_fg,
+            inactiveselectbackground=selection_bg,
+            highlightbackground=border,
+            highlightcolor=colors.get("accent", border),
+            highlightthickness=1,
+            relief="flat",
+            borderwidth=1,
+        )
+        self.text.tag_configure("current", background=current_bg, foreground=fg)
 
     # ------------------------------------------------------------------
     # Lean live-window API

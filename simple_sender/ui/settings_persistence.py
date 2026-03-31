@@ -112,6 +112,50 @@ def load_settings(app) -> dict:
     return cast(dict, app._settings_store.data)
 
 
+def _settings_save_blocked_until_restart(app) -> bool:
+    try:
+        return bool(getattr(app, "_settings_save_blocked_until_restart", False))
+    except Exception:
+        return False
+
+
+def _notify_settings_save_blocked(app) -> None:
+    message = str(
+        getattr(
+            app,
+            "_settings_save_block_message",
+            (
+                "Restart required before saving more settings changes. "
+                "Imported settings on disk are being preserved until restart."
+            ),
+        )
+        or ""
+    ).strip()
+    if not message:
+        message = (
+            "Restart required before saving more settings changes. "
+            "Imported settings on disk are being preserved until restart."
+        )
+    try:
+        status = getattr(app, "status", None)
+        if status is not None and hasattr(status, "config"):
+            status.config(text="Settings restart required before saving changes")
+    except Exception as exc:
+        _log_suppressed("Failed updating status for deferred settings save", exc)
+    if bool(getattr(app, "_settings_save_block_log_emitted", False)):
+        return
+    try:
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            ui_q.put(("log", f"[settings] {message}"))
+    except Exception as exc:
+        _log_suppressed("Failed logging deferred settings save", exc)
+    try:
+        app._settings_save_block_log_emitted = True
+    except Exception:
+        pass
+
+
 def _safe_float(app, var, default, label: str) -> float:
     try:
         return float(var.get())
@@ -286,6 +330,43 @@ def _prune_unknown_keys(data: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in data.items() if key in known_keys}
 
 
+def _setting_default(key: str, fallback: object) -> object:
+    return DEFAULT_SETTINGS.get(key, fallback)
+
+
+def _read_setting_value(app, *, attr_name: str, key: str, fallback: object) -> object:
+    if hasattr(app, attr_name):
+        var = getattr(app, attr_name)
+        getter = getattr(var, "get", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception as exc:
+                _log_suppressed(f"Failed reading settings variable {attr_name}", exc)
+    return app.settings.get(key, _setting_default(key, fallback))
+
+
+def _read_bool_setting_value(app, *, attr_name: str, key: str, fallback: bool) -> bool:
+    return bool(_read_setting_value(app, attr_name=attr_name, key=key, fallback=fallback))
+
+
+def _read_string_setting_value(
+    app,
+    *,
+    attr_name: str,
+    key: str,
+    fallback: str,
+    strip: bool = False,
+    lower: bool = False,
+) -> str:
+    value = str(_read_setting_value(app, attr_name=attr_name, key=key, fallback=fallback) or "")
+    if strip:
+        value = value.strip()
+    if lower:
+        value = value.lower()
+    return value
+
+
 def _build_ui_settings(
     app,
     *,
@@ -297,30 +378,24 @@ def _build_ui_settings(
     return {
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
         "tooltip_timeout_sec": tooltip_timeout_value,
-        "numeric_keypad_enabled": bool(
-            app.numeric_keypad_enabled.get()
-            if hasattr(app, "numeric_keypad_enabled")
-            else app.settings.get(
-                "numeric_keypad_enabled",
-                DEFAULT_SETTINGS.get("numeric_keypad_enabled", True),
-            )
+        "numeric_keypad_enabled": _read_bool_setting_value(
+            app,
+            attr_name="numeric_keypad_enabled",
+            key="numeric_keypad_enabled",
+            fallback=True,
         ),
-        "developer_options_enabled": bool(
-            app.developer_options_enabled.get()
-            if hasattr(app, "developer_options_enabled")
-            else app.settings.get(
-                "developer_options_enabled",
-                DEFAULT_SETTINGS.get("developer_options_enabled", False),
-            )
+        "developer_options_enabled": _read_bool_setting_value(
+            app,
+            attr_name="developer_options_enabled",
+            key="developer_options_enabled",
+            fallback=False,
         ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
-        "pi_profile_enabled": bool(
-            app.pi_profile_enabled.get()
-            if hasattr(app, "pi_profile_enabled")
-            else app.settings.get(
-                "pi_profile_enabled",
-                DEFAULT_SETTINGS.get("pi_profile_enabled", False),
-            )
+        "pi_profile_enabled": _read_bool_setting_value(
+            app,
+            attr_name="pi_profile_enabled",
+            key="pi_profile_enabled",
+            fallback=False,
         ),
         "pi_profile_prompt_shown": bool(
             app.settings.get(
@@ -329,78 +404,85 @@ def _build_ui_settings(
             )
         ),
         "error_dialogs_enabled": bool(app.error_dialogs_enabled.get()),
-        "grbl_popup_enabled": bool(
-            app.grbl_popup_enabled.get()
-            if hasattr(app, "grbl_popup_enabled")
-            else app.settings.get(
-                "grbl_popup_enabled",
-                DEFAULT_SETTINGS.get("grbl_popup_enabled", True),
-            )
+        "grbl_popup_enabled": _read_bool_setting_value(
+            app,
+            attr_name="grbl_popup_enabled",
+            key="grbl_popup_enabled",
+            fallback=True,
         ),
         "grbl_popup_auto_dismiss_sec": grbl_popup_auto_dismiss_value,
         "grbl_popup_dedupe_sec": grbl_popup_dedupe_value,
         "performance_mode": bool(app.performance_mode.get()),
-        "performance_profile_enabled": bool(
-            app.performance_profile_enabled.get()
-            if hasattr(app, "performance_profile_enabled")
-            else app.settings.get(
-                "performance_profile_enabled",
-                DEFAULT_SETTINGS.get("performance_profile_enabled", False),
-            )
+        "performance_profile_enabled": _read_bool_setting_value(
+            app,
+            attr_name="performance_profile_enabled",
+            key="performance_profile_enabled",
+            fallback=False,
         ),
-        "performance_leak_watch_enabled": bool(
-            app.performance_leak_watch_enabled.get()
-            if hasattr(app, "performance_leak_watch_enabled")
-            else app.settings.get(
-                "performance_leak_watch_enabled",
-                DEFAULT_SETTINGS.get("performance_leak_watch_enabled", False),
-            )
+        "performance_leak_watch_enabled": _read_bool_setting_value(
+            app,
+            attr_name="performance_leak_watch_enabled",
+            key="performance_leak_watch_enabled",
+            fallback=False,
         ),
-        "performance_profile_log_path": str(
-            app.performance_profile_log_path.get()
-            if hasattr(app, "performance_profile_log_path")
-            else app.settings.get(
-                "performance_profile_log_path",
-                DEFAULT_SETTINGS.get("performance_profile_log_path", ""),
-            )
-        ).strip(),
+        "performance_profile_log_path": _read_string_setting_value(
+            app,
+            attr_name="performance_profile_log_path",
+            key="performance_profile_log_path",
+            fallback="",
+            strip=True,
+        ),
         "theme": app.selected_theme.get(),
         "ui_scale": (
             _safe_float(
                 app,
                 app.ui_scale,
-                app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0)),
+                app.settings.get("ui_scale", _setting_default("ui_scale", 1.0)),
                 "ui scale",
             )
             if hasattr(app, "ui_scale")
-            else app.settings.get("ui_scale", DEFAULT_SETTINGS.get("ui_scale", 1.0))
+            else app.settings.get("ui_scale", _setting_default("ui_scale", 1.0))
         ),
-        "scrollbar_width": str(
-            app.scrollbar_width.get()
-            if hasattr(app, "scrollbar_width")
-            else app.settings.get(
-                "scrollbar_width",
-                DEFAULT_SETTINGS.get("scrollbar_width", "wide"),
-            )
-        )
-        .strip()
-        .lower(),
-        "touch_scroll_mode": str(
-            app.touch_scroll_mode.get()
-            if hasattr(app, "touch_scroll_mode")
-            else app.settings.get(
-                "touch_scroll_mode",
-                DEFAULT_SETTINGS.get("touch_scroll_mode", "thumb_and_swipe"),
-            )
-        )
-        .strip()
-        .lower(),
+        "scrollbar_width": _read_string_setting_value(
+            app,
+            attr_name="scrollbar_width",
+            key="scrollbar_width",
+            fallback="wide",
+            strip=True,
+            lower=True,
+        ),
+        "touch_scroll_mode": _read_string_setting_value(
+            app,
+            attr_name="touch_scroll_mode",
+            key="touch_scroll_mode",
+            fallback="thumb_and_swipe",
+            strip=True,
+            lower=True,
+        ),
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
         "show_endstop_indicator": bool(app.show_endstop_indicator.get()),
         "show_probe_indicator": bool(app.show_probe_indicator.get()),
         "show_hold_indicator": bool(app.show_hold_indicator.get()),
+        "show_logs_tab": _read_bool_setting_value(
+            app,
+            attr_name="show_logs_tab",
+            key="show_logs_tab",
+            fallback=False,
+        ),
+        "show_raw_grbl_tab": _read_bool_setting_value(
+            app,
+            attr_name="show_raw_grbl_tab",
+            key="show_raw_grbl_tab",
+            fallback=False,
+        ),
+        "show_checklists_tab": _read_bool_setting_value(
+            app,
+            attr_name="show_checklists_tab",
+            key="show_checklists_tab",
+            fallback=True,
+        ),
         "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
         "show_quick_keys_button": bool(app.show_quick_keys_button.get()),
         "show_quick_alo_button": bool(app.show_quick_alo_button.get()),
@@ -469,10 +551,21 @@ def _build_macro_and_autolevel_settings(
     macro_probe_z_value: float,
     macro_probe_margin_value: float,
 ) -> dict[str, object]:
+    disable_macro_timeouts_var = getattr(app, "disable_macro_timeouts", None)
+    if disable_macro_timeouts_var is not None:
+        disable_macro_timeouts = bool(disable_macro_timeouts_var.get())
+    else:
+        disable_macro_timeouts = bool(
+            getattr(app, "settings", {}).get(
+                "disable_macro_timeouts",
+                DEFAULT_SETTINGS.get("disable_macro_timeouts", False),
+            )
+        )
     return {
         "auto_level_enabled": bool(app.auto_level_enabled.get()),
         "show_autolevel_overlay": bool(app.show_autolevel_overlay.get()),
         "macros_allow_python": bool(app.macros_allow_python.get()),
+        "disable_macro_timeouts": disable_macro_timeouts,
         "macro_line_timeout_sec": macro_line_timeout_value,
         "macro_total_timeout_sec": macro_total_timeout_value,
         "macro_probe_z_location": macro_probe_z_value,
@@ -636,6 +729,9 @@ def _build_kasa_settings(app) -> dict[str, object]:
 
 
 def save_settings(app):
+    if _settings_save_blocked_until_restart(app):
+        _notify_settings_save_blocked(app)
+        return
     app._apply_error_dialog_settings()
     app._on_status_failure_limit_change()
     app._on_homing_watchdog_change()

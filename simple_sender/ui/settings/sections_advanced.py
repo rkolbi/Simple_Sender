@@ -139,6 +139,59 @@ def _build_interface_logging_row(app, interface_frame, row: int) -> int:
     return row + 1
 
 
+def _build_interface_tab_visibility_row(app, interface_frame, row: int) -> int:
+    if not hasattr(app, "show_logs_tab"):
+        app.show_logs_tab = tk.BooleanVar(master=interface_frame, value=False)
+    if not hasattr(app, "show_raw_grbl_tab"):
+        app.show_raw_grbl_tab = tk.BooleanVar(master=interface_frame, value=False)
+    if not hasattr(app, "show_checklists_tab"):
+        app.show_checklists_tab = tk.BooleanVar(master=interface_frame, value=True)
+    on_optional_tab_visibility_change = getattr(
+        app,
+        "_on_optional_tab_visibility_change",
+        lambda *_args, **_kwargs: None,
+    )
+    ttk.Label(interface_frame, text="Notebook tabs").grid(
+        row=row, column=0, sticky="w", pady=(10, 0)
+    )
+    tabs_row = ttk.Frame(interface_frame)
+    tabs_row.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
+    app.logs_tab_visibility_check = ttk.Checkbutton(
+        tabs_row,
+        text="Show Logs Tab",
+        variable=app.show_logs_tab,
+        command=on_optional_tab_visibility_change,
+    )
+    app.logs_tab_visibility_check.pack(side="left")
+    apply_tooltip(
+        app.logs_tab_visibility_check,
+        "Show or hide the Logs notebook tab.",
+    )
+    app.raw_grbl_tab_visibility_check = ttk.Checkbutton(
+        tabs_row,
+        text="Show Raw $$ Tab",
+        variable=app.show_raw_grbl_tab,
+        command=on_optional_tab_visibility_change,
+    )
+    app.raw_grbl_tab_visibility_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(
+        app.raw_grbl_tab_visibility_check,
+        "Show or hide the Raw $$ notebook tab.",
+    )
+    app.checklists_tab_visibility_check = ttk.Checkbutton(
+        tabs_row,
+        text="Show Checklists Tab",
+        variable=app.show_checklists_tab,
+        command=on_optional_tab_visibility_change,
+    )
+    app.checklists_tab_visibility_check.pack(side="left", padx=(12, 0))
+    apply_tooltip(
+        app.checklists_tab_visibility_check,
+        "Show or hide the Checklists notebook tab.",
+    )
+    return row + 2
+
+
 def _build_interface_indicators_row(app, interface_frame, row: int) -> int:
     indicator_label = ttk.Label(interface_frame, text="Status indicators")
     indicator_label.grid(row=row, column=0, sticky="w", pady=(10, 0))
@@ -318,6 +371,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     next_row = _build_interface_performance_row(app, interface_frame, 1)
     next_row = _build_interface_logging_row(app, interface_frame, next_row)
+    next_row = _build_interface_tab_visibility_row(app, interface_frame, next_row)
     next_row = _build_interface_indicators_row(app, interface_frame, next_row)
     next_row = _build_status_bar_button_visibility_row(app, interface_frame, next_row)
     _build_status_bar_quick_toggle_row(app, interface_frame, next_row)

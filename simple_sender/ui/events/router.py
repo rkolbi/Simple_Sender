@@ -131,6 +131,46 @@ def _loaded_stream_is_noop(app: Any, signature: tuple[str, str, int, bool]) -> b
     return current == signature
 
 
+def _queue_loaded_stream_apply(
+    app: Any,
+    *,
+    token: int,
+    signature: tuple[str, str, int, bool],
+    path: str,
+    source: Any,
+    sample_lines: list[str],
+    lines_hash: str | None,
+    total_lines: int | None,
+    report: Any,
+    sample_only: bool,
+) -> None:
+    generation = int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0) + 1
+    app._gcode_loaded_stream_apply_generation = generation
+    pending = getattr(app, "_gcode_loaded_stream_pending", None)
+    if pending and isinstance(pending, tuple) and len(pending) >= 4:
+        stale_source = pending[4]
+        if stale_source is not source:
+            logger.info(
+                "[ui] gcode_loaded_stream coalesced: job=%s hash=%s reason=pending_apply_replaced",
+                signature[0] or "<none>",
+                signature[1] or "<none>",
+            )
+            _cleanup_streaming_source(stale_source, context="Coalesced gcode_loaded_stream apply")
+    app._gcode_loaded_stream_pending = (
+        generation,
+        token,
+        signature,
+        path,
+        source,
+        sample_lines,
+        lines_hash,
+        total_lines,
+        report,
+        sample_only,
+    )
+    _schedule_loaded_stream_apply(app)
+
+
 def _cancel_load_settling_clear_timer(app: Any) -> None:
     after_id = getattr(app, "_gcode_load_settling_after_id", None)
     if after_id is None:
@@ -1023,31 +1063,18 @@ def handle_gcode_loaded_stream(app, evt):
         _signal_gcode_load_result(app, token=token, success=True, path=path)
         _cleanup_streaming_source(source, context="Idempotent gcode_loaded_stream skip")
         return
-    generation = int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0) + 1
-    app._gcode_loaded_stream_apply_generation = generation
-    pending = getattr(app, "_gcode_loaded_stream_pending", None)
-    if pending and isinstance(pending, tuple) and len(pending) >= 4:
-        stale_source = pending[4]
-        if stale_source is not source:
-            logger.info(
-                "[ui] gcode_loaded_stream coalesced: job=%s hash=%s reason=pending_apply_replaced",
-                signature[0] or "<none>",
-                signature[1] or "<none>",
-            )
-            _cleanup_streaming_source(stale_source, context="Coalesced gcode_loaded_stream apply")
-    app._gcode_loaded_stream_pending = (
-        generation,
-        token,
-        signature,
-        path,
-        source,
-        sample_lines,
-        lines_hash,
-        total_lines,
-        report,
-        sample_only,
+    _queue_loaded_stream_apply(
+        app,
+        token=token,
+        signature=signature,
+        path=path,
+        source=source,
+        sample_lines=sample_lines,
+        lines_hash=lines_hash,
+        total_lines=total_lines,
+        report=report,
+        sample_only=sample_only,
     )
-    _schedule_loaded_stream_apply(app)
 
 
 def handle_gcode_load_invalid(

@@ -1,11 +1,18 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project are documented in this file.
 Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
 ## [Unreleased]
 
+## [2.8] - 2026-03-31
+
 ### Changed
+- Gemini-inspired dark theme is now the normal startup default for new/default settings while preserving saved user theme selections.
+- Notebook tab visibility is now operator-configurable from App Settings:
+  - `Logs` is hidden by default and controlled by `Show Logs Tab`
+  - `Raw $$` is hidden by default and controlled by `Show Raw $$ Tab`
+  - `Checklists` remains shown by default and is controlled by `Show Checklists Tab`
 - Dry Run safeguard policy now applies consistently to resume flows:
   - `Resume From...` now uses the same explicit Dry Run decision model as Run when Dry Run is enabled
   - reconnect-resume routes through the same guarded resume path, so recovery resumes cannot bypass the Dry Run decision
@@ -13,10 +20,23 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Dry Run confirmation dialog now supports action-specific wording for normal-mode continuation:
   - Run continues to use `Switch to Normal Run and Start`
   - Resume uses `Switch to Normal Run and Resume`
+- Shared tooltip styling now uses explicit readable colors and theme-aware palette resolution so tooltip text stays visible under the active theme.
+- Notebook tabs use slightly larger shared tab padding to better match the main UI button sizing.
+
+### Fixed
+- Reconnect loaded-job restore now ends in a truthful state:
+  - if the worker-side job restore fails after reconnect, the previous job is cleared instead of continuing to look loaded
+  - Run / Resume readiness no longer remains ahead of the actual restored worker state
+- `Clear Job` now clears File Info truthfully instead of leaving stale metadata visible after the underlying job state is gone.
+- Secondary text-display dialogs that previously bypassed the shared dark-pane styling path now follow the current theme instead of falling back to bright white panes.
+- Backup-bundle async completion now clears inflight flags even if the UI-post completion callback cannot be delivered during teardown.
+- Tooltips now remain readable after the theme-default and dark-theme polish work.
 
 ### Documentation
 - README now documents the unified Dry Run safeguard behavior across Run and Resume paths, including reconnect-resume inheritance.
-- README local release-gate baseline was refreshed to the latest full `run_tests.bat` run (`1455 passed, 3 skipped` on 2026-03-28).
+- README and macro docs now document `Disable Macro Timeouts`, the hidden-by-default `Logs` / `Raw $$` tabs, Gemini as the default theme, and the scoped no-timeout behavior used for operator-assisted Job Setup / Tool Change workflows.
+- README validation baseline wording now reflects the latest documented local `run_tests.bat` snapshot (`1508 passed, 2 skipped` on 2026-03-31) instead of older "latest/current" counts.
+- Historical closeout docs now read as closeout snapshots rather than live project-status documents.
 
 ## [2.7.1] - 2026-03-27
 
@@ -352,3 +372,4 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - `python -m mypy --config-file mypy.ini`: PASS (`148` source files)
 - `python -m pytest -q`: PASS (`567` passed, `2` skipped)
 - `run_tests.bat`: PASS end-to-end (`mypy`, full `pytest`+coverage, and critical-path coverage gate)
+

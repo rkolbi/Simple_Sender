@@ -26,8 +26,6 @@ import logging
 import threading
 import time
 
-from simple_sender.utils.constants import MACRO_PROMPT_TIMEOUT
-
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -51,53 +49,15 @@ def _all_stop_cancel_requested(app) -> bool:
         return False
 
 
-def _snapshot_macro_timeout_state(app) -> tuple[float | None, float | None, float, bool]:
-    line_timeout: float | None = None
-    total_timeout: float | None = None
-    line_var = getattr(app, "macro_line_timeout_sec", None)
-    if line_var is not None and hasattr(line_var, "get"):
-        try:
-            line_timeout = float(line_var.get())
-        except Exception:
-            line_timeout = 0.0
-    total_var = getattr(app, "macro_total_timeout_sec", None)
-    if total_var is not None and hasattr(total_var, "get"):
-        try:
-            total_timeout = float(total_var.get())
-        except Exception:
-            total_timeout = 0.0
-    try:
-        prompt_timeout = float(getattr(app, "_macro_prompt_timeout_s", MACRO_PROMPT_TIMEOUT))
-    except Exception:
-        prompt_timeout = float(MACRO_PROMPT_TIMEOUT)
-    no_timeout_override = bool(getattr(app, "_tool_change_unlimited_time_active", False))
-    return line_timeout, total_timeout, prompt_timeout, no_timeout_override
+def _snapshot_macro_timeout_state(app) -> bool:
+    return bool(getattr(app, "_tool_change_unlimited_time_active", False))
 
 
 def _apply_macro_timeout_state(
     app,
     *,
-    line_timeout: float | None,
-    total_timeout: float | None,
-    prompt_timeout: float,
     no_timeout_override: bool,
 ) -> None:
-    line_var = getattr(app, "macro_line_timeout_sec", None)
-    if line_timeout is not None and line_var is not None and hasattr(line_var, "set"):
-        try:
-            line_var.set(float(line_timeout))
-        except Exception as exc:
-            _log_suppressed("Failed restoring macro line timeout", exc)
-    total_var = getattr(app, "macro_total_timeout_sec", None)
-    if total_timeout is not None and total_var is not None and hasattr(total_var, "set"):
-        try:
-            total_var.set(float(total_timeout))
-        except Exception as exc:
-            _log_suppressed("Failed restoring macro total timeout", exc)
-    try:
-        app._macro_prompt_timeout_s = float(prompt_timeout)
-    except Exception as exc:
-        _log_suppressed("Failed restoring macro prompt timeout", exc)
     try:
         app._tool_change_unlimited_time_active = bool(no_timeout_override)
     except Exception as exc:
@@ -106,42 +66,11 @@ def _apply_macro_timeout_state(
 
 def _disable_macro_timeouts_for_tool_change(
     app,
-) -> tuple[float | None, float | None, float, bool]:
+) -> bool:
     saved_raw = app._call_on_ui_thread(_snapshot_macro_timeout_state, app, timeout=None)
-    saved: tuple[float | None, float | None, float, bool]
-    if isinstance(saved_raw, tuple) and len(saved_raw) == 4:
-        raw_line_timeout, raw_total_timeout, raw_prompt_timeout, raw_no_timeout_override = saved_raw
-        try:
-            line_timeout = float(raw_line_timeout) if raw_line_timeout is not None else None
-        except Exception:
-            line_timeout = None
-        try:
-            total_timeout = float(raw_total_timeout) if raw_total_timeout is not None else None
-        except Exception:
-            total_timeout = None
-        try:
-            prompt_timeout = float(raw_prompt_timeout)
-        except Exception:
-            prompt_timeout = float(MACRO_PROMPT_TIMEOUT)
-        no_timeout_override = bool(raw_no_timeout_override)
-        saved = (line_timeout, total_timeout, prompt_timeout, no_timeout_override)
-    else:
-        saved = (
-            None,
-            None,
-            float(MACRO_PROMPT_TIMEOUT),
-            bool(getattr(app, "_tool_change_unlimited_time_active", False)),
-        )
-    line_var = getattr(app, "macro_line_timeout_sec", None)
-    if line_var is not None and hasattr(line_var, "set"):
-        app._call_on_ui_thread(line_var.set, 0.0, timeout=None)
-    total_var = getattr(app, "macro_total_timeout_sec", None)
-    if total_var is not None and hasattr(total_var, "set"):
-        app._call_on_ui_thread(total_var.set, 0.0, timeout=None)
-    try:
-        app._macro_prompt_timeout_s = 0.0
-    except Exception as exc:
-        _log_suppressed("Failed disabling macro prompt timeout for tool change", exc)
+    saved = bool(saved_raw) if isinstance(saved_raw, bool) else bool(
+        getattr(app, "_tool_change_unlimited_time_active", False)
+    )
     try:
         app._tool_change_unlimited_time_active = True
     except Exception as exc:
@@ -151,21 +80,21 @@ def _disable_macro_timeouts_for_tool_change(
 
 def _restore_macro_timeouts_for_tool_change(
     app,
-    saved: tuple[float | None, float | None, float, bool],
+    saved: bool,
 ) -> None:
-    line_timeout, total_timeout, prompt_timeout, no_timeout_override = saved
     app._call_on_ui_thread(
         _apply_macro_timeout_state,
         app,
-        line_timeout=line_timeout,
-        total_timeout=total_timeout,
-        prompt_timeout=prompt_timeout,
-        no_timeout_override=no_timeout_override,
+        no_timeout_override=bool(saved),
         timeout=None,
     )
 
 
 def _tool_change_workflow_timeout_s(app) -> float:
+    if bool(getattr(app, "_tool_change_unlimited_time_active", False)) or bool(
+        getattr(app, "_macro_operator_assisted_unlimited_time_active", False)
+    ):
+        return 0.0
     try:
         timeout_s = float(getattr(app, "_tool_change_workflow_timeout_s", 1800.0) or 0.0)
     except Exception:

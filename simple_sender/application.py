@@ -189,6 +189,8 @@ class App(tk.Tk):
     _gcode_source: "FileGcodeSource | None"
     _gcode_streaming_mode: bool
     _gcode_total_lines: int
+    _gcode_restore_failed: bool
+    _gcode_restore_failure_message: str
     _resume_after_disconnect: bool
     _resume_from_index: int | None
     _resume_job_name: str | None

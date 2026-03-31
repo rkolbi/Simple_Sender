@@ -35,6 +35,7 @@ def job_controls_ready(app: Any, has_job: bool | None = None) -> bool:
         and app._grbl_ready
         and app._status_seen
         and not app._alarm_locked
+        and not bool(getattr(app, "_gcode_restore_failed", False))
     )
 
 

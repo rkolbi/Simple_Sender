@@ -33,6 +33,62 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _GCODE_APPLY_STAGE_BUDGET_MS = 15.0
 
+_LOADED_GCODE_RUNTIME_RESET_DEFAULTS: dict[str, object] = {
+    "_live_estimate_min": None,
+    "_live_estimate_total_min": None,
+    "_live_estimate_observed_total_min": None,
+    "_live_estimate_display_min": None,
+    "_live_estimate_display_ts": 0.0,
+    "_loaded_estimate_total_min": None,
+    "_loaded_estimate_source": "",
+    "_estimate_confidence": "provisional",
+    "_estimate_inputs_snapshot": {},
+    "_last_stats": None,
+    "_last_rate_source": None,
+    "_gcode_stats_sample_executable_lines": 0,
+    "_gcode_stats_sample_motion_lines": 0,
+    "_gcode_stats_executable_total_lines": 0,
+    "_gcode_stats_motion_total_lines": 0,
+}
+
+_IN_MEMORY_GCODE_SOURCE_DEFAULTS: dict[str, object] = {
+    "_gcode_storage_mode": "in_memory",
+    "_gcode_load_mode": "strict",
+    "_gcode_index_mode": "none",
+    "_gcode_source_line_count_known": True,
+    "_gcode_source_offset_count": 0,
+    "_gcode_source_offset_type": "",
+    "_gcode_prepare_sample_line_count": 0,
+    "_gcode_prepare_sample_head_lines": 0,
+    "_gcode_prepare_sample_tail_lines": 0,
+    "_gcode_prepare_sample_interval_lines": 0,
+    "_gcode_prepare_sample_max_lines": 0,
+    "_gcode_file_size_bytes": 0,
+    "_gcode_file_line_count": 0,
+    "_gcode_file_line_count_known": False,
+    "_gcode_total_lines_known": True,
+    "_gcode_prepare_executable_total_lines": 0,
+    "_gcode_prepare_motion_total_lines": 0,
+    "_gcode_prepare_sampled_executable_lines": 0,
+    "_gcode_prepare_sampled_motion_lines": 0,
+    "_gcode_quick_scan_ms": 0.0,
+    "_gcode_bounds_box": None,
+    "_gcode_bounds_confidence": "rough",
+    "_gcode_dimensions_confidence": "rough",
+    "_gcode_dimensions_confidence_reasons": {},
+    "_gcode_estimated_job_time_sec": None,
+    "_gcode_estimate_confidence": "provisional",
+    "_gcode_estimate_confidence_reasons": {},
+    "_gcode_estimate_replaced_quick": False,
+    "_gcode_post_popup_background_tasks": "none",
+    "_gcode_offset_index_enabled": False,
+    "_gcode_ssmeta_present": False,
+    "_gcode_ssmeta": {},
+    "_gcode_dimensions_source": "scan",
+    "_gcode_units_source": "scan",
+    "_gcode_ssmeta_scan_reduced": False,
+}
+
 
 def _is_motion_line(line: str) -> bool:
     text = str(line or "").strip().upper()
@@ -98,6 +154,46 @@ def _should_prime_file_backed_send_cache(app) -> bool:
     # File-backed jobs already stream from disk; on low-power profiles we skip
     # in-memory priming to avoid duplicate payload caches.
     return not _pi_profile_enabled(app)
+
+
+def _clone_state_default(value: object) -> object:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return value
+
+
+def _apply_state_defaults(app, defaults: dict[str, object]) -> None:
+    for attr_name, value in defaults.items():
+        setattr(app, attr_name, _clone_state_default(value))
+
+
+def _reset_loaded_runtime_tracking(app) -> None:
+    _apply_state_defaults(app, _LOADED_GCODE_RUNTIME_RESET_DEFAULTS)
+
+
+def _apply_in_memory_source_state(
+    app,
+    *,
+    lines: list[str],
+    total_lines: int | None,
+) -> None:
+    _apply_state_defaults(app, _IN_MEMORY_GCODE_SOURCE_DEFAULTS)
+    app._gcode_executable_lines = max(0, int(total_lines or len(lines)))
+    app._gcode_executable_lines_known = True
+    app._gcode_motion_lines = _count_motion_lines(lines)
+    app._gcode_motion_lines_known = True
+
+
+def _sync_loaded_job_restore_state(
+    app,
+    *,
+    failed: bool,
+    message: str = "",
+) -> None:
+    app._gcode_restore_failed = bool(failed)
+    app._gcode_restore_failure_message = str(message or "").strip()
 
 
 def apply_loaded_gcode(
@@ -173,6 +269,7 @@ def apply_loaded_gcode(
     ):
         app._gcode_validation_report = deps.validate_gcode_lines(lines)
     app._clear_pending_ui_updates()
+    _sync_loaded_job_restore_state(app, failed=False)
     app._last_gcode_lines = lines
     app._gcode_retained_line_count = int(len(lines))
     app._last_gcode_path = path
@@ -195,21 +292,7 @@ def apply_loaded_gcode(
             )
     app._stats_after_id = None
     app._stats_token = int(getattr(app, "_stats_token", 0)) + 1
-    app._live_estimate_min = None
-    app._live_estimate_total_min = None
-    app._live_estimate_observed_total_min = None
-    app._live_estimate_display_min = None
-    app._live_estimate_display_ts = 0.0
-    app._loaded_estimate_total_min = None
-    app._loaded_estimate_source = ""
-    app._estimate_confidence = "provisional"
-    app._estimate_inputs_snapshot = {}
-    app._last_stats = None
-    app._last_rate_source = None
-    app._gcode_stats_sample_executable_lines = 0
-    app._gcode_stats_sample_motion_lines = 0
-    app._gcode_stats_executable_total_lines = 0
-    app._gcode_stats_motion_total_lines = 0
+    _reset_loaded_runtime_tracking(app)
     existing_source = getattr(app, "_gcode_source", None)
     if existing_source is not None and existing_source is not streaming_source:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
@@ -229,45 +312,7 @@ def apply_loaded_gcode(
                 )
     app._gcode_source = streaming_source
     if streaming_source is None:
-        app._gcode_storage_mode = "in_memory"
-        app._gcode_load_mode = "strict"
-        app._gcode_index_mode = "none"
-        app._gcode_source_line_count_known = True
-        app._gcode_source_offset_count = 0
-        app._gcode_source_offset_type = ""
-        app._gcode_prepare_sample_line_count = 0
-        app._gcode_prepare_sample_head_lines = 0
-        app._gcode_prepare_sample_tail_lines = 0
-        app._gcode_prepare_sample_interval_lines = 0
-        app._gcode_prepare_sample_max_lines = 0
-        app._gcode_file_size_bytes = 0
-        app._gcode_file_line_count = 0
-        app._gcode_file_line_count_known = False
-        app._gcode_total_lines_known = True
-        app._gcode_executable_lines = max(0, int(total_lines or len(lines)))
-        app._gcode_executable_lines_known = True
-        app._gcode_motion_lines = _count_motion_lines(lines)
-        app._gcode_motion_lines_known = True
-        app._gcode_prepare_executable_total_lines = 0
-        app._gcode_prepare_motion_total_lines = 0
-        app._gcode_prepare_sampled_executable_lines = 0
-        app._gcode_prepare_sampled_motion_lines = 0
-        app._gcode_quick_scan_ms = 0.0
-        app._gcode_bounds_box = None
-        app._gcode_bounds_confidence = "rough"
-        app._gcode_dimensions_confidence = "rough"
-        app._gcode_dimensions_confidence_reasons = {}
-        app._gcode_estimated_job_time_sec = None
-        app._gcode_estimate_confidence = "provisional"
-        app._gcode_estimate_confidence_reasons = {}
-        app._gcode_estimate_replaced_quick = False
-        app._gcode_post_popup_background_tasks = "none"
-        app._gcode_offset_index_enabled = False
-        app._gcode_ssmeta_present = False
-        app._gcode_ssmeta = {}
-        app._gcode_dimensions_source = "scan"
-        app._gcode_units_source = "scan"
-        app._gcode_ssmeta_scan_reduced = False
+        _apply_in_memory_source_state(app, lines=lines, total_lines=total_lines)
     else:
         app._gcode_storage_mode = "file_backed_streaming"
         app._gcode_load_mode = str(
@@ -519,6 +564,7 @@ def apply_loaded_gcode(
                     )
     else:
         app.grbl.load_gcode(lines, name=deps.os.path.basename(path))
+    _sync_loaded_job_restore_state(app, failed=False)
     app._last_sent_index = -1
     app._last_acked_index = -1
     app._last_error_index = -1

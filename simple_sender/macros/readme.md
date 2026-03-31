@@ -42,6 +42,8 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 - During file streaming, exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines are sender directives that trigger configured vacuum outlet actions and are never sent to GRBL.
 - Run-button safety gate: starting a job checks the same `macro.state.TOOL_REFERENCE` state behind the Tool Ref label. If it is missing/invalid, the app shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
 - Dry Run safeguards: when Dry Run is enabled, both Run and Resume paths prompt before start/resume side effects (`Continue in Dry Run`, `Switch to Normal Run and Start/Resume`, `Cancel`).
+- `Disable Macro Timeouts` in **App Settings > Macros** disables the normal prompt, line, and total timeout enforcement used for general macro runs.
+- `Macro-3 (Job Setup)` and `Macro-4 (Tool Change)` already use scoped operator-assisted unlimited-wait behavior where the operator is expected to respond to prompts or complete setup/tool-change actions. Streamed `TC:<tool name>` tool changes also use their own scoped no-timeout override while the stream is paused.
 - Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab (with collapsible checklist titles) and release/start-job checklist dialogs.
 
 ## Core Directives
@@ -65,7 +67,7 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 2. Make modal intent explicit (`G90`/`G91`, feed mode, units) near motion lines.
 3. Use `%wait` after long moves or probe cycles.
 4. End with `STATE_RETURN` if the macro changes modal state.
-5. Set line/total macro timeouts in `App Settings > Macros` for unattended routines.
+5. Set line/total macro timeouts in `App Settings > Macros` for unattended routines, or turn on `Disable Macro Timeouts` only when you intentionally want general macros to wait indefinitely.
 
 ## Quick Troubleshooting
 

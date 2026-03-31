@@ -25,6 +25,12 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from simple_sender.ui.theme_helpers import (
+    bind_scrollbar_theme,
+    bind_text_display_theme,
+    notebook_page_style_name,
+    text_display_theme_options,
+)
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 
@@ -350,11 +356,11 @@ def refresh_file_info_tab(app) -> None:
 
 
 def build_file_info_tab(app, notebook) -> None:
-    tab = ttk.Frame(notebook, padding=6)
+    tab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
     notebook.add(tab, text="File Info")
     set_tab_tooltip(notebook, tab, "Loaded file metadata and quick-scan metrics.")
     app.file_info_tab = tab
-    content = ttk.Frame(tab)
+    content = ttk.Frame(tab, style=notebook_page_style_name())
     content.pack(fill="both", expand=True)
     text_widget = tk.Text(
         content,
@@ -363,10 +369,15 @@ def build_file_info_tab(app, notebook) -> None:
         state="disabled",
         takefocus=0,
     )
+    themed_options = text_display_theme_options(app)
+    if themed_options:
+        text_widget.configure(themed_options)
     text_widget.pack(side="left", fill="both", expand=True)
     scrollbar = ttk.Scrollbar(content, orient="vertical", command=text_widget.yview)
+    bind_scrollbar_theme(app, scrollbar)
     scrollbar.pack(side="right", fill="y")
     text_widget.configure(yscrollcommand=scrollbar.set)
+    bind_text_display_theme(app, text_widget)
     app.file_info_text = text_widget
     app.file_info_scrollbar = scrollbar
     refresh_file_info_tab(app)

@@ -26,6 +26,7 @@ from tkinter import ttk
 from typing import Any, Callable
 
 from simple_sender.ui.scrollable_container import build_scrollable_container
+from simple_sender.ui.theme_helpers import notebook_page_style_name
 from .sections import (
     build_auto_level_section,
     build_diagnostics_section,
@@ -666,13 +667,13 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
 def build_app_settings_tab(app, notebook):
     nb = notebook
     # App Settings tab
-    sstab = ttk.Frame(nb, padding=8)
+    sstab = ttk.Frame(nb, padding=8, style=notebook_page_style_name())
     nb.add(sstab, text="App Settings")
     set_tab_tooltip(nb, sstab, "Configure app preferences, UI, and safety settings.")
     sstab.grid_columnconfigure(0, weight=1)
     sstab.grid_rowconfigure(1, weight=1)
 
-    sticky_frame = ttk.Frame(sstab)
+    sticky_frame = ttk.Frame(sstab, style=notebook_page_style_name())
     sticky_frame.grid(row=0, column=0, sticky="ew", pady=(0, 4))
     sticky_frame.grid_columnconfigure(0, weight=1)
     sticky_frame.grid_columnconfigure(1, weight=0)
@@ -684,7 +685,7 @@ def build_app_settings_tab(app, notebook):
         else _APP_SETTINGS_VIEW_BASIC
     )
     app.app_settings_view_mode_var = tk.StringVar(master=sticky_frame, value=default_mode)
-    filter_row = ttk.Frame(sticky_frame)
+    filter_row = ttk.Frame(sticky_frame, style=notebook_page_style_name())
     filter_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
     filter_row.grid_columnconfigure(1, weight=1)
     ttk.Label(filter_row, text="Search").grid(row=0, column=0, sticky="w", padx=(0, 6))
@@ -734,10 +735,11 @@ def build_app_settings_tab(app, notebook):
     app._resume_app_settings_lazy_build = lambda: _schedule_app_settings_lazy_build(app)
     app._note_app_settings_interaction = lambda: _note_app_settings_interaction(app)
 
-    scroll_host = ttk.Frame(sstab)
+    scroll_host = ttk.Frame(sstab, style=notebook_page_style_name())
     scroll_host.grid(row=1, column=0, columnspan=2, sticky="nsew")
     scroll_container = build_scrollable_container(
         scroll_host,
+        app=app,
         tk_module=tk,
         ttk_module=ttk,
     )

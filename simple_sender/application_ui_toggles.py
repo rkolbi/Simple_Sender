@@ -57,6 +57,7 @@ from simple_sender.ui.ui_actions import (
     on_touch_command_feedback,
     on_gui_logging_change,
     on_performance_mode_change,
+    on_optional_tab_visibility_change,
     on_scrollbar_width_change,
     on_touch_scroll_mode_change,
     on_theme_change,
@@ -113,6 +114,9 @@ class UiTogglesMixin:
 
     def _on_performance_mode_change(self):
         on_performance_mode_change(self)
+
+    def _on_optional_tab_visibility_change(self):
+        on_optional_tab_visibility_change(self)
 
     def _on_theme_change(self, *_):
         on_theme_change(self)

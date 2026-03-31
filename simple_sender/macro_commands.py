@@ -30,6 +30,7 @@ import types
 from typing import Any, Callable
 from tkinter import messagebox
 
+from simple_sender.macro_timeouts import macro_timeouts_disabled
 from simple_sender.utils.constants import MACRO_GPAT, MACRO_PROMPT_TIMEOUT, RT_STATUS
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,6 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
-
 
 def _maybe_set_unit_mode(app, unit_mode: str | None) -> None:
     if not unit_mode:
@@ -80,7 +80,7 @@ def _handle_prompt_command(
         macro_snapshot,
     )
     prompt_timeout_s = float(getattr(app, "_macro_prompt_timeout_s", MACRO_PROMPT_TIMEOUT))
-    if bool(getattr(app, "_tool_change_unlimited_time_active", False)):
+    if macro_timeouts_disabled(app):
         prompt_timeout_s = 0.0
     if prompt_timeout_s < 0:
         prompt_timeout_s = 0.0

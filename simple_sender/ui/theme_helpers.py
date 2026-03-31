@@ -83,8 +83,8 @@ def _toggle_indicator_palette(app) -> dict[str, str]:
     background = _style_lookup(style, "TFrame", "background", palette.get("bg", "#f0f0f0"))
     border = palette.get("border") or _style_lookup(style, "TCheckbutton", "foreground", "#5f5f5f")
     field = _style_lookup(style, "TEntry", "fieldbackground", palette.get("button_bg", "#ffffff"))
-    accent = palette.get("button_pressed") or "#0b63d1"
-    check = palette.get("bg") or "#ffffff"
+    accent = palette.get("accent") or palette.get("button_pressed") or "#0b63d1"
+    check = palette.get("selection_fg") or palette.get("fg") or "#ffffff"
     muted = palette.get("muted_fg") or "#9a9a9a"
     disabled_fill = palette.get("button_bg") or background
     return {
@@ -349,6 +349,527 @@ def refresh_stop_button_backgrounds(app):
             btn.refresh_background()
 
 
+def register_theme_refresh(app, callback) -> None:
+    if not callable(callback):
+        return
+    callbacks = getattr(app, "_theme_refresh_callbacks", None)
+    if not isinstance(callbacks, list):
+        callbacks = []
+        app._theme_refresh_callbacks = callbacks
+    if callback not in callbacks:
+        callbacks.append(callback)
+
+
+def unregister_theme_refresh(app, callback) -> None:
+    callbacks = getattr(app, "_theme_refresh_callbacks", None)
+    if not isinstance(callbacks, list):
+        return
+    try:
+        callbacks.remove(callback)
+    except ValueError:
+        return
+
+
+def refresh_theme_widgets(app) -> None:
+    callbacks = getattr(app, "_theme_refresh_callbacks", None)
+    if not isinstance(callbacks, list):
+        return
+    for callback in tuple(callbacks):
+        try:
+            callback()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing theme-managed widget", exc)
+
+
+_TEXT_DISPLAY_OPTIONS = (
+    "background",
+    "foreground",
+    "insertbackground",
+    "insertwidth",
+    "selectbackground",
+    "selectforeground",
+    "inactiveselectbackground",
+    "highlightbackground",
+    "highlightcolor",
+    "highlightthickness",
+    "relief",
+    "borderwidth",
+)
+
+
+def _cache_widget_theme_defaults(widget, *, options: tuple[str, ...]) -> dict[str, object]:
+    cached = getattr(widget, "_simple_sender_theme_defaults", None)
+    if isinstance(cached, dict):
+        return cached
+    cached = {}
+    for option in options:
+        try:
+            cached[option] = widget.cget(option)
+        except Exception:
+            continue
+    try:
+        widget._simple_sender_theme_defaults = cached
+    except Exception:
+        pass
+    return cached
+
+
+def _text_display_palette(app) -> dict[str, object] | None:
+    palette = getattr(app, "theme_palette", None)
+    if not isinstance(palette, dict) or not palette:
+        return None
+    bg = (
+        palette.get("text_pane_bg")
+        or palette.get("panel_raised")
+        or palette.get("button_bg")
+        or palette.get("panel_bg")
+        or palette.get("bg")
+    )
+    fg = palette.get("text_pane_fg") or palette.get("fg") or "#ffffff"
+    selection_bg = palette.get("selection_bg") or palette.get("accent") or bg
+    selection_fg = palette.get("selection_fg") or fg
+    border = palette.get("text_pane_border") or palette.get("border") or bg or "#000000"
+    inactive_selection = palette.get("text_pane_inactive_selection_bg") or selection_bg
+    insert = palette.get("text_pane_insert") or palette.get("accent_secondary") or fg
+    return {
+        "background": bg,
+        "foreground": fg,
+        "insertbackground": insert,
+        "insertwidth": 2,
+        "selectbackground": selection_bg,
+        "selectforeground": selection_fg,
+        "inactiveselectbackground": inactive_selection,
+        "highlightbackground": border,
+        "highlightcolor": palette.get("accent") or border,
+        "highlightthickness": 1,
+        "relief": "flat",
+        "borderwidth": 1,
+    }
+
+
+def text_display_theme_options(app) -> dict[str, object]:
+    palette = _text_display_palette(app)
+    return dict(palette) if isinstance(palette, dict) else {}
+
+
+def apply_text_display_theme(app, widget) -> None:
+    if widget is None:
+        return
+    exists = getattr(widget, "winfo_exists", None)
+    if callable(exists):
+        try:
+            if not bool(exists()):
+                return
+        except Exception:
+            return
+    defaults = _cache_widget_theme_defaults(widget, options=_TEXT_DISPLAY_OPTIONS)
+    palette = _text_display_palette(app)
+    values = palette or defaults
+    if not isinstance(values, dict) or not values:
+        return
+    try:
+        widget.configure(**values)
+    except Exception as exc:
+        _log_suppressed("Failed applying themed text-display widget colors", exc)
+
+
+_CANVAS_OPTIONS = (
+    "background",
+    "highlightbackground",
+    "highlightcolor",
+    "highlightthickness",
+    "borderwidth",
+    "relief",
+)
+
+_SCROLLBAR_OPTIONS = (
+    "style",
+    "width",
+)
+
+
+def _canvas_palette(app) -> dict[str, object] | None:
+    palette = getattr(app, "theme_palette", None)
+    if not isinstance(palette, dict) or not palette:
+        return None
+    background = (
+        palette.get("panel_bg")
+        or palette.get("bg")
+        or palette.get("button_bg")
+    )
+    border = palette.get("border") or background or "#000000"
+    return {
+        "background": background,
+        "highlightbackground": background,
+        "highlightcolor": border,
+        "highlightthickness": 0,
+        "borderwidth": 0,
+        "relief": "flat",
+    }
+
+
+def _scrollbar_width_value(app) -> int | None:
+    cached = getattr(app, "_scrollbar_width_px", None)
+    try:
+        if isinstance(cached, (int, float, str)) and cached not in ("", None):
+            return max(1, int(cached))
+    except Exception:
+        pass
+    style = getattr(app, "style", None)
+    if style is None:
+        return None
+    for style_name in ("Vertical.TScrollbar", "Horizontal.TScrollbar", "TScrollbar"):
+        for option in ("width", "arrowsize"):
+            try:
+                value = style.lookup(style_name, option)
+            except Exception:
+                value = None
+            try:
+                if value not in ("", None):
+                    return max(1, int(value))
+            except Exception:
+                continue
+    return None
+
+
+def _scrollbar_palette(app, widget) -> dict[str, object] | None:
+    width = _scrollbar_width_value(app)
+    try:
+        orient = str(widget.cget("orient") or "").strip().lower()
+    except Exception:
+        orient = "vertical"
+    style_name = "Horizontal.TScrollbar" if orient == "horizontal" else "Vertical.TScrollbar"
+    values: dict[str, object] = {"style": style_name}
+    if width is not None:
+        values["width"] = int(width)
+    return values
+
+
+def _plain_tk_defaults(app) -> dict[str, object]:
+    palette = getattr(app, "theme_palette", None)
+    palette = palette if isinstance(palette, dict) else {}
+    style = getattr(app, "style", None)
+    frame_bg = _normalize_color(
+        app,
+        palette.get("panel_bg")
+        or palette.get("bg")
+        or palette.get("button_bg")
+        or _style_lookup(style, "TFrame", "background", "#f0f0f0"),
+        "#f0f0f0",
+    )
+    text_bg = _normalize_color(
+        app,
+        palette.get("text_pane_bg")
+        or palette.get("panel_raised")
+        or palette.get("button_bg")
+        or _style_lookup(style, "TEntry", "fieldbackground", frame_bg),
+        frame_bg,
+    )
+    fg = _normalize_color(
+        app,
+        palette.get("text_pane_fg")
+        or palette.get("fg")
+        or _style_lookup(style, "TLabel", "foreground", "#000000"),
+        "#000000",
+    )
+    border = _normalize_color(
+        app,
+        palette.get("text_pane_border")
+        or palette.get("border")
+        or _style_lookup(style, "TFrame", "bordercolor", frame_bg),
+        frame_bg,
+    )
+    accent = _normalize_color(
+        app,
+        palette.get("accent")
+        or _style_lookup(style, "TButton", "focuscolor", border),
+        border,
+    )
+    selection_bg = _normalize_color(
+        app,
+        palette.get("selection_bg") or accent,
+        accent,
+    )
+    selection_fg = _normalize_color(
+        app,
+        palette.get("selection_fg") or fg,
+        fg,
+    )
+    muted = _normalize_color(
+        app,
+        palette.get("muted_fg") or fg,
+        fg,
+    )
+    return {
+        "frame_bg": frame_bg,
+        "text_bg": text_bg,
+        "fg": fg,
+        "border": border,
+        "accent": accent,
+        "selection_bg": selection_bg,
+        "selection_fg": selection_fg,
+        "muted": muted,
+    }
+
+
+def plain_tk_theme_defaults(app) -> dict[str, object]:
+    return dict(_plain_tk_defaults(app))
+
+
+def _seed_plain_tk_widget_defaults(app) -> None:
+    option_add = getattr(app, "option_add", None)
+    if not callable(option_add):
+        return
+    defaults = _plain_tk_defaults(app)
+    option_values = {
+        "*Text.background": defaults["text_bg"],
+        "*Text.foreground": defaults["fg"],
+        "*Text.insertBackground": defaults["accent"],
+        "*Text.selectBackground": defaults["selection_bg"],
+        "*Text.selectForeground": defaults["selection_fg"],
+        "*Text.highlightBackground": defaults["border"],
+        "*Text.highlightColor": defaults["accent"],
+        "*Listbox.background": defaults["text_bg"],
+        "*Listbox.foreground": defaults["fg"],
+        "*Listbox.selectBackground": defaults["selection_bg"],
+        "*Listbox.selectForeground": defaults["selection_fg"],
+        "*Listbox.disabledForeground": defaults["muted"],
+        "*Listbox.highlightBackground": defaults["border"],
+        "*Listbox.highlightColor": defaults["accent"],
+        "*Canvas.background": defaults["frame_bg"],
+        "*Canvas.highlightBackground": defaults["frame_bg"],
+        "*Canvas.highlightColor": defaults["border"],
+    }
+    for pattern, value in option_values.items():
+        try:
+            option_add(pattern, value)
+        except Exception as exc:
+            _log_suppressed(f"Failed seeding Tk option database for {pattern}", exc)
+
+
+def configure_notebook_page_style(app) -> None:
+    style = getattr(app, "style", None)
+    if style is None:
+        return
+    defaults = _plain_tk_defaults(app)
+    try:
+        style.configure("SimpleSender.NotebookPage.TFrame", background=defaults["frame_bg"])
+    except Exception as exc:
+        _log_suppressed("Failed configuring notebook page frame style", exc)
+
+
+def notebook_page_style_name() -> str:
+    return "SimpleSender.NotebookPage.TFrame"
+
+
+def canvas_theme_options(app) -> dict[str, object]:
+    palette = _canvas_palette(app)
+    return dict(palette) if isinstance(palette, dict) else {}
+
+
+def apply_canvas_theme(app, widget) -> None:
+    if widget is None:
+        return
+    exists = getattr(widget, "winfo_exists", None)
+    if callable(exists):
+        try:
+            if not bool(exists()):
+                return
+        except Exception:
+            return
+    defaults = _cache_widget_theme_defaults(widget, options=_CANVAS_OPTIONS)
+    palette = _canvas_palette(app)
+    values = palette or defaults
+    if not isinstance(values, dict) or not values:
+        return
+    try:
+        widget.configure(**values)
+    except Exception as exc:
+        _log_suppressed("Failed applying themed canvas colors", exc)
+
+
+def apply_scrollbar_theme(app, widget) -> None:
+    if widget is None:
+        return
+    exists = getattr(widget, "winfo_exists", None)
+    if callable(exists):
+        try:
+            if not bool(exists()):
+                return
+        except Exception:
+            return
+    defaults = _cache_widget_theme_defaults(widget, options=_SCROLLBAR_OPTIONS)
+    palette = _scrollbar_palette(app, widget)
+    values = palette or defaults
+    if not isinstance(values, dict) or not values:
+        return
+    style_name = values.get("style")
+    if style_name not in ("", None):
+        try:
+            widget.configure(style=style_name)
+        except Exception as exc:
+            _log_suppressed("Failed applying themed scrollbar style", exc)
+    width = values.get("width")
+    if width not in ("", None):
+        try:
+            widget.configure(width=width)
+        except Exception:
+            pass
+
+
+_LISTBOX_OPTIONS = (
+    "background",
+    "foreground",
+    "selectbackground",
+    "selectforeground",
+    "disabledforeground",
+    "highlightbackground",
+    "highlightcolor",
+    "highlightthickness",
+    "relief",
+    "borderwidth",
+    "activestyle",
+)
+
+
+def _listbox_palette(app) -> dict[str, object] | None:
+    palette = getattr(app, "theme_palette", None)
+    if not isinstance(palette, dict) or not palette:
+        return None
+    bg = (
+        palette.get("text_pane_bg")
+        or palette.get("panel_raised")
+        or palette.get("button_bg")
+        or palette.get("panel_bg")
+        or palette.get("bg")
+    )
+    fg = palette.get("text_pane_fg") or palette.get("fg") or "#ffffff"
+    selection_bg = palette.get("selection_bg") or palette.get("accent") or bg
+    selection_fg = palette.get("selection_fg") or fg
+    border = palette.get("text_pane_border") or palette.get("border") or bg or "#000000"
+    return {
+        "background": bg,
+        "foreground": fg,
+        "selectbackground": selection_bg,
+        "selectforeground": selection_fg,
+        "disabledforeground": palette.get("muted_fg") or fg,
+        "highlightbackground": border,
+        "highlightcolor": palette.get("accent") or border,
+        "highlightthickness": 1,
+        "relief": "flat",
+        "borderwidth": 1,
+        "activestyle": "none",
+    }
+
+
+def apply_listbox_theme(app, widget) -> None:
+    if widget is None:
+        return
+    exists = getattr(widget, "winfo_exists", None)
+    if callable(exists):
+        try:
+            if not bool(exists()):
+                return
+        except Exception:
+            return
+    defaults = _cache_widget_theme_defaults(widget, options=_LISTBOX_OPTIONS)
+    palette = _listbox_palette(app)
+    values = palette or defaults
+    if not isinstance(values, dict) or not values:
+        return
+    try:
+        widget.configure(**values)
+    except Exception as exc:
+        _log_suppressed("Failed applying themed listbox widget colors", exc)
+
+
+def _bind_theme_managed_widget(app, widget, *, apply_callback_name: str, apply_func) -> None:
+    if widget is None:
+        return
+    callback = getattr(widget, apply_callback_name, None)
+    if not callable(callback):
+        callback = lambda widget=widget: apply_func(app, widget)
+        try:
+            setattr(widget, apply_callback_name, callback)
+        except Exception:
+            pass
+        register_theme_refresh(app, callback)
+
+        def _cleanup(event=None, *, widget=widget, callback=callback) -> None:
+            if event is not None and getattr(event, "widget", None) is not widget:
+                return
+            unregister_theme_refresh(app, callback)
+            try:
+                setattr(widget, apply_callback_name, None)
+            except Exception:
+                pass
+
+        try:
+            widget.bind("<Destroy>", _cleanup, add="+")
+        except Exception as exc:
+            _log_suppressed("Failed binding themed-widget cleanup handler", exc)
+    callback()
+
+
+def bind_text_display_theme(app, widget) -> None:
+    _bind_theme_managed_widget(
+        app,
+        widget,
+        apply_callback_name="_simple_sender_theme_refresh",
+        apply_func=apply_text_display_theme,
+    )
+
+
+def bind_listbox_theme(app, widget) -> None:
+    _bind_theme_managed_widget(
+        app,
+        widget,
+        apply_callback_name="_simple_sender_listbox_theme_refresh",
+        apply_func=apply_listbox_theme,
+    )
+
+
+def bind_canvas_theme(app, widget) -> None:
+    _bind_theme_managed_widget(
+        app,
+        widget,
+        apply_callback_name="_simple_sender_canvas_theme_refresh",
+        apply_func=apply_canvas_theme,
+    )
+
+
+def bind_scrollbar_theme(app, widget) -> None:
+    _bind_theme_managed_widget(
+        app,
+        widget,
+        apply_callback_name="_simple_sender_scrollbar_theme_refresh",
+        apply_func=apply_scrollbar_theme,
+    )
+
+
+def resolve_theme_choice(app, theme: str | None, *, default_theme: str | None = None) -> str:
+    available = list(getattr(app, "available_themes", ()) or ())
+    candidates: list[str] = []
+    for value in (theme, default_theme):
+        normalized = str(value or "").strip()
+        if normalized:
+            candidates.append(normalized)
+    current_theme = ""
+    style = getattr(app, "style", None)
+    if style is not None:
+        try:
+            current_theme = str(style.theme_use() or "").strip()
+        except Exception:
+            current_theme = ""
+    if current_theme:
+        candidates.append(current_theme)
+    candidates.extend(str(name or "").strip() for name in available)
+    for candidate in candidates:
+        if candidate and candidate in available:
+            return candidate
+    return current_theme or str(default_theme or theme or "").strip()
+
+
 def _apply_icon_button_theme(app, palette: dict):
     style = app.style
     style.configure(
@@ -376,7 +897,13 @@ def _apply_home_button_theme(app, palette: dict):
     if not style_name:
         return
     button_bg = palette.get("button_bg", "#f0f0f0") if isinstance(palette, dict) else "#f0f0f0"
-    accent = "#5b3b89"
+    accent = (
+        palette.get("accent_secondary")
+        or palette.get("accent")
+        or "#5b3b89"
+        if isinstance(palette, dict)
+        else "#5b3b89"
+    )
     fg = accent
     border = palette.get("border", button_bg) if isinstance(palette, dict) else button_bg
     hover = palette.get("button_hover", button_bg) if isinstance(palette, dict) else button_bg
@@ -459,14 +986,15 @@ def _reapply_button_metrics(app) -> None:
         _log_suppressed("Failed reapplying unit-toggle button metrics", exc)
 
 
-def apply_theme(app, theme: str):
+def apply_theme(app, theme: str) -> str:
+    applied_theme = resolve_theme_choice(app, theme, default_theme=getattr(app, "default_theme_name", ""))
     try:
-        if theme in app.available_themes:
-            app.style.theme_use(theme)
+        if applied_theme in app.available_themes:
+            app.style.theme_use(applied_theme)
             _reapply_button_metrics(app)
             palette = None
             try:
-                palette = app.theme_palettes.get(theme)
+                palette = app.theme_palettes.get(applied_theme)
             except Exception:
                 palette = None
             if palette:
@@ -481,6 +1009,8 @@ def apply_theme(app, theme: str):
                     _log_suppressed("Failed applying icon button theme overrides", exc)
             else:
                 app.theme_palette = {}
+            _seed_plain_tk_widget_defaults(app)
+            configure_notebook_page_style(app)
             apply_toggle_indicator_style(app)
             try:
                 _apply_home_button_theme(app, palette or {})
@@ -491,10 +1021,25 @@ def apply_theme(app, theme: str):
             except Exception as exc:
                 _log_suppressed("Failed applying notebook tab font after theme change", exc)
             try:
-                app.style.configure("TNotebook.Tab", padding=(10, 4))
+                app.style.configure("TNotebook.Tab", padding=(14, 8))
             except Exception as exc:
                 _log_suppressed("Failed applying notebook tab padding after theme change", exc)
             refresh_stop_button_backgrounds(app)
             refresh_led_backgrounds(app)
+            refresh_theme_widgets(app)
     except tk.TclError as exc:
         _log_suppressed("Failed applying requested Tk theme", exc)
+    selected_theme = getattr(app, "selected_theme", None)
+    setter = getattr(selected_theme, "set", None)
+    if callable(setter) and applied_theme:
+        try:
+            setter(applied_theme)
+        except Exception as exc:
+            _log_suppressed("Failed syncing selected-theme variable after theme apply", exc)
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict) and applied_theme:
+        try:
+            settings["theme"] = applied_theme
+        except Exception as exc:
+            _log_suppressed("Failed syncing theme setting after theme apply", exc)
+    return applied_theme

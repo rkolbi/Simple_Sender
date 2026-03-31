@@ -29,6 +29,7 @@ from tkinter import ttk
 from typing import Any, Callable, cast
 
 from simple_sender.ui.checklist_files import find_named_checklist, load_checklist_items
+from simple_sender.ui.theme_helpers import bind_text_display_theme, text_display_theme_options
 
 from .popup_utils import center_window
 
@@ -146,7 +147,11 @@ def _open_checklist_window(
         justify="left",
     ).pack(anchor="w", pady=(4, 10))
     text = tk.Text(container, wrap="word", height=text_height)
+    themed_options = text_display_theme_options(app)
+    if themed_options:
+        text.configure(themed_options)
     text.pack(fill="both", expand=True)
+    bind_text_display_theme(app, text)
     if items:
         text.insert("end", "\n".join(f"- {item}" for item in items))
     else:

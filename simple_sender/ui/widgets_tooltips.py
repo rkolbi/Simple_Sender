@@ -23,7 +23,6 @@
 import logging
 import time
 import tkinter as tk
-from tkinter import ttk
 from typing import Any, Callable, cast
 
 from simple_sender.ui.tooltip_policy import resolve_disabled_reason as _policy_disabled_reason
@@ -98,6 +97,82 @@ def _place_tooltip_window(widget, tip: tk.Toplevel, x: int, y: int) -> None:
     tip.wm_geometry(f"+{final_x}+{final_y}")
 
 
+def _tooltip_style_lookup(owner, style_name: str, option: str) -> str:
+    style = getattr(owner, "style", None) if owner is not None else None
+    lookup = getattr(style, "lookup", None)
+    if not callable(lookup):
+        return ""
+    try:
+        return str(lookup(style_name, option) or "").strip()
+    except Exception:
+        return ""
+
+
+def _tooltip_palette(widget) -> dict[str, str]:
+    owner = _resolve_owner(widget, "theme_palette") or _resolve_owner(widget, "style")
+    palette = getattr(owner, "theme_palette", None) if owner is not None else None
+    if not isinstance(palette, dict):
+        palette = {}
+    bg = str(
+        palette.get("panel_raised")
+        or palette.get("text_pane_bg")
+        or _tooltip_style_lookup(owner, "TEntry", "fieldbackground")
+        or _tooltip_style_lookup(owner, "TFrame", "background")
+        or _tooltip_style_lookup(owner, ".", "background")
+        or "#ffffe0"
+    ).strip() or "#ffffe0"
+    fg = str(
+        palette.get("fg")
+        or palette.get("text_pane_fg")
+        or _tooltip_style_lookup(owner, "TLabel", "foreground")
+        or _tooltip_style_lookup(owner, ".", "foreground")
+        or "#111111"
+    ).strip() or "#111111"
+    border = str(
+        palette.get("accent")
+        or palette.get("text_pane_border")
+        or _tooltip_style_lookup(owner, ".", "focuscolor")
+        or _tooltip_style_lookup(owner, "TButton", "bordercolor")
+        or _tooltip_style_lookup(owner, "TNotebook.Tab", "bordercolor")
+        or "#8a8a52"
+    ).strip() or "#8a8a52"
+    return {
+        "background": bg,
+        "foreground": fg,
+        "border": border,
+    }
+
+
+def _build_tooltip_label(
+    widget,
+    tip: tk.Toplevel,
+    *,
+    text: str,
+    wraplength: int | None,
+) -> tk.Label:
+    palette = _tooltip_palette(widget)
+    label_kwargs: dict[str, Any] = {
+        "text": text,
+        "background": palette["background"],
+        "foreground": palette["foreground"],
+        "relief": "solid",
+        "borderwidth": 1,
+        "padx": 6,
+        "pady": 3,
+        "highlightthickness": 1,
+        "highlightbackground": palette["border"],
+        "highlightcolor": palette["border"],
+    }
+    if wraplength is not None:
+        label_kwargs["wraplength"] = wraplength
+        label_kwargs["justify"] = "left"
+    try:
+        tip.configure(background=palette["background"])
+    except tk.TclError:
+        pass
+    return tk.Label(tip, **label_kwargs)
+
+
 class ToolTip:
     def __init__(self, widget, text: str, delay_ms: int = TOOLTIP_DELAY_MS):
         self.widget = widget
@@ -158,17 +233,11 @@ class ToolTip:
             self._tip.wm_overrideredirect(True)
             self._tip.wm_geometry(f"+{x}+{y}")
             wraplength = _tooltip_wraplength(self.widget)
-            label_kwargs: dict[str, Any] = {}
-            if wraplength is not None:
-                label_kwargs["wraplength"] = wraplength
-                label_kwargs["justify"] = "left"
-            label = ttk.Label(
+            label = _build_tooltip_label(
+                self.widget,
                 self._tip,
                 text=text,
-                background="#ffffe0",
-                relief="solid",
-                padding=(6, 3),
-                **label_kwargs,
+                wraplength=wraplength,
             )
             label.pack()
             _place_tooltip_window(self.widget, self._tip, int(x), int(y))
@@ -355,17 +424,11 @@ class _NotebookTabTooltips:
             self._tip.wm_overrideredirect(True)
             self._tip.wm_geometry(f"+{x}+{y}")
             wraplength = _tooltip_wraplength(self.notebook)
-            label_kwargs: dict[str, Any] = {}
-            if wraplength is not None:
-                label_kwargs["wraplength"] = wraplength
-                label_kwargs["justify"] = "left"
-            label = ttk.Label(
+            label = _build_tooltip_label(
+                self.notebook,
                 self._tip,
                 text=text,
-                background="#ffffe0",
-                relief="solid",
-                padding=(6, 3),
-                **label_kwargs,
+                wraplength=wraplength,
             )
             label.pack()
             _place_tooltip_window(self.notebook, self._tip, int(x), int(y))

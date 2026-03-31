@@ -31,6 +31,7 @@ from simple_sender.ui.checklist_files import (
     load_checklist_items,
 )
 from simple_sender.ui.scrollable_container import build_scrollable_container
+from simple_sender.ui.theme_helpers import notebook_page_style_name
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 
@@ -124,13 +125,14 @@ def _build_checklist_section(
 
 
 def build_checklists_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
-    tab = ttk.Frame(notebook, padding=8)
+    tab = ttk.Frame(notebook, padding=8, style=notebook_page_style_name())
     notebook.add(tab, text="Checklists")
     set_tab_tooltip(notebook, tab, "Run setup and safety checklists.")
     tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(0, weight=1)
     scroll_container = build_scrollable_container(
         tab,
+        app=app,
         tk_module=tk,
         ttk_module=ttk,
         bind_mousewheel_support=True,

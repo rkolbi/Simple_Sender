@@ -23,6 +23,8 @@
 import logging
 import sys
 
+from simple_sender.ui.theme_helpers import resolve_theme_choice
+from simple_sender.ui.ttk_themes import register_simple_sender_themes
 from simple_sender.utils.constants import (
     JOG_DRO_SMOOTHING_CHOICES,
     JOG_DRO_SMOOTHING_OFF,
@@ -89,6 +91,12 @@ def _init_behavior_preferences(
         value=setting(
             "macro_total_timeout_sec",
             default_settings.get("macro_total_timeout_sec", 0.0),
+        )
+    )
+    app.disable_macro_timeouts = tk.BooleanVar(
+        value=setting(
+            "disable_macro_timeouts",
+            default_settings.get("disable_macro_timeouts", False),
         )
     )
     app.macro_probe_z_location = tk.DoubleVar(
@@ -225,15 +233,21 @@ def _init_behavior_preferences(
 
 def _init_style_preferences(app, *, tkfont, ttk) -> None:
     app.style = ttk.Style()
+    app.theme_palettes = register_simple_sender_themes(app.style)
     try:
         default_scrollbar = app.style.lookup("TScrollbar", "width")
     except Exception:
         default_scrollbar = None
+    if default_scrollbar in ("", None):
+        try:
+            default_scrollbar = app.style.lookup("TScrollbar", "arrowsize")
+        except Exception:
+            default_scrollbar = None
     try:
         app._scrollbar_width_default = int(default_scrollbar)
     except Exception:
         app._scrollbar_width_default = None
-    app.theme_palettes = {}
+    app._scrollbar_width_px = app._scrollbar_width_default
     default_font = tkfont.nametofont("TkDefaultFont")
     app.icon_button_font = tkfont.Font(
         family=default_font.cget("family"),
@@ -349,6 +363,9 @@ def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
     app.show_endstop_indicator = tk.BooleanVar(value=setting("show_endstop_indicator", True))
     app.show_probe_indicator = tk.BooleanVar(value=setting("show_probe_indicator", True))
     app.show_hold_indicator = tk.BooleanVar(value=setting("show_hold_indicator", True))
+    app.show_logs_tab = tk.BooleanVar(value=setting("show_logs_tab", False))
+    app.show_raw_grbl_tab = tk.BooleanVar(value=setting("show_raw_grbl_tab", False))
+    app.show_checklists_tab = tk.BooleanVar(value=setting("show_checklists_tab", True))
     app.auto_level_enabled = tk.BooleanVar(value=setting("auto_level_enabled", True))
     app.show_autolevel_overlay = tk.BooleanVar(value=setting("show_autolevel_overlay", True))
     app.show_quick_tips_button = tk.BooleanVar(value=setting("show_quick_tips_button", True))
@@ -389,9 +406,24 @@ def init_basic_preferences(app, app_version: str, module):
     )
     _init_style_preferences(app, tkfont=tkfont, ttk=ttk)
     app.available_themes = list(app.style.theme_names())
-    theme_choice = setting("theme", app.style.theme_use())
+    app.default_theme_name = str(default_settings.get("theme", "") or "").strip()
+    requested_theme = str(setting("theme", app.style.theme_use()) or "").strip()
+    theme_choice = resolve_theme_choice(
+        app,
+        requested_theme,
+        default_theme=app.default_theme_name,
+    )
     app.selected_theme = tk.StringVar(value=theme_choice)
-    app._apply_theme(theme_choice)
+    applied_theme = str(app._apply_theme(theme_choice) or theme_choice).strip()
+    actual_theme = resolve_theme_choice(
+        app,
+        applied_theme,
+        default_theme=theme_choice,
+    )
+    if actual_theme and actual_theme != app.selected_theme.get():
+        app.selected_theme.set(actual_theme)
+    if isinstance(getattr(app, "settings", None), dict) and actual_theme:
+        app.settings["theme"] = actual_theme
     try:
         app._apply_scrollbar_width()
     except Exception as exc:

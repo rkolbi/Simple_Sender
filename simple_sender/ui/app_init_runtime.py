@@ -663,6 +663,8 @@ def _init_stream_and_override_state(
     app._resume_after_disconnect = False
     app._resume_from_index = None
     app._resume_job_name = None
+    app._gcode_restore_failed = False
+    app._gcode_restore_failure_message = ""
     app._job_started_at = None
     app._job_completion_notified = False
 

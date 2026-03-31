@@ -24,6 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.ui.scrollable_container import build_scrollable_container
+from simple_sender.ui.theme_helpers import bind_scrollbar_theme, bind_text_display_theme, text_display_theme_options
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
@@ -138,6 +139,7 @@ def build_overdrive_tab(app, parent):
     container.pack(fill="both", expand=True)
     scroll_container = build_scrollable_container(
         container,
+        app=app,
         tk_module=tk,
         ttk_module=ttk,
         bind_mousewheel_support=True,
@@ -309,16 +311,21 @@ def build_overdrive_tab(app, parent):
             wrap="word",
             state="disabled",
         )
+        themed_options = text_display_theme_options(app)
+        if themed_options:
+            app.overdrive_validation_results_text.configure(themed_options)
         app.overdrive_validation_results_text.pack(side="left", fill="both", expand=True)
         validate_results_scroll = scrollbar_cls(
             validate_results_row,
             orient="vertical",
             command=app.overdrive_validation_results_text.yview,
         )
+        bind_scrollbar_theme(app, validate_results_scroll)
         validate_results_scroll.pack(side="right", fill="y")
         app.overdrive_validation_results_text.configure(
             yscrollcommand=validate_results_scroll.set
         )
+        bind_text_display_theme(app, app.overdrive_validation_results_text)
     else:
         class _TextFallback:
             def __init__(self) -> None:

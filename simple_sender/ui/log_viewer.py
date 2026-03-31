@@ -34,6 +34,12 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.ui.theme_helpers import (
+    bind_scrollbar_theme,
+    bind_text_display_theme,
+    notebook_page_style_name,
+    text_display_theme_options,
+)
 from simple_sender.utils.atomic_files import atomic_replace_path
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.logging_config import get_log_dir
@@ -251,7 +257,7 @@ class LogViewer(ttk.Frame):
         close_callback=None,
         line_limit: int = 1000,
     ) -> None:
-        super().__init__(parent, padding=12)
+        super().__init__(parent, padding=12, style=notebook_page_style_name())
         self.app = app
         self._include_close = include_close
         self._close_callback = close_callback
@@ -296,11 +302,17 @@ class LogViewer(ttk.Frame):
             self.text = tk.Text(self, wrap=tk.NONE, height=28, font=font)
         else:
             self.text = tk.Text(self, wrap=tk.NONE, height=28)
+        themed_options = text_display_theme_options(self.app)
+        if themed_options:
+            self.text.configure(themed_options)
         self.text.pack(fill="both", expand=True, side="left")
+        bind_text_display_theme(self.app, self.text)
 
         y_scroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
+        bind_scrollbar_theme(self.app, y_scroll)
         y_scroll.pack(side="right", fill="y")
         x_scroll = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
+        bind_scrollbar_theme(self.app, x_scroll)
         x_scroll.pack(fill="x")
         self.text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 

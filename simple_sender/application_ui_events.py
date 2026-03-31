@@ -40,7 +40,11 @@ from simple_sender.ui.controls.toolbar import (
     update_resume_button_visibility,
 )
 from simple_sender.ui.dialogs import show_macro_prompt
-from simple_sender.ui.main_tabs import on_tab_changed, update_tab_visibility
+from simple_sender.ui.main_tabs import (
+    on_tab_changed,
+    sync_optional_tab_visibility,
+    update_tab_visibility,
+)
 from simple_sender.ui.manual_controls import clear_widget_transient_state
 from simple_sender.ui.settings import (
     bind_app_settings_mousewheel,
@@ -109,6 +113,9 @@ class UiEventsMixin:
 
     def _update_tab_visibility(self, nb=None):
         update_tab_visibility(self, nb)
+
+    def _sync_optional_tab_visibility(self, nb=None):
+        sync_optional_tab_visibility(self, nb)
 
     def _update_app_settings_scrollregion(self):
         update_app_settings_scrollregion(self)

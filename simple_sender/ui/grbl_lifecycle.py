@@ -108,6 +108,105 @@ def _report_modal_sync_failure(app, message: str) -> None:
             pass
 
 
+def _set_gcode_restore_state(
+    app,
+    *,
+    failed: bool,
+    message: str = "",
+) -> None:
+    try:
+        app._gcode_restore_failed = bool(failed)
+    except Exception:
+        pass
+    try:
+        app._gcode_restore_failure_message = str(message or "").strip()
+    except Exception:
+        pass
+
+
+def _clear_loaded_job_after_restore_failure(app) -> None:
+    clear_fn = getattr(app, "_clear_gcode", None)
+    if callable(clear_fn):
+        try:
+            clear_fn()
+            return
+        except Exception as exc:
+            _log_suppressed("Failed clearing job after reconnect restore failure", exc)
+    try:
+        app._gcode_source = None
+        app._last_gcode_lines = []
+        app._last_gcode_path = None
+        app._gcode_hash = None
+        app._gcode_total_lines = 0
+        app._resume_after_disconnect = False
+        app._resume_from_index = None
+        app._resume_job_name = None
+    except Exception as exc:
+        _log_suppressed(
+            "Failed clearing local G-code state after reconnect restore failure",
+            exc,
+        )
+    gview = getattr(app, "gview", None)
+    clear_view = getattr(gview, "clear", None)
+    if callable(clear_view):
+        try:
+            clear_view()
+        except Exception as exc:
+            _log_suppressed("Failed clearing G-code viewer after reconnect restore failure", exc)
+    refresh_file_info = getattr(app, "_refresh_file_info_tab", None)
+    if callable(refresh_file_info):
+        try:
+            refresh_file_info()
+        except Exception as exc:
+            _log_suppressed("Failed refreshing File Info after reconnect restore failure", exc)
+    try:
+        disable_job_controls(app)
+    except Exception as exc:
+        _log_suppressed("Failed disabling job controls after reconnect restore failure", exc)
+
+
+def _handle_reconnect_gcode_restore_failure(app, exc: BaseException) -> None:
+    _log_suppressed("Failed restoring loaded G-code after connect", exc)
+    message = "Connected, but the previous job could not be restored. Reload the job before running."
+    _clear_loaded_job_after_restore_failure(app)
+    _set_gcode_restore_state(app, failed=True, message=message)
+    try:
+        app.status.config(text=message)
+    except Exception:
+        pass
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("log", f"[status] {message}"))
+        except Exception:
+            pass
+
+
+def _restore_loaded_gcode_after_connect(app) -> None:
+    if getattr(app, "_gcode_source", None) is not None:
+        name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
+        app.grbl.load_gcode(app._gcode_source, name=name or None)
+        if (
+            not _pi_profile_enabled(app)
+            and not getattr(app, "_gcode_streaming_mode", False)
+            and app._last_gcode_lines
+        ):
+            prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
+            if callable(prime_cache):
+                try:
+                    prime_cache(app._last_gcode_lines)
+                except Exception as exc:
+                    _log_suppressed("Failed priming in-memory send cache after reconnect", exc)
+        _set_gcode_restore_state(app, failed=False)
+        return
+    if app._last_gcode_lines:
+        name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
+        app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
+        _set_gcode_restore_state(app, failed=False)
+        return
+    _set_gcode_restore_state(app, failed=False)
+
+
 def _schedule_reconnect_resume(app, *, start_index: int) -> None:
     try:
         app.status.config(text=f"Preparing reconnect resume from line {int(start_index) + 1}...")
@@ -546,25 +645,9 @@ def handle_connection_event(app, is_on: bool, port):
         app._set_manual_controls_enabled(False)
         app.throughput_var.set("TX: 0 B/s")
         try:
-            if getattr(app, "_gcode_source", None) is not None:
-                name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
-                app.grbl.load_gcode(app._gcode_source, name=name or None)
-                if (
-                    not _pi_profile_enabled(app)
-                    and not getattr(app, "_gcode_streaming_mode", False)
-                    and app._last_gcode_lines
-                ):
-                    prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
-                    if callable(prime_cache):
-                        try:
-                            prime_cache(app._last_gcode_lines)
-                        except Exception as exc:
-                            _log_suppressed("Failed priming in-memory send cache after reconnect", exc)
-            elif app._last_gcode_lines:
-                name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
-                app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
+            _restore_loaded_gcode_after_connect(app)
         except Exception as exc:
-            _log_suppressed("Failed restoring loaded G-code after connect", exc)
+            _handle_reconnect_gcode_restore_failure(app, exc)
         if alarm_latched:
             alarm_status = alarm_message or "ALARM latched: verify machine, then use Unlock ($X) or Home ($H)."
             try:
@@ -670,7 +753,12 @@ def handle_ready_event(app, ready):
         return
     if app.connected and app._connected_port:
         _record_connection_timeline(app, "ready_true", f"port={app._connected_port}")
-        app.status.config(text=StatusMessages.connected(app._connected_port))
+        restore_failure_message = str(
+            getattr(app, "_gcode_restore_failure_message", "") or ""
+        ).strip()
+        app.status.config(
+            text=restore_failure_message or StatusMessages.connected(app._connected_port)
+        )
         try:
             ready_tail_s = float(
                 getattr(
@@ -689,6 +777,13 @@ def handle_ready_event(app, ready):
             failure_status="Connected, but modal-state sync is pending retry.",
             failure_log="[status] Connected, but $G modal sync was rejected; retry pending.",
         )
+        if bool(getattr(app, "_gcode_restore_failed", False)):
+            disable_job_controls(app)
+            app._resume_after_disconnect = False
+            app._resume_from_index = None
+            app._resume_job_name = None
+            apply_status_poll_profile(app)
+            return
         if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
             app._resume_after_disconnect = False
             total_lines = (

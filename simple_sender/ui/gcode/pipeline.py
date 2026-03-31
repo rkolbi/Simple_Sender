@@ -78,6 +78,96 @@ from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
+_CLEAR_GCODE_RUNTIME_DEFAULTS: dict[str, object] = {
+    "_gcode_total_lines": 0,
+    "_gcode_total_lines_known": False,
+    "_gcode_executable_lines": 0,
+    "_gcode_executable_lines_known": False,
+    "_gcode_motion_lines": 0,
+    "_gcode_motion_lines_known": False,
+    "_gcode_storage_mode": "none",
+    "_gcode_load_mode": "",
+    "_gcode_index_mode": "none",
+    "_gcode_source_line_count_known": False,
+    "_gcode_time_to_stream_ready_ms": None,
+    "_gcode_time_to_popup_close_ms": None,
+    "_gcode_retained_line_count": 0,
+    "_gcode_source_offset_count": 0,
+    "_gcode_source_offset_type": "",
+    "_gcode_offset_index_enabled": False,
+    "_gcode_prepare_sample_line_count": 0,
+    "_gcode_prepare_sample_head_lines": 0,
+    "_gcode_prepare_sample_tail_lines": 0,
+    "_gcode_prepare_sample_interval_lines": 0,
+    "_gcode_prepare_sample_max_lines": 0,
+    "_gcode_file_size_bytes": 0,
+    "_gcode_file_line_count": 0,
+    "_gcode_file_line_count_known": False,
+    "_gcode_quick_scan_ms": 0.0,
+    "_gcode_bounds_box": None,
+    "_gcode_bounds_confidence": "rough",
+    "_gcode_dimensions_confidence": "rough",
+    "_gcode_dimensions_confidence_reasons": {},
+    "_gcode_dimensions_source": "scan",
+    "_gcode_estimated_job_time_sec": None,
+    "_gcode_estimate_confidence": "provisional",
+    "_gcode_estimate_confidence_reasons": {},
+    "_gcode_estimate_replaced_quick": False,
+    "_gcode_units_source": "scan",
+    "_gcode_ssmeta_present": False,
+    "_gcode_ssmeta": {},
+    "_gcode_ssmeta_scan_reduced": False,
+    "_gcode_prepare_executable_total_lines": 0,
+    "_gcode_prepare_motion_total_lines": 0,
+    "_gcode_prepare_sampled_executable_lines": 0,
+    "_gcode_prepare_sampled_motion_lines": 0,
+    "_gcode_stats_compute_mode": "",
+    "_gcode_stats_sample_scale": 1.0,
+    "_gcode_stats_sample_line_count": 0,
+    "_gcode_stats_sample_total_lines": 0,
+    "_gcode_stats_sample_executable_lines": 0,
+    "_gcode_stats_sample_motion_lines": 0,
+    "_gcode_stats_executable_total_lines": 0,
+    "_gcode_stats_motion_total_lines": 0,
+    "_gcode_post_popup_background_tasks": "none",
+    "_gcode_full_line_cache_profile": "",
+    "_gcode_full_line_cache_cap_lines": 0,
+    "_gcode_full_line_cache_cap_hit": False,
+    "_gcode_sample_line_cap": 0,
+    "_resume_after_disconnect": False,
+    "_resume_from_index": None,
+    "_resume_job_name": None,
+    "_stream_state": "loaded",
+    "_stream_start_ts": None,
+    "_stream_pause_total": 0.0,
+    "_stream_paused_at": None,
+    "_stream_done_pending_idle": False,
+    "_last_gcode_lines": [],
+    "_last_gcode_path": None,
+    "_gcode_hash": None,
+    "_gcode_validation_report": None,
+    "_last_parse_result": None,
+    "_last_parse_hash": None,
+    "_auto_level_job_source_path": None,
+    "_auto_level_job_hash": None,
+    "_auto_level_job_total_lines": 0,
+    "_live_estimate_min": None,
+    "_live_estimate_total_min": None,
+    "_live_estimate_observed_total_min": None,
+    "_live_estimate_display_min": None,
+    "_live_estimate_display_ts": 0.0,
+    "_loaded_estimate_total_min": None,
+    "_loaded_estimate_source": "",
+    "_estimate_confidence": "provisional",
+    "_estimate_inputs_snapshot": {},
+    "_last_stats": None,
+    "_last_rate_source": None,
+    "_last_error_index": -1,
+    "_manual_queue_drop_total": 0,
+    "_gcode_restore_failed": False,
+    "_gcode_restore_failure_message": "",
+}
+
 
 def set_sample_streaming_state(app, streaming: bool) -> None:
     app._gcode_streaming_mode = bool(streaming)
@@ -167,6 +257,19 @@ def _restore_macro_state(app, snapshot: dict[str, object] | None) -> None:
             state_data.update(snapshot)
     except Exception as exc:
         _log_suppressed("Failed restoring macro.state after clearing G-code", exc)
+
+
+def _clone_state_default(value: object) -> object:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return value
+
+
+def _apply_state_defaults(app, defaults: dict[str, object]) -> None:
+    for attr_name, value in defaults.items():
+        setattr(app, attr_name, _clone_state_default(value))
 
 
 def load_gcode_from_path(app, path: str):
@@ -330,91 +433,7 @@ def clear_gcode(app):
         app._set_job_button_mode("read_job")
     except Exception as exc:
         _log_suppressed("Failed resetting job button mode after clear", exc)
-    app._gcode_total_lines = 0
-    app._gcode_total_lines_known = False
-    app._gcode_executable_lines = 0
-    app._gcode_executable_lines_known = False
-    app._gcode_motion_lines = 0
-    app._gcode_motion_lines_known = False
-    app._gcode_storage_mode = "none"
-    app._gcode_load_mode = ""
-    app._gcode_index_mode = "none"
-    app._gcode_source_line_count_known = False
-    app._gcode_time_to_stream_ready_ms = None
-    app._gcode_time_to_popup_close_ms = None
-    app._gcode_retained_line_count = 0
-    app._gcode_source_offset_count = 0
-    app._gcode_source_offset_type = ""
-    app._gcode_offset_index_enabled = False
-    app._gcode_prepare_sample_line_count = 0
-    app._gcode_prepare_sample_head_lines = 0
-    app._gcode_prepare_sample_tail_lines = 0
-    app._gcode_prepare_sample_interval_lines = 0
-    app._gcode_prepare_sample_max_lines = 0
-    app._gcode_file_size_bytes = 0
-    app._gcode_file_line_count = 0
-    app._gcode_file_line_count_known = False
-    app._gcode_quick_scan_ms = 0.0
-    app._gcode_bounds_box = None
-    app._gcode_bounds_confidence = "rough"
-    app._gcode_dimensions_confidence = "rough"
-    app._gcode_dimensions_confidence_reasons = {}
-    app._gcode_dimensions_source = "scan"
-    app._gcode_estimated_job_time_sec = None
-    app._gcode_estimate_confidence = "provisional"
-    app._gcode_estimate_confidence_reasons = {}
-    app._gcode_estimate_replaced_quick = False
-    app._gcode_units_source = "scan"
-    app._gcode_ssmeta_present = False
-    app._gcode_ssmeta = {}
-    app._gcode_ssmeta_scan_reduced = False
-    app._gcode_prepare_executable_total_lines = 0
-    app._gcode_prepare_motion_total_lines = 0
-    app._gcode_prepare_sampled_executable_lines = 0
-    app._gcode_prepare_sampled_motion_lines = 0
-    app._gcode_stats_compute_mode = ""
-    app._gcode_stats_sample_scale = 1.0
-    app._gcode_stats_sample_line_count = 0
-    app._gcode_stats_sample_total_lines = 0
-    app._gcode_stats_sample_executable_lines = 0
-    app._gcode_stats_sample_motion_lines = 0
-    app._gcode_stats_executable_total_lines = 0
-    app._gcode_stats_motion_total_lines = 0
-    app._gcode_post_popup_background_tasks = "none"
-    app._gcode_full_line_cache_profile = ""
-    app._gcode_full_line_cache_cap_lines = 0
-    app._gcode_full_line_cache_cap_hit = False
-    app._gcode_sample_line_cap = 0
-    app._resume_after_disconnect = False
-    app._resume_from_index = None
-    app._resume_job_name = None
-    app._stream_state = "loaded"
-    app._stream_start_ts = None
-    app._stream_pause_total = 0.0
-    app._stream_paused_at = None
-    app._stream_done_pending_idle = False
-    app._last_gcode_lines = []
-    app._last_gcode_path = None
-    app._gcode_hash = None
-    app._gcode_validation_report = None
-    app._last_parse_result = None
-    app._last_parse_hash = None
-    app._auto_level_job_source_path = None
-    app._auto_level_job_hash = None
-    app._auto_level_job_total_lines = 0
-    app._live_estimate_min = None
-    app._live_estimate_total_min = None
-    app._live_estimate_observed_total_min = None
-    app._live_estimate_display_min = None
-    app._live_estimate_display_ts = 0.0
-    app._loaded_estimate_total_min = None
-    app._loaded_estimate_source = ""
-    app._estimate_confidence = "provisional"
-    app._estimate_inputs_snapshot = {}
-    app._last_stats = None
-    app._last_rate_source = None
-    app._last_error_index = -1
-    app._manual_queue_drop_total = 0
+    _apply_state_defaults(app, _CLEAR_GCODE_RUNTIME_DEFAULTS)
     _reset_autolevel_state(app)
     app._gcode_parse_token += 1
     after_id = getattr(app, "_stats_after_id", None)
@@ -451,7 +470,6 @@ def clear_gcode(app):
             file_info_var.set("")
     except Exception:
         pass
-    app._file_info_last_text = ""
     app.progress_pct.set(0)
     try:
         app.buffer_fill.set("Buffer: 0%")

@@ -28,6 +28,7 @@ from simple_sender.utils.macro_headers import parse_macro_header
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.theme_helpers import bind_text_display_theme, text_display_theme_options
 
 class MacroPanel:
     def __init__(self, app: Any) -> None:
@@ -164,6 +165,10 @@ class MacroPanel:
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text=name, font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 6))
         text = tk.Text(frame, wrap="word", height=14, width=80, state="normal")
+        themed_options = text_display_theme_options(self.app)
+        if themed_options:
+            text.configure(themed_options)
+        bind_text_display_theme(self.app, text)
         text.insert("end", body)
         text.config(state="disabled")
         text.pack(fill="both", expand=True)
@@ -250,5 +255,3 @@ class MacroPanel:
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
         self.app._refresh_keyboard_table()
-
-

@@ -228,6 +228,13 @@ def _status_settling_active(app) -> bool:
     return bool(getattr(app, "_gcode_load_settling", False))
 
 
+def _homing_status_resolution_pending(app) -> bool:
+    # Repeated status frames remain meaningful while homing is latched because
+    # `_resolve_display_state()` may need a later Idle/Alarm/other status to
+    # clear the temporary Homing state truthfully.
+    return bool(getattr(app, "_homing_in_progress", False))
+
+
 def _status_connect_settling_active(app) -> bool:
     if not bool(getattr(app, "connected", False)):
         return False
@@ -2138,6 +2145,7 @@ def handle_status_event(app, raw: str):
     app._last_status_raw = raw
     state_token = _status_state_token(raw)
     state_lower = str(state_token or "").strip().lower()
+    homing_resolution_pending = _homing_status_resolution_pending(app)
     live_updates_during_settling = bool(
         settling and state_lower.startswith(("jog", "run", "hold"))
     )
@@ -2148,7 +2156,7 @@ def handle_status_event(app, raw: str):
             _log_suppressed("Failed tracking last non-idle status timestamp", exc)
     # Short-circuit exact duplicates first, then a relaxed idle signature that
     # tolerates benign idle-only churn outside active streaming.
-    if raw == previous_raw:
+    if (not homing_resolution_pending) and raw == previous_raw:
         app._status_seen = True
         app._status_duplicate_count = int(getattr(app, "_status_duplicate_count", 0) or 0) + 1
         if state_token:
@@ -2165,6 +2173,8 @@ def handle_status_event(app, raw: str):
         )
         return
     if (
+        (not homing_resolution_pending)
+        and
         state_lower.startswith("idle")
         and not _stream_active_or_finishing(app)
         and _status_relaxed_idle_signature(raw)

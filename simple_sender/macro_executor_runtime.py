@@ -31,6 +31,7 @@ import time
 import types
 from tkinter import messagebox
 
+from simple_sender.macro_timeouts import macro_timeouts_disabled
 from simple_sender.utils.constants import (
     MACRO_LINE_TIMEOUT,
     MACRO_TOTAL_TIMEOUT,
@@ -48,7 +49,6 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
-
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
 
@@ -63,7 +63,7 @@ class MacroRunnerMixin(MacroExecutorState):
             return False
 
     def _macro_timeout_setting(self, attr_name: str, default_value: float) -> float:
-        if bool(getattr(self.app, "_tool_change_unlimited_time_active", False)):
+        if macro_timeouts_disabled(self.app):
             return 0.0
         value = getattr(self.app, attr_name, default_value)
         try:
@@ -120,6 +120,10 @@ class MacroRunnerMixin(MacroExecutorState):
                     self._macro_vars["tool_change_required_tool_name"] = ""
         except Exception as exc:
             _log_suppressed("Failed preparing tool-change prompt context", exc)
+
+    @staticmethod
+    def _operator_assisted_macro_has_unlimited_wait(index: int) -> bool:
+        return int(index) in {3, 4}
 
     def run_macro(self, index: int, allow_streaming_paused: bool = False) -> bool:
         if not self.grbl.is_connected():
@@ -178,15 +182,37 @@ class MacroRunnerMixin(MacroExecutorState):
         self._last_macro_run_success = None
         t = threading.Thread(
             target=self._run_macro_worker,
-            args=(lines, path, body_start),
+            args=(
+                lines,
+                path,
+                body_start,
+                self._operator_assisted_macro_has_unlimited_wait(int(index)),
+            ),
             daemon=True,
         )
         t.start()
         return True
 
-    def _run_macro_worker(self, lines: list[str], path: str | None, body_start: int = 2):
+    def _run_macro_worker(
+        self,
+        lines: list[str],
+        path: str | None,
+        body_start: int = 2,
+        unlimited_time_override: bool = False,
+    ):
         start = time.perf_counter()
         executed = 0
+        previous_unlimited_override = bool(
+            getattr(self.app, "_macro_operator_assisted_unlimited_time_active", False)
+        )
+        if unlimited_time_override:
+            try:
+                self.app._macro_operator_assisted_unlimited_time_active = True
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed enabling operator-assisted macro no-timeout override",
+                    exc,
+                )
         line_timeout_s = self._macro_line_timeout_s()
         total_timeout_s = self._macro_total_timeout_s()
         self._alarm_event.clear()
@@ -350,6 +376,16 @@ class MacroRunnerMixin(MacroExecutorState):
                     dialog_title="Macro error",
                 )
         finally:
+            if unlimited_time_override:
+                try:
+                    self.app._macro_operator_assisted_unlimited_time_active = bool(
+                        previous_unlimited_override
+                    )
+                except Exception as exc:
+                    _log_suppressed(
+                        "Failed restoring operator-assisted macro no-timeout override",
+                        exc,
+                    )
             self._last_macro_run_success = not aborted
             try:
                 if not self._macro_state_restored:

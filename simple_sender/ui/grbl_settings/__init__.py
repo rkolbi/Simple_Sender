@@ -28,6 +28,12 @@ from decimal import Decimal, InvalidOperation
 from tkinter import ttk, messagebox
 from typing import Any, Sequence
 
+from simple_sender.ui.theme_helpers import (
+    bind_scrollbar_theme,
+    bind_text_display_theme,
+    notebook_page_style_name,
+    text_display_theme_options,
+)
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import ToolTip, apply_tooltip, set_tab_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
@@ -113,6 +119,7 @@ class GRBLSettingsController:
         self.app = app
         self.settings_tree: ttk.Treeview | None = None
         self.settings_raw_text: tk.Text | None = None
+        self.settings_raw_tab: ttk.Frame | None = None
         self.settings_tip: ToolTip | None = None
         self.btn_refresh: ttk.Button | None = None
         self.btn_save: ttk.Button | None = None
@@ -146,18 +153,24 @@ class GRBLSettingsController:
                 _log_suppressed("Failed posting settings callback via ui_q", exc)
 
     def build_tabs(self, notebook: ttk.Notebook) -> None:
-        rtab = ttk.Frame(notebook, padding=6)
+        rtab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
+        self.settings_raw_tab = rtab
         notebook.add(rtab, text="Raw $$")
         set_tab_tooltip(notebook, rtab, "View the raw $$ settings dump from GRBL.")
         self.settings_raw_text = tk.Text(rtab, wrap="word", height=12, state="disabled")
+        themed_options = text_display_theme_options(self.app)
+        if themed_options:
+            self.settings_raw_text.configure(themed_options)
         rsb = ttk.Scrollbar(rtab, orient="vertical", command=self.settings_raw_text.yview)
+        bind_scrollbar_theme(self.app, rsb)
         self.settings_raw_text.configure(yscrollcommand=rsb.set)
+        bind_text_display_theme(self.app, self.settings_raw_text)
         self.settings_raw_text.grid(row=0, column=0, sticky="nsew")
         rsb.grid(row=0, column=1, sticky="ns")
         rtab.grid_rowconfigure(0, weight=1)
         rtab.grid_columnconfigure(0, weight=1)
 
-        stab = ttk.Frame(notebook, padding=6)
+        stab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
         notebook.add(stab, text="GRBL Settings")
         set_tab_tooltip(notebook, stab, "Edit GRBL configuration values and save changes.")
         sbar = ttk.Frame(stab)
@@ -201,6 +214,7 @@ class GRBLSettingsController:
         self.settings_tree.column("units", width=100, anchor="w")
         self.settings_tree.column("desc", width=420, anchor="w")
         tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.settings_tree.yview)
+        bind_scrollbar_theme(self.app, tree_scroll)
         self.settings_tree.configure(yscrollcommand=tree_scroll.set)
         self.settings_tree.pack(side="left", fill="both", expand=True)
         tree_scroll.pack(side="right", fill="y")

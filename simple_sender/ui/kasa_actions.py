@@ -26,7 +26,7 @@ import logging
 import sys
 import threading
 import time
-from typing import Any, cast
+from typing import Any
 
 from simple_sender.kasa_accessory import (
     DeviceInfo,
@@ -34,9 +34,18 @@ from simple_sender.kasa_accessory import (
     OutletInfo,
     validate_outlet_mapping,
 )
+from simple_sender.ui.kasa_state import (
+    OUTLET_LABELS,
+    format_kasa_status_line as _format_kasa_status_line,
+    kasa_settings_snapshot as _kasa_settings_snapshot,
+    kasa_status_snapshot as _kasa_status_snapshot,
+    kasa_supported as _kasa_supported_for_platform,
+    outlet_id_from_label as _outlet_id_from_label,
+    outlet_label as _outlet_label,
+    read_var_value as _read_var_value,
+)
+from simple_sender.ui import kasa_runtime as _kasa_runtime
 
-
-OUTLET_LABELS = ("Outlet 1", "Outlet 2")
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -50,129 +59,31 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 def _kasa_supported() -> bool:
-    return sys.platform.startswith("linux")
+    return _kasa_supported_for_platform(sys.platform)
+
+
+def _kasa_helper_platform() -> str:
+    return "linux" if _kasa_supported() else str(sys.platform or "")
 
 
 def outlet_label(outlet_id: int) -> str:
-    return f"Outlet {2 if int(outlet_id) == 2 else 1}"
+    return _outlet_label(outlet_id)
 
 
 def outlet_id_from_label(label: str, default: int) -> int:
-    text = str(label or "").strip().lower()
-    if text.endswith("2"):
-        return 2
-    if text.endswith("1"):
-        return 1
-    return 2 if int(default) == 2 else 1
-
-
-def _read_var_value(app, attr_name: str, default: Any) -> Any:
-    var = getattr(app, attr_name, None)
-    if var is None:
-        return default
-    getter = getattr(var, "get", None)
-    if not callable(getter):
-        return default
-    try:
-        return getter()
-    except Exception:
-        return default
+    return _outlet_id_from_label(label, default)
 
 
 def kasa_settings_snapshot(app) -> dict[str, Any]:
-    if not _kasa_supported():
-        return {
-            "kasa_enabled": False,
-            "kasa_device_identifier": "",
-            "kasa_outlet_count": 2,
-            "vacuum_enabled": False,
-            "vacuum_off_delay_sec": 0.0,
-            "vacuum_outlet": 1,
-            "light_enabled": False,
-            "light_outlet": 2,
-        }
-    vacuum_outlet = int(_read_var_value(app, "vacuum_outlet", 1))
-    light_outlet = int(_read_var_value(app, "light_outlet", 2))
-    if vacuum_outlet not in (1, 2):
-        vacuum_outlet = 1
-    if light_outlet not in (1, 2):
-        light_outlet = 2
-    try:
-        vacuum_off_delay_sec = float(_read_var_value(app, "vacuum_off_delay_sec", 0.0))
-    except Exception:
-        vacuum_off_delay_sec = 0.0
-    vacuum_off_delay_sec = max(0.0, vacuum_off_delay_sec)
-    return {
-        "kasa_enabled": bool(_read_var_value(app, "kasa_enabled", False)),
-        "kasa_device_identifier": (
-            str(_read_var_value(app, "kasa_device_identifier", "") or "").strip()
-        ),
-        "kasa_outlet_count": max(1, int(getattr(app, "_kasa_outlet_count", 2) or 2)),
-        "vacuum_enabled": bool(_read_var_value(app, "vacuum_enabled", False)),
-        "vacuum_off_delay_sec": float(vacuum_off_delay_sec),
-        "vacuum_outlet": vacuum_outlet,
-        "light_enabled": bool(_read_var_value(app, "light_enabled", False)),
-        "light_outlet": light_outlet,
-    }
+    return _kasa_settings_snapshot(app, platform=_kasa_helper_platform())
 
 
 def kasa_status_snapshot(app) -> dict[str, Any]:
-    settings = kasa_settings_snapshot(app)
-    enabled = bool(settings.get("kasa_enabled", False))
-    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
-    outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
-    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
-    light_enabled = bool(settings.get("light_enabled", False)) and outlet_count >= 2
-    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
-    light_outlet = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
-    vacuum_state = (
-        bool(getattr(app, "_kasa_vacuum_quick_on", False)) if vacuum_enabled else None
-    )
-    light_state = (
-        bool(getattr(app, "_kasa_light_quick_on", False)) if light_enabled else None
-    )
-    return {
-        "enabled": enabled,
-        "device_identifier": device_identifier,
-        "outlet_count": outlet_count,
-        "vacuum_enabled": vacuum_enabled,
-        "vacuum_outlet": vacuum_outlet,
-        "vacuum_on": vacuum_state,
-        "light_enabled": light_enabled,
-        "light_outlet": light_outlet,
-        "light_on": light_state,
-    }
+    return _kasa_status_snapshot(app, platform=_kasa_helper_platform())
 
 
 def format_kasa_status_line(app) -> str:
-    if not _kasa_supported():
-        return "enabled=False | linux_only=True"
-    snapshot = kasa_status_snapshot(app)
-
-    def _channel_text(name: str, *, enabled: bool, outlet: int, state: bool | None) -> str:
-        if not enabled:
-            return f"{name}=disabled"
-        state_text = "ON" if bool(state) else "OFF"
-        return f"{name}=Outlet {int(outlet)}:{state_text}"
-
-    enabled = bool(snapshot.get("enabled", False))
-    device = str(snapshot.get("device_identifier", "") or "").strip() or "none"
-    vacuum_text = _channel_text(
-        "vacuum",
-        enabled=bool(snapshot.get("vacuum_enabled", False)),
-        outlet=int(snapshot.get("vacuum_outlet", 1) or 1),
-        state=cast(bool | None, snapshot.get("vacuum_on")),
-    )
-    light_text = _channel_text(
-        "light",
-        enabled=bool(snapshot.get("light_enabled", False)),
-        outlet=int(snapshot.get("light_outlet", 2) or 2),
-        state=cast(bool | None, snapshot.get("light_on")),
-    )
-    return (
-        f"enabled={enabled} | device={device} | outlets={int(snapshot.get('outlet_count', 2) or 2)}"
-        f" | {vacuum_text} | {light_text}"
-    )
+    return _format_kasa_status_line(app, platform=_kasa_helper_platform())
 
 
 def _set_stringvar_if_changed(var: Any, value: str) -> bool:
@@ -709,11 +620,8 @@ def _handle_outlet_list_success(app, outlets: list[OutletInfo]) -> None:
     _refresh_kasa_quick_ui(app)
 
 
-def _post_ui(app, func, *args) -> None:
-    try:
-        app._post_ui_thread(func, *args)
-    except Exception as exc:
-        _log_suppressed("Failed posting Kasa callback to UI thread", exc)
+def _cancel_pending_vacuum_off_delay(app) -> None:
+    _kasa_runtime.cancel_pending_vacuum_off_delay(app)
 
 
 def discover_kasa_devices(app) -> None:
@@ -722,14 +630,11 @@ def discover_kasa_devices(app) -> None:
         return
     if not bool(app.kasa_enabled.get()):
         return
-
-    def _on_success(devices: list[DeviceInfo]) -> None:
-        _post_ui(app, _handle_discovery_success, app, devices)
-
-    def _on_error(exc: Exception) -> None:
-        _post_ui(app, log_kasa_message, app, f"Discovery failed: {exc}")
-
-    app.accessory_router.discover(on_success=_on_success, on_error=_on_error)
+    _kasa_runtime.discover_devices(
+        app,
+        on_success_ui=_handle_discovery_success,
+        log_message=log_kasa_message,
+    )
 
 
 def refresh_kasa_outlet_list(app) -> None:
@@ -741,87 +646,24 @@ def refresh_kasa_outlet_list(app) -> None:
     identifier = str(app.kasa_device_identifier.get() or "").strip()
     if not identifier:
         return
-
-    def _on_success(outlets: list[OutletInfo]) -> None:
-        _post_ui(app, _handle_outlet_list_success, app, outlets)
-
-    def _on_error(exc: Exception) -> None:
-        _post_ui(app, log_kasa_message, app, f"Outlet refresh failed: {exc}")
-
-    app.accessory_router.list_outlets(identifier, on_success=_on_success, on_error=_on_error)
+    _kasa_runtime.refresh_outlet_list(
+        app,
+        identifier,
+        on_success_ui=_handle_outlet_list_success,
+        log_message=log_kasa_message,
+    )
 
 
 def test_kasa_outlet(app, outlet_id: int, on: bool) -> None:
     if not _kasa_supported():
         refresh_kasa_controls_state(app)
         return
-    accepted = app.accessory_router.request_outlet_state(
+    _kasa_runtime.test_outlet(
+        app,
         int(outlet_id),
         bool(on),
-        source="test",
+        log_message=log_kasa_message,
     )
-    if not accepted:
-        log_kasa_message(app, f"Test command skipped for outlet {outlet_id}.")
-
-
-def _resolve_stream_detection_line(app, fallback_line: str, line_index: int | None) -> str:
-    if line_index is None:
-        return fallback_line
-    try:
-        idx = int(line_index)
-    except (TypeError, ValueError):
-        return fallback_line
-    if idx < 0:
-        return fallback_line
-    source = getattr(app, "_gcode_source", None)
-    if source is not None:
-        try:
-            candidate = str(source[idx] or "")
-        except Exception as exc:
-            _log_suppressed("Failed reading streamed G-code line from source for Kasa dry-run routing", exc)
-        else:
-            if candidate.strip():
-                return candidate
-    lines = getattr(app, "_last_gcode_lines", None)
-    if lines is None:
-        return fallback_line
-    try:
-        candidate = str(lines[idx] or "")
-    except Exception as exc:
-        _log_suppressed("Failed reading cached G-code line for Kasa dry-run routing", exc)
-        return fallback_line
-    if candidate.strip():
-        return candidate
-    return fallback_line
-
-
-def _iter_stream_detection_lines(app, fallback_line: str, line_index: int | None):
-    if line_index is None:
-        yield str(fallback_line or "")
-        return
-    try:
-        idx = int(line_index)
-    except (TypeError, ValueError):
-        yield str(fallback_line or "")
-        return
-    if idx < 0:
-        yield str(fallback_line or "")
-        return
-    try:
-        last_idx = int(getattr(app, "_kasa_last_stream_line_index", -1))
-    except (TypeError, ValueError):
-        last_idx = -1
-    if idx <= last_idx:
-        start_idx = idx
-    else:
-        start_idx = max(0, last_idx + 1)
-    for current_idx in range(start_idx, idx + 1):
-        fallback = str(fallback_line or "") if current_idx == idx else ""
-        yield _resolve_stream_detection_line(app, fallback, current_idx)
-    try:
-        app._kasa_last_stream_line_index = idx
-    except Exception as exc:
-        _log_suppressed("Failed caching last streamed index for Kasa spindle detection", exc)
 
 
 def handle_outgoing_gcode_line(
@@ -838,277 +680,39 @@ def handle_outgoing_gcode_line(
     _ = line_index
 
 
-def _clear_pending_vacuum_off_delay_state(app) -> None:
-    app._kasa_vacuum_off_delay_after_id = None
-    app._kasa_vacuum_off_delay_outlet = None
-    app._kasa_vacuum_off_delay_source = ""
-
-
-def _cancel_pending_vacuum_off_delay(app) -> None:
-    after_id = getattr(app, "_kasa_vacuum_off_delay_after_id", None)
-    if after_id is None:
-        _clear_pending_vacuum_off_delay_state(app)
-        return
-    cancel = getattr(app, "after_cancel", None)
-    if callable(cancel):
-        try:
-            cancel(after_id)
-        except Exception as exc:
-            _log_suppressed("Failed canceling delayed vacuum OFF callback", exc)
-    _clear_pending_vacuum_off_delay_state(app)
-
-
-def _request_vacuum_state(
-    app,
-    *,
-    outlet_id: int,
-    is_on: bool,
-    source: str,
-) -> bool:
-    accepted = False
-    try:
-        accepted = bool(
-            app.accessory_router.request_outlet_state(
-                int(outlet_id),
-                bool(is_on),
-                source=str(source or "stream_vacuum"),
-            )
-        )
-    except Exception as exc:
-        _log_suppressed("Failed issuing vacuum outlet command to Kasa router", exc)
-    if not accepted:
-        log_kasa_message(
-            app,
-            f"VACUUM_{'ON' if is_on else 'OFF'} request skipped for outlet {outlet_id}.",
-        )
-    return accepted
-
-
-def _request_vacuum_off_with_delay(
-    app,
-    *,
-    outlet_id: int,
-    source: str,
-    delay_s: float,
-) -> bool:
-    delay = max(0.0, float(delay_s))
-    source_text = str(source or "stream_vacuum_off")
-    # Shutdown path is best-effort immediate to avoid leaving a queued callback
-    # behind while the app is exiting.
-    if delay <= 0.0 or source_text.startswith("app_"):
-        _cancel_pending_vacuum_off_delay(app)
-        return _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=False,
-            source=source_text,
-        )
-    delay_ms = int(round(delay * 1000.0))
-    if delay_ms <= 0:
-        _cancel_pending_vacuum_off_delay(app)
-        return _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=False,
-            source=source_text,
-        )
-    _cancel_pending_vacuum_off_delay(app)
-    after = getattr(app, "after", None)
-    if not callable(after):
-        _cancel_pending_vacuum_off_delay(app)
-        return _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=False,
-            source=source_text,
-        )
-
-    def _run_delayed_off() -> None:
-        _clear_pending_vacuum_off_delay_state(app)
-        _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=False,
-            source=f"{source_text}_delayed",
-        )
-
-    try:
-        after_id = after(delay_ms, _run_delayed_off)
-    except Exception as exc:
-        _log_suppressed("Failed scheduling delayed vacuum OFF callback", exc)
-        _cancel_pending_vacuum_off_delay(app)
-        return _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=False,
-            source=source_text,
-        )
-    app._kasa_vacuum_off_delay_after_id = after_id
-    app._kasa_vacuum_off_delay_outlet = int(outlet_id)
-    app._kasa_vacuum_off_delay_source = source_text
-    log_kasa_message(
-        app,
-        f"VACUUM_OFF delayed by {delay:.1f}s for outlet {int(outlet_id)}.",
-    )
-    return True
-
-
 def handle_stream_vacuum_directive(app, is_on: bool) -> None:
     if not _kasa_supported():
         return
-    if not hasattr(app, "accessory_router"):
-        return
-    settings = kasa_settings_snapshot(app)
-    if not bool(settings.get("kasa_enabled", False)):
-        return
-    if not bool(settings.get("vacuum_enabled", False)):
-        return
-    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
-    if not device_identifier:
-        return
-    try:
-        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
-    except Exception:
-        outlet_count = 2
-    outlet_id = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
-    if outlet_id > outlet_count:
-        log_kasa_message(
-            app,
-            f"VACUUM_{'ON' if is_on else 'OFF'} ignored: outlet {outlet_id} unavailable.",
-        )
-        return
-    if bool(is_on):
-        _cancel_pending_vacuum_off_delay(app)
-        _request_vacuum_state(
-            app,
-            outlet_id=int(outlet_id),
-            is_on=True,
-            source="stream_vacuum_on",
-        )
-        return
-    delay_s = 0.0
-    try:
-        delay_s = max(0.0, float(settings.get("vacuum_off_delay_sec", 0.0) or 0.0))
-    except Exception:
-        delay_s = 0.0
-    _request_vacuum_off_with_delay(
+    _kasa_runtime.handle_stream_vacuum_directive(
         app,
-        outlet_id=int(outlet_id),
-        source="stream_vacuum_off",
-        delay_s=delay_s,
+        bool(is_on),
+        settings_snapshot=kasa_settings_snapshot,
+        log_message=log_kasa_message,
     )
     # Do not mutate UI state here; wait for AccessoryRouter command-result callback
     # so stream directives use worker execution + final UI reconciliation only.
 
 
-def _selected_job_outlets(app) -> list[int]:
-    settings = kasa_settings_snapshot(app)
-    if not bool(settings.get("kasa_enabled", False)):
-        return []
-    device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
-    if not device_identifier:
-        return []
-    try:
-        outlet_count = max(1, int(settings.get("kasa_outlet_count", 2) or 2))
-    except Exception:
-        outlet_count = 2
-    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
-    light_enabled = bool(settings.get("light_enabled", False)) and outlet_count >= 2
-    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
-    light_outlet = 1 if int(settings.get("light_outlet", 2) or 2) == 1 else 2
-    valid, message = validate_outlet_mapping(
-        vacuum_enabled=vacuum_enabled,
-        vacuum_outlet=vacuum_outlet,
-        light_enabled=light_enabled,
-        light_outlet=light_outlet,
-    )
-    if not valid:
-        log_kasa_message(app, str(message or "Invalid Kasa outlet mapping."))
-        return []
-    outlets: list[int] = []
-    if vacuum_enabled and vacuum_outlet <= outlet_count:
-        outlets.append(vacuum_outlet)
-    if light_enabled and light_outlet <= outlet_count and light_outlet not in outlets:
-        outlets.append(light_outlet)
-    return outlets
-
-
-def _set_job_outlet_state(app, outlet_id: int, on: bool, *, source: str) -> bool:
-    try:
-        return bool(
-            app.accessory_router.request_outlet_state(
-                int(outlet_id),
-                bool(on),
-                source=str(source or "job"),
-            )
-        )
-    except Exception as exc:
-        _log_suppressed("Failed sending Kasa job-lifecycle outlet command", exc)
-        return False
-
-
 def start_job_accessories(app, *, source: str = "job_run") -> None:
     if not _kasa_supported():
         return
-    if not hasattr(app, "accessory_router"):
-        return
-    if bool(getattr(app, "_kasa_job_running", False)):
-        return
-    _cancel_pending_vacuum_off_delay(app)
-    outlets = _selected_job_outlets(app)
-    active_outlets: set[int] = set()
-    for outlet_id in outlets:
-        if _set_job_outlet_state(app, outlet_id, True, source=source):
-            active_outlets.add(int(outlet_id))
-        else:
-            log_kasa_message(
-                app,
-                f"Job accessory start rejected for outlet {int(outlet_id)}.",
-            )
-    app._kasa_job_active_outlets = active_outlets
-    app._kasa_job_running = bool(active_outlets)
+    _kasa_runtime.start_job_accessories(
+        app,
+        settings_snapshot=kasa_settings_snapshot,
+        log_message=log_kasa_message,
+        source=source,
+    )
 
 
 def stop_job_accessories(app, *, source: str = "job_stop") -> None:
     if not _kasa_supported():
         return
-    if not hasattr(app, "accessory_router"):
-        return
-    tracked = getattr(app, "_kasa_job_active_outlets", None)
-    if isinstance(tracked, set) and tracked:
-        outlet_ids = sorted(int(outlet) for outlet in tracked)
-    else:
-        outlet_ids = _selected_job_outlets(app)
-    settings = kasa_settings_snapshot(app)
-    vacuum_enabled = bool(settings.get("vacuum_enabled", False))
-    vacuum_outlet = 1 if int(settings.get("vacuum_outlet", 1) or 1) == 1 else 2
-    try:
-        vacuum_off_delay_s = max(
-            0.0, float(settings.get("vacuum_off_delay_sec", 0.0) or 0.0)
-        )
-    except Exception:
-        vacuum_off_delay_s = 0.0
-    remaining_active = set(int(outlet_id) for outlet_id in outlet_ids)
-    for outlet_id in outlet_ids:
-        accepted = False
-        if vacuum_enabled and int(outlet_id) == int(vacuum_outlet):
-            accepted = _request_vacuum_off_with_delay(
-                app,
-                outlet_id=int(outlet_id),
-                source=str(source or "job_stop"),
-                delay_s=float(vacuum_off_delay_s),
-            )
-        else:
-            accepted = _set_job_outlet_state(app, outlet_id, False, source=source)
-        if not accepted:
-            log_kasa_message(
-                app,
-                f"Job accessory stop rejected for outlet {int(outlet_id)}.",
-            )
-            continue
-        remaining_active.discard(int(outlet_id))
-    app._kasa_job_active_outlets = remaining_active
-    app._kasa_job_running = bool(remaining_active)
+    _kasa_runtime.stop_job_accessories(
+        app,
+        settings_snapshot=kasa_settings_snapshot,
+        log_message=log_kasa_message,
+        source=source,
+    )
 
 
 def handle_stream_spindle_state(app, is_on: bool) -> None:

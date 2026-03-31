@@ -31,9 +31,135 @@ from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
 from simple_sender.ui.file_info_tab import build_file_info_tab
+from simple_sender.ui.theme_helpers import bind_scrollbar_theme, notebook_page_style_name, register_theme_refresh
 from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 logger = logging.getLogger(__name__)
+
+
+def _var_bool(value, default: bool) -> bool:
+    getter = getattr(value, "get", None)
+    if callable(getter):
+        try:
+            return bool(getter())
+        except Exception:
+            return default
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _managed_notebook_tabs(nb) -> tuple[str, ...]:
+    try:
+        return tuple(str(tab_id) for tab_id in nb.tabs())
+    except Exception:
+        return ()
+
+
+def _notebook_has_tab(nb, tab) -> bool:
+    try:
+        return str(tab) in _managed_notebook_tabs(nb)
+    except Exception:
+        return False
+
+
+def _notebook_tab_state(nb, tab) -> str:
+    if tab is None or not _notebook_has_tab(nb, tab):
+        return "missing"
+    try:
+        return str(nb.tab(tab, "state") or "normal").strip().lower() or "normal"
+    except Exception:
+        return "normal"
+
+
+def _tab_should_be_visible(app, variable_name: str, default: bool) -> bool:
+    return _var_bool(getattr(app, variable_name, None), default)
+
+
+def _register_optional_tabs(app) -> None:
+    raw_tab = getattr(getattr(app, "settings_controller", None), "settings_raw_tab", None)
+    app._optional_notebook_tabs = {
+        "logs": {
+            "tab": getattr(app, "logs_tab", None),
+            "label": "Logs",
+            "variable_name": "show_logs_tab",
+            "default": False,
+        },
+        "raw_grbl": {
+            "tab": raw_tab,
+            "label": "Raw $$",
+            "variable_name": "show_raw_grbl_tab",
+            "default": False,
+        },
+        "checklists": {
+            "tab": getattr(app, "checklists_tab", None),
+            "label": "Checklists",
+            "variable_name": "show_checklists_tab",
+            "default": True,
+        },
+    }
+
+
+def sync_optional_tab_visibility(app, nb=None):
+    if nb is None:
+        nb = getattr(app, "notebook", None)
+    if not nb:
+        return
+    registry = getattr(app, "_optional_notebook_tabs", None)
+    if not isinstance(registry, dict) or not registry:
+        return
+    gcode_tab = getattr(app, "gcode_tab", None)
+    selected_tab = None
+    try:
+        selected_tab = nb.select()
+    except Exception:
+        selected_tab = None
+    for entry in registry.values():
+        tab = entry.get("tab")
+        if tab is None or not _notebook_has_tab(nb, tab):
+            continue
+        should_show = _tab_should_be_visible(
+            app,
+            str(entry.get("variable_name") or ""),
+            bool(entry.get("default", False)),
+        )
+        tab_state = _notebook_tab_state(nb, tab)
+        if should_show:
+            if tab_state == "hidden":
+                try:
+                    nb.add(tab)
+                except Exception:
+                    logger.exception("Failed restoring notebook tab %r", entry.get("label"))
+            continue
+        if str(selected_tab) == str(tab):
+            fallback = None
+            if gcode_tab is not None and _notebook_has_tab(nb, gcode_tab):
+                gcode_state = _notebook_tab_state(nb, gcode_tab)
+                if gcode_state != "hidden" and str(gcode_tab) != str(tab):
+                    fallback = gcode_tab
+            if fallback is None:
+                for candidate in _managed_notebook_tabs(nb):
+                    if candidate == str(tab):
+                        continue
+                    try:
+                        if str(nb.tab(candidate, "state") or "normal").strip().lower() == "hidden":
+                            continue
+                    except Exception:
+                        pass
+                    fallback = candidate
+                    break
+            if fallback is not None:
+                try:
+                    nb.select(fallback)
+                    selected_tab = fallback
+                except Exception:
+                    logger.exception("Failed selecting fallback notebook tab while hiding %r", entry.get("label"))
+        if tab_state != "hidden":
+            try:
+                nb.hide(tab)
+            except Exception:
+                logger.exception("Failed hiding notebook tab %r", entry.get("label"))
+    update_tab_visibility(app, nb)
 
 
 def update_tab_visibility(app, nb=None):
@@ -106,7 +232,7 @@ def on_tab_changed(app, event):
 def build_gcode_tab(app, notebook):
     nb = notebook
     # Gcode tab
-    gtab = ttk.Frame(nb, padding=6)
+    gtab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
     nb.add(gtab, text="G-code")
     set_tab_tooltip(nb, gtab, "Live Past/Current/Next G-code window and job stats.")
     app.gcode_tab = gtab
@@ -129,6 +255,13 @@ def build_gcode_tab(app, notebook):
     )
     app.gcode_stats_label.pack(side="left", fill="x", expand=True)
     app.gview = GcodeViewer(gtab)
+    app.gview.apply_theme_palette(getattr(app, "theme_palette", None))
+    bind_scrollbar_theme(app, app.gview.vsb)
+    bind_scrollbar_theme(app, app.gview.hsb)
+    register_theme_refresh(
+        app,
+        lambda: getattr(app, "gview", None) and app.gview.apply_theme_palette(getattr(app, "theme_palette", None)),
+    )
     app.gview.pack(fill="both", expand=True)
 
 
@@ -149,13 +282,14 @@ def build_main_tabs(app, parent):
     build_console_tab(app, nb)
 
     # Logs tab
-    ltab = ttk.Frame(nb, padding=6)
+    ltab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
     nb.add(ltab, text="Logs")
     set_tab_tooltip(nb, ltab, "Review streaming and UI log output.")
+    app.logs_tab = ltab
     app.logs_viewer = LogViewer(ltab, app)
     app.logs_viewer.pack(fill="both", expand=True)
 
-    otab = ttk.Frame(nb, padding=6)
+    otab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
     nb.add(otab, text="Overdrive")
     set_tab_tooltip(nb, otab, "Adjust feed/spindle overrides and quick controls.")
     build_overdrive_tab(app, otab)
@@ -165,6 +299,7 @@ def build_main_tabs(app, parent):
     build_app_settings_tab(app, nb)
 
     # Checklists tab
-    build_checklists_tab(app, nb)
+    app.checklists_tab = build_checklists_tab(app, nb)
 
-    app._update_tab_visibility(nb)
+    _register_optional_tabs(app)
+    sync_optional_tab_visibility(app, nb)

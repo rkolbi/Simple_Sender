@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 _VALID_BAUD_RATES = (9600, 19200, 38400, 57600, 115200, 230400)
 _VALID_UNIT_MODES = ("mm", "inch")
 _VALID_TOUCH_SCROLL_MODES = ("thumb_only", "thumb_and_swipe")
+_THEME_SETTING_KEY = "theme"
+_APP_DATA_DIR_NAME = "simple-sender-data"
+_LEGACY_APP_DATA_DIR_NAMES = ("SimpleSender",)
+_HIDDEN_FALLBACK_DIR_NAME = ".simple-sender-data"
+_LEGACY_HIDDEN_FALLBACK_DIR_NAMES = (".simple_sender",)
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "active_profile": "",
@@ -104,6 +109,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "light_enabled": False,
     "light_outlet": 2,
     "macros_allow_python": False,
+    "disable_macro_timeouts": False,
     "macro_line_timeout_sec": 0.0,
     "macro_total_timeout_sec": 0.0,
     "macro_probe_z_location": -5.0,
@@ -121,6 +127,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_endstop_indicator": True,
     "show_probe_indicator": True,
     "show_hold_indicator": True,
+    "show_logs_tab": False,
+    "show_raw_grbl_tab": False,
+    "show_checklists_tab": True,
     "auto_level_enabled": True,
     "show_quick_tips_button": True,
     "show_quick_keys_button": True,
@@ -135,7 +144,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "stop_joystick_hold_on_focus_loss": True,
     "step_xy": 400.0,
     "step_z": 1.0,
-    "theme": "vista",
+    "theme": "simple_sender_gemini",
     "ui_scale": 1.5,
     "scrollbar_width": "wide",
     "touch_scroll_mode": "thumb_and_swipe",
@@ -248,6 +257,11 @@ def _repair_invalid_settings(
         )
         repaired_keys.append("touch_scroll_mode")
 
+    theme = repaired.get(_THEME_SETTING_KEY)
+    if not isinstance(theme, str) or not str(theme).strip():
+        repaired[_THEME_SETTING_KEY] = defaults.get(_THEME_SETTING_KEY, "")
+        repaired_keys.append(_THEME_SETTING_KEY)
+
     if repaired_keys:
         if repaired_keys_out is not None:
             repaired_keys_out.extend(sorted(set(repaired_keys)))
@@ -278,7 +292,51 @@ def get_default_settings_dir() -> str:
     if not base:
         base = os.path.expanduser("~")
 
-    return os.path.join(base, "SimpleSender")
+    return os.path.join(base, _APP_DATA_DIR_NAME)
+
+
+def _legacy_settings_dir_candidates() -> list[str]:
+    candidates: list[str] = []
+
+    if sys.platform.startswith("win"):
+        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+    else:
+        base = os.getenv("XDG_CONFIG_HOME")
+
+    home_dir = os.path.expanduser("~")
+    if not base:
+        base = home_dir
+
+    for dirname in _LEGACY_APP_DATA_DIR_NAMES:
+        candidates.append(os.path.join(base, dirname))
+    for dirname in _LEGACY_HIDDEN_FALLBACK_DIR_NAMES:
+        candidates.append(os.path.join(home_dir, dirname))
+    candidates.append(os.path.join(tempfile.gettempdir(), _LEGACY_APP_DATA_DIR_NAMES[0]))
+    return candidates
+
+
+def _migrate_legacy_settings_dir(target_dir: str) -> str | None:
+    target_settings = os.path.join(target_dir, SETTINGS_FILENAME)
+    if os.path.exists(target_settings):
+        return target_settings
+
+    for legacy_dir in _legacy_settings_dir_candidates():
+        legacy_settings = os.path.join(legacy_dir, SETTINGS_FILENAME)
+        if not os.path.exists(legacy_settings):
+            continue
+        try:
+            shutil.copytree(legacy_dir, target_dir, dirs_exist_ok=True)
+            logger.info("Migrated settings data from legacy directory: %s", legacy_dir)
+            return target_settings
+        except OSError as exc:
+            logger.warning(
+                "Failed migrating legacy settings directory %s to %s: %s",
+                legacy_dir,
+                target_dir,
+                exc,
+            )
+            return legacy_settings
+    return None
 
 
 def get_settings_path() -> str:
@@ -304,10 +362,10 @@ def get_settings_path() -> str:
 
     chosen = _ensure_writable_dir(base_dir, "primary")
     if chosen is None:
-        fallback_dir = os.path.join(os.path.expanduser("~"), ".simple_sender")
+        fallback_dir = os.path.join(os.path.expanduser("~"), _HIDDEN_FALLBACK_DIR_NAME)
         chosen = _ensure_writable_dir(fallback_dir, "fallback")
     if chosen is None:
-        temp_dir = os.path.join(tempfile.gettempdir(), "SimpleSender")
+        temp_dir = os.path.join(tempfile.gettempdir(), _APP_DATA_DIR_NAME)
         chosen = _ensure_writable_dir(temp_dir, "temporary")
     if chosen is None:
         # Last resort - app directory (may still be read-only)
@@ -317,6 +375,10 @@ def get_settings_path() -> str:
                 "Settings directory is not writable; using %s anyway", base_dir
             )
         chosen = base_dir
+
+    migrated_settings = _migrate_legacy_settings_dir(chosen)
+    if migrated_settings:
+        return migrated_settings
 
     return os.path.join(chosen, SETTINGS_FILENAME)
 
@@ -589,6 +651,11 @@ class Settings:
             mode = self.data["unit_mode"]
             if mode not in _VALID_UNIT_MODES:
                 raise SettingsValidationError(f"Invalid unit mode: {mode}")
+
+        if _THEME_SETTING_KEY in self.data:
+            theme = self.data[_THEME_SETTING_KEY]
+            if not isinstance(theme, str) or not str(theme).strip():
+                raise SettingsValidationError(f"Invalid theme: {theme}")
 
         return True
 

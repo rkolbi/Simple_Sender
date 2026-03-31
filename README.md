@@ -1,5 +1,5 @@
 ﻿# Simple Sender - Full Manual
-![Release: 2.7.1](https://img.shields.io/badge/release-2.7.1-blue)
+![Release: 2.8](https://img.shields.io/badge/release-2.8-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
@@ -99,7 +99,7 @@ pip install -r requirements.txt
 
 Development dependencies are pinned in `requirements-dev.txt` to match the current toolchain.
 
-Settings are stored in a per-user config folder (`%LOCALAPPDATA%\SimpleSender` or `%APPDATA%\SimpleSender` on Windows, or `$XDG_CONFIG_HOME/SimpleSender` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple_sender`, then a `SimpleSender` folder under your temp directory, and finally the module directory (`simple_sender/utils`).
+Settings are stored in a per-user app-data folder (`%LOCALAPPDATA%\simple-sender-data` or `%APPDATA%\simple-sender-data` on Windows, or `$XDG_CONFIG_HOME/simple-sender-data` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple-sender-data`, then a `simple-sender-data` folder under your temp directory, and finally the module directory (`simple_sender/utils`). Existing installs using the older `SimpleSender` / `.simple_sender` directory names are migrated automatically when possible.
 
 ### Recommended: Samba share setup on Raspberry Pi / Linux
 
@@ -293,7 +293,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - When enabled, non-blocking GRBL popups show timestamp, code number, and definition for known `ALARM:x` / `error:x` responses. Duplicate popups are deduped by code for the configured interval.
 9) **Settings and tuning**
    - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
-   - Raw $$ tab keeps the text capture.
+   - If enabled, the optional Raw $$ tab keeps the text capture.
 10) **Macros**
        - Left-click to run; right-click to sample contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
 
@@ -314,6 +314,8 @@ This is a practical end-to-end flow, with rationale for the key options.
 
 - **Tabs:**
   
+  Some secondary notebook tabs are optional. By default, **Logs** and **Raw $$** are hidden, while **Checklists** is shown. Use **App Settings > Interface > Notebook tabs** to control `Show Logs Tab`, `Show Raw $$ Tab`, and `Show Checklists Tab`.
+  
   **G-code viewer:** Bounded Live G-code window (`500 past / current / 500 next`) fed from worker ack/pending queues so the tab stays responsive on large jobs.
   
   ![](pics/screenshot-02.png)
@@ -325,7 +327,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-04.png)
   
-  **Logs:** Read-only viewer for application/serial/UI/error logs with source + level filters and export.
+  **Logs:** Optional read-only viewer for application/serial/UI/error logs with source + level filters and export. Hidden by default; also available through **View Logs...** in App Settings.
   
   ![](pics/screenshot-05.png)
   
@@ -333,7 +335,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-06.png)
   
-  **Raw $$:** Captures the raw settings dump from GRBL for quick copy/paste or archival.
+  **Raw $$:** Optional raw settings-dump capture for quick copy/paste or archival. Hidden by default and controlled by **Show Raw $$ Tab**.
   
   ![-](pics/screenshot-07.png)
   
@@ -341,15 +343,15 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-08.png)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
   
   ![](pics/screenshot-09.png)
   
-  **Checklists:** Release/start-job checklists loaded from `checklist-*.chk` files, including collapsible checklist titles in the Checklists tab, the Release/Start Job checklist dialogs, and the status-bar Release quick button.
+  **Checklists:** Optional checklist tab loaded from `checklist-*.chk` files, including collapsible checklist titles in the Checklists tab, the Release/Start Job checklist dialogs, and the status-bar Release quick button. Shown by default.
   
   ![-](pics/screenshot-10.png)
   
-  **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, Keys, Auto-Level Overlay (ALO), and Release (toggleable in App Settings; logging/error-dialog controls live there too).
+  **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, Keys, Auto-Level Overlay (ALO), Vac, Light, and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 
 ## Status Lights
 - **Placement:** The LEDs sit inline with the status bar so they stay next to the quick buttons (Tips, Keys, Auto-Level Overlay, Release) and provide a quick glance of machine triggers.
@@ -387,7 +389,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
-- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the existing tool-change macro workflow. Streaming stays paused with no timeout until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
+- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the existing tool-change macro workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (viewer window + sampled metadata).
 - **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
@@ -430,7 +432,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - Console Save pre-fills a timestamped filename (`simple_sender_console_YYYYMMDD_HHMMSS.txt`) for touch-friendly export.
 
 ## GRBL Settings UI
-- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. Raw $$ tab holds capture.
+- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ tab holds the raw text capture.
 
 ## Macros
 ![](pics\screenshot-Macro.png)
@@ -904,6 +906,7 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
 - The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
+  - The **Logs** tab is hidden by default. Enable it with **App Settings > Interface > Notebook tabs > Show Logs Tab** if you want a persistent notebook tab; **View Logs...** remains available either way.
 
 ## Testing
 Dev dependencies (tests + type checking):
@@ -920,7 +923,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Current local release-gate baseline (validated on March 28, 2026): `run_tests.bat` passed end-to-end; the coverage test stage (`python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`) reported `1455 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Latest documented local release-gate snapshot in this repo (validated on March 31, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1508 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -990,7 +993,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
 - `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI) imported and installed onto `App`.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, input bindings, dialogs).
-- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers (G-code/File Info/Console/Logs/Overdrive/App Settings/Checklists).
+- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers, including optional notebook-tab visibility for Logs / Raw $$ / Checklists.
 - `simple_sender/ui/file_info_tab.py`: scrollable read-only File Info tab renderer (SSMETA + quick-scan metrics).
 - `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
@@ -1126,7 +1129,7 @@ python tools/perf_microbench.py
 - Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
 
 ## Pre-release Notes
-1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple_sender`).
+1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple-sender-data`).
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
@@ -1330,6 +1333,7 @@ Macro UI is included below along with the rest of the interface.
 
 ### Raw $$ Tab
 - Raw $$ text view: read-only capture of the last settings dump from GRBL.
+- Hidden by default; enable it with **App Settings > Interface > Notebook tabs > Show Raw $$ Tab**.
 
 ### GRBL Settings Tab
 - Refresh $$: requests a fresh $$ dump and populates the table.
@@ -1343,7 +1347,8 @@ Macro UI is included below along with the rest of the interface.
 - Sticky section title: the active category remains pinned while scrolling and updates to match current filters.
 
 ### App Settings: Theme
-- UI theme (dropdown): selects the ttk theme; some themes apply fully after restart.
+- UI theme (dropdown): selects the ttk theme.
+- Default theme: the Gemini-inspired dark theme (`simple_sender_gemini`) is the normal startup default on a new/default configuration.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
@@ -1380,6 +1385,8 @@ Macro UI is included below along with the rest of the interface.
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
 - Line timeout (sec): maximum time allowed for each macro line (`0` disables; old-style behavior).
 - Total timeout (sec): maximum time allowed for a full macro run (`0` disables; old-style behavior).
+- Disable Macro Timeouts: disables normal prompt, line, and total timeout enforcement for general macro runs.
+- Operator-assisted Job Setup / Tool Change waits: Macro-3 / Macro-4 and streamed tool-change workflows already use scoped no-timeout behavior where the operator is expected to respond or complete a tool change; that override is separate from the global `Disable Macro Timeouts` setting.
 - Probe Z start (machine, mm): machine-coordinate approach Z for tool-reference probing macros (typically `-5`).
 - Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Macro-3/4.
 - Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder Macro-1..Macro-8 without leaving the app.
@@ -1420,8 +1427,9 @@ Macro UI is included below along with the rest of the interface.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
 - View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
+- Notebook tabs: `Show Logs Tab`, `Show Raw $$ Tab`, and `Show Checklists Tab` control whether those notebook tabs are visible. Defaults are Logs hidden, Raw $$ hidden, Checklists shown.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
-- Status bar quick buttons (Tips, Keys, Auto-Level Overlay, Release): toggles each status-bar quick button.
+- Status bar quick buttons (Tips, Keys, Auto-Level Overlay, Vac, Light, Release): toggles each status-bar quick button.
 - Status bar quick toggles (Tips, Keys, Auto-Level Overlay): immediate action buttons to flip the corresponding feature.
 - Recommendation: keep the indicators on and only hide quick buttons you never use.
 
@@ -1483,6 +1491,7 @@ Macro UI is included below along with the rest of the interface.
 ### Checklists Tab: Checklists
 - Checklist items: checkbox list loaded from `checklist-*.chk` files.
 - Checklist title toggle: click a checklist title (`[-]` / `[+]`) to collapse or expand that checklist's items.
+- Shown by default; hide it with **App Settings > Interface > Notebook tabs > Show Checklists Tab** if you do not want it in the notebook.
 
 ### Auto-Level Dialog: Settings Tab (Experimental)
 - Profile (dropdown): chooses Small/Large/Custom preset for spacing/interpolation.

@@ -23,18 +23,29 @@
 import tkinter as tk
 from tkinter import ttk
 
+from simple_sender.ui.theme_helpers import (
+    bind_scrollbar_theme,
+    bind_text_display_theme,
+    notebook_page_style_name,
+    text_display_theme_options,
+)
 from simple_sender.ui.widgets_tooltips import apply_tooltip, set_tab_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 
 
 def build_console_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
-    ctab = ttk.Frame(notebook, padding=6)
+    ctab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
     notebook.add(ctab, text="Console")
     set_tab_tooltip(notebook, ctab, "Send manual commands and view GRBL responses.")
 
     app.console = tk.Text(ctab, wrap="word", height=12, state="disabled", font=app.console_font)
+    themed_options = text_display_theme_options(app)
+    if themed_options:
+        app.console.configure(themed_options)
     csb = ttk.Scrollbar(ctab, orient="vertical", command=app.console.yview)
+    bind_scrollbar_theme(app, csb)
     app.console.configure(yscrollcommand=csb.set)
+    bind_text_display_theme(app, app.console)
     app.console.grid(row=0, column=0, sticky="nsew")
     csb.grid(row=0, column=1, sticky="ns")
     app._setup_console_tags()

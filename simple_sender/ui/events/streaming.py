@@ -232,6 +232,32 @@ def _loaded_state_signature(
     return (path, gcode_hash, total, storage_mode, stats_mode)
 
 
+def _loaded_state_transition_is_noop(
+    prev_state: str | None,
+    *,
+    prior_signature: tuple[str, str, int, str, str] | None,
+    next_signature: tuple[str, str, int, str, str],
+    force_apply: bool,
+) -> bool:
+    return (
+        str(prev_state or "").strip().lower() == "loaded"
+        and prior_signature == next_signature
+        and not force_apply
+    )
+
+
+def _prepare_loaded_state_transition(
+    app,
+    *,
+    previous_state: str | None,
+    loaded_total: int | None,
+) -> tuple[bool, tuple[str, str, int, str, str], tuple[str, str, int, str, str] | None]:
+    force_apply = bool(getattr(app, "_stream_loaded_force_apply", False))
+    next_signature = _loaded_state_signature(app, loaded_total)
+    prior_signature = getattr(app, "_stream_loaded_signature", None)
+    return force_apply, next_signature, prior_signature
+
+
 def _cancel_loaded_reconcile(app) -> None:
     after_id = getattr(app, "_stream_loaded_reconcile_after_id", None)
     if after_id is None:
@@ -577,13 +603,16 @@ def handle_stream_state_event(app, evt):
     prev_stream_busy = _stream_busy_from_state(prev, prev_done_pending_idle)
     loaded_total = evt[2] if len(evt) > 2 else None
     if st == "loaded":
-        force_apply = bool(getattr(app, "_stream_loaded_force_apply", False))
-        next_loaded_sig = _loaded_state_signature(app, loaded_total)
-        prior_loaded_sig = getattr(app, "_stream_loaded_signature", None)
-        if (
-            str(prev or "").strip().lower() == "loaded"
-            and prior_loaded_sig == next_loaded_sig
-            and not force_apply
+        force_apply, next_loaded_sig, prior_loaded_sig = _prepare_loaded_state_transition(
+            app,
+            previous_state=prev,
+            loaded_total=loaded_total,
+        )
+        if _loaded_state_transition_is_noop(
+            prev,
+            prior_signature=prior_loaded_sig,
+            next_signature=next_loaded_sig,
+            force_apply=force_apply,
         ):
             logger.info(
                 "[ui] stream_state idempotent skip: %s->%s job=%s hash=%s reason=already_loaded_no_changes",

@@ -27,6 +27,13 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
+from simple_sender.ui.theme_helpers import (
+    bind_canvas_theme,
+    bind_scrollbar_theme,
+    canvas_theme_options,
+    notebook_page_style_name,
+)
+
 _WHEEL_DELTA_UNIT = 120
 
 
@@ -133,6 +140,7 @@ def bind_mousewheel(container: ScrollableContainerRefs) -> None:
 def build_scrollable_container(
     host,
     *,
+    app=None,
     tk_module=tk,
     ttk_module=ttk,
     bind_mousewheel_support: bool = False,
@@ -145,8 +153,21 @@ def build_scrollable_container(
 
     if callable(canvas_cls) and callable(scrollbar_cls):
         canvas = canvas_cls(host, highlightthickness=0)
+        if app is not None:
+            themed_canvas = canvas_theme_options(app)
+            if themed_canvas:
+                try:
+                    canvas.configure(**themed_canvas)
+                except Exception:
+                    pass
+            bind_canvas_theme(app, canvas)
         scrollbar = scrollbar_cls(host, orient="vertical", command=canvas.yview)
-        content = frame_cls(canvas)
+        if app is not None:
+            bind_scrollbar_theme(app, scrollbar)
+        if app is not None:
+            content = frame_cls(canvas, style=notebook_page_style_name())
+        else:
+            content = frame_cls(canvas)
         if _supports_scrollable_widgets(host, canvas, scrollbar, content):
             host.grid_columnconfigure(0, weight=1)
             host.grid_rowconfigure(0, weight=1)
@@ -167,5 +188,8 @@ def build_scrollable_container(
             if bind_mousewheel_support:
                 bind_mousewheel(refs)
             return refs
-    content = frame_cls(host)
+    if app is not None:
+        content = frame_cls(host, style=notebook_page_style_name())
+    else:
+        content = frame_cls(host)
     return _place_plain_content(host, content)

@@ -36,6 +36,7 @@ from simple_sender.ui.macro_files import (
     remove_macro_slot,
     write_macro_slot,
 )
+from simple_sender.ui.theme_helpers import bind_listbox_theme, bind_text_display_theme, text_display_theme_options
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -84,6 +85,7 @@ class _MacroManagerDialog:
         ttk.Label(left, text="Macro slots").grid(row=0, column=0, sticky="w")
         self.slot_list = tk.Listbox(left, height=12, exportselection=False, width=28)
         self.slot_list.grid(row=1, column=0, sticky="nsw")
+        bind_listbox_theme(self.app, self.slot_list)
         self.slot_list.bind("<<ListboxSelect>>", self._on_slot_select)
 
         right = ttk.Frame(root)
@@ -127,7 +129,11 @@ class _MacroManagerDialog:
 
         ttk.Label(right, text="Body").grid(row=4, column=0, sticky="nw", padx=(0, 8), pady=4)
         self.body_text = tk.Text(right, wrap="word", height=16)
+        themed_options = text_display_theme_options(self.app)
+        if themed_options:
+            self.body_text.configure(themed_options)
         self.body_text.grid(row=4, column=1, sticky="nsew", pady=4)
+        bind_text_display_theme(self.app, self.body_text)
         body_scroll = ttk.Scrollbar(right, orient="vertical", command=self.body_text.yview)
         body_scroll.grid(row=4, column=2, sticky="ns", pady=4)
         self.body_text.configure(yscrollcommand=body_scroll.set)

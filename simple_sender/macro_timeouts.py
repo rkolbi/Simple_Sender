@@ -19,19 +19,34 @@
 # contributing them back upstream (e.g., via a pull request) so others can benefit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+"""Shared macro-timeout policy helpers."""
 
-"""Simple Sender - GRBL 1.1h CNC Controller.
+from __future__ import annotations
 
-A minimal, reliable GRBL sender for 3-axis CNC machines with Python + Tkinter.
-"""
 
-__version__ = "2.8"
-__author__ = "Bob Kolbasowski"
+def _read_bool(value: object, default: bool = False) -> bool:
+    try:
+        if hasattr(value, "get"):
+            value = value.get()
+        return bool(value)
+    except Exception:
+        return bool(default)
 
-from .grbl_worker import GrblWorker
-from .utils import Settings
 
-__all__ = [
-    "GrblWorker",
-    "Settings",
-]
+def macro_timeout_override_active(app) -> bool:
+    return bool(
+        _read_bool(getattr(app, "_tool_change_unlimited_time_active", False))
+        or _read_bool(getattr(app, "_macro_operator_assisted_unlimited_time_active", False))
+    )
+
+
+def macro_timeouts_disabled(app) -> bool:
+    if macro_timeout_override_active(app):
+        return True
+    attr_value = getattr(app, "disable_macro_timeouts", None)
+    if attr_value is not None:
+        return _read_bool(attr_value)
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        return _read_bool(settings.get("disable_macro_timeouts", False))
+    return False
