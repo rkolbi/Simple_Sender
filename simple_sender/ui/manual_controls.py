@@ -60,9 +60,19 @@ def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
     if not connected:
         return "normal" if widget in app._offline_controls else "disabled"
     if not enabled:
+        stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+        stream_busy = bool(getattr(app, "_stream_done_pending_idle", False)) or stream_state in {
+            "running",
+            "paused",
+        }
         if widget is getattr(app, "btn_all_stop", None):
             return "normal"
         if widget in app._override_controls:
+            return "normal"
+        if (
+            not stream_busy
+            and widget in {getattr(app, "btn_open", None), getattr(app, "btn_clear", None)}
+        ):
             return "normal"
         return "disabled"
     return "normal"

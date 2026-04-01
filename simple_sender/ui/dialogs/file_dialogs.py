@@ -209,6 +209,39 @@ def _theme_dialog_canvas_items(app, canvas_path: str, defaults: dict[str, object
             app.tk.call(canvas_path, "itemconfigure", tag_name, "-fill", color)
         except Exception:
             continue
+    try:
+        item_ids = app.tk.splitlist(app.tk.call(canvas_path, "find", "all"))
+    except Exception:
+        item_ids = ()
+    for item_id in item_ids:
+        try:
+            item_type = str(app.tk.call(canvas_path, "type", item_id))
+        except Exception:
+            continue
+        if item_type != "text":
+            continue
+        try:
+            tags = {
+                str(tag)
+                for tag in app.tk.splitlist(app.tk.call(canvas_path, "gettags", item_id))
+            }
+        except Exception:
+            tags = set()
+        if "text" not in tags:
+            try:
+                app.tk.call(canvas_path, "addtag", "text", "withtag", item_id)
+            except Exception:
+                pass
+        fill = defaults["selection_fg"] if "selectionText" in tags else defaults["fg"]
+        for option, value in (
+            ("-fill", fill),
+            ("-activefill", fill),
+            ("-disabledfill", defaults["muted"]),
+        ):
+            try:
+                app.tk.call(canvas_path, "itemconfigure", item_id, option, value)
+            except Exception:
+                continue
 
 
 def _theme_linux_dialog_widgets(app, dialog_path: str) -> None:

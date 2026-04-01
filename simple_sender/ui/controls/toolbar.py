@@ -633,7 +633,7 @@ def build_toolbar(app):
         bar,
         textvariable=app.machine_state,
         font=state_font,
-        fg="#000000",
+        fg=style.lookup("TLabel", "foreground") or "#000000",
         bg=bar_bg,
         padx=20,
         pady=6,
@@ -643,6 +643,10 @@ def build_toolbar(app):
         app._state_default_bg = app.machine_state_label.cget("background")
     except Exception as exc:
         _log_suppressed("Failed caching default state-label background", exc)
+    try:
+        app._state_default_fg = app.machine_state_label.cget("foreground")
+    except Exception as exc:
+        _log_suppressed("Failed caching default state-label foreground", exc)
     try:
         app._machine_state_max_chars = len(MachineStateMessages.DISCONNECTED) + 2
         app.machine_state_label.config(width=app._machine_state_max_chars)

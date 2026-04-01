@@ -35,9 +35,19 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _default_state_label_fg(app) -> str:
+    return str(getattr(app, "_state_default_fg", "") or "#000000")
+
+
 def apply_state_fg(app, color: str | None, fg: str | None = None):
     target = color if color else (app._state_default_bg or "#f0f0f0")
-    text_color = fg or "#000000"
+    default_bg = str(getattr(app, "_state_default_bg", "") or "")
+    if fg is not None:
+        text_color = fg
+    elif (color is None) or (default_bg and str(color) == default_bg):
+        text_color = _default_state_label_fg(app)
+    else:
+        text_color = "#000000"
     lbl = getattr(app, "machine_state_label", None)
     if not lbl:
         return
@@ -118,9 +128,15 @@ def update_state_highlight(app, state: str | None):
     elif text.startswith("idle"):
         cancel_state_flash(app)
         apply_state_fg(app, "#2196f3")
+    elif text.startswith("connected"):
+        cancel_state_flash(app)
+        apply_state_fg(app, "#607d8b", fg="#ffffff")
     elif text.startswith("disconnected"):
         cancel_state_flash(app)
         apply_state_fg(app, "#2b2b2b", fg="#ffffff")
+    elif text.startswith(("restore failed", "reload job")):
+        cancel_state_flash(app)
+        apply_state_fg(app, "#ef6c00", fg="#ffffff")
     elif text.startswith(("home", "homing")):
         cancel_state_flash(app)
         apply_state_fg(app, "#7e57c2")
