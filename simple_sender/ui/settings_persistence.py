@@ -293,15 +293,6 @@ def _build_motion_and_connection_settings(app, last_port: str) -> dict[str, obje
         "all_stop_mode": app.all_stop_mode.get(),
         "training_wheels": bool(app.training_wheels.get()),
         "stop_joystick_hold_on_focus_loss": bool(app.stop_hold_on_focus_loss.get()),
-        "validate_streaming_gcode": bool(app.validate_streaming_gcode.get()),
-        "overdrive_validation_stop_on_first_error": bool(
-            app.overdrive_validation_stop_on_first_error.get()
-            if hasattr(app, "overdrive_validation_stop_on_first_error")
-            else app.settings.get(
-                "overdrive_validation_stop_on_first_error",
-                DEFAULT_SETTINGS.get("overdrive_validation_stop_on_first_error", True),
-            )
-        ),
         "streaming_line_threshold": _safe_int(
             app,
             app.streaming_line_threshold,
@@ -442,6 +433,22 @@ def _build_ui_settings(
             )
             if hasattr(app, "ui_scale")
             else app.settings.get("ui_scale", _setting_default("ui_scale", 1.0))
+        ),
+        "linux_file_dialog_scale": (
+            _safe_float(
+                app,
+                app.linux_file_dialog_scale,
+                app.settings.get(
+                    "linux_file_dialog_scale",
+                    _setting_default("linux_file_dialog_scale", 1.0),
+                ),
+                "Linux file dialog scale",
+            )
+            if hasattr(app, "linux_file_dialog_scale")
+            else app.settings.get(
+                "linux_file_dialog_scale",
+                _setting_default("linux_file_dialog_scale", 1.0),
+            )
         ),
         "scrollbar_width": _read_string_setting_value(
             app,

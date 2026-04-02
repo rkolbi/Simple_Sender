@@ -595,14 +595,6 @@ def _init_stream_and_override_state(
     app._gcode_load_settling_tail_ms = 1200
     app._gcode_stats_settle_delay_ms = 1500
     app._gcode_post_popup_background_tasks = "none"
-    app._overdrive_validation_run_id = 0
-    app._overdrive_validation_running = False
-    app._overdrive_validation_cancel_event = None
-    app._overdrive_validation_worker = None
-    app._overdrive_validation_last_result = None
-    app._overdrive_validation_last_report_text = ""
-    app._overdrive_validation_last_progress_pct = -1.0
-    app._last_validation_run = None
     app._stream_loaded_force_apply = False
     app._stream_loaded_reconcile_after_id = None
     app._stream_loaded_reconcile_generation = 0

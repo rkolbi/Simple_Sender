@@ -987,8 +987,8 @@ def build_app_settings_tab(app, notebook):
         "System",
         build_power_section,
         mode="basic",
-        description="Linux-only shutdown and reboot actions.",
-        keywords=("shutdown", "reboot", "linux"),
+        description="Application restart/close on all platforms, plus Linux shutdown and reboot actions.",
+        keywords=("restart", "close", "shutdown", "reboot", "linux"),
     )
     _apply_app_settings_filters(app, reset_scroll=False)
     after_idle = getattr(app, "after_idle", None)

@@ -21,7 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
-import os
+import sys
 
 from simple_sender.ui.theme_helpers import plain_tk_theme_defaults
 
@@ -65,16 +65,29 @@ def _coerce_scale(value, default: float = _FILE_DIALOG_MIN_SCALE) -> float:
         return default
     if scale <= 0:
         return default
-    return max(1.0, min(_FILE_DIALOG_MAX_SCALE, scale))
+    return max(_FILE_DIALOG_MIN_SCALE, min(_FILE_DIALOG_MAX_SCALE, scale))
 
 
 def _dialog_target_scale(app, old_scale: float) -> float:
     ui_scale = _FILE_DIALOG_MIN_SCALE
+    linux_file_dialog_scale = _FILE_DIALOG_MIN_SCALE
     try:
         ui_scale = _coerce_scale(app.ui_scale.get(), _FILE_DIALOG_MIN_SCALE)
     except Exception:
         ui_scale = _FILE_DIALOG_MIN_SCALE
-    return max(float(old_scale), float(ui_scale), _FILE_DIALOG_MIN_SCALE)
+    try:
+        linux_file_dialog_scale = _coerce_scale(
+            app.linux_file_dialog_scale.get(),
+            _FILE_DIALOG_MIN_SCALE,
+        )
+    except Exception:
+        linux_file_dialog_scale = _FILE_DIALOG_MIN_SCALE
+    return max(
+        float(old_scale),
+        float(ui_scale),
+        float(linux_file_dialog_scale),
+        _FILE_DIALOG_MIN_SCALE,
+    )
 
 
 def _get_tk_var(app, name: str) -> str | None:
@@ -336,8 +349,7 @@ def _start_linux_dialog_resize_watch(app, *, parent):
 
 
 def _run_with_dialog_scaling(app, func, *args, **kwargs):
-    # Windows native dialogs became unstable when Tk scaling was changed at runtime.
-    if os.name == "nt":
+    if not sys.platform.startswith("linux"):
         return func(*args, **kwargs)
     old_motif = _get_tk_var(app, "tk_strictMotif")
     if old_motif is not None:

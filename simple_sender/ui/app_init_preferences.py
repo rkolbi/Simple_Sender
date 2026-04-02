@@ -129,12 +129,6 @@ def _init_behavior_preferences(
     app.stop_hold_on_focus_loss = tk.BooleanVar(
         value=setting("stop_joystick_hold_on_focus_loss", True)
     )
-    app.validate_streaming_gcode = tk.BooleanVar(
-        value=setting("validate_streaming_gcode", False)
-    )
-    app.overdrive_validation_stop_on_first_error = tk.BooleanVar(
-        value=setting("overdrive_validation_stop_on_first_error", True)
-    )
     app.streaming_line_threshold = tk.IntVar(
         value=setting("streaming_line_threshold", gcode_streaming_line_threshold)
     )
@@ -218,6 +212,12 @@ def _init_behavior_preferences(
         value=bool(setting("console_positions_enabled", True))
     )
     app.ui_scale = tk.DoubleVar(value=setting("ui_scale", 1.0))
+    app.linux_file_dialog_scale = tk.DoubleVar(
+        value=setting(
+            "linux_file_dialog_scale",
+            default_settings.get("linux_file_dialog_scale", 1.4),
+        )
+    )
     app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
     touch_scroll_mode_raw = str(
         setting(

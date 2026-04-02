@@ -72,12 +72,6 @@ def _cancel_machine_driving_tasks(app) -> None:
             cancel_probe()
     except Exception as exc:
         _log_suppressed("Failed canceling auto-level probing during ALL STOP", exc)
-    try:
-        cancel_event = getattr(app, "_overdrive_validation_cancel_event", None)
-        if cancel_event is not None and hasattr(cancel_event, "set"):
-            cancel_event.set()
-    except Exception as exc:
-        _log_suppressed("Failed canceling overdrive validation during ALL STOP", exc)
 
 
 def all_stop_action(app):

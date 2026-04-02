@@ -29,6 +29,7 @@ from tkinter import messagebox, ttk
 import tkinter.font as tkfont
 
 from simple_sender.ui.alarm_state import mark_alarm_clear_requested
+from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
@@ -153,6 +154,8 @@ _SCROLLBAR_WIDTHS = {
     "wider": 32,
     "widest": 40,
 }
+_LINUX_FILE_DIALOG_SCALE_MIN = 1.4
+_LINUX_FILE_DIALOG_SCALE_MAX = 3.0
 _TOUCH_SCROLL_MODES = {"thumb_only", "thumb_and_swipe"}
 _TOUCH_FEEDBACK_STATUS_PREFIX = "Touch received: "
 _TOUCH_FEEDBACK_STATUS_MS = 850
@@ -194,6 +197,17 @@ def _coerce_touch_scroll_mode(value, default: str = "thumb_and_swipe") -> str:
     if normalized in _TOUCH_SCROLL_MODES:
         return normalized
     return default
+
+
+def _coerce_linux_file_dialog_scale(value, default: float = _LINUX_FILE_DIALOG_SCALE_MIN) -> float:
+    try:
+        scale = float(value)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        return default
+    if scale <= 0:
+        return default
+    scale = max(_LINUX_FILE_DIALOG_SCALE_MIN, min(_LINUX_FILE_DIALOG_SCALE_MAX, scale))
+    return round(scale, 1)
 
 
 def _coerce_ui_scale(value, default: float = 1.0) -> float:
@@ -349,6 +363,29 @@ def on_ui_scale_change(app, _event=None):
     _persist_ui_setting_change(
         app,
         failure_text="UI scale changed for this session only; settings save failed",
+    )
+
+
+def on_linux_file_dialog_scale_change(app, _event=None):
+    scale = _coerce_linux_file_dialog_scale(
+        app.linux_file_dialog_scale.get() if hasattr(app, "linux_file_dialog_scale") else None,
+        _LINUX_FILE_DIALOG_SCALE_MIN,
+    )
+    try:
+        app.linux_file_dialog_scale.set(scale)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed writing normalized Linux file dialog scale to Tk variable", exc)
+    try:
+        app.settings["linux_file_dialog_scale"] = scale
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting Linux file dialog scale", exc)
+    try:
+        app.status.config(text=f"Linux file dialog scale: {scale:.1f}x")
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for Linux file dialog scale change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Linux file dialog scale changed for this session only; settings save failed",
     )
 
 
@@ -800,6 +837,34 @@ def _job_estimate_text(app) -> tuple[str, str, str]:
     return feed_only, total, finish_at
 
 
+def _run_job_metadata_summary_text(app) -> str:
+    ssmeta = getattr(app, "_gcode_ssmeta", None)
+    ssmeta_map = dict(ssmeta) if isinstance(ssmeta, dict) else {}
+    if not bool(getattr(app, "_gcode_ssmeta_present", False)) or not ssmeta_map:
+        return ""
+
+    sections: list[str] = []
+    toolpaths = ssmeta_toolpaths(ssmeta_map)
+    if toolpaths:
+        sections.append(
+            "\n".join(
+                ["The following toolpaths are about to run:"]
+                + [f"- {toolpath}" for toolpath in toolpaths]
+            )
+        )
+
+    tools = ssmeta_tools(ssmeta_map)
+    if tools:
+        sections.append(
+            "\n".join(
+                ["Please ensure the following tools are available and ready:"]
+                + [f"- {tool}" for tool in tools]
+            )
+        )
+
+    return "\n\n".join(section for section in sections if section)
+
+
 def _confirm_run_job(app, label: str = "Run job") -> bool:
     path = getattr(app, "_last_gcode_path", None)
     name = ""
@@ -855,8 +920,18 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             row=idx, column=1, sticky="w", pady=2
         )
     report = getattr(app, "_gcode_validation_report", None)
+    summary_text = _run_job_metadata_summary_text(app)
+    next_row = len(rows) + 1
+    if summary_text:
+        ttk.Label(
+            dialog,
+            text=summary_text,
+            wraplength=520,
+            justify="left",
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        next_row += 1
     report_text = format_validation_report(report)
-    report_row = len(rows) + 1
+    report_row = next_row
     ttk.Label(
         dialog,
         text=report_text,

@@ -195,27 +195,15 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.btn_import_backup_bundle,
         "Import settings and macro assets from a previously exported bundle.",
     )
-    app.validate_streaming_check = ttk.Checkbutton(
-        developer_frame,
-        text="Overdrive validation strict by default",
-        variable=app.validate_streaming_gcode,
-    )
-    app.validate_streaming_check.grid(
-        row=7, column=0, columnspan=2, sticky="w", pady=(6, 0)
-    )
-    apply_tooltip(
-        app.validate_streaming_check,
-        "Default mode for Overdrive > Validate Loaded Job. Off = quick scan, On = full scan.",
-    )
     ttk.Label(developer_frame, text="Sample-only threshold (lines)").grid(
-        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=7, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
         developer_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
-    app.streaming_line_threshold_entry.grid(row=8, column=1, sticky="w", pady=(6, 0))
+    app.streaming_line_threshold_entry.grid(row=7, column=1, sticky="w", pady=(6, 0))
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
@@ -227,7 +215,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
             value=max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
         )
     ttk.Label(developer_frame, text="Ultra-large threshold (MB)").grid(
-        row=9, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.ultra_large_size_threshold_mb_entry = ttk.Entry(
         developer_frame,
@@ -235,7 +223,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         width=10,
     )
     app.ultra_large_size_threshold_mb_entry.grid(
-        row=9, column=1, sticky="w", pady=(6, 0)
+        row=8, column=1, sticky="w", pady=(6, 0)
     )
     attach_numeric_keypad(app.ultra_large_size_threshold_mb_entry, allow_decimal=False)
     apply_tooltip(
@@ -273,7 +261,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.ultra_large_size_threshold_info_var,
     )
     app.ultra_large_size_threshold_info_label.grid(
-        row=10, column=1, sticky="w", pady=(2, 0)
+        row=9, column=1, sticky="w", pady=(2, 0)
     )
     apply_tooltip(
         app.ultra_large_size_threshold_info_label,
@@ -388,6 +376,8 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     theme_frame.grid_columnconfigure(1, weight=1)
     if not hasattr(app, "ui_scale"):
         app.ui_scale = tk.DoubleVar(master=parent, value=1.0)
+    if not hasattr(app, "linux_file_dialog_scale"):
+        app.linux_file_dialog_scale = tk.DoubleVar(master=parent, value=1.4)
     if not hasattr(app, "scrollbar_width"):
         app.scrollbar_width = tk.StringVar(master=parent, value="wide")
     if not hasattr(app, "touch_scroll_mode"):
@@ -449,8 +439,45 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.ui_scale_apply_btn,
         "Apply the UI scale immediately.",
     )
+
+    scrollbar_row = 2
+    touch_scroll_row = 3
+    tooltips_enabled_row = 4
+    tooltip_timeout_row_index = 5
+    numeric_keypad_row = 6
+    if sys.platform.startswith("linux"):
+        ttk.Label(theme_frame, text="Linux File Dialog Scale").grid(
+            row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        )
+        app.linux_file_dialog_scale_combo = ttk.Combobox(
+            theme_frame,
+            state="readonly",
+            values=["1.4", "1.6", "1.8", "2.0", "2.2", "2.4", "2.6", "2.8", "3.0"],
+            textvariable=app.linux_file_dialog_scale,
+            width=12,
+        )
+        app.linux_file_dialog_scale_combo.grid(row=2, column=1, sticky="w", pady=4)
+        on_linux_file_dialog_scale_change = getattr(
+            app,
+            "_on_linux_file_dialog_scale_change",
+            lambda *_args, **_kwargs: None,
+        )
+        app.linux_file_dialog_scale_combo.bind(
+            "<<ComboboxSelected>>",
+            on_linux_file_dialog_scale_change,
+        )
+        apply_tooltip(
+            app.linux_file_dialog_scale_combo,
+            "Scale Linux Tk file dialogs for touchscreen use; the larger of UI scale and this value applies the next time a file dialog opens.",
+        )
+        scrollbar_row += 1
+        touch_scroll_row += 1
+        tooltips_enabled_row += 1
+        tooltip_timeout_row_index += 1
+        numeric_keypad_row += 1
+
     ttk.Label(theme_frame, text="Scrollbar width").grid(
-        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        row=scrollbar_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.scrollbar_width_combo = ttk.Combobox(
         theme_frame,
@@ -459,7 +486,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.scrollbar_width,
         width=12,
     )
-    app.scrollbar_width_combo.grid(row=2, column=1, sticky="w", pady=4)
+    app.scrollbar_width_combo.grid(row=scrollbar_row, column=1, sticky="w", pady=4)
     on_scrollbar_width_change = getattr(
         app,
         "_on_scrollbar_width_change",
@@ -471,7 +498,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
     ttk.Label(theme_frame, text="Touch scroll mode").grid(
-        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+        row=touch_scroll_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.touch_scroll_mode_combo = ttk.Combobox(
         theme_frame,
@@ -480,7 +507,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.touch_scroll_mode,
         width=20,
     )
-    app.touch_scroll_mode_combo.grid(row=3, column=1, sticky="w", pady=4)
+    app.touch_scroll_mode_combo.grid(row=touch_scroll_row, column=1, sticky="w", pady=4)
     on_touch_scroll_mode_change = getattr(
         app,
         "_on_touch_scroll_mode_change",
@@ -518,7 +545,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         command=_on_tooltip_setting_change,
     )
     app.tooltips_enabled_check.grid(
-        row=4, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        row=tooltips_enabled_row, column=0, columnspan=3, sticky="w", pady=(6, 0)
     )
     apply_tooltip(
         app.tooltips_enabled_check,
@@ -532,10 +559,10 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         _log_suppressed("Failed wiring tooltip-enabled variable trace handler", exc)
 
     ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
-        row=5, column=0, sticky="w", padx=(0, 10), pady=4
+        row=tooltip_timeout_row_index, column=0, sticky="w", padx=(0, 10), pady=4
     )
     tooltip_timeout_row = ttk.Frame(theme_frame)
-    tooltip_timeout_row.grid(row=5, column=1, sticky="w", pady=4)
+    tooltip_timeout_row.grid(row=tooltip_timeout_row_index, column=1, sticky="w", pady=4)
     app.tooltip_timeout_entry = ttk.Entry(
         tooltip_timeout_row, textvariable=app.tooltip_timeout_sec, width=10
     )
@@ -555,7 +582,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         variable=app.numeric_keypad_enabled,
     )
     app.numeric_keypad_check.grid(
-        row=6, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        row=numeric_keypad_row, column=0, columnspan=3, sticky="w", pady=(6, 0)
     )
     apply_tooltip(
         app.numeric_keypad_check,
@@ -920,11 +947,21 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
 
 
 def build_power_section(app, parent: ttk.Frame, row: int) -> int:
-    if not sys.platform.startswith("linux"):
-        return row
     power_frame = ttk.LabelFrame(parent, text="System", padding=8)
     power_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     power_frame.grid_columnconfigure(1, weight=1)
+
+    def _invoke_app_action(method_name: str, *, fallback_name: str | None = None) -> bool:
+        action = getattr(app, method_name, None)
+        if not callable(action) and fallback_name is not None:
+            action = getattr(app, fallback_name, None)
+        if not callable(action):
+            return False
+        try:
+            return bool(action())
+        except Exception as exc:
+            _log_suppressed(f"Failed invoking app action {method_name}", exc)
+            return False
 
     def _log_status(text: str) -> None:
         try:
@@ -1011,8 +1048,27 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
             enabled = False
         apply_pi_profile(app, enabled=enabled, save_settings=True, emit_status=True)
 
+    app_row = ttk.Frame(power_frame)
+    app_row.grid(row=0, column=0, sticky="w")
+    app.btn_close_application = ttk.Button(
+        app_row,
+        text="Close Application",
+        command=lambda: _invoke_app_action(
+            "_close_application",
+            fallback_name="_on_close",
+        ),
+    )
+    app.btn_close_application.pack(side="left")
+    apply_tooltip(
+        app.btn_close_application,
+        "Close Simple Sender cleanly using the normal shutdown path.",
+    )
+
+    if not sys.platform.startswith("linux"):
+        return row + 1
+
     btn_row = ttk.Frame(power_frame)
-    btn_row.grid(row=0, column=0, sticky="w")
+    btn_row.grid(row=1, column=0, sticky="w", pady=(8, 0))
     app.btn_shutdown = ttk.Button(
         btn_row,
         text="Shutdown",

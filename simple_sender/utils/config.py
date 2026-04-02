@@ -146,6 +146,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "step_z": 1.0,
     "theme": "simple_sender_gemini",
     "ui_scale": 1.5,
+    "linux_file_dialog_scale": 1.4,
     "scrollbar_width": "wide",
     "touch_scroll_mode": "thumb_and_swipe",
     "tooltips_enabled": True,
@@ -157,8 +158,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "vacuum_enabled": False,
     "vacuum_off_delay_sec": 0.0,
     "vacuum_outlet": 1,
-    "validate_streaming_gcode": False,
-    "overdrive_validation_stop_on_first_error": True,
     "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,
     "ultra_large_size_threshold_mb": max(
         0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)
@@ -261,6 +260,22 @@ def _repair_invalid_settings(
     if not isinstance(theme, str) or not str(theme).strip():
         repaired[_THEME_SETTING_KEY] = defaults.get(_THEME_SETTING_KEY, "")
         repaired_keys.append(_THEME_SETTING_KEY)
+
+    linux_file_dialog_scale = repaired.get("linux_file_dialog_scale")
+    if isinstance(linux_file_dialog_scale, (int, float, str)):
+        try:
+            linux_file_dialog_scale_value = float(linux_file_dialog_scale)
+        except Exception:
+            linux_file_dialog_scale_value = None
+    else:
+        linux_file_dialog_scale_value = None
+    if (
+        linux_file_dialog_scale_value is None
+        or linux_file_dialog_scale_value < 1.4
+        or linux_file_dialog_scale_value > 3.0
+    ):
+        repaired["linux_file_dialog_scale"] = defaults.get("linux_file_dialog_scale", 1.4)
+        repaired_keys.append("linux_file_dialog_scale")
 
     if repaired_keys:
         if repaired_keys_out is not None:

@@ -1403,7 +1403,7 @@ def _stream_from_disk(
         app.ui_q.put(
             (
                 "log",
-                "[gcode] Run path stays fast; use Overdrive > Validate Loaded Job for optional deep validation.",
+                "[gcode] Run path stays fast; use preflight and File Info validation details when you want extra review before cutting.",
             )
         )
         cleaned_lines_estimate = max(0, int(prepare_data.cleaned_lines_estimate))

@@ -20,7 +20,36 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 import logging
+import os
 import time
+
+
+def _notify_duplicate_instance(exc: BaseException) -> None:
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        title = str(getattr(exc, "title", "Simple Sender Already Running") or "Simple Sender Already Running")
+        message = str(exc).strip() or "Another Simple Sender instance is already running."
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        messagebox.showerror(title, message, parent=root)
+    except Exception as notify_exc:
+        logging.getLogger(__name__).warning(
+            "Duplicate-start notification failed; continuing with log-only warning: %s",
+            notify_exc,
+        )
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def main() -> None:
@@ -39,6 +68,26 @@ def main() -> None:
             "Logging bootstrap failed; continuing with basic logging: %s",
             exc,
         )
+    from simple_sender import __version__
+    from simple_sender.utils.runtime_integrity import (
+        DuplicateInstanceError,
+        ensure_runtime_marker_claimed,
+    )
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        ensure_runtime_marker_claimed(
+            script_dir,
+            version=__version__,
+        )
+    except DuplicateInstanceError as exc:
+        logging.getLogger(__name__).warning(
+            "Another Simple Sender instance is already running; exiting duplicate startup. pid=%s host=%s",
+            exc.payload.get("pid"),
+            exc.payload.get("hostname"),
+        )
+        _notify_duplicate_instance(exc)
+        return
     from simple_sender.application import App
     App(startup_started_at=startup_started_at).mainloop()
 

@@ -29,6 +29,7 @@ from typing import Any, cast
 from simple_sender.types import AppProtocol
 
 from simple_sender.ui.app_lifecycle import (
+    close_application,
     log_exception,
     on_close,
     tk_report_callback_exception,
@@ -57,6 +58,9 @@ class LifecycleMixin:
 
     def _on_close(self):
         on_close(self)
+
+    def _close_application(self) -> bool:
+        return bool(close_application(self))
 
     def _call_on_ui_thread(self, func, *args, timeout: float | None = 5.0, **kwargs):
         return call_on_ui_thread(self, func, *args, timeout=timeout, **kwargs)

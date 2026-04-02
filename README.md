@@ -284,8 +284,8 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
-   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight and deep validation tools from App Settings/Overdrive when you want extra review before cutting.
-   - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive. Optional deep validation is now manual via **Overdrive -> Validate Loaded Job** (quick or strict), so Start/Run never blocks on a pre-run validation pass.
+   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight, File Info, and the shared validation summary when you want extra review before cutting.
+   - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP. Use **Recover (Experimental)** to see a guided recovery panel.
@@ -343,7 +343,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-08.png)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, Overdrive validation default + fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and Linux-only System power controls.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (application close on all platforms, plus Linux-only shutdown/reboot).
   
   ![](pics/screenshot-09.png)
   
@@ -1457,14 +1457,13 @@ Macro UI is included below along with the rest of the interface.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip. Import validates settings before replacing the live copy, reports repaired values, and asks before replacing colliding macro/checklist assets.
-- Overdrive validation strict by default: sets default mode for **Overdrive -> Validate Loaded Job** (`Off=quick`, `On=full scan`).
 - Sample-only threshold (lines): cleaned line count threshold for aggressive sampled prepare behavior (set `0` to disable line-based trigger).
 - Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (sample-only + skip full validation); set `0` to disable.
 - Ultra-large threshold info: shows the computed trigger in GiB/bytes for the current MB value.
 - Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit (enabled by default for new settings).
 - Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
 - Performance report log path: optional destination file to append exit reports.
-- Recommendation: keep Run path lean; use **Overdrive -> Validate Loaded Job** when you want deep validation before cutting.
+- Recommendation: keep Run path lean; use preflight, File Info, and the built-in validation summary when you want extra review before cutting.
 
 ### Baseline Capture (Lean Mode)
 - Idle (no file loaded): let the app sit connected/ready for 5 minutes.

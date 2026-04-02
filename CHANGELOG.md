@@ -92,11 +92,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Lean runtime cleanup pass:
   - removed obsolete `streaming_validation_prompt` UI event path and related type/constants/test hooks
   - simplified fast-load worker API by dropping stale `_stream_from_disk` validation/sample threshold parameters that were no-ops
-  - retained manual deep validation exclusively through **Overdrive -> Validate Loaded Job**
 - Documentation refresh for lean sender runtime:
   - README now documents the bounded Live G-code window (`500 past/current/500 next`) instead of legacy sent/acked highlight wording
-  - run-path validation text now points to manual Overdrive validation (quick/strict) and confirms Start/Run stays non-blocking
-  - diagnostics/settings wording updated to reflect Overdrive strict-default toggle and current fast-load thresholds
+  - run-path validation text now reflects the non-blocking shared validation/reporting flow used during load/start
+  - diagnostics/settings wording updated to reflect the current fast-load thresholds
 - Revision 2.0.0 loader architecture kickoff:
   - all file-based G-code loads now normalize through one disk-backed path (`FileGcodeSource` + temp-file offsets)
   - sample-only behavior is now controlled by an explicit flag, decoupled from "source is file-backed", so non-sample jobs keep full stats/pathview features
@@ -178,7 +177,6 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - `grbl_worker_status` status-wait tracing now normalizes trace payload types before serializing/logging so mypy remains clean on strict checks while preserving runtime diagnostics behavior.
 - Shutdown sequencing now remains best-effort across all steps: a settings-save failure no longer skips GRBL disconnect and final resource cleanup.
 - Macro parser now preserves expression-only bracket lines (for example `["G0 X0" if cond else ""]`) through the expression-evaluation path so conditional macro command lines execute instead of being dropped.
-- Overdrive validation start flow now safely defaults when Tk setting vars are missing/uninitialized, preventing edge-case `None.get()` failures in validation startup.
 
 ### Baseline Validation (local, 2026-03-27)
 - `run_tests.bat`: PASS (`7/7` gates passed; coverage test stage `1433 passed, 3 skipped`)

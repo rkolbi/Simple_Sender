@@ -330,9 +330,6 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
         kasa_line = ""
     if kasa_line:
         metrics["kasa_status_line"] = kasa_line
-    last_validation_run = getattr(app, "_last_validation_run", None)
-    if isinstance(last_validation_run, dict):
-        metrics["last_validation_run"] = dict(last_validation_run)
     grbl = getattr(app, "grbl", None)
     getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
     if callable(getter):

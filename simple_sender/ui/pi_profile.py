@@ -214,7 +214,6 @@ def apply_pi_profile(
             _log_suppressed("Failed applying idle maintenance/reconnect intervals for Pi profile", exc)
         _set_var(app, "gui_logging_enabled", False)
         _invoke_handler(app, "_on_gui_logging_change")
-        _set_var(app, "validate_streaming_gcode", False)
         _set_var(app, "streaming_line_threshold", PI_PROFILE_STREAMING_LINE_THRESHOLD)
         _set_var(app, "status_poll_interval", PI_PROFILE_STATUS_POLL_INTERVAL)
         _invoke_handler(app, "_on_status_interval_change")

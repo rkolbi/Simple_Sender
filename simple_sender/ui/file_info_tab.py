@@ -197,29 +197,28 @@ def _ordered_ssmeta_values(
     return [fallback] if fallback else []
 
 
-def _toolpath_tool_rows(ssmeta: dict[str, str]) -> list[str]:
-    toolpaths = _ordered_ssmeta_values(
+def ssmeta_toolpaths(ssmeta: dict[str, str]) -> list[str]:
+    return _ordered_ssmeta_values(
         ssmeta,
         list_key="__ssmeta_toolpaths_list",
         fallback_keys=("toolpaths_output", "toolpaths"),
     )
-    tools = _ordered_ssmeta_values(
+
+
+def ssmeta_tools(ssmeta: dict[str, str]) -> list[str]:
+    return _ordered_ssmeta_values(
         ssmeta,
         list_key="__ssmeta_tools_list",
         fallback_keys=("tools_used", "tools"),
     )
-    count = max(len(toolpaths), len(tools))
-    rows: list[str] = []
-    for index in range(count):
-        toolpath = toolpaths[index] if index < len(toolpaths) else ""
-        tool = tools[index] if index < len(tools) else ""
-        if toolpath and tool:
-            rows.append(f"{index + 1} {toolpath} / {tool}")
-        elif toolpath:
-            rows.append(f"{index + 1} {toolpath}")
-        elif tool:
-            rows.append(f"{index + 1} {tool}")
-    return rows
+
+
+def _append_ssmeta_list_section(lines: list[str], title: str, values: list[str]) -> None:
+    if not values:
+        return
+    lines.append("")
+    lines.append(f"- {title}:")
+    lines.extend(f"  - {value}" for value in values)
 
 
 def render_file_info_text(app) -> str:
@@ -271,14 +270,11 @@ def render_file_info_text(app) -> str:
                 continue
             lines.append(f"- {label}: {value}")
             seen_labels.add(label)
-        toolpath_tool_rows = _toolpath_tool_rows(ssmeta_map)
-        if toolpath_tool_rows:
-            lines.append("")
-            lines.append("- Toolpaths and Tools:")
-            lines.extend(toolpath_tool_rows)
-            lines.append("")
+        _append_ssmeta_list_section(lines, "Toolpaths", ssmeta_toolpaths(ssmeta_map))
+        _append_ssmeta_list_section(lines, "Tools", ssmeta_tools(ssmeta_map))
         extents_rows = _format_ssmeta_extents(ssmeta_map)
         if extents_rows:
+            lines.append("")
             lines.append("- Extents:")
             lines.extend(extents_rows)
     else:

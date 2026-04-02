@@ -24,6 +24,7 @@
 """
 
 # Standard library imports
+import atexit
 import logging
 import os
 import sys
@@ -61,6 +62,11 @@ from simple_sender.ui.pi_profile import (
     offer_pi_profile_if_recommended,
 )
 from simple_sender.utils.perf_monitor import create_app_performance_monitor
+from simple_sender.utils.runtime_integrity import (
+    clear_runtime_marker,
+    DuplicateInstanceError,
+    ensure_runtime_marker_claimed,
+)
 
 if TYPE_CHECKING:
     from simple_sender.macro_executor import MacroExecutor
@@ -176,8 +182,6 @@ class App(tk.Tk):
     reconnect_on_open: tk.BooleanVar
     fullscreen_on_startup: tk.BooleanVar
     stop_hold_on_focus_loss: tk.BooleanVar
-    validate_streaming_gcode: tk.BooleanVar
-    overdrive_validation_stop_on_first_error: tk.BooleanVar
     streaming_controller: Any
     tool_reference_var: tk.StringVar
     machine_state: tk.StringVar
@@ -196,6 +200,7 @@ class App(tk.Tk):
     _resume_job_name: str | None
     _manual_queue_drop_total: int
     _script_dir: str
+    _script_file: str
     _serial_available: bool
     _serial_import_error: str
 
@@ -221,8 +226,10 @@ class App(tk.Tk):
     def __init__(self, *, startup_started_at: float | None = None):
         super().__init__()
         self._script_dir = _SCRIPT_DIR
+        self._script_file = _SCRIPT_FILE
         self._serial_available = SERIAL_AVAILABLE
         self._serial_import_error = SERIAL_IMPORT_ERROR
+        self._install_runtime_marker()
         self.title("Simple Sender")
         self.minsize(980, 620)
         self.bind("<Escape>", lambda _evt: self.attributes("-fullscreen", False))
@@ -312,6 +319,42 @@ class App(tk.Tk):
                 perf_monitor.mark_app_ready()
             except Exception as exc:
                 _log_suppressed("Failed marking application startup readiness in performance monitor", exc)
+
+    def _install_runtime_marker(self) -> None:
+        try:
+            ensure_runtime_marker_claimed(
+                self._script_dir,
+                version=__version__,
+                argv=sys.argv,
+            )
+            atexit.register(clear_runtime_marker, self._script_dir, expected_pid=os.getpid())
+        except DuplicateInstanceError as exc:
+            logger.warning(
+                "Rejected duplicate Simple Sender startup during App initialization. pid=%s host=%s",
+                exc.payload.get("pid"),
+                exc.payload.get("hostname"),
+            )
+            try:
+                self.withdraw()
+            except Exception as withdraw_exc:
+                _log_suppressed("Failed withdrawing duplicate-start application root", withdraw_exc)
+            try:
+                messagebox.showerror(exc.title, str(exc), parent=self)
+            except Exception as dialog_exc:
+                _log_suppressed("Failed showing duplicate-start warning dialog", dialog_exc)
+            try:
+                self.destroy()
+            except Exception as destroy_exc:
+                _log_suppressed("Failed destroying duplicate-start application root", destroy_exc)
+            raise
+        except Exception as exc:
+            _log_suppressed("Failed installing runtime integrity marker", exc)
+
+    def _clear_runtime_marker(self) -> None:
+        try:
+            clear_runtime_marker(self._script_dir, expected_pid=os.getpid())
+        except Exception as exc:
+            _log_suppressed("Failed clearing runtime integrity marker", exc)
 
 
 _install_app_mixin_methods(App, _APP_MIXINS)

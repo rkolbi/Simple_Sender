@@ -56,6 +56,7 @@ from simple_sender.ui.ui_actions import (
     bind_touch_command_feedback,
     on_touch_command_feedback,
     on_gui_logging_change,
+    on_linux_file_dialog_scale_change,
     on_performance_mode_change,
     on_optional_tab_visibility_change,
     on_scrollbar_width_change,
@@ -126,6 +127,9 @@ class UiTogglesMixin:
 
     def _on_ui_scale_change(self, _event=None):
         on_ui_scale_change(self, _event)
+
+    def _on_linux_file_dialog_scale_change(self, _event=None):
+        on_linux_file_dialog_scale_change(self, _event)
 
     def _apply_scrollbar_width(self, value: str | None = None):
         return apply_scrollbar_width(self, value)

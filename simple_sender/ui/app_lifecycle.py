@@ -82,6 +82,82 @@ def _report_shutdown_failure(app, context: str, exc: BaseException) -> None:
         _log_suppressed(context, exc)
 
 
+def _macro_running(app) -> bool:
+    macro_executor = getattr(app, "macro_executor", None)
+    if macro_executor is None or not hasattr(macro_executor, "macro_vars"):
+        return False
+    try:
+        with macro_executor.macro_vars() as macro_vars:
+            return bool(macro_vars.get("running", False))
+    except Exception as exc:
+        _log_suppressed("Failed checking macro-running state before app lifecycle action", exc)
+        return False
+
+
+def _lifecycle_risk_reasons(app) -> list[str]:
+    reasons: list[str] = []
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
+    try:
+        grbl = getattr(app, "grbl", None)
+        is_streaming = bool(grbl.is_streaming()) if grbl is not None and hasattr(grbl, "is_streaming") else False
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL streaming state before app lifecycle action", exc)
+        is_streaming = False
+
+    if is_streaming or stream_state == "running":
+        reasons.append("A job is currently running.")
+    elif stream_state == "paused":
+        reasons.append("A job is currently paused.")
+
+    if done_pending_idle:
+        reasons.append("Job completion is still settling.")
+    if bool(getattr(app, "_resume_after_disconnect", False)) or getattr(app, "_resume_from_index", None) is not None:
+        reasons.append("Reconnect recovery is pending.")
+    if bool(getattr(app, "_gcode_restore_failed", False)):
+        reasons.append("A reconnect recovery failure is awaiting operator attention.")
+    if bool(getattr(app, "_auto_reconnect_pending", False)):
+        reasons.append("Automatic reconnect is pending.")
+    if bool(getattr(app, "_connecting", False)):
+        reasons.append("A controller connection attempt is in progress.")
+    if bool(getattr(app, "_disconnecting", False)):
+        reasons.append("A controller disconnect is in progress.")
+    if bool(getattr(app, "_homing_in_progress", False)):
+        reasons.append("Homing is currently active.")
+    if _macro_running(app):
+        reasons.append("A macro is currently running.")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if reason in seen:
+            continue
+        seen.add(reason)
+        deduped.append(reason)
+    return deduped
+
+
+def _confirm_application_close(app) -> bool:
+    reasons = _lifecycle_risk_reasons(app)
+    if reasons:
+        title = "Close Application"
+        consequence = "Closing now will interrupt the current session, disconnect from the controller, and stop any in-progress job or recovery activity."
+        prompt = "Close Simple Sender anyway?"
+        message = "\n".join(
+            ["Simple Sender is currently busy:"]
+            + [f"- {reason}" for reason in reasons]
+            + ["", consequence, "", prompt]
+        )
+    else:
+        title = "Close Application"
+        message = "Close Simple Sender now?"
+    try:
+        return bool(messagebox.askyesno(title, message))
+    except Exception as exc:
+        _log_suppressed("Failed showing application lifecycle confirmation dialog", exc)
+        return False
+
+
 def tk_report_callback_exception(app, exc, val, tb):
     try:
         text = "".join(traceback.format_exception(exc, val, tb))
@@ -122,7 +198,7 @@ def on_close(app):
             if choice is True:
                 break
             if choice is None:
-                return
+                return False
     app._closing = True
     for event_name in ("_connection_state_event", "_status_update_event", "_modal_update_event"):
         evt = getattr(app, event_name, None)
@@ -196,4 +272,30 @@ def on_close(app):
     try:
         app.destroy()
     except Exception as exc:
-        _log_suppressed("Failed destroying application root during shutdown", exc)
+        _report_shutdown_failure(app, "Failed destroying application root during shutdown", exc)
+        try:
+            messagebox.showerror(
+                "Close failed",
+                (
+                    "Simple Sender could not close cleanly.\n\n"
+                    f"{exc}\n\n"
+                    "The application is still running."
+                ),
+            )
+        except Exception as dialog_exc:
+            _log_suppressed("Failed showing close-failed dialog", dialog_exc)
+        app._closing = False
+        return False
+    clear_runtime_marker = getattr(app, "_clear_runtime_marker", None)
+    if callable(clear_runtime_marker):
+        try:
+            clear_runtime_marker()
+        except Exception as exc:
+            _log_suppressed("Failed clearing runtime integrity marker during shutdown", exc)
+    return True
+
+
+def close_application(app) -> bool:
+    if not _confirm_application_close(app):
+        return False
+    return bool(on_close(app))
