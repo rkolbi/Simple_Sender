@@ -20,14 +20,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Console UI package exports."""
+"""Console UI package exports for the live production console surface."""
 
-from .core import Console
 from .panel import build_console_tab
 from .utils import clear_console_log, save_console_log, send_console, setup_console_tags
 
 __all__ = [
-    "Console",
     "build_console_tab",
     "clear_console_log",
     "save_console_log",

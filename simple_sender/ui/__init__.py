@@ -23,9 +23,7 @@
 """UI components for Simple Sender."""
 
 from .viewer.gcode_viewer import GcodeViewer
-from .console import Console
 
 __all__ = [
     "GcodeViewer",
-    "Console",
 ]

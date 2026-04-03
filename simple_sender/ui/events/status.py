@@ -295,7 +295,7 @@ def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
         ):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)
-            _apply_machine_state_visuals(
+            _apply_machine_state_visuals_deferred_highlight(
                 app,
                 rendered_state=rendered_state,
                 banner_state=banner_state,
@@ -748,6 +748,37 @@ def _apply_machine_state_visuals(
     )
 
 
+def _apply_machine_state_visuals_deferred_highlight(
+    app,
+    *,
+    rendered_state: str,
+    banner_state: str,
+    width_context: str,
+    highlight_context: str,
+) -> None:
+    rendered_changed = _set_var_if_changed(app.machine_state, rendered_state)
+    if rendered_changed:
+        try:
+            app._ensure_state_label_width(rendered_state)
+        except Exception as exc:
+            _log_suppressed(width_context, exc)
+    highlight_key = _machine_state_highlight_key(banner_state)
+    previous_highlight_key = str(getattr(app, "_machine_state_highlight_key", "") or "")
+    if highlight_key == previous_highlight_key:
+        return
+    setattr(app, "_machine_state_highlight_key", highlight_key)
+
+    def _apply_state_highlight() -> None:
+        app._update_state_highlight(banner_state)
+
+    _schedule_status_ui_callback(
+        app,
+        callback_attr="_status_machine_state_highlight_after_id",
+        callback=_apply_state_highlight,
+        context=highlight_context,
+    )
+
+
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
     prev_state = str(getattr(app, "_machine_state_text", "") or "")
     prev_state_token = prev_state.strip().lower()
@@ -767,13 +798,22 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
         elif not getattr(app, "_macro_status_active", False):
             banner_state = _stream_latched_banner_state(app, state, display_state)
             rendered_state = _render_machine_state_text(app, state, banner_state)
-            _apply_machine_state_visuals(
-                app,
-                rendered_state=rendered_state,
-                banner_state=banner_state,
-                width_context="Failed adjusting machine state label width",
-                highlight_context="Failed updating machine-state highlight",
-            )
+            if _status_connect_settling_active(app):
+                _apply_machine_state_visuals_deferred_highlight(
+                    app,
+                    rendered_state=rendered_state,
+                    banner_state=banner_state,
+                    width_context="Failed adjusting machine state label width",
+                    highlight_context="Failed updating machine-state highlight during connect settling",
+                )
+            else:
+                _apply_machine_state_visuals(
+                    app,
+                    rendered_state=rendered_state,
+                    banner_state=banner_state,
+                    width_context="Failed adjusting machine state label width",
+                    highlight_context="Failed updating machine-state highlight",
+                )
             if hasattr(app, "_update_current_highlight"):
                 _schedule_status_ui_callback(
                     app,

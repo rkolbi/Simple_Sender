@@ -33,6 +33,7 @@ from typing import Any
 from simple_sender.utils.atomic_files import atomic_write_json
 
 RUNTIME_MARKER_FILENAME = ".simple_sender_runtime.json"
+_WINDOWS_EPOCH_AS_FILETIME_100NS = 116444736000000000
 
 
 class DuplicateInstanceError(RuntimeError):
@@ -60,6 +61,61 @@ def read_runtime_marker(root_dir: str | Path) -> dict[str, Any] | None:
 
 def _supports_proc_identity_checks() -> bool:
     return os.name == "posix"
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_process_creation_time_100ns(pid: int) -> int | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return None
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = getattr(ctypes, "windll", None)
+    if kernel32 is None:
+        return None
+    handle = kernel32.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        int(pid),
+    )
+    if not handle:
+        return None
+    try:
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        ok = kernel32.kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        )
+        if not ok:
+            return None
+        return (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+    finally:
+        try:
+            kernel32.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+
+
+def _process_creation_epoch_from_100ns(value: int | None) -> float | None:
+    if value is None:
+        return None
+    return (float(value) - float(_WINDOWS_EPOCH_AS_FILETIME_100NS)) / 10000000.0
 
 
 def _current_boot_id() -> str | None:
@@ -122,6 +178,26 @@ def _marker_matches_live_process(payload: dict[str, Any], pid: int) -> bool:
     current_boot_id = _current_boot_id()
     if marker_boot_id and current_boot_id and marker_boot_id != current_boot_id:
         return False
+
+    live_created_100ns = _read_process_creation_time_100ns(pid)
+    marker_created_100ns = _coerce_int(payload.get("process_created_100ns"))
+    if live_created_100ns is not None:
+        if marker_created_100ns is not None:
+            if marker_created_100ns != live_created_100ns:
+                return False
+        else:
+            marker_started_epoch = payload.get("started_at_epoch")
+            try:
+                marker_started_epoch_value = float(marker_started_epoch)
+            except (TypeError, ValueError):
+                marker_started_epoch_value = None
+            live_created_epoch = _process_creation_epoch_from_100ns(live_created_100ns)
+            if (
+                marker_started_epoch_value is None
+                or live_created_epoch is None
+                or abs(marker_started_epoch_value - live_created_epoch) > 30.0
+            ):
+                return False
 
     cmdline_match = _cmdline_matches_marker(payload, pid)
     if cmdline_match is False:
@@ -193,15 +269,19 @@ def write_runtime_marker(
     started_at: float | None = None,
 ) -> Path:
     path = runtime_marker_path(root_dir)
+    current_pid = int(pid if pid is not None else os.getpid())
+    process_created_100ns = _read_process_creation_time_100ns(current_pid)
     payload = {
         "app": "Simple Sender",
         "version": str(version or "").strip(),
-        "pid": int(pid if pid is not None else os.getpid()),
+        "pid": current_pid,
         "hostname": str(hostname or socket.gethostname()).strip(),
         "started_at_epoch": float(started_at if started_at is not None else time.time()),
         "argv": [str(item) for item in (argv if argv is not None else sys.argv)],
         "boot_id": _current_boot_id(),
     }
+    if process_created_100ns is not None:
+        payload["process_created_100ns"] = process_created_100ns
     atomic_write_json(path, payload, indent=2, ensure_ascii=True)
     return path
 

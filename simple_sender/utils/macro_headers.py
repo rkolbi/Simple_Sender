@@ -33,6 +33,16 @@ _TEXT_COLOR_PREFIX_PAT = re.compile(
 )
 
 
+class MacroFormatError(ValueError):
+    def __init__(self, issues: Sequence[str]) -> None:
+        normalized = [str(item).strip() for item in issues if str(item).strip()]
+        self.issues = normalized
+        super().__init__("; ".join(normalized) or "Unsupported macro format.")
+
+    def format_details(self) -> str:
+        return "\n".join(f"- {issue}" for issue in self.issues)
+
+
 def _is_valid_color_token(token: str, color_validator: Callable[[str], bool] | None) -> bool:
     if not token:
         return False
@@ -69,6 +79,43 @@ def parse_macro_color_line(
     return None
 
 
+def validate_macro_header(
+    lines: Sequence[str],
+    *,
+    color_validator: Callable[[str], bool] | None = None,
+) -> None:
+    issues: list[str] = []
+    if len(lines) < 5:
+        issues.append(
+            "macro file must include label, tooltip, button color, text color, and at least one body line"
+        )
+    else:
+        third_line = str(lines[2]).strip()
+        fourth_line = str(lines[3]).strip()
+        if third_line and (
+            parse_macro_color_line(
+                third_line,
+                kind="button",
+                color_validator=color_validator,
+            )
+            is None
+        ):
+            issues.append("line 3 button color is invalid")
+        if fourth_line and (
+            parse_macro_color_line(
+                fourth_line,
+                kind="text",
+                color_validator=color_validator,
+            )
+            is None
+        ):
+            issues.append("line 4 text color is invalid")
+        if not any(str(line).strip() for line in lines[4:]):
+            issues.append("macro body must contain at least one non-blank line")
+    if issues:
+        raise MacroFormatError(issues)
+
+
 def parse_macro_header(
     lines: Sequence[str],
     *,
@@ -78,45 +125,33 @@ def parse_macro_header(
 
     Returns (name, tooltip, button_color, button_text_color, body_start_index).
 
-    Supports both legacy and new header layouts:
-      - legacy: line 1 label, line 2 tooltip, body starts at line 3
-      - new: line 3 button color (or blank), line 4 text color (or blank)
+    Supported header format:
+      - line 1: label
+      - line 2: tooltip
+      - line 3: button color or blank
+      - line 4: button text color or blank
+      - remaining lines: macro body
 
-    Body start is determined by whether line 3/4 are recognizable header lines.
+    Raises:
+        MacroFormatError: If the file does not match the supported macro format.
     """
+    validate_macro_header(lines, color_validator=color_validator)
     name = str(lines[0]).strip() if lines else ""
     tip = str(lines[1]).strip() if len(lines) > 1 else ""
-    button_color: str | None = None
-    button_text_color: str | None = None
-    body_start = 2
-
+    body_start = 4
     third_line = str(lines[2]).strip() if len(lines) > 2 else ""
-    color_token = parse_macro_color_line(
+    button_color_token = parse_macro_color_line(
         third_line,
         kind="button",
         color_validator=color_validator,
     )
-    third_explicit = bool(_COLOR_PREFIX_PAT.match(third_line))
-    third_reserved = (third_line == "") or (color_token is not None) or third_explicit
-    if color_token:
-        button_color = color_token
-    if third_reserved:
-        body_start = 3
-        fourth_line = str(lines[3]).strip() if len(lines) > 3 else ""
-        text_color_token = parse_macro_color_line(
-            fourth_line,
-            kind="text",
-            color_validator=color_validator,
-        )
-        fourth_explicit = bool(_TEXT_COLOR_PREFIX_PAT.match(fourth_line))
-        fourth_reserved = (
-            fourth_line == ""
-            or text_color_token is not None
-            or fourth_explicit
-        )
-        if text_color_token:
-            button_text_color = text_color_token
-        if fourth_reserved:
-            body_start = 4
+    button_color = button_color_token or None
+    fourth_line = str(lines[3]).strip() if len(lines) > 3 else ""
+    button_text_color_token = parse_macro_color_line(
+        fourth_line,
+        kind="text",
+        color_validator=color_validator,
+    )
+    button_text_color = button_text_color_token or None
 
     return name, tip, button_color, button_text_color, body_start

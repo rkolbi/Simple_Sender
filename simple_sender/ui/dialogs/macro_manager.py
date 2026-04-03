@@ -248,58 +248,37 @@ class _MacroManagerDialog:
             return False
         return True
 
-    def _invalid_header_issues(self, path: str) -> list[str]:
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                lines = handle.read().splitlines()
-        except Exception:
-            return []
-        issues: list[str] = []
-        line3 = str(lines[2]).strip() if len(lines) > 2 else ""
-        line4 = str(lines[3]).strip() if len(lines) > 3 else ""
-        if line3 and (
-            parse_macro_color_line(
-                line3,
-                kind="button",
-                color_validator=self._validate_macro_color,
-            )
-            is None
-        ):
-            issues.append("line 3 button color is invalid")
-        if line4 and (
-            parse_macro_color_line(
-                line4,
-                kind="text",
-                color_validator=self._validate_macro_color,
-            )
-            is None
-        ):
-            issues.append("line 4 text color is invalid")
-        return issues
-
     def refresh(self) -> None:
         self.slot_list.delete(0, "end")
         self._slot_data = {}
         invalid_headers: list[str] = []
         for slot in range(1, 9):
-            name, tip, color, text_color, body, path = read_macro_slot(self.app, slot)
+            name, tip, color, text_color, body, path, error = read_macro_slot(
+                self.app, slot
+            )
             self._slot_data[slot] = (name, tip, color, text_color, body, path)
             label = name or "(empty)"
+            if error:
+                label = f"{label} [invalid]"
             self.slot_list.insert("end", f"Macro-{slot}: {label}")
-            if path and os.path.isfile(path):
-                issues = self._invalid_header_issues(path)
-                if issues:
-                    path_key = os.path.normcase(os.path.abspath(path))
-                    if path_key not in self._warned_invalid_header_paths:
-                        self._warned_invalid_header_paths.add(path_key)
-                        issue_text = ", ".join(issues)
-                        invalid_headers.append(f"Macro-{slot} ({os.path.basename(path)}): {issue_text}")
+            if error and path and os.path.isfile(path):
+                path_key = os.path.normcase(os.path.abspath(path))
+                if path_key not in self._warned_invalid_header_paths:
+                    self._warned_invalid_header_paths.add(path_key)
+                    invalid_headers.append(
+                        f"Macro-{slot} ({os.path.basename(path)}): {error}"
+                    )
         if invalid_headers:
             details = "\n".join(invalid_headers)
             messagebox.showwarning(
                 "Macro Manager",
-                "Some macros have invalid color headers.\n"
-                "Lines 3 and 4 should be blank or valid colors.\n\n"
+                "Some macros use an unsupported or malformed format and will not run until repaired.\n"
+                "Supported format:\n"
+                "line 1 = label\n"
+                "line 2 = tooltip\n"
+                "line 3 = button color or blank\n"
+                "line 4 = text color or blank\n"
+                "line 5+ = macro body\n\n"
                 f"{details}",
             )
         can_edit = self._macro_dir is not None

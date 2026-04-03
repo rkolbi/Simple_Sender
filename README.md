@@ -99,7 +99,7 @@ pip install -r requirements.txt
 
 Development dependencies are pinned in `requirements-dev.txt` to match the current toolchain.
 
-Settings are stored in a per-user app-data folder (`%LOCALAPPDATA%\simple-sender-data` or `%APPDATA%\simple-sender-data` on Windows, or `$XDG_CONFIG_HOME/simple-sender-data` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple-sender-data`, then a `simple-sender-data` folder under your temp directory, and finally the module directory (`simple_sender/utils`). Existing installs using the older `SimpleSender` / `.simple_sender` directory names are migrated automatically when possible.
+Settings are stored in a per-user app-data folder (`%LOCALAPPDATA%\simple-sender-data` or `%APPDATA%\simple-sender-data` on Windows, or `$XDG_CONFIG_HOME/simple-sender-data` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple-sender-data`, then a `simple-sender-data` folder under your temp directory, and finally the module directory (`simple_sender/utils`).
 
 ### Recommended: Samba share setup on Raspberry Pi / Linux
 
@@ -444,7 +444,8 @@ Macro file header format:
 - Line 2: tooltip text.
 - Line 3: button color (`#RRGGBB`, `#RGB`, named color like `red`, or `color: ...`/`color=...`). Leave blank if unused.
 - Line 4: button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`). Leave blank if unused.
-- Remaining lines: executed macro body.
+- Line 5 and later: executed macro body.
+- The file must include at least one non-blank body line. Unsupported or malformed macro files are marked invalid and blocked from running until repaired.
 
 Manual macro launches are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed. The streamed `TC:<tool name>` sender directive is the built-in exception: it pauses the stream and reuses the existing tool-change macro workflow.
 `App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
@@ -923,7 +924,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Latest documented local release-gate snapshot in this repo (validated on March 31, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1508 passed, 2 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Latest documented local release-gate snapshot in this repo (validated on April 2, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1591 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -962,7 +963,7 @@ You can also use the resilient launcher helper: `python tools/run_ruff.py check 
 
 Validate mypy target manifest and README count note:
 ```powershell
-python tools/check_mypy_targets.py --expected-count 142
+python tools/check_mypy_targets.py --expected-count 141
 ```
 
 One-command local gate:
@@ -1133,7 +1134,7 @@ python tools/perf_microbench.py
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 142 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-03-25), and local/CI hooks now enforce `--expected-count 142`.
+5. Static typing gates currently run mypy against 141 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-04-02), and local/CI hooks now enforce `--expected-count 141`.
 6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
 7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
 8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
@@ -1279,7 +1280,8 @@ Macro UI is included below along with the rest of the interface.
 ### Macro Panel (Jog Area)
 - Macro buttons (1-8): one button per existing `Macro-<n>` file; buttons appear in a single row and left-click runs the macro.
 - Header color lines: line 3 sets button background color and line 4 sets button text color (either line may be blank).
-- Right-click sample: opens a read-only sample of the selected macro.
+- Invalid macros are labeled `[invalid]` in the button text and cannot run.
+- Right-click sample: opens a read-only sample of the selected macro; unsupported or malformed macro files show an error instead of opening the sample dialog.
 - Tooltips: show the second line of each macro file as a hint.
 - Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
 
@@ -1548,11 +1550,12 @@ Macro UI is included below along with the rest of the interface.
 
 ### Macro Sample Dialog
 - Title: shows the macro name being sampled.
-- Macro text: read-only contents of the macro (excluding the header lines).
+- Macro text: read-only contents of a valid macro (excluding the header lines).
+- Invalid macro behavior: unsupported or malformed files show a `Macro error` dialog instead of opening the sample window.
 - Close: closes the sample.
 
 ### Macro Manager Dialog
-- Macro list: slot overview for Macro-1..Macro-8 and source file paths.
+- Macro list: slot overview for Macro-1..Macro-8 with the current slot label; invalid files are marked `[invalid]`.
 - Name/tooltip/color/text-color/body editor: edits macro header and content in-place.
 - Save/Delete: writes or removes the selected macro file in the active writable macro directory.
 - Duplicate: copies one macro slot to a different slot.

@@ -825,11 +825,42 @@ class StreamingController:
                     pass
         return True
 
+    def _gcode_tab_active(self) -> bool:
+        active_tab = str(getattr(self.app, "_active_tab_label", "") or "").strip().lower()
+        return active_tab in {"g-code", "gcode"}
+
     def _schedule_live_window_flush(self) -> None:
         if self._live_window_after_id is not None:
             return
         delay_ms = max(int(getattr(self.app, "_ui_throttle_ms", 0) or 0), self._live_window_refresh_ms)
         self._live_window_after_id = self.app.after(delay_ms, self._flush_live_window)
+
+    def handle_active_tab_changed(self) -> None:
+        if self._gcode_tab_active():
+            pending_after_id = self._live_window_after_id
+            if pending_after_id is not None:
+                try:
+                    self.app.after_cancel(pending_after_id)
+                except Exception as exc:
+                    logger.debug(
+                        "Failed canceling pending live G-code redraw on tab activation",
+                        exc_info=exc,
+                    )
+                self._live_window_after_id = None
+            if self._pending_live_window_payload is not None:
+                self._flush_live_window()
+            return
+        pending_after_id = self._live_window_after_id
+        if pending_after_id is None:
+            return
+        try:
+            self.app.after_cancel(pending_after_id)
+        except Exception as exc:
+            logger.debug(
+                "Failed canceling pending live G-code redraw on tab deactivation",
+                exc_info=exc,
+            )
+        self._live_window_after_id = None
 
     def _flush_live_window(self) -> None:
         self._live_window_after_id = None
@@ -941,6 +972,8 @@ class StreamingController:
     def handle_live_gcode_window(self, payload: dict) -> None:
         """Queue bounded live G-code window updates for throttled UI rendering."""
         self._pending_live_window_payload = dict(payload)
+        if not self._gcode_tab_active():
+            return
         self._schedule_live_window_flush()
 
 

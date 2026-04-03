@@ -35,7 +35,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ### Documentation
 - README now documents the unified Dry Run safeguard behavior across Run and Resume paths, including reconnect-resume inheritance.
 - README and macro docs now document `Disable Macro Timeouts`, the hidden-by-default `Logs` / `Raw $$` tabs, Gemini as the default theme, and the scoped no-timeout behavior used for operator-assisted Job Setup / Tool Change workflows.
-- README validation baseline wording now reflects the latest documented local `run_tests.bat` snapshot (`1508 passed, 2 skipped` on 2026-03-31) instead of older "latest/current" counts.
+- README validation baseline wording was updated at that time to reflect the then-current documented local `run_tests.bat` snapshot (`1508 passed, 2 skipped` on 2026-03-31) instead of older "latest/current" counts.
 - Historical closeout docs now read as closeout snapshots rather than live project-status documents.
 
 ## [2.7.1] - 2026-03-27

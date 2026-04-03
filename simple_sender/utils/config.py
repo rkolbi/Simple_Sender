@@ -59,9 +59,7 @@ _VALID_UNIT_MODES = ("mm", "inch")
 _VALID_TOUCH_SCROLL_MODES = ("thumb_only", "thumb_and_swipe")
 _THEME_SETTING_KEY = "theme"
 _APP_DATA_DIR_NAME = "simple-sender-data"
-_LEGACY_APP_DATA_DIR_NAMES = ("SimpleSender",)
 _HIDDEN_FALLBACK_DIR_NAME = ".simple-sender-data"
-_LEGACY_HIDDEN_FALLBACK_DIR_NAMES = (".simple_sender",)
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "active_profile": "",
@@ -310,50 +308,6 @@ def get_default_settings_dir() -> str:
     return os.path.join(base, _APP_DATA_DIR_NAME)
 
 
-def _legacy_settings_dir_candidates() -> list[str]:
-    candidates: list[str] = []
-
-    if sys.platform.startswith("win"):
-        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
-    else:
-        base = os.getenv("XDG_CONFIG_HOME")
-
-    home_dir = os.path.expanduser("~")
-    if not base:
-        base = home_dir
-
-    for dirname in _LEGACY_APP_DATA_DIR_NAMES:
-        candidates.append(os.path.join(base, dirname))
-    for dirname in _LEGACY_HIDDEN_FALLBACK_DIR_NAMES:
-        candidates.append(os.path.join(home_dir, dirname))
-    candidates.append(os.path.join(tempfile.gettempdir(), _LEGACY_APP_DATA_DIR_NAMES[0]))
-    return candidates
-
-
-def _migrate_legacy_settings_dir(target_dir: str) -> str | None:
-    target_settings = os.path.join(target_dir, SETTINGS_FILENAME)
-    if os.path.exists(target_settings):
-        return target_settings
-
-    for legacy_dir in _legacy_settings_dir_candidates():
-        legacy_settings = os.path.join(legacy_dir, SETTINGS_FILENAME)
-        if not os.path.exists(legacy_settings):
-            continue
-        try:
-            shutil.copytree(legacy_dir, target_dir, dirs_exist_ok=True)
-            logger.info("Migrated settings data from legacy directory: %s", legacy_dir)
-            return target_settings
-        except OSError as exc:
-            logger.warning(
-                "Failed migrating legacy settings directory %s to %s: %s",
-                legacy_dir,
-                target_dir,
-                exc,
-            )
-            return legacy_settings
-    return None
-
-
 def get_settings_path() -> str:
     """Get path to settings file.
 
@@ -390,10 +344,6 @@ def get_settings_path() -> str:
                 "Settings directory is not writable; using %s anyway", base_dir
             )
         chosen = base_dir
-
-    migrated_settings = _migrate_legacy_settings_dir(chosen)
-    if migrated_settings:
-        return migrated_settings
 
     return os.path.join(chosen, SETTINGS_FILENAME)
 

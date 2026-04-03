@@ -36,7 +36,7 @@ from simple_sender.utils.constants import (
     MACRO_LINE_TIMEOUT,
     MACRO_TOTAL_TIMEOUT,
 )
-from simple_sender.utils.macro_headers import parse_macro_header
+from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -51,6 +51,20 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
+
+    @staticmethod
+    def _format_macro_file_error(path: str | None, exc: MacroFormatError) -> str:
+        filename = os.path.basename(str(path or "").strip()) or "macro file"
+        return (
+            f"Unsupported macro format in {filename}.\n\n"
+            "Supported format:\n"
+            "- line 1: label\n"
+            "- line 2: tooltip\n"
+            "- line 3: button color or blank\n"
+            "- line 4: text color or blank\n"
+            "- line 5+: macro body\n\n"
+            f"{exc.format_details()}"
+        )
 
     def _validate_macro_color(self, color: str) -> bool:
         checker = getattr(self.app, "winfo_rgb", None)
@@ -164,10 +178,16 @@ class MacroRunnerMixin(MacroExecutorState):
             messagebox.showerror("Macro error", str(exc))
             self._macro_lock.release()
             return False
-        name, tip, _color, _text_color, body_start = parse_macro_header(
-            lines,
-            color_validator=self._validate_macro_color,
-        )
+        try:
+            name, tip, _color, _text_color, body_start = parse_macro_header(
+                lines,
+                color_validator=self._validate_macro_color,
+            )
+        except MacroFormatError as exc:
+            self._last_macro_run_success = False
+            messagebox.showerror("Macro error", self._format_macro_file_error(path, exc))
+            self._macro_lock.release()
+            return False
         if not name:
             name = f"Macro {index}"
         ts = time.strftime("%H:%M:%S")
@@ -197,7 +217,7 @@ class MacroRunnerMixin(MacroExecutorState):
         self,
         lines: list[str],
         path: str | None,
-        body_start: int = 2,
+        body_start: int = 4,
         unlimited_time_override: bool = False,
     ):
         start = time.perf_counter()

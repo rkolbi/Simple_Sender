@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from simple_sender.utils.constants import MACRO_EXTS, MACRO_PREFIXES
-from simple_sender.utils.macro_headers import parse_macro_header
+from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 
 CHECKLIST_PREFIX = "checklist-"
 CHECKLIST_EXT = ".chk"
@@ -79,26 +79,42 @@ def _macro_color_validator_from_app(app: Any):
     return _validate
 
 
-def read_macro_slot(app: Any, index: int) -> tuple[str, str, str, str, str, str | None]:
+def read_macro_slot(
+    app: Any, index: int
+) -> tuple[str, str, str, str, str, str | None, str]:
     path = None
     try:
         path = app.macro_executor.macro_path(int(index))
     except Exception:
         path = None
     if not path:
-        return "", "", "", "", "", None
+        return "", "", "", "", "", None, ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             lines = handle.read().splitlines()
     except Exception:
-        return "", "", "", "", "", path
+        return "", "", "", "", "", path, "Failed reading macro file."
     color_validator = _macro_color_validator_from_app(app)
-    name, tip, color, text_color, body_start = parse_macro_header(
-        lines,
-        color_validator=color_validator,
-    )
+    try:
+        name, tip, color, text_color, body_start = parse_macro_header(
+            lines,
+            color_validator=color_validator,
+        )
+    except MacroFormatError as exc:
+        name = str(lines[0]).strip() if lines else ""
+        tip = str(lines[1]).strip() if len(lines) > 1 else ""
+        if len(lines) >= 5:
+            color = str(lines[2]).strip()
+            text_color = str(lines[3]).strip()
+            body_lines = lines[4:]
+        else:
+            color = ""
+            text_color = ""
+            body_lines = lines[2:] if len(lines) > 2 else []
+        body = "\n".join(body_lines)
+        return name, tip, color, text_color, body, path, str(exc)
     body = "\n".join(lines[body_start:]) if len(lines) > body_start else ""
-    return name, tip, color or "", text_color or "", body, path
+    return name, tip, color or "", text_color or "", body, path, ""
 
 
 def write_macro_slot(
@@ -122,6 +138,8 @@ def write_macro_slot(
         str(text_color).strip(),
     ]
     body_text = str(body).replace("\r\n", "\n").replace("\r", "\n")
+    if not any(line.strip() for line in body_text.split("\n")):
+        raise ValueError("Macro body cannot be empty.")
     if body_text:
         lines.extend(body_text.split("\n"))
     text = "\n".join(lines).rstrip("\n") + "\n"

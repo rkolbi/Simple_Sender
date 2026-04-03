@@ -58,12 +58,12 @@ from .diagnostics_bundle import (
 from .diagnostics_bundle_exporter import (
     build_recent_serial_window_from_log as _build_recent_serial_window_from_log_impl,
     collect_streaming_bundle_artifacts as _collect_streaming_bundle_artifacts_impl,
-    find_named_log as _find_named_log_impl,
-    parse_serial_log_timestamp as _parse_serial_log_timestamp_impl,
+    find_named_log as _find_named_log,
+    parse_serial_log_timestamp as _parse_serial_log_timestamp,
     write_bounded_log_tail_chunked as _write_bounded_log_tail_chunked_impl,
 )
 from .diagnostics_runtime_reporting import (
-    format_mb as _format_mb_impl,
+    format_mb as _format_mb,
     format_runtime_metrics as _format_runtime_metrics_impl,
 )
 from .diagnostics_report_text import (
@@ -75,9 +75,9 @@ from .diagnostics_performance_actions import (
 )
 from .diagnostics_preflight import (
     evaluate_run_preflight as _evaluate_run_preflight_impl,
-    format_validation_summary as _format_validation_summary_impl,
-    get_bounds as _get_bounds_impl,
-    get_travel_limits as _get_travel_limits_impl,
+    format_validation_summary as _format_validation_summary,
+    get_bounds as _get_bounds,
+    get_travel_limits as _get_travel_limits,
 )
 from .diagnostics_session_text import (
     build_session_diagnostics_lines as _build_session_diagnostics_lines_impl,
@@ -88,8 +88,6 @@ from .diagnostics_runtime_display import (
 from .diagnostics_checklists import (
     open_release_checklist as _open_release_checklist_impl,
     open_run_checklist as _open_run_checklist_impl,
-    resolve_checklist_items as _resolve_checklist_items_impl,
-    resolve_checklist_items_any as _resolve_checklist_items_any_impl,
 )
 from .diagnostics_report_export import (
     export_session_diagnostics as _export_session_diagnostics_impl,
@@ -244,10 +242,6 @@ def _resolved_settings_path(app: Any) -> Path | None:
     if not path.is_file():
         return None
     return path
-
-
-def _format_mb(value_bytes: Any) -> str:
-    return cast(str, _format_mb_impl(value_bytes))
 
 
 def _pi_profile_enabled(app: Any) -> bool:
@@ -1750,16 +1744,6 @@ def open_runtime_telemetry(app) -> None:
     )
 
 
-def _resolve_checklist_items(app: Any, name: str, fallback: list[str]) -> list[str]:
-    return cast(list[str], _resolve_checklist_items_impl(app, name, fallback))
-
-
-def _resolve_checklist_items_any(
-    app: Any, names: list[str], fallback: list[str]
-) -> list[str]:
-    return cast(list[str], _resolve_checklist_items_any_impl(app, names, fallback))
-
-
 def open_release_checklist(app: Any) -> None:
     _open_release_checklist_impl(
         app,
@@ -1774,18 +1758,6 @@ def open_run_checklist(app: Any) -> None:
         fallback_items=RUN_CHECKLIST_ITEMS,
         log_suppressed=_log_suppressed,
     )
-
-
-def _format_validation_summary(report) -> list[str]:
-    return cast(list[str], _format_validation_summary_impl(report))
-
-
-def _get_bounds(app: Any):
-    return _get_bounds_impl(app)
-
-
-def _get_travel_limits(app: Any) -> dict[str, float]:
-    return cast(dict[str, float], _get_travel_limits_impl(app))
 
 
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
@@ -1876,10 +1848,6 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
         ),
     )
 
-def _find_named_log(log_files: list[Path], filename: str) -> Path | None:
-    return cast(Path | None, _find_named_log_impl(log_files, filename))
-
-
 def _write_bounded_log_tail_chunked(
     archive: zipfile.ZipFile,
     *,
@@ -1896,10 +1864,6 @@ def _write_bounded_log_tail_chunked(
         chunk_bytes=chunk_bytes,
         log_suppressed=_log_suppressed,
     )
-
-
-def _parse_serial_log_timestamp(line: str) -> datetime | None:
-    return cast(datetime | None, _parse_serial_log_timestamp_impl(line))
 
 
 def _build_recent_serial_window_from_log(

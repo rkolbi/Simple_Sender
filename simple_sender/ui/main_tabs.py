@@ -192,6 +192,17 @@ def update_tab_visibility(app, nb=None):
             label,
             exc_info=exc,
         )
+    streaming_controller = getattr(app, "streaming_controller", None)
+    handle_active_tab_changed = getattr(streaming_controller, "handle_active_tab_changed", None)
+    if callable(handle_active_tab_changed):
+        try:
+            handle_active_tab_changed()
+        except Exception as exc:
+            logger.debug(
+                "Failed syncing streaming controller for active tab %r",
+                label,
+                exc_info=exc,
+            )
     try:
         if label == "App Settings":
             app._bind_app_settings_mousewheel()

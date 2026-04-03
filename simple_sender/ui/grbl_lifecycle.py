@@ -108,6 +108,18 @@ def _report_modal_sync_failure(app, message: str) -> None:
             pass
 
 
+def _clear_status_frame_cache(app) -> None:
+    """Invalidate cached status-frame continuity across connection resets."""
+    try:
+        app._last_status_raw = ""
+    except Exception as exc:
+        _log_suppressed("Failed clearing cached last status frame", exc)
+    try:
+        app._status_duplicate_count = 0
+    except Exception as exc:
+        _log_suppressed("Failed clearing cached duplicate-status counter", exc)
+
+
 def _set_gcode_restore_state(
     app,
     *,
@@ -622,6 +634,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._modal_sync_inflight_started_ts = 0.0
         app._modal_sync_retry_after_ts = 0.0
         app._status_seen = False
+        _clear_status_frame_cache(app)
         try:
             connect_settling_s = float(
                 getattr(app, "_status_connect_settling_window_s", _STATUS_CONNECT_SETTLING_WINDOW_S)
@@ -683,6 +696,7 @@ def handle_connection_event(app, is_on: bool, port):
         clear_modal_sync_state(app)
         setattr(app, "_pending_unit_mode", None)
         app._status_seen = False
+        _clear_status_frame_cache(app)
         app._status_connect_settling_until_ts = 0.0
         app._report_units = None
         app._zero_all_pending_active = False
@@ -737,6 +751,7 @@ def handle_ready_event(app, ready):
         invalidate_job_setup_state(app)
         _record_connection_timeline(app, "ready_false")
         app._status_seen = False
+        _clear_status_frame_cache(app)
         app._alarm_locked = False
         if not bool(getattr(app, "_alarm_latched", False)):
             app._alarm_message = ""

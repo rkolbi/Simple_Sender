@@ -24,7 +24,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Callable, cast
 
-from simple_sender.utils.macro_headers import parse_macro_header
+from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.ui.dialogs.popup_utils import center_window
@@ -147,14 +147,32 @@ class MacroPanel:
             if not name:
                 name = f"Macro {index}"
             return name, tip, color, text_color, body_start
+        except MacroFormatError as exc:
+            name = ""
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    preview_lines = f.read().splitlines()
+                name = str(preview_lines[0]).strip() if preview_lines else ""
+            except Exception:
+                name = ""
+            display_name = (name or f"Macro {index}") + " [invalid]"
+            return display_name, str(exc), None, None, 4
         except Exception:
-            return f"Macro {index}", "", None, None, 2
+            return f"Macro {index}", "", None, None, 4
 
     def _show_macro_sample(self, name: str, lines: list[str]) -> None:
-        _name, _tip, _color, _text_color, body_start = parse_macro_header(
-            lines,
-            color_validator=self._validate_macro_color,
-        )
+        try:
+            _name, _tip, _color, _text_color, body_start = parse_macro_header(
+                lines,
+                color_validator=self._validate_macro_color,
+            )
+        except MacroFormatError as exc:
+            messagebox.showerror(
+                "Macro error",
+                "This macro uses an unsupported or malformed format.\n\n"
+                f"{exc.format_details()}",
+            )
+            return
         body = "".join(lines[body_start:]) if len(lines) > body_start else ""
         dlg = tk.Toplevel(self.app)
         dlg.title(f"Macro Sample - {name}")
