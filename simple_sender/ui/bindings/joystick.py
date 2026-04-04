@@ -81,6 +81,33 @@ def _app_settings_interaction_recent(app, now: float | None = None) -> bool:
     return (float(now) - ts) <= window_s
 
 
+def _app_window_backgrounded(app) -> bool:
+    target = app
+    toplevel = getattr(app, "winfo_toplevel", None)
+    if callable(toplevel):
+        try:
+            target = toplevel()
+        except Exception:
+            target = app
+    for widget in (target, app):
+        visible_fn = getattr(widget, "winfo_viewable", None)
+        if callable(visible_fn):
+            try:
+                if not bool(visible_fn()):
+                    return True
+            except Exception:
+                pass
+        state_fn = getattr(widget, "state", None)
+        if callable(state_fn):
+            try:
+                state = str(state_fn() or "").strip().lower()
+            except Exception:
+                state = ""
+            if state in {"iconic", "withdrawn"}:
+                return True
+    return False
+
+
 def _noninteractive_tab_idle(app) -> bool:
     label = str(getattr(app, "_active_tab_label", "") or "").strip().lower()
     return label in {"logs", "app settings", "checklists"}
@@ -334,6 +361,23 @@ def poll_joystick_events(
                     ),
                 )
                 interval = max(interval, noninteractive_interval)
+            if (
+                _app_window_backgrounded(app)
+                and not bool(getattr(app, "_joystick_capture_state", None))
+                and not bool(getattr(app, "_active_joystick_hold_binding", None))
+            ):
+                background_interval = max(
+                    500,
+                    int(
+                        getattr(
+                            app,
+                            "_joystick_poll_background_interval_ms",
+                            1600,
+                        )
+                        or 1600
+                    ),
+                )
+                interval = max(interval, background_interval)
             app._joystick_poll_id = app.after(interval, app._poll_joystick_events)
         if record_poll_timing:
             elapsed_ms = 0.0

@@ -29,6 +29,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 ## Table of Contents
 - [Overview](#overview)
 - [Requirements & Installation](#requirements--installation)
+- [Update Safety](#update-safety)
 - [Launching](#launching)
 - [Safety Basics](#safety-basics)
 - [Operation / Use Walkthrough](#operation--use-walkthrough)
@@ -68,7 +69,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - Character-count streaming with a Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
-- Read-only file load (Read Job) with an in-app touch-friendly browser (plus optional system-picker fallback), clear/unload button, inline status/progress.
+- Read-only file load (Read Job) through the shared file-dialog path, clear/unload button, inline status/progress. On Linux, Tk file dialogs use the current theme plus temporary scaling/min-size safeguards so they stay readable on Pi/Openbox touchscreen setups.
 - Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in a dedicated File Info tab.
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
@@ -86,7 +87,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - **Experimental features:** **Auto-Level (Experimental)**, **Recover (Experimental)**, and **Resume From... (Experimental)** are optional UI features controlled in **App Settings > Experimental**.
 
 ## Project Status
-The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the release-ready stable build for day-to-day machine use, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md` and `REFACTOR_SUMMARY.md` for the closeout summary and refactor boundary notes.
+The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the release-ready stable build for day-to-day machine use, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md`, `REFACTOR_SUMMARY.md`, and `refactor-status.md` for the historical closeout and boundary notes.
 
 ## Requirements & Installation
 - Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
@@ -99,7 +100,12 @@ pip install -r requirements.txt
 
 Development dependencies are pinned in `requirements-dev.txt` to match the current toolchain.
 
-Settings are stored in a per-user app-data folder (`%LOCALAPPDATA%\simple-sender-data` or `%APPDATA%\simple-sender-data` on Windows, or `$XDG_CONFIG_HOME/simple-sender-data` on Linux). Override with `SIMPLE_SENDER_CONFIG_DIR`; if the directory cannot be created, the app falls back to `~/.simple-sender-data`, then a `simple-sender-data` folder under your temp directory, and finally the module directory (`simple_sender/utils`).
+Settings are stored in the per-user Simple Sender app-data folder: `%LOCALAPPDATA%\simple-sender-data` (or `%APPDATA%\simple-sender-data`) on Windows, and `$XDG_CONFIG_HOME/simple-sender-data` on Linux. Override the supported location with `SIMPLE_SENDER_CONFIG_DIR` when you need a custom settings directory.
+
+## Update Safety
+- Do not sync, overwrite, or partially update a live running Simple Sender install.
+- Close the application first, or reboot/shutdown the Pi before syncing updates to the runtime files.
+- The runtime marker/duplicate-instance guard exists to block unsafe overlapping runtime conditions. It is a safety check, not a hot-update workflow.
 
 ### Recommended: Samba share setup on Raspberry Pi / Linux
 
@@ -266,7 +272,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read Job** to open the in-app touch-friendly file browser (large rows and buttons). Use **Use System Picker** inside that dialog if you want the OS-native file chooser; on Linux, the app applies temporary Tk scaling and a minimum picker size so dialogs stay readable. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level (Experimental)** for quick access; **Clear Job** returns it to **Read Job**.
+   - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level (Experimental)** for quick access; **Clear Job** returns it to **Read Job**.
    - Check the Live G-code window plus the job dimensions/estimate block for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
@@ -284,6 +290,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
+   - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools` as separate truthful lists. It does not invent one-to-one pairings between them.
    - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight, File Info, and the shared validation summary when you want extra review before cutting.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
@@ -321,7 +328,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   ![](pics/screenshot-02.png)
   ![](pics/screenshot-03.png)
 
-  **File Info:** Read-only, scrollable file/metadata summary. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and auto-level prereq snapshot summary).
+  **File Info:** Read-only, scrollable file/metadata summary. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, auto-level prereq snapshot summary, and separate `Toolpaths` / `Tools` lists when the metadata provides them).
   
   **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
@@ -343,7 +350,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-08.png)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (application close on all platforms, plus Linux-only shutdown/reboot).
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`).
   
   ![](pics/screenshot-09.png)
   
@@ -383,8 +390,9 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both Run and Resume paths require an explicit operator choice before stream start/resume side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens an in-app touch-friendly file browser with large tap targets and folder navigation (`Home`, `Up`, `Refresh`, and `Drives` on Windows). `Use System Picker` is available inside the dialog when OS-native browsing is preferred. On Linux, the app applies temporary Tk scaling plus a minimum file-dialog size so WM-managed pickers stay readable. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
+- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
+- **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in File Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
@@ -924,7 +932,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Latest documented local release-gate snapshot in this repo (validated on April 2, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1591 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Latest documented local release-gate snapshot in this repo (validated on April 3, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1599 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
 
 Run a subset:
 ```powershell
@@ -1005,7 +1013,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/ui/widgets_common.py`: shared widget utilities (background resolution plus button metadata helpers for keyboard IDs/log tags).
 - `simple_sender/ui/widgets_tooltips.py`: tooltip-focused UI helpers (tooltip rendering, tab tooltips, disabled-reason text resolution, and bulk tooltip attachment).
 - `simple_sender/ui/widgets_keypad.py`: numeric keypad helpers for touch-friendly numeric entry widgets.
-- `simple_sender/ui/dialogs/touch_file_browser.py`: in-app touch-first G-code file browser with large tap targets and native-picker fallback.
+- `simple_sender/ui/dialogs/file_dialogs.py`: shared file-dialog helpers, Linux dialog scaling/theming, and common open/save chooser behavior.
 - `simple_sender/ui/autolevel_dialog/dialog_controller.py`: Auto-Level dialog controller plus entrypoint/dependency wiring (`show_auto_level_dialog()` / `build_auto_level_dialog_dependencies()`).
 - `simple_sender/ui/dialogs/spoilboard_generator.py`: Spoilboard surfacing generator dialog + in-memory/read-save-cancel flow.
 - `simple_sender/grbl_worker*.py`: GRBL connection, streaming, status polling, and commands.
@@ -1130,7 +1138,7 @@ python tools/perf_microbench.py
 - Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
 
 ## Pre-release Notes
-1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`, so UI settings and the settings store use the same fallback logic (`%LOCALAPPDATA%`/`%APPDATA%`/`$XDG_CONFIG_HOME` -> `~/.simple-sender-data`).
+1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`; the supported storage location is the per-user `simple-sender-data` app-data directory (or `SIMPLE_SENDER_CONFIG_DIR` when you intentionally override it).
 2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
 4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
@@ -1250,7 +1258,7 @@ Macro UI is included below along with the rest of the interface.
 - Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
 - Refresh: rescans serial ports and repopulates the port list.
 - Connect/Disconnect: opens or closes the selected port; shows `Connecting...` / `Disconnecting...` while workers run, then waits for banner/status before enabling controls.
-- Read Job / Auto-Level (Experimental): opens the touch-friendly in-app file browser for G-code selection (with optional `Use System Picker` fallback), then reads the selected file into the viewer; after a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
+- Read Job / Auto-Level (Experimental): opens the shared file dialog for G-code selection, then reads the selected file into the viewer; on Linux the chooser uses the current theme plus the configured file-dialog scaling/min-size safeguards. After a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
 - Clear Job: unloads the current job and resets samples/state.
 - Run: starts streaming the loaded job to GRBL. If Job Setup state is invalid, it shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
 - Pause: issues feed hold during a running job.
@@ -1353,6 +1361,7 @@ Macro UI is included below along with the rest of the interface.
 - Default theme: the Gemini-inspired dark theme (`simple_sender_gemini`) is the normal startup default on a new/default configuration.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
+- Linux File Dialog Scale (Linux only): sets the minimum temporary Tk scaling used for file dialogs; the next Linux file dialog uses the larger of this value and the current UI scale.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
 - Touch scroll mode: choose `thumb_only` (disable App Settings swipe scrolling) or `thumb_and_swipe` (enable both thumb drag and swipe in App Settings).
 - Enable tooltips: toggles hover tips across the app (clicked controls suppress their tooltip until pointer leave/re-enter).
@@ -1485,9 +1494,12 @@ Macro UI is included below along with the rest of the interface.
 - Reconnect to last port on open: auto-connect on startup when possible.
 - Recommendation: keep Training Wheels on for new machines or operators.
 
-### App Settings: System (Linux only)
-- Shutdown: powers off the system after confirmation.
-- Reboot: reboots the system after confirmation.
+### App Settings: System
+- Close Application: closes Simple Sender through the normal app shutdown path. During active/risky states, the app warns before closing because this affects the application session, not machine power.
+- Restart workflow: there is no separate in-app `Restart Application` button in the current build; close the app, then relaunch it when you need a restart.
+- Shutdown (Linux only): powers off the system after confirmation.
+- Reboot (Linux only): reboots the system after confirmation.
+- Pi profile (Linux only): applies Raspberry Pi-oriented UI/performance defaults for lower CPU and memory usage.
 
 ### Checklists Tab: Checklists
 - Checklist items: checkbox list loaded from `checklist-*.chk` files.

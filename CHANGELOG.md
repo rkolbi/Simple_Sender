@@ -5,6 +5,33 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+### Changed
+- `Read Job` now uses the shared file-dialog path instead of the removed in-app browser flow:
+  - Linux dialogs honor `Linux File Dialog Scale`
+  - Linux dialogs apply the current theme and a readable minimum size before opening
+  - README now documents the current OS-picker workflow instead of the removed `Use System Picker` path
+- Application lifecycle/system controls are now documented and aligned with the current UI:
+  - `Close Application` is available on all platforms
+  - `Shutdown`, `Reboot`, and `Pi profile` remain Linux-only
+  - closing is explicitly documented as application lifecycle behavior, not machine power control
+- File metadata and run-confirmation summaries now keep tool metadata truthful:
+  - `Toolpaths` and `Tools` are shown as separate lists in File Info and Start Job confirmation when present
+  - the app no longer implies false toolpath-to-tool pairings
+- The old Overdrive-centered validation workflow is no longer treated as a current review surface:
+  - use File Info, Preflight, and the Start Job confirmation for truthful run review instead
+- Macro docs and runtime behavior now align on the single supported 4-line header + body format:
+  - malformed or legacy-layout macros are rejected clearly instead of being documented as accepted compatibility formats
+- Runtime-marker/duplicate-instance behavior is now documented as part of the supported deployment/update workflow:
+  - syncing over a live running instance is unsupported
+  - the app should be closed, or the Pi rebooted/shut down, before syncing updates
+
+### Fixed
+- The Start Job confirmation popup now follows the active Gemini/dark theme instead of falling back to a white dialog surface.
+- Recent UI-performance polish reduced avoidable hidden/background notebook work and trimmed minor status-turn UI overhead without changing machine-control semantics.
+
+### Documentation
+- README, macro docs, deployment docs, and historical closeout docs were refreshed to match the current codebase and remove stale references to removed workflows.
+
 ## [2.8] - 2026-03-31
 
 ### Changed

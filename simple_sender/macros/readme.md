@@ -31,13 +31,16 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 ## Notes
 
 - Macro file header format:
+  - this is the only supported macro header format in the current app
   - line 1 = button label
   - line 2 = tooltip
   - line 3 = button color (`#RRGGBB`, `#RGB`, named color, or `color: ...`/`color=...`) (leave blank if unused)
   - line 4 = button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`) (leave blank if unused)
   - line 5+ = executed macro body
   - the file must include at least one non-blank body line
+  - older/alternate header layouts are not auto-migrated or accepted as compatibility formats
   - unsupported or malformed files are flagged as invalid in the UI and blocked from running until repaired
+- The bundled `Macro-1` through `Macro-4` files in this repo already use that current header format.
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
 - During file streaming, `TC:<tool name>` is handled as a sender directive (not GRBL G-code): the app pauses the stream, runs Macro-4 to move to the tool setter, then shows a single swap/cancel prompt, re-measures when resumed, and continues when complete.
@@ -75,7 +78,7 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 
 - Button missing: ensure file name is `Macro-1`..`Macro-8` in a discovered macros directory.
 - Macro blocked: streaming/alarm/disconnected states prevent execution by design.
-- Macro marked `[invalid]`: the file does not match the supported 4-line header plus body format; repair the file structure and try again.
+- Macro marked `[invalid]`: the file does not match the supported 4-line header plus body format; repair the file structure and try again. Legacy/alternate header layouts are rejected instead of being guessed at.
 - Run warns `Job Setup Not Completed`: run `Macro-3` to repopulate `macro.state.TOOL_REFERENCE` for the current session, then retry.
 - Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the tool-change macro prerequisites (for example `macro.state.TOOL_REFERENCE`) are satisfied.
 - Stale coordinates: insert `%update` before using `wx/wy/wz`.

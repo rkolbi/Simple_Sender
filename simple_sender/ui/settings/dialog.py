@@ -362,7 +362,46 @@ def _flush_app_settings_sticky_header(app) -> None:
         app._app_settings_sticky_after_id = None
     except Exception:
         pass
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        return
     _update_app_settings_sticky_header(app)
+
+
+def _cancel_app_settings_sticky_header(app) -> None:
+    pending = getattr(app, "_app_settings_sticky_after_id", None)
+    if pending is None:
+        return
+    try:
+        app._app_settings_sticky_after_id = None
+    except Exception:
+        pass
+    after_cancel = getattr(app, "after_cancel", None)
+    if callable(after_cancel):
+        try:
+            after_cancel(pending)
+        except Exception:
+            pass
+
+
+def _cancel_app_settings_lazy_build(app) -> None:
+    pending = getattr(app, "_app_settings_lazy_build_after_id", None)
+    if pending is None:
+        return
+    try:
+        app._app_settings_lazy_build_after_id = None
+    except Exception:
+        pass
+    after_cancel = getattr(app, "after_cancel", None)
+    if callable(after_cancel):
+        try:
+            after_cancel(pending)
+        except Exception:
+            pass
+
+
+def _suspend_app_settings_background_work(app) -> None:
+    _cancel_app_settings_sticky_header(app)
+    _cancel_app_settings_lazy_build(app)
 
 
 def _schedule_app_settings_sticky_header(app, *, force: bool = False) -> None:
@@ -583,6 +622,14 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
     headers = getattr(app, "app_settings_section_headers", None)
     sticky_var = getattr(app, "app_settings_sticky_var", None)
     canvas = getattr(app, "app_settings_canvas", None)
+    if not bool(getattr(app, "_app_settings_tab_active", False)):
+        record_task_timing(
+            app,
+            "app_settings.sticky_header",
+            max(0.0, (time.perf_counter() - started) * 1000.0),
+            success=True,
+        )
+        return
     if not headers or sticky_var is None or canvas is None:
         record_task_timing(
             app,
@@ -733,6 +780,7 @@ def build_app_settings_tab(app, notebook):
         force=bool(force),
     )
     app._resume_app_settings_lazy_build = lambda: _schedule_app_settings_lazy_build(app)
+    app._suspend_app_settings_background_work = lambda: _suspend_app_settings_background_work(app)
     app._note_app_settings_interaction = lambda: _note_app_settings_interaction(app)
 
     scroll_host = ttk.Frame(sstab, style=notebook_page_style_name())
@@ -991,9 +1039,10 @@ def build_app_settings_tab(app, notebook):
         keywords=("restart", "close", "shutdown", "reboot", "linux"),
     )
     _apply_app_settings_filters(app, reset_scroll=False)
-    after_idle = getattr(app, "after_idle", None)
-    if callable(after_idle):
-        after_idle(lambda: _schedule_app_settings_sticky_header(app, force=True))
-    else:
-        _schedule_app_settings_sticky_header(app, force=True)
+    if bool(getattr(app, "_app_settings_tab_active", False)):
+        after_idle = getattr(app, "after_idle", None)
+        if callable(after_idle):
+            after_idle(lambda: _schedule_app_settings_sticky_header(app, force=True))
+        else:
+            _schedule_app_settings_sticky_header(app, force=True)
 

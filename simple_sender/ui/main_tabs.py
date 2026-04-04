@@ -209,11 +209,14 @@ def update_tab_visibility(app, nb=None):
             app._bind_app_settings_touch_scroll()
             refresh_sticky = getattr(app, "_refresh_app_settings_sticky_header", None)
             if callable(refresh_sticky):
-                refresh_sticky(force=False)
+                refresh_sticky(force=True)
             resume_lazy_build = getattr(app, "_resume_app_settings_lazy_build", None)
             if callable(resume_lazy_build):
                 resume_lazy_build()
         else:
+            suspend_background = getattr(app, "_suspend_app_settings_background_work", None)
+            if callable(suspend_background):
+                suspend_background()
             app._unbind_app_settings_mousewheel()
             app._unbind_app_settings_touch_scroll()
     except Exception as exc:

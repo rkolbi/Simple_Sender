@@ -209,6 +209,33 @@ def _app_settings_interaction_recent(app, now: float | None = None) -> bool:
     return (float(now) - ts) <= window_s
 
 
+def _app_window_backgrounded(app) -> bool:
+    target = app
+    toplevel = getattr(app, "winfo_toplevel", None)
+    if callable(toplevel):
+        try:
+            target = toplevel()
+        except Exception:
+            target = app
+    for widget in (target, app):
+        visible_fn = getattr(widget, "winfo_viewable", None)
+        if callable(visible_fn):
+            try:
+                if not bool(visible_fn()):
+                    return True
+            except Exception:
+                pass
+        state_fn = getattr(widget, "state", None)
+        if callable(state_fn):
+            try:
+                state = str(state_fn() or "").strip().lower()
+            except Exception:
+                state = ""
+            if state in {"iconic", "withdrawn"}:
+                return True
+    return False
+
+
 def _joystick_live_status_interval_s(app) -> float:
     if bool(getattr(app, "_joystick_capture_state", None)):
         interval_ms = int(JOYSTICK_LIVE_STATUS_INTERVAL_MS)
@@ -331,6 +358,11 @@ def update_joystick_live_status(app, py) -> None:
     started = time.perf_counter()
     record_live_status = False
     if not hasattr(app, "joystick_live_status"):
+        return
+    if (
+        not bool(getattr(app, "_joystick_capture_state", None))
+        and _app_window_backgrounded(app)
+    ):
         return
     if not _joystick_live_status_visible(app):
         return

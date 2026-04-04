@@ -634,18 +634,20 @@ def _queue_coalesced_status_positions_update(
     interval_s = _status_positions_coalesce_interval_s(app)
     last_apply_ts = float(getattr(app, "_status_positions_last_apply_ts", 0.0) or 0.0)
     pending_after_id = getattr(app, "_status_positions_coalesce_after_id", None)
-    if (
-        not force_defer
-        and pending_after_id is None
+    ready_for_deferred_apply = (
+        pending_after_id is None
         and (last_apply_ts <= 0.0 or (now_mono - last_apply_ts) >= interval_s)
-    ):
-        return False
+    )
 
     setattr(app, "_status_positions_coalesce_pending_fields", _clone_status_fields(fields))
     if pending_after_id is not None:
         return True
 
-    remaining_s = max(0.0, interval_s - max(0.0, now_mono - last_apply_ts))
+    remaining_s = (
+        0.0
+        if ready_for_deferred_apply
+        else max(0.0, interval_s - max(0.0, now_mono - last_apply_ts))
+    )
     raw_pressure_min_delay_ms = getattr(
         app,
         "_status_positions_pressure_min_defer_ms",
@@ -656,6 +658,9 @@ def _queue_coalesced_status_positions_update(
     except Exception:
         pressure_min_delay_ms = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS
     pressure_min_delay_ms = max(1, min(100, pressure_min_delay_ms))
+    # Keep the status event itself light by pushing even ready-to-apply position
+    # updates to the next UI turn while streaming. The cadence stays the same,
+    # but the status handler no longer absorbs the full DRO/macro apply cost.
     delay_ms = max(
         pressure_min_delay_ms if force_defer else 1,
         int(round(remaining_s * 1000.0)),

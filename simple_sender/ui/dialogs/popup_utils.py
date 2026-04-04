@@ -22,6 +22,8 @@
 
 from tkinter import messagebox
 
+from simple_sender.ui.theme_helpers import plain_tk_theme_defaults
+
 _DEFAULT_PARENT = None
 _PATCHED = False
 
@@ -61,6 +63,22 @@ def patch_messagebox() -> None:
     messagebox.showerror = wrap(messagebox.showerror)
     messagebox.askyesno = wrap(messagebox.askyesno)
     _PATCHED = True
+
+
+def apply_toplevel_theme(window, app) -> None:
+    if window is None or app is None:
+        return
+    try:
+        defaults = plain_tk_theme_defaults(app)
+    except Exception:
+        defaults = {}
+    background = str(defaults.get("frame_bg") or "").strip()
+    if not background:
+        return
+    try:
+        window.configure(background=background)
+    except Exception:
+        return
 
 
 def center_window(window, parent=None) -> None:

@@ -31,13 +31,14 @@ import tkinter.font as tkfont
 from simple_sender.ui.alarm_state import mark_alarm_clear_requested
 from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.gcode.stats import format_duration
-from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 from simple_sender.gcode_validator import format_validation_details, format_validation_report
 from simple_sender.ui.modal_sync import request_modal_state_sync
 from simple_sender.ui.theme_helpers import (
     apply_toggle_indicator_style,
     bind_scrollbar_theme,
     bind_text_display_theme,
+    notebook_page_style_name,
     refresh_theme_widgets,
     text_display_theme_options,
 )
@@ -884,7 +885,12 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     dialog.title(f"Confirm {label.lower()}")
     dialog.transient(app)
     dialog.resizable(False, False)
-    dialog.configure(padx=20, pady=16)
+    apply_toplevel_theme(dialog, app)
+    dialog.grid_columnconfigure(0, weight=1)
+
+    body = ttk.Frame(dialog, padding=(20, 16), style=notebook_page_style_name())
+    body.grid(row=0, column=0, sticky="nsew")
+    body.grid_columnconfigure(1, weight=1)
 
     base_font = tkfont.nametofont("TkDefaultFont")
     title_font = tkfont.Font(
@@ -903,7 +909,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     )
 
     title = "Run job?" if label == "Run job" else "Resume job?"
-    ttk.Label(dialog, text=title, font=title_font).grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(body, text=title, font=title_font).grid(row=0, column=0, columnspan=2, sticky="w")
 
     rows = [
         ("File", name),
@@ -913,10 +919,10 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         ("If started now, finishes at", finish_at),
     ]
     for idx, (label, value) in enumerate(rows, start=1):
-        ttk.Label(dialog, text=f"{label}:", font=label_font).grid(
+        ttk.Label(body, text=f"{label}:", font=label_font).grid(
             row=idx, column=0, sticky="w", padx=(0, 12), pady=2
         )
-        ttk.Label(dialog, text=value, font=value_font, wraplength=520).grid(
+        ttk.Label(body, text=value, font=value_font, wraplength=520).grid(
             row=idx, column=1, sticky="w", pady=2
         )
     report = getattr(app, "_gcode_validation_report", None)
@@ -924,7 +930,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     next_row = len(rows) + 1
     if summary_text:
         ttk.Label(
-            dialog,
+            body,
             text=summary_text,
             wraplength=520,
             justify="left",
@@ -933,7 +939,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
     report_text = format_validation_report(report)
     report_row = next_row
     ttk.Label(
-        dialog,
+        body,
         text=report_text,
         wraplength=520,
         justify="left",
@@ -956,7 +962,8 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         win.title("G-code validation details")
         win.transient(dialog)
         win.minsize(640, 420)
-        container = ttk.Frame(win, padding=12)
+        apply_toplevel_theme(win, app)
+        container = ttk.Frame(win, padding=12, style=notebook_page_style_name())
         container.pack(fill="both", expand=True)
         text = tk.Text(container, wrap="word", height=18)
         themed_options = text_display_theme_options(app)
@@ -986,7 +993,7 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         win.protocol("WM_DELETE_WINDOW", close)
         center_window(win, dialog)
 
-    btn_frame = ttk.Frame(dialog)
+    btn_frame = ttk.Frame(body, style=notebook_page_style_name())
     btn_frame.grid(row=report_row + 1, column=0, columnspan=2, sticky="e", pady=(12, 0))
     result = {"ok": False}
 

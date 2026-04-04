@@ -365,6 +365,28 @@ class _NotebookTabTooltips:
                 return True
         return True
 
+    def _notebook_visible(self) -> bool:
+        target = self._root if self._root is not None else self.notebook
+        for widget in (self.notebook, target):
+            if widget is None:
+                continue
+            visible_fn = getattr(widget, "winfo_viewable", None)
+            if callable(visible_fn):
+                try:
+                    if not bool(visible_fn()):
+                        return False
+                except (AttributeError, tk.TclError):
+                    pass
+            state_fn = getattr(widget, "state", None)
+            if callable(state_fn):
+                try:
+                    state = str(state_fn() or "").strip().lower()
+                except (AttributeError, tk.TclError):
+                    state = ""
+                if state in {"iconic", "withdrawn"}:
+                    return False
+        return True
+
     def _cancel_pending(self) -> None:
         if self._after_id is not None:
             try:
@@ -595,7 +617,7 @@ class _NotebookTabTooltips:
         self._cancel_poll()
 
     def _schedule_poll(self, delay_ms: int | None = None) -> None:
-        if self._stream_busy():
+        if self._stream_busy() or not self._notebook_visible():
             self._cancel_poll()
             return
         if self._poll_after_id is not None:
@@ -625,7 +647,7 @@ class _NotebookTabTooltips:
                 return
         except tk.TclError:
             return
-        if self._stream_busy():
+        if self._stream_busy() or not self._notebook_visible():
             self._hide_tip()
             return
         self._process_hover()
