@@ -30,16 +30,46 @@ from simple_sender.utils.atomic_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
+def _console_theme_palette(app) -> dict[str, str]:
+    palette = getattr(app, "theme_palette", None)
+    palette = palette if isinstance(palette, dict) else {}
+    console = getattr(app, "console", None)
+
+    def _widget_color(option: str, fallback: str) -> str:
+        getter = getattr(console, "cget", None)
+        if callable(getter):
+            try:
+                value = str(getter(option) or "").strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+        return fallback
+
+    base_fg = str(
+        palette.get("text_pane_fg")
+        or palette.get("fg")
+        or _widget_color("foreground", "#F5F7FB")
+    )
+    return {
+        "console_tx": str(palette.get("accent_secondary") or palette.get("accent") or "#8CCBFF"),
+        "console_ok": str(palette.get("success_fg") or "#8FD8AE"),
+        "console_status": str(palette.get("warning_fg") or "#F0D28B"),
+        "console_error": str(palette.get("error_fg") or "#FF9F9F"),
+        "console_alarm": str(palette.get("alarm_fg") or palette.get("error_fg") or "#FF7F7F"),
+        "default": base_fg,
+    }
+
 def setup_console_tags(app):
     """Apply the standard tag palette used by the console text widget."""
 
-    text_fg = "#111111"
+    colors = _console_theme_palette(app)
     try:
-        app.console.tag_configure("console_tx", background="#e5efff", foreground=text_fg)       # light blue
-        app.console.tag_configure("console_ok", background="#e6f7ed", foreground=text_fg)       # light green
-        app.console.tag_configure("console_status", background="#fff4d8", foreground=text_fg)   # light orange
-        app.console.tag_configure("console_error", background="#ffe5e5", foreground=text_fg)    # light red
-        app.console.tag_configure("console_alarm", background="#ffd8d8", foreground=text_fg)    # light red/darker
+        app.console.tag_configure("console_tx", foreground=colors["console_tx"])
+        app.console.tag_configure("console_ok", foreground=colors["console_ok"])
+        app.console.tag_configure("console_status", foreground=colors["console_status"])
+        app.console.tag_configure("console_error", foreground=colors["console_error"])
+        app.console.tag_configure("console_alarm", foreground=colors["console_alarm"])
     except Exception:
         logger.exception("Failed to configure console tag palette")
 

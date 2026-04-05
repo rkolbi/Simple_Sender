@@ -28,6 +28,7 @@ import threading
 import time
 
 from simple_sender.macro_state import (
+    macro_fast_poll_scope,
     macro_force_mm,
     macro_restore_state,
     macro_restore_units,
@@ -36,10 +37,17 @@ from simple_sender.macro_state import (
     macro_wait_for_status,
     snapshot_macro_state,
 )
+from simple_sender import tool_measurement
 from simple_sender.types import MacroExecutorState
+
+_TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM = 0.05
+_TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN = 100.0
 
 
 class MacroStateMixin(MacroExecutorState):
+    def _macro_log(self, message: str) -> None:
+        self.ui_q.put(("log", f"[macro][tool] {message}"))
+
     def _macro_wait_for_idle(self, timeout_s: float = 30.0):
         macro_wait_for_idle(
             app=self.app,
@@ -109,6 +117,72 @@ class MacroStateMixin(MacroExecutorState):
         self._macro_state_restored = restored
         return restored
 
+    def measure_tool_probe_machine_z(
+        self,
+        *,
+        probe_distance_mm: float,
+        rapid_feed_mm_min: float,
+        spread_tolerance_mm: float = tool_measurement.DEFAULT_TOOL_PROBE_SPREAD_TOLERANCE_MM,
+        measurement_label: str = "Tool measurement",
+        allow_tool_change_retry: bool = False,
+    ) -> tool_measurement.ToolProbeMeasurement:
+        label = str(measurement_label)
+        retry_enabled = bool(allow_tool_change_retry)
+        common_kwargs = {
+            "macro_send": self._macro_send,
+            "probe_controller": getattr(self.app, "probe_controller", None),
+            "cancel_event": getattr(self, "_alarm_event", None),
+            "probe_distance_mm": float(probe_distance_mm),
+            "rapid_feed_mm_min": float(rapid_feed_mm_min),
+            "spread_tolerance_mm": float(spread_tolerance_mm),
+            "log": self._macro_log,
+        }
+        try:
+            return tool_measurement.collect_high_precision_tool_probe_measurement(
+                measurement_label=label,
+                **common_kwargs,
+            )
+        except tool_measurement.ToolProbeSpreadExceededError as exc:
+            if not retry_enabled:
+                raise
+            if exc.spread_mm <= _TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM:
+                raise
+            self._macro_log(
+                (
+                    f"{label} first-round spread={exc.spread_mm:0.4f} mm exceeded "
+                    f"retry threshold {_TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM:0.4f} mm."
+                )
+            )
+            self._macro_log(
+                (
+                    f"{label} retry starting: one-time fallback pass with reduced fine probe speed "
+                    f"{_TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN:0.0f} mm/min."
+                )
+            )
+            retry_label = f"{label} retry"
+            try:
+                retry_result = tool_measurement.collect_high_precision_tool_probe_measurement(
+                    measurement_label=retry_label,
+                    fine_probe_feed_mm_min=_TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN,
+                    **common_kwargs,
+                )
+            except tool_measurement.ToolProbeSpreadExceededError as retry_exc:
+                self._macro_log(
+                    (
+                        f"{retry_label} final result: rejected under normal rules; "
+                        f"spread={retry_exc.spread_mm:0.4f} mm exceeded "
+                        f"tolerance={retry_exc.tolerance_mm:0.4f} mm."
+                    )
+                )
+                raise
+            self._macro_log(
+                (
+                    f"{retry_label} final result: accepted under normal rules; "
+                    f"spread={retry_result.spread_mm:0.4f} mm."
+                )
+            )
+            return retry_result
+
     def _parse_timeout(self, cmd_parts: list[str], default: float) -> float:
         if len(cmd_parts) > 1:
             try:
@@ -120,73 +194,75 @@ class MacroStateMixin(MacroExecutorState):
         return default
 
     def _wait_for_connection_state(self, target: bool, timeout_s: float = 10.0) -> bool:
-        start = time.monotonic()
-        cancel_event = getattr(self, "_alarm_event", None)
-        conn_evt = getattr(self.app, "_connection_state_event", None)
-        if isinstance(conn_evt, threading.Event):
-            try:
-                conn_evt.clear()
-            except Exception:
-                pass
-        while True:
-            if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
-                return False
-            if getattr(self.app, "_closing", False):
-                return False
-            if bool(getattr(self.app, "connected", False)) is target:
-                return True
-            elapsed = max(0.0, time.monotonic() - start)
-            if timeout_s and elapsed > timeout_s:
-                return False
-            wait_s = 0.5
-            if timeout_s:
-                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+        with macro_fast_poll_scope(self.app, "_macro_critical_fast_poll_count"):
+            start = time.monotonic()
+            cancel_event = getattr(self, "_alarm_event", None)
+            conn_evt = getattr(self.app, "_connection_state_event", None)
             if isinstance(conn_evt, threading.Event):
                 try:
-                    signaled = bool(conn_evt.wait(wait_s))
-                    if signaled:
-                        conn_evt.clear()
-                    continue
+                    conn_evt.clear()
                 except Exception:
                     pass
-            time.sleep(max(0.0, min(wait_s, 0.1)))
-
-    def _wait_for_grbl_ready_state(self, timeout_s: float = 10.0) -> bool:
-        start = time.monotonic()
-        cancel_event = getattr(self, "_alarm_event", None)
-        conn_evt = getattr(self.app, "_connection_state_event", None)
-        status_evt = getattr(self.app, "_status_update_event", None)
-        while True:
-            if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
-                return False
-            if getattr(self.app, "_closing", False):
-                return False
-            if bool(getattr(self.app, "connected", False)) and bool(
-                getattr(self.app, "_grbl_ready", False)
-            ):
-                return True
-            elapsed = max(0.0, time.monotonic() - start)
-            if timeout_s and elapsed > timeout_s:
-                return False
-            wait_s = 0.5
-            if timeout_s:
-                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
-            signaled = False
-            for evt in (status_evt, conn_evt):
-                if not isinstance(evt, threading.Event):
-                    continue
-                try:
-                    signaled = bool(evt.wait(wait_s))
-                except Exception:
-                    signaled = False
-                if signaled:
+            while True:
+                if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
+                    return False
+                if getattr(self.app, "_closing", False):
+                    return False
+                if bool(getattr(self.app, "connected", False)) is target:
+                    return True
+                elapsed = max(0.0, time.monotonic() - start)
+                if timeout_s and elapsed > timeout_s:
+                    return False
+                wait_s = 0.05
+                if timeout_s:
+                    wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+                if isinstance(conn_evt, threading.Event):
                     try:
-                        evt.clear()
+                        signaled = bool(conn_evt.wait(wait_s))
+                        if signaled:
+                            conn_evt.clear()
+                        continue
                     except Exception:
                         pass
-                    break
-            if not signaled:
-                time.sleep(max(0.0, min(wait_s, 0.1)))
+                time.sleep(max(0.0, min(wait_s, 0.05)))
+
+    def _wait_for_grbl_ready_state(self, timeout_s: float = 10.0) -> bool:
+        with macro_fast_poll_scope(self.app, "_macro_critical_fast_poll_count"):
+            start = time.monotonic()
+            cancel_event = getattr(self, "_alarm_event", None)
+            conn_evt = getattr(self.app, "_connection_state_event", None)
+            status_evt = getattr(self.app, "_status_update_event", None)
+            while True:
+                if isinstance(cancel_event, threading.Event) and cancel_event.is_set():
+                    return False
+                if getattr(self.app, "_closing", False):
+                    return False
+                if bool(getattr(self.app, "connected", False)) and bool(
+                    getattr(self.app, "_grbl_ready", False)
+                ):
+                    return True
+                elapsed = max(0.0, time.monotonic() - start)
+                if timeout_s and elapsed > timeout_s:
+                    return False
+                wait_s = 0.05
+                if timeout_s:
+                    wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+                signaled = False
+                for evt in (status_evt, conn_evt):
+                    if not isinstance(evt, threading.Event):
+                        continue
+                    try:
+                        signaled = bool(evt.wait(wait_s))
+                    except Exception:
+                        signaled = False
+                    if signaled:
+                        try:
+                            evt.clear()
+                        except Exception:
+                            pass
+                        break
+                if not signaled:
+                    time.sleep(max(0.0, min(wait_s, 0.05)))
 
     def _wait_for_gcode_load_result(self, token: int, timeout_s: float = 120.0) -> bool:
         start = time.monotonic()
@@ -217,7 +293,7 @@ class MacroStateMixin(MacroExecutorState):
             elapsed = max(0.0, time.monotonic() - start)
             if timeout_s and elapsed > timeout_s:
                 return False
-            wait_s = 0.5
+            wait_s = 0.05
             if timeout_s:
                 wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
             if isinstance(result_evt, threading.Event):
@@ -231,4 +307,4 @@ class MacroStateMixin(MacroExecutorState):
                     except Exception:
                         pass
                     continue
-            time.sleep(max(0.0, min(wait_s, 0.1)))
+            time.sleep(max(0.0, min(wait_s, 0.05)))

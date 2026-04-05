@@ -27,7 +27,7 @@ from typing import Any, Callable, cast
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 from simple_sender.ui.tk_vars import read_bool_var_attr
 from simple_sender.utils.grbl_errors import extract_grbl_code
 
@@ -256,6 +256,7 @@ def _ensure_grbl_code_popup(app):
     popup.transient(app)
     popup.resizable(False, False)
     popup.configure(padx=16, pady=12)
+    apply_toplevel_theme(popup, app)
 
     title_var = tk.StringVar(master=popup, value="GRBL alarm/error detected")
     time_var = tk.StringVar(master=popup, value="")

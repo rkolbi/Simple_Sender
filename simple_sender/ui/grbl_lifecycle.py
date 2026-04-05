@@ -52,6 +52,8 @@ _STATUS_POLL_PERF_RUNNING = 0.35
 _STATUS_POLL_MANUAL_ACTIVE = 0.1
 _STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
 _STATUS_POLL_PROBE_INDICATOR = 0.02
+_STATUS_POLL_MACRO_ACTIVE = 0.1
+_STATUS_POLL_MACRO_CRITICAL = 0.05
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
 _STATUS_CONNECT_SETTLING_WINDOW_S = 1.5
 _STATUS_CONNECT_SETTLING_READY_TAIL_S = 1.0
@@ -396,6 +398,28 @@ def _probe_indicator_fast_poll_active(app) -> bool:
         except Exception:
             return False
     return False
+
+
+def _macro_fast_poll_active(app) -> bool:
+    if _stream_running_or_paused(app):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    try:
+        return int(getattr(app, "_macro_active_fast_poll_count", 0) or 0) > 0
+    except Exception:
+        return False
+
+
+def _macro_critical_fast_poll_active(app) -> bool:
+    if _stream_running_or_paused(app):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    try:
+        return int(getattr(app, "_macro_critical_fast_poll_count", 0) or 0) > 0
+    except Exception:
+        return False
 
 
 def mark_manual_motion_activity(app, *, duration_s: float | None = None) -> None:
@@ -933,10 +957,14 @@ def effective_status_poll_interval(app) -> float:
         base = STATUS_POLL_DEFAULT
     if base <= 0:
         base = STATUS_POLL_DEFAULT
-    if _manual_motion_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
     if _probe_indicator_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_PROBE_INDICATOR))
+    if _macro_critical_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_MACRO_CRITICAL))
+    if _macro_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_MACRO_ACTIVE))
+    if _manual_motion_fast_poll_active(app):
+        return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
     if _manual_ready_fast_poll_active(app):
         return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
     if _status_poll_should_use_running_profile(app):

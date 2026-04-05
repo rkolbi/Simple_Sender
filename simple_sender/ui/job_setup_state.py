@@ -31,9 +31,10 @@ from simple_sender.ui.dialogs.popup_utils import center_window
 logger = logging.getLogger(__name__)
 _WARNING_TITLE = "Job Setup Not Completed"
 _WARNING_BODY = (
-    "Job Setup has not been completed for this session. Work zero and tool reference may not "
-    "be set correctly. Starting now could cause the job to run at the wrong position or depth, "
-    "and tool changes may not be compensated correctly.\n\n"
+    "Job Setup is missing a current valid tool reference for this session. Work zero and tool "
+    "reference data may not be set correctly for the current tool-change workflow. Starting now "
+    "could cause the job to run at the wrong position or depth, and later tool changes may fail "
+    "or be compensated incorrectly.\n\n"
     "Do you want to start the job anyway?"
 )
 

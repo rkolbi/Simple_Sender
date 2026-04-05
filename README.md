@@ -374,7 +374,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP; Recover (Experimental) button shows quick actions.
-- **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions; auto-dismiss and dedupe intervals are configurable in App Settings > Error dialogs.
+- **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions. Duplicate popups are deduped by the configured interval, and current alarm/error popups stay visible until the operator dismisses them.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
 - **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics). Backup-bundle import validates settings through the same repair/import path used elsewhere, warns when imported values were repaired, and requires explicit confirmation before overwriting colliding macro/checklist assets.
@@ -385,7 +385,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Tooltips:** Available for all buttons/fields; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. Toggle with the Tips button in the status bar or App Settings.
 - **Worker-thread UI marshaling:** Background workers post UI updates through the UI queue/UI-thread helpers instead of calling Tk widgets directly, reducing cross-thread Tk risk during connect/load/settings/log operations.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
-- **Job Setup run gate:** Run checks the same `macro.state.TOOL_REFERENCE` value used by the Tool Ref display. If the value is missing/blank/invalid (`None`, unknown text, NaN, etc.), it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
+- **Job Setup run gate:** Run checks the current Job Setup tool-reference state used by Tool Change, not just the Tool Ref display text. If the stored reference is missing, non-numeric, or missing the current `TOOL_REFERENCE_FORMAT`, it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
 - **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that actually reset assumptions (including accepted ALL STOP reset modes and alarm-recovery Reset), and GRBL reset/banner reinitialization.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both Run and Resume paths require an explicit operator choice before stream start/resume side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
 
@@ -473,6 +473,14 @@ Macro scripting remains fully open, and runtime hardening is applied around it: 
 `App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed; `_` lines, `[expression]`, and assignments inside non-comment lines are blocked. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
 Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` (or `%state_return`) inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
+
+Current fixed-sensor / bitsetter measurement behavior is:
+- one coarse seek onto the sensor using the current App Settings Z jog speed as the coarse feed for Macro-3 / Macro-4
+- then 5 exact samples using the shared high-precision helper
+- each sample retracts `5.0 mm`, dwells `0.5 s`, and re-probes `6.0 mm` at `175 mm/min`
+- the final result discards the low/high sample and averages the middle 3
+- normal acceptance still requires spread `<= 0.050 mm`
+- Tool Change only: if the first round exceeds `0.050 mm`, one retry round is attempted at `100 mm/min`; the retry must still pass the normal spread rule or the Tool Change fails
 
 ### Macro directives
 | Directive | What it does | Example usage |
@@ -1247,7 +1255,7 @@ The macro panel supports `Macro-1` through `Macro-8`; the repository currently s
 | Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
 | Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
 | Macro-3: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup before job start, and after reconnect/reset/new controller session. | Starts with a custom `PROMPT` (`[btn(...)]` keys), branches on `macro.prompt_choice_key` (`x/z/m`), runs the matching touch-plate/manual path, then performs shared `$132`-based reference capture and stores `macro.state.TOOL_REFERENCE = wz`. |
-| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
+| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)` and `%if TOOL_REFERENCE_FORMAT != CURRENT_TOOL_REFERENCE_FORMAT: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -1386,7 +1394,7 @@ Macro UI is included below along with the rest of the interface.
 - Burst window: time window for burst detection.
 - Max dialogs per window: cap before suppression begins.
 - Show GRBL alarm/error popups: toggles non-blocking GRBL code popups.
-- GRBL popup auto-dismiss (seconds): auto-close delay for GRBL popups (`0` disables auto-close).
+- GRBL popup auto-dismiss setting (seconds): retained for compatibility with existing settings; current GRBL alarm/error popups stay visible until manually dismissed.
 - GRBL popup dedupe interval (seconds): minimum time before the same `ALARM:x` / `error:x` popup can show again.
 - Show job completion dialog: toggles completion summary popup.
 - Play reminder beep on completion: toggles completion beep.

@@ -24,8 +24,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from simple_sender.ui.dialogs.popup_utils import center_window
-from simple_sender.ui.job_setup_state import invalidate_job_setup_state
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 
 logger = logging.getLogger(__name__)
 _ALARM_RECOVERY_WRAPLENGTH = 460
@@ -45,6 +44,7 @@ def show_alarm_recovery(app) -> None:
     dlg.transient(app)
     dlg.grab_set()
     dlg.resizable(False, False)
+    apply_toplevel_theme(dlg, app)
     frm = ttk.Frame(dlg, padding=12)
     frm.pack(fill="both", expand=True)
     ttk.Label(
@@ -100,6 +100,8 @@ def show_alarm_recovery(app) -> None:
             )
 
     def _reset_with_accessories_off() -> bool:
+        from simple_sender.ui.job_setup_state import invalidate_job_setup_state
+
         try:
             if hasattr(app, "_stop_job_accessories"):
                 app._stop_job_accessories("job_reset")

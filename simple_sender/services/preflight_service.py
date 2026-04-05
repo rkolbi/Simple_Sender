@@ -7,6 +7,10 @@ from enum import Enum
 from typing import Any, Callable
 
 _TRAVEL_COMPARE_EPSILON = 1e-6
+_TRAVEL_LIMITS_UNAVAILABLE_WARNING = (
+    "Machine travel settings ($130/$131/$132) are unavailable, so Simple Sender "
+    "cannot compare job span to machine travel."
+)
 _AXIS_SETTINGS: tuple[tuple[str, str], ...] = (
     ("x", "$130"),
     ("y", "$131"),
@@ -110,7 +114,12 @@ class PreflightResult:
 
 
 class PreflightService:
-    """Evaluate loaded-job readiness without UI coupling."""
+    """Evaluate loaded-job readiness without UI coupling.
+
+    The travel-limit portion of this check compares the parsed job span against
+    GRBL's configured machine travel. It does not validate current WCS/job
+    placement inside the machine envelope.
+    """
 
     def __init__(
         self,
@@ -138,6 +147,7 @@ class PreflightService:
         return self._coerce_travel_limits(raw)
 
     def validate_job(self, app: Any) -> PreflightResult:
+        """Return a span-vs-travel preflight result for the currently loaded job."""
         failures: list[str] = []
         warnings: list[str] = []
         has_job = self._has_loaded_job(app)
@@ -163,7 +173,7 @@ class PreflightService:
             if violations:
                 failures.extend(violation.message for violation in violations)
             elif not travel_limits.available:
-                warnings.append("Machine travel settings ($130/$131/$132) are unavailable.")
+                warnings.append(_TRAVEL_LIMITS_UNAVAILABLE_WARNING)
 
         outcome = self._resolve_outcome(
             has_job=has_job,

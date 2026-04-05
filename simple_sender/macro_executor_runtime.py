@@ -32,6 +32,7 @@ import types
 from tkinter import messagebox
 
 from simple_sender.macro_timeouts import macro_timeouts_disabled
+from simple_sender.macro_state import macro_fast_poll_scope
 from simple_sender.utils.constants import (
     MACRO_LINE_TIMEOUT,
     MACRO_TOTAL_TIMEOUT,
@@ -257,144 +258,146 @@ class MacroRunnerMixin(MacroExecutorState):
             except (AttributeError, RuntimeError) as exc:
                 _log_suppressed("Failed starting macro status indicator on UI thread", exc)
         try:
-            with self._macro_vars_lock:
-                self._macro_local_vars = {"app": self.app, "os": os}
-                self._macro_vars["app"] = self.app
-                self._macro_vars["os"] = os
-                self._macro_vars["prompt_choice"] = ""
-                self._macro_vars["prompt_choice_key"] = None
-                self._macro_vars["prompt_choice_label"] = ""
-                self._macro_vars["prompt_index"] = -1
-                self._macro_vars["prompt_cancelled"] = False
-                macro_ns = self._macro_vars.get("macro")
-                if isinstance(macro_ns, types.SimpleNamespace):
-                    setattr(macro_ns, "prompt_choice", "")
-                    setattr(macro_ns, "prompt_choice_key", None)
-                    setattr(macro_ns, "prompt_choice_label", "")
-                    setattr(macro_ns, "prompt_index", -1)
-                    setattr(macro_ns, "prompt_cancelled", False)
-            self._macro_state_restored = False
-            self._macro_saved_state = None
-            with self._macro_vars_lock:
-                modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
-            self._macro_send("$G")
-            modal_ok = self._macro_wait_for_modal(modal_seq)
-            status_ok = self._macro_wait_for_status()
-            if not modal_ok or not status_ok:
-                aborted = True
-                self.ui_q.put(("log", "[macro] Snapshot failed; macro aborted."))
-                self._macro_audit("Snapshot failed; aborting.", force=True)
-                return
-            self._macro_saved_state = self._snapshot_macro_state()
-            if self.grbl.is_connected():
-                self._macro_force_mm()
-            for idx in range(body_start, len(lines)):
-                now = time.perf_counter()
-                if total_timeout_s > 0 and (now - start) > total_timeout_s:
-                    aborted = True
-                    self.ui_q.put(
-                        ("log", f"[macro] Macro timed out after {total_timeout_s:.1f}s; aborted."),
-                    )
-                    self._macro_audit(
-                        f"L{idx + 1} timeout: total runtime exceeded {total_timeout_s:.1f}s",
-                        force=True,
-                    )
-                    break
-                raw = lines[idx]
-                raw_line = raw.rstrip("\r\n")
-                line = raw_line.strip()
-                self._current_macro_line = raw_line
-                if self._alarm_event.is_set():
-                    aborted = True
-                    self._macro_audit(f"L{idx + 1} abort: alarm event set", force=True)
-                    break
-                if not line:
-                    continue
-                executed += 1
-                line_no = idx + 1
-                self._macro_audit(f"L{line_no} raw: {raw_line}")
-                line_start = time.perf_counter()
+            with macro_fast_poll_scope(self.app, "_macro_active_fast_poll_count"):
                 try:
-                    compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
-                    if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
+                    with self._macro_vars_lock:
+                        self._macro_local_vars = {"app": self.app, "os": os}
+                        self._macro_vars["app"] = self.app
+                        self._macro_vars["os"] = os
+                        self._macro_vars["prompt_choice"] = ""
+                        self._macro_vars["prompt_choice_key"] = None
+                        self._macro_vars["prompt_choice_label"] = ""
+                        self._macro_vars["prompt_index"] = -1
+                        self._macro_vars["prompt_cancelled"] = False
+                        macro_ns = self._macro_vars.get("macro")
+                        if isinstance(macro_ns, types.SimpleNamespace):
+                            setattr(macro_ns, "prompt_choice", "")
+                            setattr(macro_ns, "prompt_choice_key", None)
+                            setattr(macro_ns, "prompt_choice_label", "")
+                            setattr(macro_ns, "prompt_index", -1)
+                            setattr(macro_ns, "prompt_cancelled", False)
+                    self._macro_state_restored = False
+                    self._macro_saved_state = None
+                    with self._macro_vars_lock:
+                        modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+                    self._macro_send("$G")
+                    modal_ok = self._macro_wait_for_modal(modal_seq)
+                    status_ok = self._macro_wait_for_status()
+                    if not modal_ok or not status_ok:
                         aborted = True
-                        self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
-                        self._macro_audit(f"L{line_no} compile_error: {compiled[1]}", force=True)
-                        self._notify_macro_compile_error(path, raw_line, line_no, compiled[1])
-                        break
-                    if compiled is None:
-                        self._macro_audit(f"L{line_no} skipped")
-                        continue
-                    if isinstance(compiled, tuple):
-                        kind = compiled[0]
-                        self._macro_audit(f"L{line_no} directive: {kind}")
-                        if kind == "WAIT":
-                            wait_timeout_s = line_timeout_s if line_timeout_s > 0 else 30.0
-                            self._macro_wait_for_idle(timeout_s=wait_timeout_s)
-                        elif kind == "MSG":
-                            msg = compiled[1] if len(compiled) > 1 else ""
-                            if msg:
-                                msg = self._format_macro_message(str(msg))
-                                self.ui_q.put(("log", f"[macro] {msg}"))
-                        elif kind == "UPDATE":
-                            update_timeout_s = min(5.0, line_timeout_s) if line_timeout_s > 0 else 1.0
-                            self._macro_wait_for_status(timeout_s=max(update_timeout_s, 0.1))
-                        self._macro_audit(f"L{line_no} ok")
-                        continue
-                    evaluated = self._bcnc_evaluate_line(compiled)
-                    if evaluated is None:
-                        self._macro_audit(f"L{line_no} python_exec_ok")
-                        continue
-                    self._macro_audit(f"L{line_no} eval: {evaluated}")
-                    if not self._execute_command(evaluated, raw_line):
-                        aborted = True
-                        self._macro_audit(f"L{line_no} aborted by command", force=True)
-                        break
-                    self._macro_audit(f"L{line_no} ok")
-                    if getattr(self.app, "_alarm_locked", False):
-                        aborted = True
-                        self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
-                        self._macro_audit(f"L{line_no} abort: alarm lock active", force=True)
-                        break
+                        self.ui_q.put(("log", "[macro] Snapshot failed; macro aborted."))
+                        self._macro_audit("Snapshot failed; aborting.", force=True)
+                        return
+                    self._macro_saved_state = self._snapshot_macro_state()
+                    if self.grbl.is_connected():
+                        self._macro_force_mm()
+                    for idx in range(body_start, len(lines)):
+                        now = time.perf_counter()
+                        if total_timeout_s > 0 and (now - start) > total_timeout_s:
+                            aborted = True
+                            self.ui_q.put(
+                                ("log", f"[macro] Macro timed out after {total_timeout_s:.1f}s; aborted."),
+                            )
+                            self._macro_audit(
+                                f"L{idx + 1} timeout: total runtime exceeded {total_timeout_s:.1f}s",
+                                force=True,
+                            )
+                            break
+                        raw = lines[idx]
+                        raw_line = raw.rstrip("\r\n")
+                        line = raw_line.strip()
+                        self._current_macro_line = raw_line
+                        if self._alarm_event.is_set():
+                            aborted = True
+                            self._macro_audit(f"L{idx + 1} abort: alarm event set", force=True)
+                            break
+                        if not line:
+                            continue
+                        executed += 1
+                        line_no = idx + 1
+                        self._macro_audit(f"L{line_no} raw: {raw_line}")
+                        line_start = time.perf_counter()
+                        try:
+                            compiled = self._bcnc_compile_line(self._strip_prompt_tokens(line))
+                            if isinstance(compiled, tuple) and compiled and compiled[0] == "COMPILE_ERROR":
+                                aborted = True
+                                self.ui_q.put(("log", f"[macro] Compile error: {compiled[1]}"))
+                                self._macro_audit(f"L{line_no} compile_error: {compiled[1]}", force=True)
+                                self._notify_macro_compile_error(path, raw_line, line_no, compiled[1])
+                                break
+                            if compiled is None:
+                                self._macro_audit(f"L{line_no} skipped")
+                                continue
+                            if isinstance(compiled, tuple):
+                                kind = compiled[0]
+                                self._macro_audit(f"L{line_no} directive: {kind}")
+                                if kind == "WAIT":
+                                    wait_timeout_s = line_timeout_s if line_timeout_s > 0 else 30.0
+                                    self._macro_wait_for_idle(timeout_s=wait_timeout_s)
+                                elif kind == "MSG":
+                                    msg = compiled[1] if len(compiled) > 1 else ""
+                                    if msg:
+                                        msg = self._format_macro_message(str(msg))
+                                        self.ui_q.put(("log", f"[macro] {msg}"))
+                                elif kind == "UPDATE":
+                                    update_timeout_s = min(5.0, line_timeout_s) if line_timeout_s > 0 else 1.0
+                                    self._macro_wait_for_status(timeout_s=max(update_timeout_s, 0.1))
+                                self._macro_audit(f"L{line_no} ok")
+                                continue
+                            evaluated = self._bcnc_evaluate_line(compiled)
+                            if evaluated is None:
+                                self._macro_audit(f"L{line_no} python_exec_ok")
+                                continue
+                            self._macro_audit(f"L{line_no} eval: {evaluated}")
+                            if not self._execute_command(evaluated, raw_line):
+                                aborted = True
+                                self._macro_audit(f"L{line_no} aborted by command", force=True)
+                                break
+                            self._macro_audit(f"L{line_no} ok")
+                            if getattr(self.app, "_alarm_locked", False):
+                                aborted = True
+                                self.ui_q.put(("log", "[macro] Alarm detected; aborting macro."))
+                                self._macro_audit(f"L{line_no} abort: alarm lock active", force=True)
+                                break
+                        except Exception as exc:
+                            aborted = True
+                            logger.exception("Macro line %d failed", line_no)
+                            self.ui_q.put(("log", f"[macro] Line {line_no} failed: {exc}"))
+                            self._macro_audit(f"L{line_no} error: {exc}", force=True)
+                            break
+                        elapsed_line = time.perf_counter() - line_start
+                        if line_timeout_s > 0 and elapsed_line > line_timeout_s:
+                            aborted = True
+                            self.ui_q.put(
+                                (
+                                    "log",
+                                    f"[macro] Line {line_no} timed out after {elapsed_line:.2f}s "
+                                    f"(limit {line_timeout_s:.2f}s); aborted.",
+                                )
+                            )
+                            self._macro_audit(
+                                f"L{line_no} timeout: {elapsed_line:.2f}s > {line_timeout_s:.2f}s",
+                                force=True,
+                            )
+                            break
                 except Exception as exc:
                     aborted = True
-                    logger.exception("Macro line %d failed", line_no)
-                    self.ui_q.put(("log", f"[macro] Line {line_no} failed: {exc}"))
-                    self._macro_audit(f"L{line_no} error: {exc}", force=True)
-                    break
-                elapsed_line = time.perf_counter() - line_start
-                if line_timeout_s > 0 and elapsed_line > line_timeout_s:
-                    aborted = True
-                    self.ui_q.put(
-                        (
-                            "log",
-                            f"[macro] Line {line_no} timed out after {elapsed_line:.2f}s "
-                            f"(limit {line_timeout_s:.2f}s); aborted.",
+                    canceled = bool(
+                        isinstance(exc, RuntimeError)
+                        and str(exc).strip().lower() == "macro canceled."
+                        and bool(self._alarm_event.is_set())
+                    )
+                    if canceled:
+                        self._macro_audit("Runtime canceled by operator.", force=True)
+                    else:
+                        self.ui_q.put(("log", f"[macro] Runtime error: {exc}"))
+                        self._macro_audit(f"Runtime error: {exc}", force=True)
+                        self.app._log_exception(
+                            "Macro error",
+                            exc,
+                            show_dialog=True,
+                            dialog_title="Macro error",
                         )
-                    )
-                    self._macro_audit(
-                        f"L{line_no} timeout: {elapsed_line:.2f}s > {line_timeout_s:.2f}s",
-                        force=True,
-                    )
-                    break
-        except Exception as exc:
-            aborted = True
-            canceled = bool(
-                isinstance(exc, RuntimeError)
-                and str(exc).strip().lower() == "macro canceled."
-                and bool(self._alarm_event.is_set())
-            )
-            if canceled:
-                self._macro_audit("Runtime canceled by operator.", force=True)
-            else:
-                self.ui_q.put(("log", f"[macro] Runtime error: {exc}"))
-                self._macro_audit(f"Runtime error: {exc}", force=True)
-                self.app._log_exception(
-                    "Macro error",
-                    exc,
-                    show_dialog=True,
-                    dialog_title="Macro error",
-                )
         finally:
             if unlimited_time_override:
                 try:

@@ -907,7 +907,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         app.grbl_popup_enabled_check,
         "Show a non-blocking popup with alarm/error code definitions.",
     )
-    ttk.Label(dialog_frame, text="GRBL popup auto-dismiss (seconds)").grid(
+    ttk.Label(dialog_frame, text="GRBL popup auto-dismiss setting (seconds)").grid(
         row=7, column=0, sticky="w", padx=(0, 10), pady=4
     )
     grbl_popup_dismiss_row = ttk.Frame(dialog_frame)
@@ -924,7 +924,8 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         app.grbl_popup_auto_dismiss_entry,
-        "Automatically close GRBL popups after this many seconds (0 disables auto-close).",
+        "Retained for compatibility with existing settings. Current GRBL alarm/error popups stay "
+        "visible until the operator dismisses them manually.",
     )
     ttk.Label(dialog_frame, text="GRBL popup dedupe interval (seconds)").grid(
         row=8, column=0, sticky="w", padx=(0, 10), pady=4

@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import threading
 import time
@@ -32,6 +33,9 @@ from simple_sender.utils.constants import RT_STATUS
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_MACRO_WAIT_SLICE_S = 0.05
+_MACRO_IDLE_WAIT_SLICE_S = 0.1
+_MACRO_STATUS_REQUERY_INTERVAL_S = 0.1
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -64,6 +68,44 @@ def _wait_for_event_or_sleep(
     time.sleep(max(0.0, min(wait_s, fallback_s)))
 
 
+def _refresh_macro_poll_profile(app) -> None:
+    applier = getattr(app, "_apply_status_poll_profile", None)
+    if callable(applier):
+        try:
+            applier()
+        except Exception as exc:
+            _log_suppressed("Failed applying macro fast-poll profile", exc)
+
+
+@contextmanager
+def macro_fast_poll_scope(app, counter_attr: str):
+    attr_name = str(counter_attr or "").strip()
+    if not attr_name:
+        yield
+        return
+    try:
+        current = int(getattr(app, attr_name, 0) or 0)
+    except Exception:
+        current = 0
+    try:
+        setattr(app, attr_name, current + 1)
+    except Exception as exc:
+        _log_suppressed(f"Failed incrementing macro fast-poll counter {attr_name}", exc)
+    _refresh_macro_poll_profile(app)
+    try:
+        yield
+    finally:
+        try:
+            current = int(getattr(app, attr_name, 0) or 0)
+        except Exception:
+            current = 0
+        try:
+            setattr(app, attr_name, max(0, current - 1))
+        except Exception as exc:
+            _log_suppressed(f"Failed decrementing macro fast-poll counter {attr_name}", exc)
+        _refresh_macro_poll_profile(app)
+
+
 def macro_wait_for_idle(
     *,
     app,
@@ -74,41 +116,46 @@ def macro_wait_for_idle(
 ) -> None:
     if not grbl.is_connected():
         return
-    start = time.monotonic()
-    seen_busy = False
-    while True:
-        if cancel_event is not None and cancel_event.is_set():
-            return
-        if not grbl.is_connected():
-            return
-        state = str(app._machine_state_text).strip()
-        is_idle = state.upper().startswith("IDLE")
-        if getattr(app, "_homing_in_progress", False):
-            is_idle = False
-        stream_active = bool(grbl.is_streaming())
-        allow_paused_tool_change = bool(
-            stream_active
-            and bool(getattr(grbl, "_paused", False))
-            and bool(getattr(grbl, "_stream_tool_change_active", False))
-        )
-        if (not stream_active) or allow_paused_tool_change:
-            if not is_idle:
-                seen_busy = True
-            elif is_idle and (seen_busy or (time.monotonic() - start) > 0.2):
+    with macro_fast_poll_scope(app, "_macro_critical_fast_poll_count"):
+        try:
+            grbl.send_realtime(RT_STATUS)
+        except Exception as exc:
+            _log_suppressed("Failed sending initial macro %wait status query", exc)
+        start = time.monotonic()
+        seen_busy = False
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
                 return
-        elapsed = max(0.0, time.monotonic() - start)
-        if timeout_s and elapsed > timeout_s:
-            ui_q.put(("log", "[macro] %wait timeout"))
-            return
-        wait_s = 0.5
-        if timeout_s:
-            wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
-        _wait_for_event_or_sleep(
-            app,
-            "_status_update_event",
-            wait_s,
-            fallback_s=0.1,
-        )
+            if not grbl.is_connected():
+                return
+            state = str(app._machine_state_text).strip()
+            is_idle = state.upper().startswith("IDLE")
+            if getattr(app, "_homing_in_progress", False):
+                is_idle = False
+            stream_active = bool(grbl.is_streaming())
+            allow_paused_tool_change = bool(
+                stream_active
+                and bool(getattr(grbl, "_paused", False))
+                and bool(getattr(grbl, "_stream_tool_change_active", False))
+            )
+            if (not stream_active) or allow_paused_tool_change:
+                if not is_idle:
+                    seen_busy = True
+                elif is_idle and (seen_busy or (time.monotonic() - start) > 0.2):
+                    return
+            elapsed = max(0.0, time.monotonic() - start)
+            if timeout_s and elapsed > timeout_s:
+                ui_q.put(("log", "[macro] %wait timeout"))
+                return
+            wait_s = _MACRO_IDLE_WAIT_SLICE_S
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            _wait_for_event_or_sleep(
+                app,
+                "_status_update_event",
+                wait_s,
+                fallback_s=_MACRO_WAIT_SLICE_S,
+            )
 
 
 def macro_wait_for_status(
@@ -121,48 +168,44 @@ def macro_wait_for_status(
     timeout_s: float = 1.0,
     cancel_event: threading.Event | None = None,
 ) -> bool:
-    start = time.monotonic()
-    with macro_vars_lock:
-        seq = int(macro_vars.get("_status_seq", 0) or 0)
-    try:
-        baseline_status_ts = float(getattr(app, "_last_status_ts", 0.0) or 0.0)
-    except Exception:
-        baseline_status_ts = 0.0
-    status_evt = getattr(app, "_status_update_event", None)
-    if isinstance(status_evt, threading.Event):
-        try:
-            status_evt.clear()
-        except Exception as exc:
-            _log_suppressed("Failed clearing status-update event before waiting", exc)
-    grbl.send_realtime(RT_STATUS)
-    while True:
-        if cancel_event is not None and cancel_event.is_set():
-            return False
+    with macro_fast_poll_scope(app, "_macro_critical_fast_poll_count"):
+        start = time.monotonic()
+        next_query_ts = start
         with macro_vars_lock:
-            now_seq = int(macro_vars.get("_status_seq", 0) or 0)
-        if now_seq != seq:
-            return True
-        # Some status handlers may skip macro sequence updates for duplicate
-        # idle frames; accept any fresh status timestamp after the query.
-        try:
-            now_status_ts = float(getattr(app, "_last_status_ts", 0.0) or 0.0)
-        except Exception:
-            now_status_ts = baseline_status_ts
-        if now_status_ts > baseline_status_ts:
-            return True
-        elapsed = max(0.0, time.monotonic() - start)
-        if timeout_s and elapsed > timeout_s:
-            ui_q.put(("log", "[macro] %update timeout"))
-            return False
-        wait_s = 0.5
-        if timeout_s:
-            wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
-        _wait_for_event_or_sleep(
-            app,
-            "_status_update_event",
-            wait_s,
-            fallback_s=0.05,
-        )
+            seq = int(macro_vars.get("_status_coords_seq", 0) or 0)
+        status_evt = getattr(app, "_status_coords_update_event", None)
+        if isinstance(status_evt, threading.Event):
+            try:
+                status_evt.clear()
+            except Exception as exc:
+                _log_suppressed("Failed clearing coordinate-update event before waiting", exc)
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            with macro_vars_lock:
+                now_seq = int(macro_vars.get("_status_coords_seq", 0) or 0)
+            if now_seq != seq:
+                return True
+            now_mono = time.monotonic()
+            if now_mono >= next_query_ts:
+                try:
+                    grbl.send_realtime(RT_STATUS)
+                except Exception as exc:
+                    _log_suppressed("Failed sending macro %update realtime status query", exc)
+                next_query_ts = now_mono + _MACRO_STATUS_REQUERY_INTERVAL_S
+            elapsed = max(0.0, now_mono - start)
+            if timeout_s and elapsed > timeout_s:
+                ui_q.put(("log", "[macro] %update timeout"))
+                return False
+            wait_s = _MACRO_WAIT_SLICE_S
+            if timeout_s:
+                wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
+            _wait_for_event_or_sleep(
+                app,
+                "_status_coords_update_event",
+                wait_s,
+                fallback_s=_MACRO_WAIT_SLICE_S,
+            )
 
 
 def macro_wait_for_modal(
@@ -196,14 +239,14 @@ def macro_wait_for_modal(
         if timeout_s and elapsed > timeout_s:
             ui_q.put(("log", "[macro] $G modal update timeout"))
             return False
-        wait_s = 0.5
+        wait_s = _MACRO_WAIT_SLICE_S
         if timeout_s:
             wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
         _wait_for_event_or_sleep(
             app,
             "_modal_update_event",
             wait_s,
-            fallback_s=0.05,
+            fallback_s=_MACRO_WAIT_SLICE_S,
         )
 
 

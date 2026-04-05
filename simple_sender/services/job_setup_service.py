@@ -3,7 +3,10 @@
 import math
 from typing import Any, Callable
 
+from simple_sender.tool_measurement import CURRENT_TOOL_REFERENCE_FORMAT
+
 _UNAVAILABLE = object()
+_ToolReferenceState = tuple[object, object]
 _INVALID_TOOL_REF_TEXT = frozenset(
     {
         "",
@@ -28,10 +31,13 @@ class JobSetupService:
         self._log_suppressed = log_suppressed
 
     def has_valid_setup_state(self, app: Any) -> bool:
-        value = self._read_tool_reference_from_macro_state(app, blocking=False)
-        if value is _UNAVAILABLE:
-            value = self._label_tool_reference_fallback(app)
-        return self._coerce_tool_reference_number(value) is not None
+        state = self._read_tool_reference_state_from_macro_state(app, blocking=False)
+        if not isinstance(state, tuple) or len(state) != 2:
+            return False
+        tool_reference, tool_reference_format = state
+        if self._coerce_tool_reference_number(tool_reference) is None:
+            return False
+        return self._tool_reference_format_is_current(tool_reference_format)
 
     def invalidate_setup_state(self, app: Any) -> None:
         self._clear_tool_reference_macro_state(app)
@@ -73,7 +79,12 @@ class JobSetupService:
         except Exception as exc:
             self._log_suppressed("Failed releasing macro vars lock", exc)
 
-    def _read_tool_reference_from_macro_state(self, app: Any, *, blocking: bool) -> object:
+    def _read_tool_reference_state_from_macro_state(
+        self,
+        app: Any,
+        *,
+        blocking: bool,
+    ) -> _ToolReferenceState | object:
         macro_executor = getattr(app, "macro_executor", None)
         lock = getattr(macro_executor, "_macro_vars_lock", None)
         macro_vars = getattr(macro_executor, "_macro_vars", None)
@@ -89,7 +100,12 @@ class JobSetupService:
             try:
                 macro_ns = macro_vars.get("macro")
                 state = getattr(macro_ns, "state", None)
-                return getattr(state, "TOOL_REFERENCE", None) if state is not None else None
+                if state is None:
+                    return (None, None)
+                return (
+                    getattr(state, "TOOL_REFERENCE", None),
+                    getattr(state, "TOOL_REFERENCE_FORMAT", None),
+                )
             except Exception:
                 return _UNAVAILABLE
             finally:
@@ -101,7 +117,12 @@ class JobSetupService:
                         return _UNAVAILABLE
                     macro_ns = macro_vars_ctx.get("macro")
                     state = getattr(macro_ns, "state", None)
-                    return getattr(state, "TOOL_REFERENCE", None) if state is not None else None
+                    if state is None:
+                        return (None, None)
+                    return (
+                        getattr(state, "TOOL_REFERENCE", None),
+                        getattr(state, "TOOL_REFERENCE_FORMAT", None),
+                    )
             except Exception:
                 return _UNAVAILABLE
         return _UNAVAILABLE
@@ -147,16 +168,6 @@ class JobSetupService:
             except Exception as exc:
                 self._log_suppressed("Failed clearing TOOL_REFERENCE via macro_vars context", exc)
 
-    def _label_tool_reference_fallback(self, app: Any) -> object:
-        var = getattr(app, "tool_reference_var", None)
-        getter = getattr(var, "get", None)
-        if not callable(getter):
-            return _UNAVAILABLE
-        try:
-            return getter()
-        except Exception:
-            return _UNAVAILABLE
-
     def _coerce_tool_reference_number(self, value: object) -> float | None:
         if value is None:
             return None
@@ -187,3 +198,7 @@ class JobSetupService:
         if not math.isfinite(number):
             return None
         return number
+
+    def _tool_reference_format_is_current(self, value: object) -> bool:
+        text = str(value or "").strip()
+        return bool(text == CURRENT_TOOL_REFERENCE_FORMAT)

@@ -194,6 +194,20 @@ def _signal_thread_event(obj, attr_name: str) -> None:
             _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
 
 
+def _mark_status_coordinates_fresh(app, *, context: str) -> None:
+    def _update_macro_status_coordinates_seq(macro_vars: dict) -> None:
+        macro_vars["_status_coords_seq"] = int(
+            macro_vars.get("_status_coords_seq", 0) or 0
+        ) + 1
+
+    _with_macro_vars_nonblocking(
+        app,
+        _update_macro_status_coordinates_seq,
+        context=context,
+    )
+    _signal_thread_event(app, "_status_coords_update_event")
+
+
 def _status_state_token(raw: str) -> str:
     return cast(str, _status_state_token_impl(raw))
 
@@ -2152,6 +2166,10 @@ def _update_positions_and_macro_state(
         _apply_macro_status_updates,
         context="Failed updating macro status values",
     )
+    _mark_status_coordinates_fresh(
+        app,
+        context="Failed marking status coordinates fresh after position update",
+    )
     # LED updates are visually helpful but noncritical during a busy stream, so
     # they can be deferred when status processing is already under pressure.
     probe_active = bool(pin_state & {"P"})
@@ -2206,6 +2224,10 @@ def handle_status_event(app, raw: str):
         app._status_duplicate_count = int(getattr(app, "_status_duplicate_count", 0) or 0) + 1
         if state_token:
             _sync_deferred_stream_completion(app, state_token)
+        _mark_status_coordinates_fresh(
+            app,
+            context="Failed marking duplicate status coordinates fresh",
+        )
         _record_status_perf_metric(
             app,
             "duplicate_short_circuit",
@@ -2230,6 +2252,10 @@ def handle_status_event(app, raw: str):
             getattr(app, "_status_duplicate_count", 0) or 0
         ) + 1
         _sync_deferred_stream_completion(app, state_token or "Idle")
+        _mark_status_coordinates_fresh(
+            app,
+            context="Failed marking relaxed duplicate status coordinates fresh",
+        )
         _record_status_perf_metric(
             app,
             "duplicate_short_circuit_relaxed",

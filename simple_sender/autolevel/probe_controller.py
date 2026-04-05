@@ -68,11 +68,7 @@ class ProbeController:
     def clear(self) -> None:
         self._last_report = None
         self._report_event.clear()
-        try:
-            with self.app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["PRB"] = None
-        except Exception as exc:
-            _log_suppressed("Failed clearing PRB macro variable in probe controller", exc)
+        self._write_probe_macro_vars(report=None)
 
     def register_callback(self, callback: Callable[[ProbeReport], None]) -> None:
         if callback not in self._callbacks:
@@ -91,14 +87,7 @@ class ProbeController:
         self._last_report = report
         self._seq += 1
         self._report_event.set()
-        try:
-            with self.app.macro_executor.macro_vars() as macro_vars:
-                macro_vars["prbx"] = report.x
-                macro_vars["prby"] = report.y
-                macro_vars["prbz"] = report.z
-                macro_vars["PRB"] = report.as_namespace()
-        except Exception as exc:
-            _log_suppressed("Failed updating probe macro variables from PRB report", exc)
+        self._write_probe_macro_vars(report=report)
         for callback in list(self._callbacks):
             try:
                 callback(report)
@@ -121,7 +110,7 @@ class ProbeController:
             elapsed = max(0.0, time.monotonic() - start)
             if timeout_s and elapsed > timeout_s:
                 return None
-            wait_s = 1.0
+            wait_s = 0.05
             if timeout_s:
                 wait_s = min(wait_s, max(0.0, timeout_s - elapsed))
             signaled = self._report_event.wait(wait_s)
@@ -147,3 +136,57 @@ class ProbeController:
             return None
         success = ok_part.strip() == "1"
         return ProbeReport(x=x, y=y, z=z, ok=success, raw=line)
+
+    def _write_probe_macro_vars(self, *, report: ProbeReport | None) -> None:
+        macro_executor = getattr(self.app, "macro_executor", None)
+        macro_lock = getattr(macro_executor, "_macro_vars_lock", None)
+        macro_vars = getattr(macro_executor, "_macro_vars", None)
+        payload: dict[str, object] = {
+            "PRB": None if report is None else report.as_namespace(),
+        }
+        if report is not None:
+            payload["prbx"] = report.x
+            payload["prby"] = report.y
+            payload["prbz"] = report.z
+        if isinstance(macro_vars, dict):
+            acquired = False
+            if macro_lock is not None and hasattr(macro_lock, "acquire"):
+                try:
+                    acquired = bool(macro_lock.acquire(blocking=False))
+                except TypeError:
+                    try:
+                        acquired = bool(macro_lock.acquire(False))
+                    except Exception as exc:
+                        _log_suppressed("Failed non-blocking acquire for probe macro-var update", exc)
+                        acquired = False
+                except Exception as exc:
+                    _log_suppressed("Failed non-blocking acquire for probe macro-var update", exc)
+                    acquired = False
+            try:
+                for key, value in payload.items():
+                    macro_vars[key] = value
+            except Exception as exc:
+                context = (
+                    "Failed clearing PRB macro variable in probe controller"
+                    if report is None
+                    else "Failed updating probe macro variables from PRB report"
+                )
+                _log_suppressed(context, exc)
+            finally:
+                if acquired and macro_lock is not None:
+                    try:
+                        macro_lock.release()
+                    except Exception as exc:
+                        _log_suppressed("Failed releasing macro-vars lock after probe macro-var update", exc)
+            return
+        try:
+            with self.app.macro_executor.macro_vars() as macro_vars_ctx:
+                for key, value in payload.items():
+                    macro_vars_ctx[key] = value
+        except Exception as exc:
+            context = (
+                "Failed clearing PRB macro variable in probe controller"
+                if report is None
+                else "Failed updating probe macro variables from PRB report"
+            )
+            _log_suppressed(context, exc)

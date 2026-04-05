@@ -25,6 +25,7 @@ import threading
 import types
 from contextlib import contextmanager
 
+from simple_sender import tool_measurement
 from simple_sender.utils.constants import (
     MACRO_EXTS,
     MACRO_PREFIXES,
@@ -39,6 +40,10 @@ from simple_sender.macro_executor_state import MacroStateMixin
 class MacroExecutor(MacroPromptMixin, MacroStateMixin, MacroCommandMixin, MacroRunnerMixin):
     def __init__(self, app, macro_search_dirs: tuple[str, ...] | None = None):
         self.app = app
+        try:
+            setattr(app, "macro_executor", self)
+        except Exception:
+            pass
         self.ui_q = app.ui_q
         self.grbl = app.grbl
         self._macro_lock = threading.Lock()
@@ -129,7 +134,9 @@ class MacroExecutor(MacroPromptMixin, MacroStateMixin, MacroCommandMixin, MacroR
             "prompt_index": -1,
             "prompt_cancelled": False,
             "_status_seq": 0,
+            "_status_coords_seq": 0,
             "_modal_seq": 0,
+            "tool_measurement": tool_measurement,
             "macro": macro_namespace,
         }
 

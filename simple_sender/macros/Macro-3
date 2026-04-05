@@ -2,13 +2,15 @@ Job Setup
 Guided setup: choose XYZ Plate, Z Plate, or Manual, then run the matching zero/reference workflow.
 
 
-; Guided setup flow that combines the common paths from Macro-3/4/5.
+; Guided setup flow.
 ; Adjust the values below for your machine (sensor coordinates, safe heights, plate offsets, probe feed).
 %macro.state.SAFE_HEIGHT = -5
 %macro.state.PROBE_X_LOCATION = -1.5
 %macro.state.PROBE_Y_LOCATION = -1224
 %macro.state.PROBE_Z_LOCATION = float(app.settings.get("macro_probe_z_location", -5.0))
 %macro.state.PROBE_SAFETY_MARGIN = max(0.0, float(app.settings.get("macro_probe_safety_margin", 3.0)))
+%macro.state.PROBE_SPREAD_TOLERANCE_MM = max(0.001, float(app.settings.get("macro_tool_probe_spread_tolerance_mm", tool_measurement.DEFAULT_TOOL_PROBE_SPREAD_TOLERANCE_MM)))
+%macro.state.JOG_FEED_Z_RAW = getattr(getattr(app, "jog_feed_z", None), "get", lambda: app.settings.get("jog_feed_z", 500.0))()
 %macro.state.grbl_settings = getattr(getattr(app, "settings_controller", None), "_settings_data", {}) or {}
 %macro.state.z_max_travel_entry = macro.state.grbl_settings.get("$132")
 %macro.state.z_max_travel_raw = macro.state.z_max_travel_entry[0] if isinstance(macro.state.z_max_travel_entry, (list, tuple)) and len(macro.state.z_max_travel_entry) > 0 else macro.state.z_max_travel_entry
@@ -17,9 +19,9 @@ Guided setup: choose XYZ Plate, Z Plate, or Manual, then run the matching zero/r
 %macro.state.Z_MAX_TRAVEL = float(macro.state.z_max_travel_text)
 %if macro.state.Z_MAX_TRAVEL <= 0: raise RuntimeError("GRBL $132 (max Z travel) must be greater than zero before running Job Setup.")
 %macro.state.PROBE_DISTANCE = max(1.0, round(macro.state.Z_MAX_TRAVEL + macro.state.PROBE_Z_LOCATION - macro.state.PROBE_SAFETY_MARGIN, 3))
-%macro.state.PROBE_RAPID_FEEDRATE = 200
+%macro.state.PROBE_RAPID_FEEDRATE = max(1.0, float(macro.state.JOG_FEED_Z_RAW))
 %macro.state.PLATE_THICKNESS = 11.95
-%macro.state.Z_FAST_PROBE_DISTANCE = 50
+%macro.state.TOUCHPLATE_MIN_SAFE_PROBE_DISTANCE = 1.0
 %macro.state.X_PLATE_OFFSET = -13.175
 %macro.state.Y_PLATE_OFFSET = -13.175
 
@@ -50,6 +52,15 @@ PROMPT [title(Job Setup)] Choose setup type. [btn(XYZ Plate)x] [btn(Z Plate)z] [
 G90
 G21
 ["G92 X0 Y0" if macro.state.SETUP_MODE in ("xyz", "z") else ""]
+%update
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.TOUCHPLATE_CURRENT_MZ = float(mz)
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.TOUCHPLATE_SOFT_LIMIT_FLOOR_MZ = -macro.state.Z_MAX_TRAVEL
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.Z_FAST_PROBE_DISTANCE = round(macro.state.Z_MAX_TRAVEL + macro.state.TOUCHPLATE_CURRENT_MZ - macro.state.PROBE_SAFETY_MARGIN, 3)
+%if macro.state.SETUP_MODE in ("xyz", "z") and macro.state.Z_FAST_PROBE_DISTANCE < macro.state.TOUCHPLATE_MIN_SAFE_PROBE_DISTANCE: raise RuntimeError(f"Job Setup touchplate probing cannot start safely because machine Z ({macro.state.TOUCHPLATE_CURRENT_MZ:.3f} mm) is too low. Raise Z and try again.")
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.TOUCHPLATE_SAFE_REMAINING_DOWNWARD_TRAVEL = macro.state.Z_FAST_PROBE_DISTANCE
+%macro.state.TOUCHPLATE_PLAN_MESSAGE = ""
+%if macro.state.SETUP_MODE in ("xyz", "z"): macro.state.TOUCHPLATE_PLAN_MESSAGE = f"Touchplate fast probe planning: z_max_travel={macro.state.Z_MAX_TRAVEL} current_machine_z={macro.state.TOUCHPLATE_CURRENT_MZ} soft_limit_floor_mz={macro.state.TOUCHPLATE_SOFT_LIMIT_FLOOR_MZ} probe_safety_margin={macro.state.PROBE_SAFETY_MARGIN} min_safe_probe_distance={macro.state.TOUCHPLATE_MIN_SAFE_PROBE_DISTANCE} computed_fast_probe_distance={macro.state.TOUCHPLATE_SAFE_REMAINING_DOWNWARD_TRAVEL}"
+%msg [macro.state.TOUCHPLATE_PLAN_MESSAGE]
 
 ; Touch plate probing branch (XYZ Plate and Z Plate modes).
 ["G91" if macro.state.SETUP_MODE in ("xyz", "z") else ""]
@@ -102,23 +113,16 @@ G53 G0 Z[macro.state.SAFE_HEIGHT]
 G53 G0 X[macro.state.PROBE_X_LOCATION] Y[macro.state.PROBE_Y_LOCATION]
 %wait
 G53 Z[macro.state.PROBE_Z_LOCATION]
-
-G91
-G38.2 Z-[macro.state.PROBE_DISTANCE] F[macro.state.PROBE_RAPID_FEEDRATE]
-G0 Z2
-G4 P0.25
-G38.2 Z-5 F40
-G4 P0.25
-G38.4 Z10 F20
-G4 P0.25
-G38.2 Z-2 F5
-G4 P0.25
-G38.4 Z10 F5
-G90
+%msg (Tool reference capture: fixed sensor ready; starting high-precision measurement with tolerance_mm=[macro.state.PROBE_SPREAD_TOLERANCE_MM].)
+%macro.state.TOOL_REFERENCE_MEASUREMENT = app.macro_executor.measure_tool_probe_machine_z(probe_distance_mm=macro.state.PROBE_DISTANCE, rapid_feed_mm_min=macro.state.PROBE_RAPID_FEEDRATE, spread_tolerance_mm=macro.state.PROBE_SPREAD_TOLERANCE_MM, measurement_label="Tool reference measurement", allow_tool_change_retry=False)
+%macro.state.TOOL_REFERENCE_MZ = round(float(macro.state.TOOL_REFERENCE_MEASUREMENT.machine_z), 4)
+%macro.state.TOOL_REFERENCE_SPREAD_MM = round(float(macro.state.TOOL_REFERENCE_MEASUREMENT.spread_mm), 4)
 %wait
 %update
-%macro.state.TOOL_REFERENCE = wz
-%msg (Reference tool height stored: [macro.state.TOOL_REFERENCE] wz=[wz])
+%macro.state.TOOL_REFERENCE_WZ = round(float(wz), 4)
+%macro.state.TOOL_REFERENCE = macro.state.TOOL_REFERENCE_WZ
+%macro.state.TOOL_REFERENCE_FORMAT = tool_measurement.CURRENT_TOOL_REFERENCE_FORMAT
+%msg (Tool reference capture committed: stored TOOL_REFERENCE_WZ=[macro.state.TOOL_REFERENCE_WZ] TOOL_REFERENCE_MZ=[macro.state.TOOL_REFERENCE_MZ] as TOOL_REFERENCE=[macro.state.TOOL_REFERENCE] format=[macro.state.TOOL_REFERENCE_FORMAT] spread_mm=[macro.state.TOOL_REFERENCE_SPREAD_MM] mz=[mz] wz=[wz])
 G91
 G0 Z5
 G90
