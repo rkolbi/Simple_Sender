@@ -53,6 +53,132 @@ def format_alarm_message(message: str | None) -> str:
     return f"ALARM: {text}"
 
 
+def is_hard_limit_alarm_message(message: str | None) -> bool:
+    text = format_alarm_message(message).upper()
+    return text.startswith("ALARM:1") or "HARD LIMIT" in text
+
+
+def _alarm_recovery_kind(message: str | None) -> str:
+    text = format_alarm_message(message).upper()
+    if text.startswith("ALARM:1") or "HARD LIMIT" in text:
+        return "hard_limit"
+    if text.startswith("ALARM:2") or "SOFT LIMIT" in text:
+        return "soft_limit"
+    if text.startswith(("ALARM:4", "ALARM:5")) or "PROBE" in text:
+        return "probe"
+    if text.startswith(("ALARM:6", "ALARM:7", "ALARM:8", "ALARM:9")) or "HOMING" in text:
+        return "homing"
+    return "generic"
+
+
+def alarm_recovery_guidance_text(message: str | None) -> str:
+    kind = _alarm_recovery_kind(message)
+    if kind == "hard_limit":
+        return (
+            "Hard-limit alarm recovery: confirm the limit condition is really clear before retrying "
+            "Unlock ($X). If the controller still sees a limit input, unlock may be refused or the "
+            "alarm may return immediately. Check the controller evidence below, then re-home ($H) "
+            "after recovery if machine position is no longer trustworthy. If motion feels unsafe, "
+            "use Reset (Ctrl-X)."
+        )
+    if kind == "soft_limit":
+        return (
+            "Soft-limit alarm recovery: confirm the requested move stays inside the configured "
+            "machine travel before retrying Unlock ($X). If limits or machine position look wrong, "
+            "re-home ($H) before running again. Use Reset (Ctrl-X) if motion feels unsafe."
+        )
+    if kind == "probe":
+        return (
+            "Probe alarm recovery: verify the probe or tool-setter wiring/contact state before "
+            "retrying Unlock ($X). Make sure the expected probe input is no longer triggered, then "
+            "rerun the probing step only when it is safe. Use Reset (Ctrl-X) if motion feels unsafe."
+        )
+    if kind == "homing":
+        return (
+            "Homing alarm recovery: resolve the homing or limit problem first, then re-home ($H) "
+            "before jogging or running. Unlock ($X) may be refused until the controller sees a safe "
+            "state. Use Reset (Ctrl-X) if motion feels unsafe."
+        )
+    return (
+        "Suggested steps: Unlock ($X) to clear the alarm, then Home ($H) if required. Check the "
+        "controller evidence below if unlock is refused or the alarm returns. If motion feels unsafe, "
+        "use Reset (Ctrl-X)."
+    )
+
+
+def alarm_recovery_evidence_lines(
+    last_status: str | None,
+    pins: str | None,
+) -> list[str]:
+    lines: list[str] = []
+    status_text = str(last_status or "").strip()
+    if status_text:
+        lines.append(f"Last status: {status_text}")
+    pins_text = str(pins or "").strip()
+    if pins_text:
+        lines.append(f"Pins: {pins_text}")
+    return lines
+
+
+def alarm_recovery_log_lines(
+    message: str | None,
+    *,
+    last_status: str | None = None,
+    pins: str | None = None,
+) -> list[str]:
+    kind = _alarm_recovery_kind(message)
+    if kind == "hard_limit":
+        lines = [
+            "[ALARM] Recovery: hard-limit alarm. Confirm the limit condition is really clear, then retry Unlock ($X).",
+            "[ALARM] Recovery: if the controller still sees a limit input, unlock may be refused or the alarm may return. Re-home ($H) after recovery if position is no longer trustworthy. Use Reset (Ctrl-X) if motion feels unsafe.",
+        ]
+    elif kind == "soft_limit":
+        lines = [
+            "[ALARM] Recovery: soft-limit alarm. Confirm the requested move stays inside configured machine travel, then retry Unlock ($X).",
+            "[ALARM] Recovery: if limits or machine position look wrong, re-home ($H) before running again. Use Reset (Ctrl-X) if motion feels unsafe.",
+        ]
+    elif kind == "probe":
+        lines = [
+            "[ALARM] Recovery: probe alarm. Verify the probe or tool-setter wiring/contact state before retrying Unlock ($X).",
+            "[ALARM] Recovery: make sure the expected probe input is no longer triggered, then rerun the probing step only when it is safe. Use Reset (Ctrl-X) if motion feels unsafe.",
+        ]
+    elif kind == "homing":
+        lines = [
+            "[ALARM] Recovery: homing alarm. Resolve the homing or limit problem first, then re-home ($H) before jogging or running.",
+            "[ALARM] Recovery: Unlock ($X) may be refused until the controller sees a safe state. Use Reset (Ctrl-X) if motion feels unsafe.",
+        ]
+    else:
+        lines = [
+            "[ALARM] Recovery: Unlock ($X) to clear the alarm, then Home ($H) if required. Use Reset (Ctrl-X) if motion feels unsafe.",
+        ]
+    evidence = alarm_recovery_evidence_lines(last_status, pins)
+    if evidence:
+        lines.append("[ALARM] Controller evidence: " + " | ".join(evidence))
+    return lines
+
+
+def _emit_alarm_recovery_log(app, message: str | None) -> None:
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is None or not hasattr(ui_q, "put"):
+        return
+    last_status = str(getattr(app, "_last_status_raw", "") or "").strip()
+    pins_value = getattr(app, "_last_status_pins", None)
+    pins = str(pins_value or "").strip()
+    key = (format_alarm_message(message), last_status, pins)
+    if key == getattr(app, "_alarm_recovery_log_key", None):
+        return
+    try:
+        for line in alarm_recovery_log_lines(
+            message,
+            last_status=last_status,
+            pins=pins,
+        ):
+            ui_q.put(("log", line))
+        app._alarm_recovery_log_key = key
+    except Exception as exc:
+        _log_suppressed("Failed logging alarm recovery guidance", exc)
+
+
 def mark_alarm_clear_requested(app) -> None:
     try:
         app._alarm_clear_requested = True
@@ -80,6 +206,7 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         app._machine_state_text = "Alarm"
         app.machine_state.set("Alarm")
         app._start_state_flash("#ff5252")
+        _emit_alarm_recovery_log(app, message or app._alarm_message)
         return
 
     if not app._alarm_locked and not bool(getattr(app, "_alarm_latched", False)):
@@ -88,6 +215,7 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
     app._alarm_latched = False
     app._alarm_clear_requested = False
     app._alarm_message = ""
+    app._alarm_recovery_log_key = None
     app.macro_executor.clear_alarm_notification()
     try:
         app.btn_alarm_recover.config(state="disabled")

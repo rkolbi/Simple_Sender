@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from simple_sender.utils.constants import MACRO_EXTS, MACRO_PREFIXES
+from simple_sender.utils.constants import USER_MACRO_SLOT_COUNT
 from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 
 CHECKLIST_PREFIX = "checklist-"
@@ -57,11 +58,58 @@ def get_writable_macro_dir(app: Any) -> str | None:
 
 
 def macro_slot_filename(index: int) -> str:
-    return f"Macro-{int(index)}"
+    return f"Macro-{user_macro_storage_index(index)}"
+
+
+def user_macro_storage_index(index: int) -> int:
+    return int(index)
 
 
 def macro_slot_path(macro_dir: str, index: int) -> str:
     return os.path.join(macro_dir, macro_slot_filename(index))
+
+
+def _macro_asset_index(name: str) -> int | None:
+    basename = os.path.basename(str(name)).strip()
+    if not basename:
+        return None
+    lower_name = basename.lower()
+    for prefix in MACRO_PREFIXES:
+        prefix_lower = prefix.lower()
+        if not lower_name.startswith(prefix_lower):
+            continue
+        remainder = basename[len(prefix) :]
+        for ext in sorted(MACRO_EXTS, key=len, reverse=True):
+            if ext:
+                if not remainder.lower().endswith(ext.lower()):
+                    continue
+                number_text = remainder[: -len(ext)]
+            else:
+                number_text = remainder
+            if number_text.isdigit():
+                return int(number_text)
+    return None
+
+
+
+
+def is_user_macro_asset_name(name: str) -> bool:
+    macro_index = _macro_asset_index(name)
+    if macro_index is None:
+        return False
+    return 1 <= macro_index <= int(USER_MACRO_SLOT_COUNT)
+
+
+def is_checklist_asset_name(name: str) -> bool:
+    basename = os.path.basename(str(name)).strip()
+    if not basename:
+        return False
+    lower_name = basename.lower()
+    return lower_name.startswith(CHECKLIST_PREFIX) and lower_name.endswith(CHECKLIST_EXT)
+
+
+def is_editable_macro_asset_name(name: str) -> bool:
+    return is_user_macro_asset_name(name) or is_checklist_asset_name(name)
 
 
 def _macro_color_validator_from_app(app: Any):
@@ -84,7 +132,11 @@ def read_macro_slot(
 ) -> tuple[str, str, str, str, str, str | None, str]:
     path = None
     try:
-        path = app.macro_executor.macro_path(int(index))
+        executor = getattr(app, "macro_executor", None)
+        if executor is not None and hasattr(executor, "user_macro_path"):
+            path = executor.user_macro_path(int(index))
+        elif executor is not None:
+            path = executor.macro_path(user_macro_storage_index(int(index)))
     except Exception:
         path = None
     if not path:
@@ -225,9 +277,15 @@ def discover_macro_assets(app: Any) -> list[tuple[str, str]]:
                 if not os.path.isfile(path):
                     continue
                 basename = os.path.basename(path)
+                if not is_editable_macro_asset_name(basename):
+                    continue
                 key = basename.lower()
                 if key in seen:
                     continue
                 seen.add(key)
                 assets.append((path, basename))
     return assets
+
+
+def user_macro_slots() -> range:
+    return range(1, int(USER_MACRO_SLOT_COUNT) + 1)

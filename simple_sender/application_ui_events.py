@@ -40,11 +40,7 @@ from simple_sender.ui.controls.toolbar import (
     update_resume_button_visibility,
 )
 from simple_sender.ui.dialogs import show_macro_prompt
-from simple_sender.ui.main_tabs import (
-    on_tab_changed,
-    sync_optional_tab_visibility,
-    update_tab_visibility,
-)
+from simple_sender.ui.main_tabs import sync_auxiliary_button_visibility
 from simple_sender.ui.manual_controls import clear_widget_transient_state
 from simple_sender.ui.settings import (
     bind_app_settings_mousewheel,
@@ -72,6 +68,21 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 
 class UiEventsMixin:
+    def _start_status_banner(self, prefix: str, name: str) -> None:
+        app = cast(Any, self)
+        self._clear_manual_control_transient_states()
+        base_name = (name or prefix).strip() or prefix
+        base_prefix = (prefix or "Status").strip() or "Status"
+        app._macro_status_text = f"{base_prefix}: {base_name}"
+        app._macro_status_scroll_index = 0
+        app._macro_status_active = True
+        app._macro_status_width = getattr(app, "_machine_state_max_chars", 0) or (
+            len(MachineStateMessages.DISCONNECTED) + 2
+        )
+        app._cancel_state_flash()
+        app._apply_state_fg("#00c853")
+        app._update_macro_status_display()
+
     def _clear_manual_control_transient_states(self) -> None:
         app = cast(Any, self)
         for widget in getattr(app, "_manual_controls", ()):
@@ -111,11 +122,8 @@ class UiEventsMixin:
     ) -> None:
         show_macro_prompt(self, title, message, choices, cancel_label, result_q)
 
-    def _update_tab_visibility(self, nb=None):
-        update_tab_visibility(self, nb)
-
-    def _sync_optional_tab_visibility(self, nb=None):
-        sync_optional_tab_visibility(self, nb)
+    def _sync_auxiliary_button_visibility(self):
+        sync_auxiliary_button_visibility(self)
 
     def _update_app_settings_scrollregion(self):
         update_app_settings_scrollregion(self)
@@ -144,9 +152,6 @@ class UiEventsMixin:
     def _unbind_app_settings_touch_scroll(self):
         unbind_app_settings_touch_scroll(self)
 
-    def _on_tab_changed(self, event):
-        on_tab_changed(self, event)
-
     def _on_auto_level_enabled_change(self):
         app = cast(Any, self)
         enabled = bool(app.auto_level_enabled.get())
@@ -170,18 +175,10 @@ class UiEventsMixin:
             app._set_job_button_mode("read_job")
 
     def _start_macro_status(self, name: str):
-        app = cast(Any, self)
-        self._clear_manual_control_transient_states()
-        text = (name or "Macro").strip() or "Macro"
-        app._macro_status_text = f"Macro: {text}"
-        app._macro_status_scroll_index = 0
-        app._macro_status_active = True
-        app._macro_status_width = getattr(app, "_machine_state_max_chars", 0) or (
-            len(MachineStateMessages.DISCONNECTED) + 2
-        )
-        app._cancel_state_flash()
-        app._apply_state_fg("#00c853")
-        app._update_macro_status_display()
+        self._start_status_banner("Macro", name)
+
+    def _start_workflow_status(self, name: str):
+        self._start_status_banner("Workflow", name)
 
     def _update_macro_status_display(self):
         app = cast(Any, self)
@@ -241,6 +238,9 @@ class UiEventsMixin:
             _log_suppressed("Failed restoring machine-state label width after macro-status stop", exc)
         self._clear_manual_control_transient_states()
         app._update_state_highlight(app._machine_state_text)
+
+    def _stop_workflow_status(self):
+        self._stop_macro_status()
 
     def _on_resume_button_visibility_change(self):
         on_resume_button_visibility_change(self)

@@ -47,6 +47,7 @@ from .constants import (
     SETTINGS_TEMP_SUFFIX,
     WATCHDOG_HOMING_TIMEOUT,
 )
+from simple_sender import tool_measurement
 from .exceptions import (
     SettingsLoadError,
     SettingsSaveError,
@@ -67,7 +68,6 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "baud_rate": 115200,
     "console_positions_enabled": False,
     "current_line_mode": "machine",
-    "default_spindle_rpm": 12000,
     "dry_run_sanitize_stream": False,
     "developer_options_enabled": False,
     "error_dialog_burst_limit": 3,
@@ -75,10 +75,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "error_dialog_interval": 2.0,
     "error_dialogs_enabled": True,
     "grbl_popup_enabled": True,
-    "grbl_popup_auto_dismiss_sec": 12.0,
     "grbl_popup_dedupe_sec": 3.0,
     "estimate_factor": 1.0,
-    "estimate_fallback_rapid": 5000.0,
     "estimate_rate_x": "",
     "estimate_rate_y": "",
     "estimate_rate_z": "",
@@ -108,10 +106,26 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "light_outlet": 2,
     "macros_allow_python": False,
     "disable_macro_timeouts": False,
-    "macro_line_timeout_sec": 0.0,
-    "macro_total_timeout_sec": 0.0,
+    "macro_line_timeout_sec": 120.0,
+    "macro_total_timeout_sec": 900.0,
     "macro_probe_z_location": -5.0,
     "macro_probe_safety_margin": 3.0,
+    "xyz_plate_thickness": tool_measurement.DEFAULT_XYZ_PLATE_THICKNESS_MM,
+    "xyz_plate_min_safe_probe_distance": tool_measurement.DEFAULT_XYZ_PLATE_MIN_SAFE_PROBE_DISTANCE_MM,
+    "xyz_plate_x_offset": tool_measurement.DEFAULT_XYZ_PLATE_X_OFFSET_MM,
+    "xyz_plate_y_offset": tool_measurement.DEFAULT_XYZ_PLATE_Y_OFFSET_MM,
+    "xyz_plate_side_clearance_distance": tool_measurement.DEFAULT_XYZ_PLATE_SIDE_CLEARANCE_DISTANCE_MM,
+    "xyz_plate_z_rough_probe_speed": tool_measurement.DEFAULT_XYZ_PLATE_Z_ROUGH_PROBE_FEED_MM_MIN,
+    "xyz_plate_z_reprobe_speed": tool_measurement.DEFAULT_XYZ_PLATE_Z_REPROBE_FEED_MM_MIN,
+    "xyz_plate_z_fine_probe_speed": tool_measurement.DEFAULT_XYZ_PLATE_Z_FINE_PROBE_FEED_MM_MIN,
+    "xyz_plate_xy_rough_probe_speed": tool_measurement.DEFAULT_XYZ_PLATE_XY_ROUGH_PROBE_FEED_MM_MIN,
+    "xyz_plate_xy_fine_probe_speed": tool_measurement.DEFAULT_XYZ_PLATE_XY_FINE_PROBE_FEED_MM_MIN,
+    "xyz_plate_probe_dwell": tool_measurement.DEFAULT_XYZ_PLATE_PROBE_DWELL_S,
+    "bit_setter_x": tool_measurement.DEFAULT_BIT_SETTER_X_MM,
+    "bit_setter_y": tool_measurement.DEFAULT_BIT_SETTER_Y_MM,
+    "bit_setter_rough_probe_speed": tool_measurement.DEFAULT_TOOL_PROBE_ROUGH_FEED_MM_MIN,
+    "bit_setter_fine_probe_speed": tool_measurement.DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN,
+    "bit_setter_probe_dwell": tool_measurement.DEFAULT_TOOL_PROBE_DWELL_S,
     "max_recent_files": 10,
     "performance_mode": True,
     "performance_profile_enabled": True,
@@ -125,9 +139,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "show_endstop_indicator": True,
     "show_probe_indicator": True,
     "show_hold_indicator": True,
-    "show_logs_tab": False,
-    "show_raw_grbl_tab": False,
-    "show_checklists_tab": True,
+    "show_logs_button": False,
+    "show_raw_grbl_button": False,
+    "show_checklists_button": True,
     "auto_level_enabled": True,
     "show_quick_tips_button": True,
     "show_quick_keys_button": True,
@@ -139,12 +153,14 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "status_query_failure_limit": 3,
     "homing_watchdog_enabled": True,
     "homing_watchdog_timeout": WATCHDOG_HOMING_TIMEOUT,
+    "spindle_control_rpm": 12000,
     "stop_joystick_hold_on_focus_loss": True,
     "step_xy": 400.0,
     "step_z": 1.0,
     "theme": "simple_sender_gemini",
     "ui_scale": 1.5,
     "linux_file_dialog_scale": 1.4,
+    "linux_file_dialog_default_path": "/root/CNC_Jobs",
     "scrollbar_width": "wide",
     "touch_scroll_mode": "thumb_and_swipe",
     "tooltips_enabled": True,
@@ -217,6 +233,47 @@ def _deep_merge_defaults(
     return merged
 
 
+def _normalize_top_level_settings(
+    loaded: Dict[str, Any],
+    defaults: Dict[str, Any],
+    *,
+    repaired_keys_out: list[str] | None = None,
+) -> Dict[str, Any]:
+    if repaired_keys_out is None:
+        repaired_keys: list[str] = []
+    else:
+        repaired_keys = repaired_keys_out
+    pruned: Dict[str, Any] = {}
+    for key, value in loaded.items():
+        if key not in defaults:
+            repaired_keys.append(str(key))
+            continue
+        pruned[key] = value
+    return pruned
+
+
+def _normalize_nonnegative_int_setting(
+    value: Any,
+    *,
+    default: int,
+) -> tuple[int, bool]:
+    if isinstance(value, bool):
+        return int(default), True
+    if isinstance(value, int):
+        return (value, False) if value >= 0 else (int(default), True)
+    if isinstance(value, float):
+        if value >= 0.0 and value.is_integer():
+            return int(value), False
+        return int(default), True
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except Exception:
+            return int(default), True
+        return (parsed, False) if parsed >= 0 else (int(default), True)
+    return int(default), True
+
+
 def _repair_invalid_settings(
     merged: Dict[str, Any], defaults: Dict[str, Any], *, repaired_keys_out: list[str] | None = None
 ) -> Dict[str, Any]:
@@ -233,6 +290,14 @@ def _repair_invalid_settings(
     if not isinstance(interval, (int, float)) or interval <= 0:
         repaired["status_poll_interval"] = defaults["status_poll_interval"]
         repaired_keys.append("status_poll_interval")
+
+    spindle_control_rpm, spindle_control_rpm_repaired = _normalize_nonnegative_int_setting(
+        repaired.get("spindle_control_rpm"),
+        default=int(defaults.get("spindle_control_rpm", DEFAULT_SETTINGS.get("spindle_control_rpm", 12000))),
+    )
+    repaired["spindle_control_rpm"] = int(spindle_control_rpm)
+    if spindle_control_rpm_repaired:
+        repaired_keys.append("spindle_control_rpm")
 
     mode = repaired.get("unit_mode")
     if mode not in _VALID_UNIT_MODES:
@@ -274,6 +339,97 @@ def _repair_invalid_settings(
     ):
         repaired["linux_file_dialog_scale"] = defaults.get("linux_file_dialog_scale", 1.4)
         repaired_keys.append("linux_file_dialog_scale")
+
+    linux_file_dialog_default_path = repaired.get("linux_file_dialog_default_path")
+    if not isinstance(linux_file_dialog_default_path, str) or not str(
+        linux_file_dialog_default_path
+    ).strip():
+        repaired["linux_file_dialog_default_path"] = defaults.get(
+            "linux_file_dialog_default_path",
+            "/root/CNC_Jobs",
+        )
+        repaired_keys.append("linux_file_dialog_default_path")
+
+    for key in ("bit_setter_x", "bit_setter_y"):
+        raw_value = repaired.get(key)
+        try:
+            if raw_value is None:
+                raise ValueError("missing")
+            float(raw_value)
+        except Exception:
+            repaired[key] = defaults.get(key, DEFAULT_SETTINGS.get(key))
+            repaired_keys.append(key)
+
+    for key in ("bit_setter_rough_probe_speed", "bit_setter_fine_probe_speed"):
+        raw_value = repaired.get(key)
+        try:
+            if raw_value is None:
+                raise ValueError("missing")
+            value = float(raw_value)
+        except Exception:
+            value = None
+        if value is None or value <= 0.0:
+            repaired[key] = defaults.get(key, DEFAULT_SETTINGS.get(key))
+            repaired_keys.append(key)
+
+    raw_bit_setter_probe_dwell = repaired.get("bit_setter_probe_dwell")
+    try:
+        if raw_bit_setter_probe_dwell is None:
+            raise ValueError("missing")
+        bit_setter_probe_dwell = float(raw_bit_setter_probe_dwell)
+    except Exception:
+        bit_setter_probe_dwell = None
+    if bit_setter_probe_dwell is None or bit_setter_probe_dwell < 0.0:
+        repaired["bit_setter_probe_dwell"] = defaults.get(
+            "bit_setter_probe_dwell",
+            DEFAULT_SETTINGS.get("bit_setter_probe_dwell"),
+        )
+        repaired_keys.append("bit_setter_probe_dwell")
+
+    for key in ("xyz_plate_x_offset", "xyz_plate_y_offset"):
+        raw_value = repaired.get(key)
+        try:
+            if raw_value is None:
+                raise ValueError("missing")
+            float(raw_value)
+        except Exception:
+            repaired[key] = defaults.get(key, DEFAULT_SETTINGS.get(key))
+            repaired_keys.append(key)
+
+    for key in (
+        "xyz_plate_thickness",
+        "xyz_plate_min_safe_probe_distance",
+        "xyz_plate_side_clearance_distance",
+        "xyz_plate_z_rough_probe_speed",
+        "xyz_plate_z_reprobe_speed",
+        "xyz_plate_z_fine_probe_speed",
+        "xyz_plate_xy_rough_probe_speed",
+        "xyz_plate_xy_fine_probe_speed",
+    ):
+        raw_value = repaired.get(key)
+        try:
+            if raw_value is None:
+                raise ValueError("missing")
+            value = float(raw_value)
+        except Exception:
+            value = None
+        if value is None or value <= 0.0:
+            repaired[key] = defaults.get(key, DEFAULT_SETTINGS.get(key))
+            repaired_keys.append(key)
+
+    raw_xyz_plate_probe_dwell = repaired.get("xyz_plate_probe_dwell")
+    try:
+        if raw_xyz_plate_probe_dwell is None:
+            raise ValueError("missing")
+        xyz_plate_probe_dwell = float(raw_xyz_plate_probe_dwell)
+    except Exception:
+        xyz_plate_probe_dwell = None
+    if xyz_plate_probe_dwell is None or xyz_plate_probe_dwell < 0.0:
+        repaired["xyz_plate_probe_dwell"] = defaults.get(
+            "xyz_plate_probe_dwell",
+            DEFAULT_SETTINGS.get("xyz_plate_probe_dwell"),
+        )
+        repaired_keys.append("xyz_plate_probe_dwell")
 
     if repaired_keys:
         if repaired_keys_out is not None:
@@ -357,7 +513,7 @@ class Settings:
     Example:
         settings = Settings()
         settings.load()
-        settings.set("last_port", "COM3")
+        settings.data["last_port"] = "COM3"
         settings.save()
     """
 
@@ -403,8 +559,13 @@ class Settings:
 
             # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
-            merged = _deep_merge_defaults(defaults, loaded_data)
             repaired_keys: list[str] = []
+            normalized_loaded = _normalize_top_level_settings(
+                loaded_data,
+                defaults,
+                repaired_keys_out=repaired_keys,
+            )
+            merged = _deep_merge_defaults(defaults, normalized_loaded)
             self.data = _repair_invalid_settings(
                 merged,
                 defaults,
@@ -532,57 +693,6 @@ class Settings:
                         exc_info=cleanup_exc,
                     )
 
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get setting value.
-
-        Args:
-            key: Setting key (supports dot notation for nested keys)
-            default: Default value if key not found
-
-        Returns:
-            Setting value or default
-        """
-        # Support nested keys via dot notation.
-        keys = key.split(".")
-        value = self.data
-
-        for k in keys:
-            if isinstance(value, dict) and k in value:
-                value = value[k]
-            else:
-                return default
-
-        return value
-
-    def set(self, key: str, value: Any) -> None:
-        """Set setting value.
-
-        Args:
-            key: Setting key (supports dot notation for nested keys)
-            value: Value to set
-        """
-        # Support nested keys via dot notation.
-        keys = key.split(".")
-
-        if len(keys) == 1:
-            self.data[key] = value
-        else:
-            # Navigate to nested dict
-            current = self.data
-            for k in keys[:-1]:
-                if k not in current or not isinstance(current[k], dict):
-                    current[k] = {}
-                current = current[k]
-            current[keys[-1]] = value
-
-    def get_all(self) -> Dict[str, Any]:
-        """Get all settings.
-
-        Returns:
-            Copy of all settings
-        """
-        return self.data.copy()
-
     def reset_to_defaults(self) -> None:
         """Reset all settings to defaults."""
         self.data = self._get_defaults()
@@ -611,6 +721,17 @@ class Settings:
             interval = self.data["status_poll_interval"]
             if not isinstance(interval, (int, float)) or interval <= 0:
                 raise SettingsValidationError(f"Invalid poll interval: {interval}")
+
+        if "spindle_control_rpm" in self.data:
+            spindle_control_rpm = self.data["spindle_control_rpm"]
+            if (
+                isinstance(spindle_control_rpm, bool)
+                or not isinstance(spindle_control_rpm, int)
+                or spindle_control_rpm < 0
+            ):
+                raise SettingsValidationError(
+                    f"Invalid spindle control RPM: {spindle_control_rpm}"
+                )
 
         if "unit_mode" in self.data:
             mode = self.data["unit_mode"]
@@ -690,8 +811,13 @@ class Settings:
 
             # Merge defaults and repair known invalid values.
             defaults = self._get_defaults()
-            merged = _deep_merge_defaults(defaults, imported_data)
             repaired_keys: list[str] = []
+            normalized_imported = _normalize_top_level_settings(
+                imported_data,
+                defaults,
+                repaired_keys_out=repaired_keys,
+            )
+            merged = _deep_merge_defaults(defaults, normalized_imported)
             self.data = _repair_invalid_settings(
                 merged,
                 defaults,

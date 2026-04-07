@@ -36,7 +36,11 @@ from tkinter import filedialog, messagebox
 from typing import Any
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
-from simple_sender.ui.macro_files import discover_macro_assets, get_writable_macro_dir
+from simple_sender.ui.macro_files import (
+    discover_macro_assets,
+    get_writable_macro_dir,
+    is_editable_macro_asset_name,
+)
 from simple_sender.utils.atomic_files import atomic_replace_path, atomic_write_bytes
 from simple_sender.utils.config import Settings
 from simple_sender.utils.task_timing import record_task_timing
@@ -200,7 +204,7 @@ def _read_bundle_members(in_path: str) -> tuple[bool, list[str]]:
             if not member.startswith("macros/"):
                 continue
             basename = _safe_bundle_name(member.split("/", 1)[1] if "/" in member else member)
-            if basename:
+            if basename and is_editable_macro_asset_name(basename):
                 asset_names.append(basename)
     return has_settings, asset_names
 
@@ -261,6 +265,8 @@ def _import_backup_bundle_archive(
                     continue
                 basename = _safe_bundle_name(member.split("/", 1)[1] if "/" in member else member)
                 if not basename:
+                    continue
+                if not is_editable_macro_asset_name(basename):
                     continue
                 macro_files_in_bundle += 1
                 if macro_dir is None:

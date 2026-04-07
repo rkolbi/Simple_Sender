@@ -26,7 +26,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from simple_sender.services.job_setup_service import JobSetupService
-from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 
 logger = logging.getLogger(__name__)
 _WARNING_TITLE = "Job Setup Not Completed"
@@ -62,6 +62,7 @@ def confirm_job_start_without_setup(app: Any) -> bool:
         dialog.transient(app)
         dialog.resizable(False, False)
         dialog.configure(padx=16, pady=12)
+        apply_toplevel_theme(dialog, app)
     except Exception as exc:
         _log_suppressed("Failed creating Job Setup warning dialog; using askyesno fallback", exc)
         return bool(messagebox.askyesno(_WARNING_TITLE, _WARNING_BODY))

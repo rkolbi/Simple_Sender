@@ -1,8 +1,10 @@
 ﻿# Simple Sender - Full Manual
-![Release: 2.8](https://img.shields.io/badge/release-2.8-blue)
+![Release: 3.0](https://img.shields.io/badge/release-3.0-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
+
+**Current release target:** **Simple Sender v3.0**. This is the current stable release baseline, built around the stronger workflow, probing, cleanup, and recovery hardening completed across the v3.0 cycle.
   ![](pics/screenshot-01.png)
 
 ## Design Objectives and Key Features
@@ -69,25 +71,25 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - Character-count streaming with a Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
-- Read-only file load (Read Job) through the shared file-dialog path, clear/unload button, inline status/progress. On Linux, Tk file dialogs use the current theme plus temporary scaling/min-size safeguards so they stay readable on Pi/Openbox touchscreen setups.
-- Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in a dedicated File Info tab.
+- Read-only file load (Read Job) through the shared file-dialog path, clear/unload button, inline status/progress. On Linux, Tk file dialogs use the current theme plus temporary scaling/min-size safeguards so they stay readable on Pi/Openbox touchscreen setups, and default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** points somewhere else.
+- Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in the Job Info view.
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
 - Resume From... (**Experimental**) dialog to continue a job with modal re-sync and safety warnings (defaults to the last error line when present), including the same Dry Run confirmation safeguard policy used by Run.
 - Run safety gate for Job Setup: Run checks the current tool-reference offset state and warns with **Job Setup Not Completed** when setup is invalid.
 - Tooltips for every control; disabled buttons explain why (streaming, disconnected, alarm).
 - Performance mode: batches console updates and suppresses per-line RX logs during streaming.
-- Overdrive tab: spindle control, Spoilboard Generator, and feed/spindle override sliders (10-200%, 10% steps in GRBL 1.1h).
+- Right-side lower controls: spindle control, Spoilboard Generator, and feed/spindle override sliders remain visible alongside the Console (10-200% GRBL override range).
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Preflight check tool summarizes readiness/bounds/validation on demand from App Settings.
 - Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
-- Macros: left-click to run, right-click to sample, with in-app Macro Manager for edit/duplicate/reorder.
+- Macros: protected built-in workflow buttons stay fixed, while the 5 user-macro slots can be edited/duplicated/reordered in the in-app Macro Manager.
 - Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 - **Experimental features:** **Auto-Level (Experimental)**, **Recover (Experimental)**, and **Resume From... (Experimental)** are optional UI features controlled in **App Settings > Experimental**.
 
 ## Project Status
-The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, and realtime control behavior. The current baseline is the release-ready stable build for day-to-day machine use, with broad repo-wide sweeps retired in favor of targeted regression and subsystem-safe development. See `CLEANUP_CLOSEOUT.md`, `REFACTOR_SUMMARY.md`, and `refactor-status.md` for the historical closeout and boundary notes.
+The cleanup/refactor track is complete and the current codebase has since gone through targeted stabilization around macro startup/load sequencing, persistence truthfulness, backup-bundle safety, shutdown recovery, realtime control behavior, lower-UI redesign, and probing/tool-measurement hardening. The current baseline is **v3.0**, the stable release line for the current workflow architecture.
 
 ## Requirements & Installation
 - Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
@@ -272,26 +274,26 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. After selection, the app auto-switches to the G-code tab; file is read-only, comments/% lines stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level (Experimental)** for quick access; **Clear Job** returns it to **Read Job**.
+   - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. Linux dialogs default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** is set to another valid folder; invalid paths fall back safely. Loaded jobs remain read-only; comments/% lines are stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level (Experimental)** for quick access; **Clear Job** returns it to **Read Job**.
    - Check the Live G-code window plus the job dimensions/estimate block for bounds sanity.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
    - Use **Resume From... (Experimental)** to start at a specific line with modal re-sync if you need to continue a job. When Dry Run is enabled, Resume now prompts before any resume-side effects are applied.
 5) **App safety options**
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
-   - ALL STOP mode: choose soft reset only, or stop-stream + reset (safer mid-job).
+   - ALL STOP mode: both modes halt the active stream first; Soft Reset always sends `Ctrl-X`, while Stop Stream + Reset avoids an extra reset when stop already performed one.
    - Auto-reconnect: enable if you want recovery after USB blips; disable for lab environments where auto-reconnect is not desired.
    - Performance mode: reduces console churn during streaming; toggle it from **App Settings > Interface**.
 6) **Prepare the machine**
    - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
-   - Run **Macro-3 (Job Setup)** for this machine session and confirm the tool reference label is populated before starting production cuts.
+   - Run the built-in **Job Setup** workflow for this machine session and confirm the tool reference label is populated before starting production cuts.
    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
    - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
-   - Use the Overdrive tab to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls plus +/-/reset shortcuts (10-200% range).
+   - Use the always-visible right-side controls to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
    - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools` as separate truthful lists. It does not invent one-to-one pairings between them.
-   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight, File Info, and the shared validation summary when you want extra review before cutting.
+   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight, Job Info, and the shared validation summary when you want extra review before cutting.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
@@ -299,8 +301,8 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
    - When enabled, non-blocking GRBL popups show timestamp, code number, and definition for known `ALARM:x` / `error:x` responses. Duplicate popups are deduped by code for the configured interval.
 9) **Settings and tuning**
-   - Use GRBL Settings tab to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
-   - If enabled, the optional Raw $$ tab keeps the text capture.
+   - Use the GRBL Settings popup to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
+   - If enabled, the optional Raw $$ popup button opens the raw settings capture.
 10) **Macros**
        - Left-click to run; right-click to sample contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
 
@@ -308,7 +310,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 1) Launch, select port (auto-selects last if enabled), Connect.
 2) Wait for GRBL banner + first status (Ready/Idle).
 3) Read Job file; optional Clear Job to unload.
-4) Run **Macro-3 (Job Setup)** and verify the tool reference label is populated.
+4) Run the built-in **Job Setup** workflow and verify the tool reference label is populated.
 5) Run (Training Wheels may confirm). If setup state is missing/invalid, either rerun Job Setup or choose Start Anyway intentionally. If Dry Run is enabled, choose run mode explicitly from the pre-start Dry Run prompt.
 6) Clear alarms with Unlock ($X) or Home ($H).
 
@@ -317,44 +319,42 @@ This is a practical end-to-end flow, with rationale for the key options.
 
 - **Hints:** Hover any control for tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again.
 
-- **Left panels:** MPos (unit toggle), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro row (Home plus Macro-1..Macro-8 buttons when files exist).
+- **Left panels:** MPos (unit toggle), WPos (Zero per-axis/All, Goto Zero), Jog pad (XY/Z, Jog Cancel, ALL STOP), step selectors (-/+ with indicator), Macro row (the 5 protected built-in workflow buttons first, then only populated user-macro buttons).
 
-- **Tabs:**
+- **Lower area:**
   
-  Some secondary notebook tabs are optional. By default, **Logs** and **Raw $$** are hidden, while **Checklists** is shown. Use **App Settings > Interface > Notebook tabs** to control `Show Logs Tab`, `Show Raw $$ Tab`, and `Show Checklists Tab`.
-  
-  **G-code viewer:** Bounded Live G-code window (`500 past / current / 500 next`) fed from worker ack/pending queues so the tab stays responsive on large jobs.
+  The lower display is a persistent split view instead of a tab strip. The left column has a popup/access button row above **Console**, and the right column has the always-visible override/control pane. **Job Info**, **Checklists**, **Logs**, **Raw $$**, **GRBL Settings**, and **App Settings** appear on the left in that order when enabled. The popups stay large, dark-themed, and reusable.
   
   ![](pics/screenshot-02.png)
   ![](pics/screenshot-03.png)
 
-  **File Info:** Read-only, scrollable file/metadata summary. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, auto-level prereq snapshot summary, and separate `Toolpaths` / `Tools` lists when the metadata provides them).
+  **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, auto-level prereq snapshot summary, and separate `Toolpaths` / `Tools` lists when the metadata provides them).
   
-  **Console:** Log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
+  **Console:** Persistent log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
   ![-](pics/screenshot-04.png)
   
-  **Logs:** Optional read-only viewer for application/serial/UI/error logs with source + level filters and export. Hidden by default; also available through **View Logs...** in App Settings.
+  **Logs:** Optional read-only viewer for application/serial/UI/error logs with source + level filters and export. It opens as a large popup, is hidden by default in the lower control row, and is also available through **View Logs...** in App Settings.
   
   ![](pics/screenshot-05.png)
   
-  **Overdrive:** Spindle ON/OFF controls, a Spoilboard Generator button, plus feed/spindle override sliders (10-200%) with a live override summary; feed/spindle sliders emit 10% real-time bytes (GRBL 1.1h limits).
+  **Right-side controls:** Persistent spindle ON/OFF controls, a Spoilboard Generator button, plus touch-sized feed/spindle override sliders (10-200%). The sliders still drive GRBL's 10% override steps internally, but the visible UI is slider/value based.
   
   ![-](pics/screenshot-06.png)
   
-  **Raw $$:** Optional raw settings-dump capture for quick copy/paste or archival. Hidden by default and controlled by **Show Raw $$ Tab**.
+  **Raw $$:** Optional raw settings-dump capture for quick copy/paste or archival. It opens in the GRBL Settings popup on the Raw $$ page, is hidden by default in the lower control row, and is controlled by **Show Raw $$ Button**.
   
   ![-](pics/screenshot-07.png)
   
-  **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller.
+  **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller. It opens in a large popup.
   
   ![-](pics/screenshot-08.png)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, notebook-tab visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`).
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
   
   ![](pics/screenshot-09.png)
   
-  **Checklists:** Optional checklist tab loaded from `checklist-*.chk` files, including collapsible checklist titles in the Checklists tab, the Release/Start Job checklist dialogs, and the status-bar Release quick button. Shown by default.
+  **Checklists:** Optional checklist popup loaded from `checklist-*.chk` files, including collapsible checklist titles, the Release/Start Job checklist dialogs, and the status-bar Release quick button. The lower-row Checklists button is shown by default.
   
   ![-](pics/screenshot-10.png)
   
@@ -378,7 +378,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
 - **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics). Backup-bundle import validates settings through the same repair/import path used elsewhere, warns when imported values were repaired, and requires explicit confirmation before overwriting colliding macro/checklist assets.
-- **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py`, while `simple_sender/ui/dialogs/diagnostics_preflight.py` remains the UI-facing compatibility facade used by diagnostics code.
+- **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py` and diagnostics now call that service directly.
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
@@ -390,14 +390,14 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both Run and Resume paths require an explicit operator choice before stream start/resume side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. The G-code tab becomes active after you pick a file. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
+- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
-- **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in File Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
+- **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in Job Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
-- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the existing tool-change macro workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
+- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (viewer window + sampled metadata).
 - **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
@@ -440,12 +440,15 @@ This is a practical end-to-end flow, with rationale for the key options.
 - Console Save pre-fills a timestamped filename (`simple_sender_console_YYYYMMDD_HHMMSS.txt`) for touch-friendly export.
 
 ## GRBL Settings UI
-- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ tab holds the raw text capture.
+- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ popup button opens the raw text capture.
 
 ## Macros
 ![](pics\screenshot-Macro.png)
 
-Macros live in `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`. Look for files named `Macro-1`...`Macro-8` (optional `.txt` extensions are supported).
+Simple Sender now has two distinct macro/workflow layers:
+
+- **Protected built-in workflow actions** are always present in the button row: `Home`, `Park at Bit Setter`, `Job Setup`, `Tool Change`, and `Park at Work`. These are core application workflows, not editable user macros.
+- **User macros** remain file-backed and editable through Macro Manager as exactly 5 slots: `User Macro 1` through `User Macro 5`. Their on-disk filenames are `Macro-1` through `Macro-5` (optional `.txt` extensions are supported) in the discovered macro directories: `simple_sender/macros`, `macros/` beside `main.py`, or the directory that contains `main.py`.
 
 Macro file header format:
 - Line 1: button label.
@@ -455,27 +458,27 @@ Macro file header format:
 - Line 5 and later: executed macro body.
 - The file must include at least one non-blank body line. Unsupported or malformed macro files are marked invalid and blocked from running until repaired.
 
-Manual macro launches are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. If the macro file is not in the directory, no button will be displayed. The streamed `TC:<tool name>` sender directive is the built-in exception: it pauses the stream and reuses the existing tool-change macro workflow.
-`App Settings > Macros` also provides `Probe Z start (machine, mm)` and `Probe safety margin (mm)` values used by the touch-plate/tool-reference flows, plus **Open Macro Manager** for in-app editing, duplication, and reordering of Macro-1..Macro-8.
+User macro launches are blocked while the controller is streaming, during alarms, or whenever the app disconnects, and they still respect Training Wheels confirmations. User macro buttons appear on the main screen only when a file-backed slot is actually assigned. The streamed `TC:<tool name>` sender directive pauses the stream and reuses the protected built-in Tool Change workflow.
+`App Settings > Macros` now covers only user-macro scripting, timeout controls, and **Open Macro Manager** for in-app editing/duplication/reordering of the 5 file-backed user macro slots. `App Settings > Probing & Setup` now owns `Probe Z start (machine, mm)`, `Probe safety margin (mm)`, the full `XYZ Plate` section, and the `Bit Setter` location/probe-cycle settings used by the protected setup workflows.
 Macro execution now uses stricter startup/result truthfulness: startup modal capture waits on the real `$G` completion signal, `LOAD` waits for actual load completion/failure, `OPEN`/`CLOSE` fail fast when the underlying connect/disconnect transition never started, and local-command helpers such as `SENDHEX` / `SAFE` fail the macro if their local action fails.
 
-In the image below, macro files **Macro-1** through **Macro-4** are present in the macros folder, so they appear in the button bar; **Macro-5** through **Macro-8** are missing, so those buttons aren’t shown.
+In the image below, the first 5 buttons are always the protected built-in workflows. Populated user macros appear after them when a `Macro-1` through `Macro-5` file is present.
 
 ![-](pics/macros.jpg)
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
 
-During streamed jobs, `TC:<tool name>` lines use this same prompt/tool-change path and intentionally wait with no timeout until the operator completes the tool-change flow.
+During streamed jobs, `TC:<tool name>` lines use this same protected tool-change path and intentionally wait with no timeout until the operator completes the tool-change flow. General macro timeout settings still apply to user macros.
 
-Macro scripting remains fully open, and runtime hardening is applied around it: line-level failures are logged with line numbers, audit entries (`[macro][audit]`) record raw/evaluated/outcome details (with GUI logging enabled), and timeout guards can abort stalled runs. By default both macro timeouts are disabled (`0`), and you can tune them in App Settings > Macros (line timeout and total timeout).
+Macro scripting remains fully open, and runtime hardening is applied around it: line-level failures are logged with line numbers, audit entries (`[macro][audit]`) record raw/evaluated/outcome details (with GUI logging enabled), and timeout guards can abort stalled runs. General macros now default to finite timeout guards (`120 s` per line, `900 s` total), and you can tune or disable them in App Settings > Macros.
 
 `App Settings > Macros` exposes the `macros_allow_python` toggle. When scripting is disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed; `_` lines, `[expression]`, and assignments inside non-comment lines are blocked. When scripting is enabled you can run Python statements, execute `_` lines, and embed `[expression]` results directly into G-code.
 
-Tool-reference macros store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives, so `wx/wy/wz` are current before capture or adjustment. Before each macro run, the sender issues `$G`, waits for the modal update, snapshots the current modal state, and forces `G21` (mm) so the macros use their mm constants. The original units are restored automatically on completion; call `STATE_RETURN` (or `%state_return`) inside a macro to restore the full modal state (WCS/plane/units/distance/feedmode/spindle/coolant).
+Tool-reference workflows store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives for user macros, so `wx/wy/wz` are current before capture or adjustment. User macros snapshot the current modal state and can restore it with `STATE_RETURN` (or `%state_return`). The built-in Job Setup and Tool Change workflows use the same modal snapshot/restore safety model internally, but they are now implemented directly in application code.
 
 Current fixed-sensor / bitsetter measurement behavior is:
-- one coarse seek onto the sensor using the current App Settings Z jog speed as the coarse feed for Macro-3 / Macro-4
+- one coarse seek onto the sensor using the current App Settings Z jog speed as the coarse feed for Job Setup / Tool Change
 - then 5 exact samples using the shared high-precision helper
 - each sample retracts `5.0 mm`, dwells `0.5 s`, and re-probes `6.0 mm` at `175 mm/min`
 - the final result discards the low/high sample and averages the middle 3
@@ -632,7 +635,7 @@ Use this checklist when creating job-critical macros:
 ### Macro troubleshooting
 | Symptom | Likely cause | Recommended fix |
 | --- | --- | --- |
-| Macro button does not appear | File is not named `Macro-1`..`Macro-8` in a discovered macro directory. | Verify filename and location (`simple_sender/macros`, `macros/` beside `main.py`, or script directory). |
+| User macro button is missing from the main panel | No valid `Macro-1`..`Macro-5` file exists for that user slot in a discovered macro directory. | Verify filename and location (`simple_sender/macros`, `macros/` beside `main.py`, or script directory), or assign the slot from Macro Manager. |
 | Button appears but macro does not run | App is streaming, in alarm, disconnected, or blocked by Training Wheels confirmation. | Stop stream / clear alarm / reconnect, then retry and confirm prompts. |
 | Coordinates used by the macro are stale | Macro reads `wx/wy/wz` or modal values before a fresh status report. | Insert `%update` before using live variables. |
 | Macro reaches 100% too early or appears "done" before motion settles | Controller accepted final lines but machine has not reported fresh `Idle` yet. | Keep `Machine` current-line mode selected; prefer `%wait` at sequence boundaries and watch for final `Idle` in status/logs. |
@@ -653,7 +656,7 @@ VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root (with 
 ### How these posts enable the semi-automatic workflow
 1) They emit `SSMETA ...` header lines in the job file, which Simple Sender uses for dimensions, units, and estimate context.
 2) The Simple-Sender posts emit `TC:[TOOLNAME]` in the header and `begin TOOLCHANGE` blocks.
-3) Simple Sender intercepts `TC:` lines before GRBL send, pauses streaming, runs the guided tool-change workflow (Macro-4 path), then resumes streaming.
+3) Simple Sender intercepts `TC:` lines before GRBL send, pauses streaming, runs the guided built-in Tool Change workflow, then resumes streaming.
 4) The Simple-Sender posts emit `VACUUM_OFF` before tool-change boundaries and `VACUUM_ON` at segment/spindle start, allowing sender-managed accessory control around the same workflow points.
 5) This avoids relying on raw `M6` behavior in GRBL and keeps the operator flow consistent for multi-tool jobs.
 
@@ -736,7 +739,7 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 ## Spoilboard Generator
 ![](pics\screenshot-SpoilBoard.png)
 
-Use the Overdrive tab's **Spoilboard** button to generate a surfacing program without opening a CAM tool.
+Use the right-side controls' **Spoilboard** button to generate a surfacing program without opening a CAM tool.
 
 ### Inputs
 - Width X
@@ -875,12 +878,12 @@ This is a practical, repeatable probing flow for setting work offsets (X/Y/Z) an
    - Click **Start Probe**, then **Apply to Job** to load the leveled file.
 7) **Dry run and cut**
    - Do a dry run in air, then run the job with the spindle enabled.
-   - If Run shows **Job Setup Not Completed**, rerun **Macro-3** for the current session (or choose **Start Anyway** only when intentional).
+   - If Run shows **Job Setup Not Completed**, rerun **Job Setup** for the current session (or choose **Start Anyway** only when intentional).
 
-### Macro shortcuts
-If you prefer guided probing, the macro set includes touch-plate and reference-tool helpers (see the Macro table below):
-- **Macro-3**: Guided Job Setup chooser (`XYZ Plate`, `Z Plate`, or `Manual`) plus reference-tool capture.
-- **Macro-4**: Tool change after a reference is established.
+### Workflow shortcuts
+If you prefer guided probing, the built-in workflow set includes touch-plate and reference-tool helpers (see the table below):
+- **Job Setup**: Guided chooser (`XYZ Plate`, `Z Plate`, or `Manual`) plus reference-tool capture.
+- **Tool Change**: Tool change after a reference is established.
 
 ## Keyboard Shortcuts
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
@@ -922,8 +925,8 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
-- The **Logs** tab (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
-  - The **Logs** tab is hidden by default. Enable it with **App Settings > Interface > Notebook tabs > Show Logs Tab** if you want a persistent notebook tab; **View Logs...** remains available either way.
+- The **Logs** popup (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
+  - The **Logs** popup button is hidden by default. Enable it with **App Settings > Interface > Auxiliary panel buttons > Show Logs Button** if you want it in the lower control row; **View Logs...** remains available either way.
 
 ## Testing
 Dev dependencies (tests + type checking):
@@ -940,7 +943,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Latest documented local release-gate snapshot in this repo (validated on April 3, 2026): `run_tests.bat` passed end-to-end; the coverage test stage reported `1599 passed, 3 skipped`. Skip counts can vary by environment (for example Tcl/Tk availability).
+Use `run_tests.bat` as the authoritative local release gate. Dated validation snapshots are tracked in [CHANGELOG.md](/d:/simple_sender_refactored/CHANGELOG.md) instead of being hardcoded here so this section does not drift behind the current repo state.
 
 Run a subset:
 ```powershell
@@ -1000,6 +1003,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
+- v3.0 release notes: `RELEASE_NOTES_v3.0.md`.
 
 ## Release Checklist
 - Release checklist template: `ref/release_checklist.md`.
@@ -1010,9 +1014,9 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
 - `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI) imported and installed onto `App`.
 - `simple_sender/ui/`: feature-focused UI modules (tabs, settings, input bindings, dialogs).
-- `simple_sender/ui/main_tabs.py`: tab construction + tab-change handlers, including optional notebook-tab visibility for Logs / Raw $$ / Checklists.
-- `simple_sender/ui/file_info_tab.py`: scrollable read-only File Info tab renderer (SSMETA + quick-scan metrics).
-- `simple_sender/ui/viewer/gcode_viewer.py`: G-code viewer widget and run-reset helper.
+- `simple_sender/ui/main_tabs.py`: lower split-layout construction plus popup routing/reuse for the current lower UI.
+- `simple_sender/ui/file_info_tab.py`: scrollable read-only Job Info renderer (SSMETA + quick-scan metrics).
+- `simple_sender/ui/viewer/gcode_viewer.py`: headless live-window/job-view state holder plus the run-reset helper used by the current runtime.
 - `simple_sender/ui/all_stop.py`: ALL STOP action + layout positioning helper.
 - `simple_sender/ui/events/router.py`: UI state updates from GRBL events (includes streaming lock helper).
 - `simple_sender/ui/app_commands.py`: UI commands (connect/load/run) + serial dependency check.
@@ -1101,7 +1105,7 @@ python tools/perf_microbench.py
 - Linux serial permissions: make sure your user can access the serial device (`dialout`, `uucp`, or the distro-equivalent group), then log out/in after changing group membership.
 - No $$: wait for ready/status; clear alarms; stop streaming.
 - Alarm: use $X/$H; reset + re-home if needed.
-- Run shows `Job Setup Not Completed`: run `Macro-3 (Job Setup)` to capture tool reference for this session, then try Run again. Use `Start Anyway` only when you intentionally accept the risk.
+- Run shows `Job Setup Not Completed`: run the built-in `Job Setup` workflow to capture tool reference for this session, then try Run again. Use `Start Anyway` only when you intentionally accept the risk.
 - Preflight reports `No G-code job is loaded`: load or reload the job first, then rerun the check.
 - Preflight reports `Job bounds are unavailable`: wait for the load/parse pipeline to finish, then rerun the check; on very large files this can appear briefly while background analysis catches up.
 - Preflight warns that travel settings are unavailable: refresh or import GRBL settings so `$130/$131/$132` are populated before relying on travel checks.
@@ -1119,7 +1123,7 @@ python tools/perf_microbench.py
 - Auto-leveling: added RMS roughness + outlier stats in the height map summary.
 - Auto-leveling: optional spiral (center-out) probe order in addition to serpentine.
 - Auto-leveling: fixed dialog initialization error when opening after loading a job.
-- Checklists tab loads `checklist-*.chk` files from the macros folder; Release/Start Job dialogs use the same files.
+- Checklists popup content loads `checklist-*.chk` files from the macros folder; Release/Start Job dialogs use the same files.
 - Diagnostics export bundles recent console/status history plus current settings; preflight check flags bounds/validation issues.
 - Auto-leveling now produces a `-AL` file, enforces GRBL's 80-byte limit in the output, and blocks re-leveling an already leveled file.
 - Streaming validation for large files is configurable, and streaming loads now preserve comments/blank lines when auto-leveling rewrites lines.
@@ -1134,27 +1138,28 @@ python tools/perf_microbench.py
 - GRBL settings capture is more resilient: queued refresh after streaming, console `$$` routes through the refresh path, and Raw $$ always completes on the final `ok`.
 - Status history is stored for diagnostics export; console logging is throttled in performance mode.
 - App Settings > Diagnostics now supports backup bundle export/import for settings, macros, and checklists.
-- App Settings > Macros now includes a built-in Macro Manager and probe safety inputs (Probe Z start and safety margin) used by touch-plate/tool-reference macros.
+- App Settings > Macros now covers user-macro scripting, timeout controls, and the built-in Macro Manager for the 5 editable user macro slots, while App Settings > Probing & Setup holds the probe safety inputs plus the XYZ Plate and Bit Setter machine/workflow settings used by Job Setup / Tool Change.
 - Console Save now pre-fills a timestamped filename for touch-first workflows.
-- GRBL Settings tab/table now supports scrolling for easier review on smaller displays.
+- GRBL Settings popup/table now supports scrolling for easier review on smaller displays.
 - Settings load/import now validates and auto-repairs invalid core values (baud/poll interval/unit mode), and save writes through unique temp files to avoid multi-instance temp-path collisions.
 - `App` now inherits only `tk.Tk`; app helper methods from `application_*.py` are installed explicitly to avoid MRO coupling from multiple inheritance.
 - GRBL stream pending/queue payloads now use dataclass value objects (`StreamQueueItem`, `StreamPendingItem`, `ManualPendingItem`) instead of positional tuples.
 - Auto-Level dialog flow is routed directly through `simple_sender/ui/autolevel_dialog/dialog_controller.py` and `simple_sender/ui/autolevel_dialog/workflow.py`.
-- Overdrive tab now includes a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
+- The right-side lower controls include a Spoilboard Generator that builds surfacing G-code in-memory and prompts Read/Save/Cancel after generation.
 - Parser/split hot paths were optimized (reduced modal/bounds overhead in parse and lighter word matching in split) for lower CPU cost on large files.
 - Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
 
-## Pre-release Notes
-1. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`; the supported storage location is the per-user `simple-sender-data` app-data directory (or `SIMPLE_SENDER_CONFIG_DIR` when you intentionally override it).
-2. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
-3. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against `None` values from older settings files.
-4. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
-5. Static typing gates currently run mypy against 141 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-04-02), and local/CI hooks now enforce `--expected-count 141`.
-6. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
-7. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
-8. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
-9. Preflight business logic now lives in `simple_sender/services/preflight_service.py`, but `simple_sender/ui/dialogs/diagnostics_preflight.py` remains the stable facade used by diagnostics-facing UI code. Treat that split as the maintenance boundary unless a future change explicitly reopens architecture work.
+## v3.0 Release Notes
+1. **Simple Sender v3.0** is the current stable release baseline. It includes recent real-machine validation of Job Setup, Tool Change, and fixed-sensor probing, plus the cleanup and hardening completed across the v3.0 cycle.
+2. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`; the supported storage location is the per-user `simple-sender-data` app-data directory (or `SIMPLE_SENDER_CONFIG_DIR` when you intentionally override it).
+3. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
+4. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against blank or non-string-safe saved port values.
+5. `App` mixin `TYPE_CHECKING` stubs are intentionally curated (not exhaustive): they cover mixin methods referenced by `App.__init__`, and a unit test now enforces this contract.
+6. Static typing gates currently run mypy against 141 source files (the explicit `files =` list in `mypy.ini`, re-verified on 2026-04-02), and local/CI hooks now enforce `--expected-count 141`.
+7. CI now applies the same critical-path coverage threshold gate as `run_tests.bat` by running `tools/check_core_coverage.py` on `coverage.xml`.
+8. Manual queue backpressure now emits a structured UI event (`manual_queue_drop`) so cumulative dropped-command counts are visible without parsing console logs.
+9. Serial-write jitter handling now forces disconnect cleanup whenever a serial port object exists, even if `is_open` flips false before exception handling runs.
+10. Preflight business logic lives in `simple_sender/services/preflight_service.py`, and diagnostics use that service directly for run checks and summaries.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
@@ -1178,8 +1183,8 @@ The sender exposes a curated subset of GRBL's real-time, system, and motion comm
 | Feed hold | `!` | Pauses execution (used for **Pause**). |
 | Cycle start / resume | `~` | Resumes execution after hold or start a job (used for **Resume**/**Run**). |
 | Jog cancel | `0x85` | Stops a `$J=` jog (bound to **JOG STOP**). |
-| Feed override +10%/-10%/reset | `0x91` / `0x92` / `0x90` | Matches the buttons in the Feed Override panel. |
-| Spindle override +10%/-10%/reset | `0x9A` / `0x9B` / `0x99` | Tied to the Spindle Override controls. |
+| Feed override +10%/-10%/reset | `0x91` / `0x92` / `0x90` | Used internally by the Feed Override slider path. |
+| Spindle override +10%/-10%/reset | `0x9A` / `0x9B` / `0x99` | Used internally by the Spindle Override slider path. |
 
 Realtime control buttons now report disconnected/unsent actions truthfully instead of silently behaving like success. That applies to Pause/Resume/Stop/Reset, ALL STOP, alarm-recovery Reset, and override-control actions that send GRBL realtime bytes.
 
@@ -1246,16 +1251,17 @@ Use the Settings tab to edit; pending edits highlight in yellow until sent. Nume
 
 
 
-## Appendix C: Macro Reference
+## Appendix C: Workflow and Macro Reference
 
-The macro panel supports `Macro-1` through `Macro-8`; the repository currently ships active defaults in `Macro-1` through `Macro-4`.
+The main panel shows the 5 protected built-in workflow actions first, then only the populated editable user-macro buttons.
 
-| Macro | Purpose | When to use | Code notes |
+| Action | Purpose | When to use | Code notes |
 | --- | --- | --- | --- |
-| Macro-1: Park over WPos X/Y | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Uses `G53` for machine-safe lift, then `G0 X0 Y0`, and ends with `STATE_RETURN`. |
-| Macro-2: Park over Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Uses `%macro.state.PROBE_X_LOCATION/PROBE_Y_LOCATION` plus `G53` moves and `STATE_RETURN`. |
-| Macro-3: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup before job start, and after reconnect/reset/new controller session. | Starts with a custom `PROMPT` (`[btn(...)]` keys), branches on `macro.prompt_choice_key` (`x/z/m`), runs the matching touch-plate/manual path, then performs shared `$132`-based reference capture and stores `macro.state.TOOL_REFERENCE = wz`. |
-| Macro-4: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Guards with `%if ... TOOL_REFERENCE is None: raise RuntimeError(...)` and `%if TOOL_REFERENCE_FORMAT != CURRENT_TOOL_REFERENCE_FORMAT: raise RuntimeError(...)`, computes probe travel from `$132` + probe start - safety margin, probes at sensor, then applies `G10 L20 Z[...]`. |
+| Built-in: Park at Work | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Implemented directly in the built-in workflow runner. |
+| Built-in: Park at Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Implemented directly in code and uses the App Settings > Probing & Setup bit-setter coordinates. |
+| Built-in: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup before job start, and after reconnect/reset/new controller session. | Implemented directly in code, uses the shared XYZ Plate / Bit Setter settings, and runs with built-in unlimited-wait workflow handling. |
+| Built-in: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Implemented directly in code, uses the shared fixed-sensor settings, and runs with built-in unlimited-wait workflow handling. |
+| User Macro 1-5 | Editable file-backed user macros managed in Macro Manager. | Custom operator routines outside the protected built-in setup/workflow actions. | Stored as `Macro-1` through `Macro-5` in the discovered macro directories. |
 
 ## Appendix D: UI Field Appendix
 Macro UI is included below along with the rest of the interface.
@@ -1301,15 +1307,7 @@ Macro UI is included below along with the rest of the interface.
 - Tooltips: show the second line of each macro file as a hint.
 - Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
 
-### G-code Tab
-- Estimate/Bounds label: read-only summary of parsed bounds and time estimates; updates with settings and GRBL rates.
-- Live G-code header: `Live G-code (500 past / current / 500 next) - Run: XX%`.
-- G-code viewer: read-only bounded window sourced from worker state:
-  - Past: last 500 acked lines
-  - Current: current acked line
-  - Next: up to 500 queued lines
-
-### Console Tab
+### Console
 - Console log: read-only GRBL traffic log with filters.
 - Command entry: manual command input; blocked while streaming or when alarms restrict input.
 - Send: sends the command entry contents to GRBL.
@@ -1318,22 +1316,23 @@ Macro UI is included below along with the rest of the interface.
 - Filters ALL/ERRORS/ALARMS: filter the console display by severity.
 - Pos/Status toggle: includes or omits status/position reports from the console view and log.
 
-### Logs Tab
+### Job Info Popup
+- Read-only, scrollable job/metadata summary.
+- Shows `SSMETA` header fields (when present), quick-scan metrics, and separate `Toolpaths` / `Tools` lists when metadata provides them.
+
+### Logs Popup
 - Log viewer: read-only view of application/serial/UI/error logs.
 - Source filter: Application/Serial/UI/Errors/All.
 - Level filter: DEBUG/INFO/WARNING/ERROR/CRITICAL.
 - Refresh: reloads log files (last ~1000 lines).
 - Export Logs: writes a zip bundle for support and reports complete success, partial success (with failed files), or total failure.
 
-### Overdrive Tab
+### Right-side Controls
+- Feed override slider: sets feed override target (10-200%).
+- Spindle override slider: sets spindle override target (10-200%).
 - Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
 - Spindle OFF: turns the spindle off (M5).
 - Spoilboard: opens the Spoilboard Generator dialog for surfacing program creation.
-- Override summary: read-only summary of current feed/spindle overrides.
-- Feed override slider: sets feed override target (10-200%).
-- Feed +10%/-10%/Reset: adjusts feed override in 10% GRBL steps.
-- Spindle override slider: sets spindle override target (10-200%).
-- Spindle +10%/-10%/Reset: adjusts spindle override in 10% GRBL steps.
 
 ### Spoilboard Generator Dialog
 - Width X / Height Y: surfacing rectangle dimensions (mm).
@@ -1345,15 +1344,15 @@ Macro UI is included below along with the rest of the interface.
 - Start X / Start Y: lower-left origin for the surfacing rectangle.
 - \* How far below Z0 to surface note: clarifies that `0.50` means `Z = -0.50`.
 - Generate: builds G-code in-memory and opens the Read/Save/Cancel modal.
-- Read G-code: loads generated program into the G-code tab without writing to disk.
+- Read G-code: loads the generated program into the current job without writing to disk.
 - Save G-code: saves to a user-selected path with timestamped default filename.
 - Cancel: aborts with no load/save side effects.
 
-### Raw $$ Tab
+### Raw $$ Popup
 - Raw $$ text view: read-only capture of the last settings dump from GRBL.
-- Hidden by default; enable it with **App Settings > Interface > Notebook tabs > Show Raw $$ Tab**.
+- Hidden by default; enable it with **App Settings > Interface > Auxiliary panel buttons > Show Raw $$ Button**.
 
-### GRBL Settings Tab
+### GRBL Settings Popup
 - Refresh $$: requests a fresh $$ dump and populates the table.
 - Save Changes: sends edited settings back to GRBL in sequence, then verifies the write using a follow-up `$$` capture before confirming success.
 - Settings table: scrollable columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
@@ -1370,6 +1369,7 @@ Macro UI is included below along with the rest of the interface.
 - UI scale: numeric scale factor (0.5-3.0) applied immediately; use Apply after typing.
 - Apply: applies the UI scale entry.
 - Linux File Dialog Scale (Linux only): sets the minimum temporary Tk scaling used for file dialogs; the next Linux file dialog uses the larger of this value and the current UI scale.
+- Linux File Dialog Default Path (Linux only): default folder for shared file dialogs when no valid per-dialog folder is available. The normal default is `/root/CNC_Jobs`; invalid paths fall back safely.
 - Scrollbar width: sets a global scrollbar width (default/wide/wider/widest).
 - Touch scroll mode: choose `thumb_only` (disable App Settings swipe scrolling) or `thumb_and_swipe` (enable both thumb drag and swipe in App Settings).
 - Enable tooltips: toggles hover tips across the app (clicked controls suppress their tooltip until pointer leave/re-enter).
@@ -1394,22 +1394,35 @@ Macro UI is included below along with the rest of the interface.
 - Burst window: time window for burst detection.
 - Max dialogs per window: cap before suppression begins.
 - Show GRBL alarm/error popups: toggles non-blocking GRBL code popups.
-- GRBL popup auto-dismiss setting (seconds): retained for compatibility with existing settings; current GRBL alarm/error popups stay visible until manually dismissed.
 - GRBL popup dedupe interval (seconds): minimum time before the same `ALARM:x` / `error:x` popup can show again.
 - Show job completion dialog: toggles completion summary popup.
 - Play reminder beep on completion: toggles completion beep.
-- Recommendation: keep dialogs enabled; tune popup dedupe/auto-dismiss to reduce noise while preserving visibility.
+- Recommendation: keep dialogs enabled and tune popup dedupe to reduce noise while preserving visibility.
 
 ### App Settings: Macros
 - Allow macro scripting (Python/eval): enables Python-style macro directives; when disabled, only plain G-code lines plus `%wait/%msg/%update` directives and comment-only `key=value` lines are allowed.
-- Line timeout (sec): maximum time allowed for each macro line (`0` disables; old-style behavior).
-- Total timeout (sec): maximum time allowed for a full macro run (`0` disables; old-style behavior).
+- Line timeout (sec): maximum time allowed for each general macro line (`120` by default; `0` disables).
+- Total timeout (sec): maximum time allowed for a full general macro run (`900` by default; `0` disables).
 - Disable Macro Timeouts: disables normal prompt, line, and total timeout enforcement for general macro runs.
-- Operator-assisted Job Setup / Tool Change waits: Macro-3 / Macro-4 and streamed tool-change workflows already use scoped no-timeout behavior where the operator is expected to respond or complete a tool change; that override is separate from the global `Disable Macro Timeouts` setting.
-- Probe Z start (machine, mm): machine-coordinate approach Z for tool-reference probing macros (typically `-5`).
-- Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Macro-3/4.
-- Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder Macro-1..Macro-8 without leaving the app.
+- Protected built-in workflow waits: `Job Setup`, `Tool Change`, streamed tool changes, and the other protected built-in workflow actions run outside the general user-macro timeout limits.
+- Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder the 5 editable user-macro slots without leaving the app.
 - Recommendation: leave scripting off unless you trust the macro source.
+
+### App Settings: Probing & Setup
+- Probe Z start (machine, mm): machine-coordinate approach Z for tool-reference probing macros (typically `-5`).
+- Probe safety margin (mm): subtracted from `$132` travel when computing probe distance for Job Setup / Tool Change.
+- XYZ Plate Thickness: touch-plate thickness used when Job Setup sets Z in `XYZ Plate` or `Z Plate` mode.
+- XYZ Plate Min Safe Probe Distance: minimum remaining safe downward machine-Z travel required before starting the touch-plate fast probe.
+- XYZ Plate X Offset / XYZ Plate Y Offset: work offsets written after the XYZ-plate X/Y edge probes.
+- XYZ Plate Side Clearance Distance: distance moved clear of the plate before probing the X and Y side edges in Job Setup.
+- XYZ Plate Z Rough / Re-Probe / Fine Probe Speed: staged Z touch-plate probe feeds used by the Job Setup XYZ/Z setup branch.
+- XYZ Plate XY Rough / Fine Probe Speed: X/Y edge-probe feeds used by the Job Setup XYZ setup branch.
+- XYZ Plate Probe Dwell (Seconds): dwell between the Z re-probe retract and the final fine touch-plate pass.
+- Bit Setter X / Bit Setter Y: machine-coordinate location of the fixed tool-height sensor used by Park at Bit Setter, Job Setup, and Tool Change.
+- Bit Setter Rough Probe Speed: coarse fixed-sensor seek feed in mm/min.
+- Bit Setter Fine Probe Speed: fine fixed-sensor re-probe feed in mm/min.
+- Bit Setter Probe Dwell (Seconds): dwell in seconds between fixed-sensor sample retracts and exact re-probes.
+- Recommendation: treat these as machine/workflow settings, not user-macro content.
 
 ### App Settings: Zeroing
 - Use persistent zeroing (G10 L20): switches zeroing buttons from G92 to G10 L20.
@@ -1446,7 +1459,7 @@ Macro UI is included below along with the rest of the interface.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
 - View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
-- Notebook tabs: `Show Logs Tab`, `Show Raw $$ Tab`, and `Show Checklists Tab` control whether those notebook tabs are visible. Defaults are Logs hidden, Raw $$ hidden, Checklists shown.
+- Auxiliary panel buttons: `Show Logs Button`, `Show Raw $$ Button`, and `Show Checklists Button` control whether those popup-launch buttons are visible in the lower control row. Defaults are Logs hidden, Raw $$ hidden, Checklists shown.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
 - Status bar quick buttons (Tips, Keys, Auto-Level Overlay, Vac, Light, Release): toggles each status-bar quick button.
 - Status bar quick toggles (Tips, Keys, Auto-Level Overlay): immediate action buttons to flip the corresponding feature.
@@ -1482,20 +1495,20 @@ Macro UI is included below along with the rest of the interface.
 - Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit (enabled by default for new settings).
 - Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
 - Performance report log path: optional destination file to append exit reports.
-- Recommendation: keep Run path lean; use preflight, File Info, and the built-in validation summary when you want extra review before cutting.
+- Recommendation: keep Run path lean; use preflight, Job Info, and the built-in validation summary when you want extra review before cutting.
 
 ### Baseline Capture (Lean Mode)
 - Idle (no file loaded): let the app sit connected/ready for 5 minutes.
 - Idle (file loaded): load a representative job (for example ~29MB), then idle for 5-10 minutes without interaction.
-- Phase coverage for runtime metrics: keep the app for at least one sample interval in each phase (`idle_gcode_visible`, `idle_gcode_hidden`, and `streaming`) so diagnostics do not report zero samples.
+- Phase coverage for runtime metrics: keep the app for at least one sample interval in each phase (`idle_connected` and `streaming`) so diagnostics do not report zero samples.
 - Export diagnostics bundle (Save ZIP) and compare `runtime_metrics.json` + `performance_report.txt` across runs.
 
 ### App Settings: Safety
-- All Stop behavior (dropdown): selects ALL STOP mode (soft reset vs stop+reset).
+- All Stop behavior (dropdown): selects between the two current ALL STOP modes after first halting the active stream.
 - Dry run sanitize: strips spindle/coolant/tool-change commands while streaming.
 - Suspend watchdog during homing: disables watchdog during $H.
 - Homing watchdog grace (seconds): delay before watchdog resumes after homing.
-- Recommendation: use Soft Reset for emergencies and Stop Stream + Reset when you want a gentler stop.
+- Recommendation: Soft Reset always sends `Ctrl-X` after stopping the stream; Stop Stream + Reset avoids an extra reset when stop already performed one.
 
 ### App Settings: Safety Aids
 - Training Wheels: confirm top-bar actions.
@@ -1503,7 +1516,7 @@ Macro UI is included below along with the rest of the interface.
 - Recommendation: keep Training Wheels on for new machines or operators.
 
 ### App Settings: System
-- Close Application: closes Simple Sender through the normal app shutdown path. During active/risky states, the app warns before closing because this affects the application session, not machine power.
+- Close Application: closes Simple Sender through the normal app shutdown path. The settings button and the titlebar/window close both use the same confirmation flow, and active/risky states warn before closing because this affects the application session, not machine power.
 - Restart workflow: there is no separate in-app `Restart Application` button in the current build; close the app, then relaunch it when you need a restart.
 - Shutdown (Linux only): powers off the system after confirmation.
 - Reboot (Linux only): reboots the system after confirmation.
@@ -1512,7 +1525,7 @@ Macro UI is included below along with the rest of the interface.
 ### Checklists Tab: Checklists
 - Checklist items: checkbox list loaded from `checklist-*.chk` files.
 - Checklist title toggle: click a checklist title (`[-]` / `[+]`) to collapse or expand that checklist's items.
-- Shown by default; hide it with **App Settings > Interface > Notebook tabs > Show Checklists Tab** if you do not want it in the notebook.
+- Shown by default; hide it with **App Settings > Interface > Auxiliary panel buttons > Show Checklists Button** if you do not want it in the lower control row.
 
 ### Auto-Level Dialog: Settings Tab (Experimental)
 - Profile (dropdown): chooses Small/Large/Custom preset for spacing/interpolation.
@@ -1575,7 +1588,7 @@ Macro UI is included below along with the rest of the interface.
 - Close: closes the sample.
 
 ### Macro Manager Dialog
-- Macro list: slot overview for Macro-1..Macro-8 with the current slot label; invalid files are marked `[invalid]`.
+- Macro list: slot overview for `User Macro 1`..`User Macro 5` with the current slot label; invalid files are marked `[invalid]`.
 - Name/tooltip/color/text-color/body editor: edits macro header and content in-place.
 - Save/Delete: writes or removes the selected macro file in the active writable macro directory.
 - Duplicate: copies one macro slot to a different slot.

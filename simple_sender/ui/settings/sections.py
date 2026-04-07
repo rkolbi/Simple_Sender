@@ -32,6 +32,7 @@ from .sections_controls import (
     build_jogging_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
+    build_probing_setup_section,
     build_zeroing_section,
 )
 from .sections_general import (
@@ -56,6 +57,7 @@ __all__ = [
     "build_kasa_plug_section",
     "build_keyboard_shortcuts_section",
     "build_macros_section",
+    "build_probing_setup_section",
     "build_power_section",
     "build_safety_aids_section",
     "build_safety_section",

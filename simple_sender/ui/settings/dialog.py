@@ -38,6 +38,7 @@ from .sections import (
     build_kasa_plug_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
+    build_probing_setup_section,
     build_power_section,
     build_safety_aids_section,
     build_safety_section,
@@ -46,7 +47,6 @@ from .sections import (
     build_viewer_section,
     build_zeroing_section,
 )
-from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 from simple_sender.utils.task_timing import record_task_timing
 
 _APP_SETTINGS_VIEW_BASIC = "Basic"
@@ -404,6 +404,32 @@ def _suspend_app_settings_background_work(app) -> None:
     _cancel_app_settings_lazy_build(app)
 
 
+def activate_app_settings_surface(app) -> None:
+    """Activate the current App Settings surface lifecycle."""
+
+    app._app_settings_tab_active = True
+    _note_app_settings_interaction(app)
+    try:
+        app._bind_app_settings_mousewheel()
+        app._bind_app_settings_touch_scroll()
+    except Exception:
+        return
+    _schedule_app_settings_sticky_header(app, force=True)
+    _schedule_app_settings_lazy_build(app)
+
+
+def deactivate_app_settings_surface(app) -> None:
+    """Deactivate the current App Settings surface lifecycle."""
+
+    app._app_settings_tab_active = False
+    _suspend_app_settings_background_work(app)
+    try:
+        app._unbind_app_settings_mousewheel()
+        app._unbind_app_settings_touch_scroll()
+    except Exception:
+        return
+
+
 def _schedule_app_settings_sticky_header(app, *, force: bool = False) -> None:
     if not force and not bool(getattr(app, "_app_settings_tab_active", False)):
         return
@@ -711,12 +737,8 @@ def _update_app_settings_sticky_header(app, *_args) -> None:
     )
 
 
-def build_app_settings_tab(app, notebook):
-    nb = notebook
-    # App Settings tab
-    sstab = ttk.Frame(nb, padding=8, style=notebook_page_style_name())
-    nb.add(sstab, text="App Settings")
-    set_tab_tooltip(nb, sstab, "Configure app preferences, UI, and safety settings.")
+def build_app_settings_panel(app, parent):
+    sstab = ttk.Frame(parent, padding=8, style=notebook_page_style_name())
     sstab.grid_columnconfigure(0, weight=1)
     sstab.grid_rowconfigure(1, weight=1)
 
@@ -934,7 +956,7 @@ def build_app_settings_tab(app, notebook):
 
     _start_category(
         "Controls & Inputs",
-        "Jogging, zeroing behavior, keyboard/joystick shortcuts, Kasa, and macros.",
+        "Jogging, zeroing behavior, probing/setup workflows, keyboard/joystick shortcuts, Kasa, and macros.",
     )
     _add_section(
         "Jogging",
@@ -949,6 +971,13 @@ def build_app_settings_tab(app, notebook):
         mode="basic",
         description="Choose persistent WCS zeroing versus G92 temporary zeroing.",
         keywords=("zero", "wcs", "g10", "g92"),
+    )
+    _add_section(
+        "Probing & Setup",
+        build_probing_setup_section,
+        mode="advanced",
+        description="Probe travel, XYZ plate geometry, and bit-setter configuration used by the protected setup workflows.",
+        keywords=("probing", "bit setter", "xyz plate", "job setup", "tool change"),
     )
     _add_section(
         "Keyboard shortcuts",
@@ -968,8 +997,8 @@ def build_app_settings_tab(app, notebook):
         "Macros",
         build_macros_section,
         mode="advanced",
-        description="Macro manager, probe defaults, and macro script timeout/security settings.",
-        keywords=("macro", "scripting", "probe"),
+        description="User macro editing, timeout controls, and macro scripting security settings.",
+        keywords=("macro", "scripting", "user macros"),
     )
 
     _start_category(
@@ -1045,4 +1074,7 @@ def build_app_settings_tab(app, notebook):
             after_idle(lambda: _schedule_app_settings_sticky_header(app, force=True))
         else:
             _schedule_app_settings_sticky_header(app, force=True)
+    return sstab
+
+
 

@@ -89,10 +89,15 @@ def all_stop_action(app):
         _log_suppressed("Failed stopping Kasa job accessories during ALL STOP", exc)
     mode = app.all_stop_mode.get()
     action_applied = False
+    reset_applied = False
+    stop_applied = False
+    if mode in {"reset", "stop_reset"}:
+        stop_applied = bool(app.grbl.stop_stream())
+        action_applied = bool(stop_applied)
     if mode == "reset":
-        action_applied = bool(app.grbl.reset())
+        reset_applied = bool(app.grbl.reset())
+        action_applied = bool(reset_applied)
     elif mode == "stop_reset":
-        action_applied = bool(app.grbl.stop_stream())
         stop_stream_resets = False
         stop_stream_resets_checker = getattr(app.grbl, "stop_stream_performs_reset", None)
         if callable(stop_stream_resets_checker):
@@ -105,13 +110,22 @@ def all_stop_action(app):
                 )
                 stop_stream_resets = True
         if not stop_stream_resets:
-            action_applied = bool(app.grbl.reset()) or bool(action_applied)
+            reset_applied = bool(app.grbl.reset())
+            action_applied = bool(reset_applied) or bool(action_applied)
         elif not action_applied:
-            action_applied = bool(app.grbl.reset())
+            reset_applied = bool(app.grbl.reset())
+            action_applied = bool(reset_applied)
     else:
         action_applied = bool(app.grbl.stop_stream())
     if action_applied:
-        invalidate_job_setup_state(app)
+        if mode == "reset":
+            if reset_applied:
+                invalidate_job_setup_state(app)
+            else:
+                action_applied = False
+        else:
+            invalidate_job_setup_state(app)
+    if action_applied:
         return
     try:
         app.status.config(text="ALL STOP warning: controller did not accept stop/reset")
@@ -124,9 +138,6 @@ def all_stop_action(app):
 
 
 def all_stop_gcode_label(app) -> str:
-    mode = app.all_stop_mode.get()
-    if mode == "reset":
-        return "Ctrl-X"
     return "Stop stream + Ctrl-X"
 
 

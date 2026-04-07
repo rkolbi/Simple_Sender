@@ -11,11 +11,29 @@ DEFAULT_TOOL_CHANGE_REVIEW_THRESHOLD_MM = 25.0
 DEFAULT_TOOL_PROBE_SAMPLE_COUNT = 5
 DEFAULT_TOOL_PROBE_SPREAD_TOLERANCE_MM = 0.05
 CURRENT_TOOL_REFERENCE_FORMAT = "sensor_wz_and_prb_mz_hp5_trimmed_v3"
+DEFAULT_XYZ_PLATE_THICKNESS_MM = 11.95
+DEFAULT_XYZ_PLATE_MIN_SAFE_PROBE_DISTANCE_MM = 1.0
+DEFAULT_XYZ_PLATE_X_OFFSET_MM = -13.175
+DEFAULT_XYZ_PLATE_Y_OFFSET_MM = -13.175
+DEFAULT_XYZ_PLATE_SIDE_CLEARANCE_DISTANCE_MM = 70.0
+DEFAULT_XYZ_PLATE_Z_ROUGH_PROBE_FEED_MM_MIN = 150.0
+DEFAULT_XYZ_PLATE_Z_REPROBE_FEED_MM_MIN = 40.0
+DEFAULT_XYZ_PLATE_Z_FINE_PROBE_FEED_MM_MIN = 20.0
+DEFAULT_XYZ_PLATE_XY_ROUGH_PROBE_FEED_MM_MIN = 170.0
+DEFAULT_XYZ_PLATE_XY_FINE_PROBE_FEED_MM_MIN = 60.0
+DEFAULT_XYZ_PLATE_PROBE_DWELL_S = 0.25
+DEFAULT_BIT_SETTER_X_MM = -1.25
+DEFAULT_BIT_SETTER_Y_MM = -1223.0
+DEFAULT_TOOL_PROBE_ROUGH_FEED_MM_MIN = 500.0
+DEFAULT_TOOL_PROBE_FINE_RETRACT_MM = 5.0
+DEFAULT_TOOL_PROBE_DWELL_S = 0.5
+DEFAULT_TOOL_PROBE_FINE_DISTANCE_MM = 6.0
+DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN = 175.0
 
-_FINE_RETRACT_MM = 5.0
-_FINE_SETTLE_S = 0.5
-_FINE_PROBE_DISTANCE_MM = 6.0
-_FINE_PROBE_FEED_MM_MIN = 175.0
+_FINE_RETRACT_MM = DEFAULT_TOOL_PROBE_FINE_RETRACT_MM
+_FINE_SETTLE_S = DEFAULT_TOOL_PROBE_DWELL_S
+_FINE_PROBE_DISTANCE_MM = DEFAULT_TOOL_PROBE_FINE_DISTANCE_MM
+_FINE_PROBE_FEED_MM_MIN = DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN
 _PROBE_REPORT_TIMEOUT_S = 1.0
 
 
@@ -37,6 +55,30 @@ class ToolChangeCompensation:
     target_work_z: float
 
 
+@dataclass(frozen=True)
+class ToolProbeCycleSettings:
+    bit_setter_x_mm: float
+    bit_setter_y_mm: float
+    rough_probe_feed_mm_min: float
+    fine_probe_feed_mm_min: float
+    dwell_s: float
+
+
+@dataclass(frozen=True)
+class XYZPlateSettings:
+    plate_thickness_mm: float
+    min_safe_probe_distance_mm: float
+    x_offset_mm: float
+    y_offset_mm: float
+    side_clearance_distance_mm: float
+    z_rough_probe_feed_mm_min: float
+    z_reprobe_feed_mm_min: float
+    z_fine_probe_feed_mm_min: float
+    xy_rough_probe_feed_mm_min: float
+    xy_fine_probe_feed_mm_min: float
+    dwell_s: float
+
+
 class ToolProbeSpreadExceededError(RuntimeError):
     def __init__(
         self,
@@ -55,6 +97,140 @@ class ToolProbeSpreadExceededError(RuntimeError):
             f"spread {self.spread_mm:0.4f} mm exceeded tolerance {self.tolerance_mm:0.4f} mm "
             f"across samples [{samples_text}]. Clean/check the tool setter, tool, and wiring, then retry."
         )
+
+
+def _resolve_setting_source(source: Any) -> tuple[Any, dict[str, Any]]:
+    if isinstance(source, dict):
+        return source, source
+    settings = getattr(source, "settings", None)
+    if isinstance(settings, dict):
+        return source, settings
+    return source, {}
+
+
+def _read_source_float(
+    source: Any,
+    key: str,
+    default: float,
+    *,
+    min_value: float | None = None,
+) -> float:
+    obj, settings = _resolve_setting_source(source)
+    raw_value: Any = None
+    if obj is not None:
+        raw_value = getattr(obj, key, None)
+        if raw_value is not None and hasattr(raw_value, "get"):
+            try:
+                raw_value = raw_value.get()
+            except Exception:
+                raw_value = None
+    if raw_value is None:
+        raw_value = settings.get(key, default)
+    try:
+        value = float(raw_value)
+    except Exception:
+        value = float(default)
+    if min_value is not None and value < float(min_value):
+        return float(default)
+    return float(value)
+
+
+def tool_probe_cycle_settings(source: Any) -> ToolProbeCycleSettings:
+    return ToolProbeCycleSettings(
+        bit_setter_x_mm=_read_source_float(
+            source, "bit_setter_x", DEFAULT_BIT_SETTER_X_MM
+        ),
+        bit_setter_y_mm=_read_source_float(
+            source, "bit_setter_y", DEFAULT_BIT_SETTER_Y_MM
+        ),
+        rough_probe_feed_mm_min=_read_source_float(
+            source,
+            "bit_setter_rough_probe_speed",
+            DEFAULT_TOOL_PROBE_ROUGH_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        fine_probe_feed_mm_min=_read_source_float(
+            source,
+            "bit_setter_fine_probe_speed",
+            DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        dwell_s=_read_source_float(
+            source,
+            "bit_setter_probe_dwell",
+            DEFAULT_TOOL_PROBE_DWELL_S,
+            min_value=0.0,
+        ),
+    )
+
+
+def xyz_plate_settings(source: Any) -> XYZPlateSettings:
+    return XYZPlateSettings(
+        plate_thickness_mm=_read_source_float(
+            source,
+            "xyz_plate_thickness",
+            DEFAULT_XYZ_PLATE_THICKNESS_MM,
+            min_value=0.001,
+        ),
+        min_safe_probe_distance_mm=_read_source_float(
+            source,
+            "xyz_plate_min_safe_probe_distance",
+            DEFAULT_XYZ_PLATE_MIN_SAFE_PROBE_DISTANCE_MM,
+            min_value=0.001,
+        ),
+        x_offset_mm=_read_source_float(
+            source,
+            "xyz_plate_x_offset",
+            DEFAULT_XYZ_PLATE_X_OFFSET_MM,
+        ),
+        y_offset_mm=_read_source_float(
+            source,
+            "xyz_plate_y_offset",
+            DEFAULT_XYZ_PLATE_Y_OFFSET_MM,
+        ),
+        side_clearance_distance_mm=_read_source_float(
+            source,
+            "xyz_plate_side_clearance_distance",
+            DEFAULT_XYZ_PLATE_SIDE_CLEARANCE_DISTANCE_MM,
+            min_value=0.001,
+        ),
+        z_rough_probe_feed_mm_min=_read_source_float(
+            source,
+            "xyz_plate_z_rough_probe_speed",
+            DEFAULT_XYZ_PLATE_Z_ROUGH_PROBE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        z_reprobe_feed_mm_min=_read_source_float(
+            source,
+            "xyz_plate_z_reprobe_speed",
+            DEFAULT_XYZ_PLATE_Z_REPROBE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        z_fine_probe_feed_mm_min=_read_source_float(
+            source,
+            "xyz_plate_z_fine_probe_speed",
+            DEFAULT_XYZ_PLATE_Z_FINE_PROBE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        xy_rough_probe_feed_mm_min=_read_source_float(
+            source,
+            "xyz_plate_xy_rough_probe_speed",
+            DEFAULT_XYZ_PLATE_XY_ROUGH_PROBE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        xy_fine_probe_feed_mm_min=_read_source_float(
+            source,
+            "xyz_plate_xy_fine_probe_speed",
+            DEFAULT_XYZ_PLATE_XY_FINE_PROBE_FEED_MM_MIN,
+            min_value=0.001,
+        ),
+        dwell_s=_read_source_float(
+            source,
+            "xyz_plate_probe_dwell",
+            DEFAULT_XYZ_PLATE_PROBE_DWELL_S,
+            min_value=0.0,
+        ),
+    )
 
 
 def _format_probe_samples(samples_machine_z: Sequence[float]) -> str:
@@ -226,6 +402,7 @@ def collect_high_precision_tool_probe_measurement(
     probe_distance_mm: float,
     rapid_feed_mm_min: float,
     fine_probe_feed_mm_min: float | None = None,
+    dwell_s: float | None = None,
     sample_count: int = DEFAULT_TOOL_PROBE_SAMPLE_COUNT,
     spread_tolerance_mm: float = DEFAULT_TOOL_PROBE_SPREAD_TOLERANCE_MM,
     log: Callable[[str], Any] | None = None,
@@ -247,16 +424,22 @@ def collect_high_precision_tool_probe_measurement(
         if fine_probe_feed_mm_min is None
         else float(fine_probe_feed_mm_min)
     )
+    settle_s = float(_FINE_SETTLE_S) if dwell_s is None else float(dwell_s)
     if fine_probe_feed <= 0.0:
         raise RuntimeError(
             f"Invalid tool probe tuning: fine probe feed must be positive, got {fine_probe_feed:0.3f} mm/min."
+        )
+    if settle_s < 0.0:
+        raise RuntimeError(
+            f"Invalid tool probe tuning: probe dwell must be non-negative, got {settle_s:0.3f} s."
         )
     _emit_measurement_log(
         log,
         (
             f"{label} started: high-precision exact probe mode, "
             f"{DEFAULT_TOOL_PROBE_SAMPLE_COUNT} samples, trim min/max, average middle 3, "
-            f"spread tolerance={tolerance:0.4f} mm."
+            f"spread tolerance={tolerance:0.4f} mm, coarse feed={float(rapid_feed_mm_min):0.3f} mm/min, "
+            f"fine feed={fine_probe_feed:0.3f} mm/min, dwell={settle_s:0.3f} s."
         ),
     )
 
@@ -280,7 +463,7 @@ def collect_high_precision_tool_probe_measurement(
         for idx in range(DEFAULT_TOOL_PROBE_SAMPLE_COUNT):
             macro_send(f"G0 Z{_FINE_RETRACT_MM:0.3f}")
             probe_contact_active = False
-            macro_send(f"G4 P{_FINE_SETTLE_S:0.2f}")
+            macro_send(f"G4 P{settle_s:0.2f}")
             sample_machine_z = _send_probe_and_wait_for_trip(
                 macro_send=macro_send,
                 probe_controller=probe_controller,

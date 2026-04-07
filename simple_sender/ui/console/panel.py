@@ -29,15 +29,12 @@ from simple_sender.ui.theme_helpers import (
     notebook_page_style_name,
     text_display_theme_options,
 )
-from simple_sender.ui.widgets_tooltips import apply_tooltip, set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 
 
-def build_console_tab(app, notebook: ttk.Notebook) -> ttk.Frame:
-    ctab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
-    notebook.add(ctab, text="Console")
-    set_tab_tooltip(notebook, ctab, "Send manual commands and view GRBL responses.")
-
+def build_console_panel(app, parent) -> ttk.Frame:
+    ctab = ttk.Frame(parent, padding=6, style=notebook_page_style_name())
     app.console = tk.Text(ctab, wrap="word", height=12, state="disabled", font=app.console_font)
     themed_options = text_display_theme_options(app)
     if themed_options:

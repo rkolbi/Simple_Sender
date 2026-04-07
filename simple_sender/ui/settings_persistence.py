@@ -24,8 +24,10 @@ import logging
 import os
 import sys
 from typing import cast
+
+from simple_sender import tool_measurement
 from simple_sender.utils.config import DEFAULT_SETTINGS
-from simple_sender.utils.constants import STATUS_POLL_DEFAULT
+from simple_sender.utils.constants import DEFAULT_SPINDLE_RPM, STATUS_POLL_DEFAULT
 from simple_sender.utils.exceptions import SettingsLoadError, SettingsSaveError
 from simple_sender.kasa_accessory import validate_outlet_mapping
 
@@ -180,6 +182,32 @@ def _safe_int(app, var, default, label: str) -> int:
         return fallback
 
 
+def _read_nonnegative_int_setting_value(
+    app,
+    *,
+    attr_name: str,
+    key: str,
+    default: int,
+    label: str,
+) -> int:
+    value = _read_setting_value(app, attr_name=attr_name, key=key, fallback=default)
+    try:
+        if isinstance(value, bool):
+            parsed = int(value)
+        elif isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float):
+            parsed = int(value)
+        elif isinstance(value, str):
+            parsed = int(value.strip())
+        else:
+            raise TypeError("unsupported int setting value")
+    except Exception:
+        parsed = int(default)
+        app.ui_q.put(("log", f"[settings] Invalid {label}; using {parsed}."))
+    return int(max(0, parsed))
+
+
 def _read_nonnegative_float_setting(
     app,
     *,
@@ -195,6 +223,52 @@ def _read_nonnegative_float_setting(
     else:
         value = _safe_float(app, var, fallback, label)
     return max(0.0, float(value))
+
+
+def _read_nonnegative_float_or_default_setting(
+    app,
+    *,
+    attr_name: str,
+    key: str,
+    default: float,
+    label: str,
+) -> float:
+    var = getattr(app, attr_name, None)
+    fallback = app.settings.get(key, DEFAULT_SETTINGS.get(key, default))
+    if var is None:
+        value = fallback
+    else:
+        value = _safe_float(app, var, fallback, label)
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    if parsed < 0.0:
+        return float(default)
+    return parsed
+
+
+def _read_positive_float_setting(
+    app,
+    *,
+    attr_name: str,
+    key: str,
+    default: float,
+    label: str,
+) -> float:
+    var = getattr(app, attr_name, None)
+    fallback = app.settings.get(key, DEFAULT_SETTINGS.get(key, default))
+    if var is None:
+        value = fallback
+    else:
+        value = _safe_float(app, var, fallback, label)
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    if parsed <= 0.0:
+        return float(default)
+    return parsed
 
 
 def _read_choice_setting(
@@ -362,10 +436,21 @@ def _build_ui_settings(
     app,
     *,
     tooltip_timeout_value: float,
-    grbl_popup_auto_dismiss_value: float,
     grbl_popup_dedupe_value: float,
     pos_status_enabled: bool,
 ) -> dict[str, object]:
+    linux_file_dialog_default_path = _read_string_setting_value(
+        app,
+        attr_name="linux_file_dialog_default_path",
+        key="linux_file_dialog_default_path",
+        fallback="/root/CNC_Jobs",
+        strip=True,
+    )
+    if sys.platform.startswith("linux") and not linux_file_dialog_default_path:
+        linux_file_dialog_default_path = str(
+            DEFAULT_SETTINGS.get("linux_file_dialog_default_path", "/root/CNC_Jobs")
+            or "/root/CNC_Jobs"
+        ).strip() or "/root/CNC_Jobs"
     return {
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
         "tooltip_timeout_sec": tooltip_timeout_value,
@@ -401,7 +486,6 @@ def _build_ui_settings(
             key="grbl_popup_enabled",
             fallback=True,
         ),
-        "grbl_popup_auto_dismiss_sec": grbl_popup_auto_dismiss_value,
         "grbl_popup_dedupe_sec": grbl_popup_dedupe_value,
         "performance_mode": bool(app.performance_mode.get()),
         "performance_profile_enabled": _read_bool_setting_value(
@@ -450,6 +534,7 @@ def _build_ui_settings(
                 _setting_default("linux_file_dialog_scale", 1.0),
             )
         ),
+        "linux_file_dialog_default_path": linux_file_dialog_default_path,
         "scrollbar_width": _read_string_setting_value(
             app,
             attr_name="scrollbar_width",
@@ -472,22 +557,22 @@ def _build_ui_settings(
         "show_endstop_indicator": bool(app.show_endstop_indicator.get()),
         "show_probe_indicator": bool(app.show_probe_indicator.get()),
         "show_hold_indicator": bool(app.show_hold_indicator.get()),
-        "show_logs_tab": _read_bool_setting_value(
+        "show_logs_button": _read_bool_setting_value(
             app,
-            attr_name="show_logs_tab",
-            key="show_logs_tab",
+            attr_name="show_logs_button",
+            key="show_logs_button",
             fallback=False,
         ),
-        "show_raw_grbl_tab": _read_bool_setting_value(
+        "show_raw_grbl_button": _read_bool_setting_value(
             app,
-            attr_name="show_raw_grbl_tab",
-            key="show_raw_grbl_tab",
+            attr_name="show_raw_grbl_button",
+            key="show_raw_grbl_button",
             fallback=False,
         ),
-        "show_checklists_tab": _read_bool_setting_value(
+        "show_checklists_button": _read_bool_setting_value(
             app,
-            attr_name="show_checklists_tab",
-            key="show_checklists_tab",
+            attr_name="show_checklists_button",
+            key="show_checklists_button",
             fallback=True,
         ),
         "show_quick_tips_button": bool(app.show_quick_tips_button.get()),
@@ -501,6 +586,13 @@ def _build_ui_settings(
         "error_dialog_burst_limit": app._error_dialog_burst_limit,
         "job_completion_popup": bool(app.job_completion_popup.get()),
         "job_completion_beep": bool(app.job_completion_beep.get()),
+        "spindle_control_rpm": _read_nonnegative_int_setting_value(
+            app,
+            attr_name="spindle_rpm_var",
+            key="spindle_control_rpm",
+            default=int(DEFAULT_SPINDLE_RPM),
+            label="spindle control RPM",
+        ),
     }
 
 
@@ -557,6 +649,22 @@ def _build_macro_and_autolevel_settings(
     macro_total_timeout_value: float,
     macro_probe_z_value: float,
     macro_probe_margin_value: float,
+    xyz_plate_thickness_value: float,
+    xyz_plate_min_safe_probe_distance_value: float,
+    xyz_plate_x_offset_value: float,
+    xyz_plate_y_offset_value: float,
+    xyz_plate_side_clearance_distance_value: float,
+    xyz_plate_z_rough_probe_speed_value: float,
+    xyz_plate_z_reprobe_speed_value: float,
+    xyz_plate_z_fine_probe_speed_value: float,
+    xyz_plate_xy_rough_probe_speed_value: float,
+    xyz_plate_xy_fine_probe_speed_value: float,
+    xyz_plate_probe_dwell_value: float,
+    bit_setter_x_value: float,
+    bit_setter_y_value: float,
+    bit_setter_rough_probe_speed_value: float,
+    bit_setter_fine_probe_speed_value: float,
+    bit_setter_probe_dwell_value: float,
 ) -> dict[str, object]:
     disable_macro_timeouts_var = getattr(app, "disable_macro_timeouts", None)
     if disable_macro_timeouts_var is not None:
@@ -577,6 +685,22 @@ def _build_macro_and_autolevel_settings(
         "macro_total_timeout_sec": macro_total_timeout_value,
         "macro_probe_z_location": macro_probe_z_value,
         "macro_probe_safety_margin": macro_probe_margin_value,
+        "xyz_plate_thickness": xyz_plate_thickness_value,
+        "xyz_plate_min_safe_probe_distance": xyz_plate_min_safe_probe_distance_value,
+        "xyz_plate_x_offset": xyz_plate_x_offset_value,
+        "xyz_plate_y_offset": xyz_plate_y_offset_value,
+        "xyz_plate_side_clearance_distance": xyz_plate_side_clearance_distance_value,
+        "xyz_plate_z_rough_probe_speed": xyz_plate_z_rough_probe_speed_value,
+        "xyz_plate_z_reprobe_speed": xyz_plate_z_reprobe_speed_value,
+        "xyz_plate_z_fine_probe_speed": xyz_plate_z_fine_probe_speed_value,
+        "xyz_plate_xy_rough_probe_speed": xyz_plate_xy_rough_probe_speed_value,
+        "xyz_plate_xy_fine_probe_speed": xyz_plate_xy_fine_probe_speed_value,
+        "xyz_plate_probe_dwell": xyz_plate_probe_dwell_value,
+        "bit_setter_x": bit_setter_x_value,
+        "bit_setter_y": bit_setter_y_value,
+        "bit_setter_rough_probe_speed": bit_setter_rough_probe_speed_value,
+        "bit_setter_fine_probe_speed": bit_setter_fine_probe_speed_value,
+        "bit_setter_probe_dwell": bit_setter_probe_dwell_value,
         "zeroing_persistent": bool(app.zeroing_persistent.get()),
         "auto_level_settings": dict(getattr(app, "auto_level_settings", {})),
         "auto_level_job_prefs": dict(getattr(app, "auto_level_job_prefs", {})),
@@ -797,12 +921,181 @@ def save_settings(app):
         default=3.0,
         label="macro probe safety margin",
     )
-    grbl_popup_auto_dismiss_value = _read_nonnegative_float_setting(
+    xyz_plate_thickness_value = _read_positive_float_setting(
         app,
-        attr_name="grbl_popup_auto_dismiss_sec",
-        key="grbl_popup_auto_dismiss_sec",
-        default=12.0,
-        label="GRBL popup auto-dismiss",
+        attr_name="xyz_plate_thickness",
+        key="xyz_plate_thickness",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_THICKNESS_MM,
+        label="XYZ plate thickness",
+    )
+    xyz_plate_min_safe_probe_distance_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_min_safe_probe_distance",
+        key="xyz_plate_min_safe_probe_distance",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_MIN_SAFE_PROBE_DISTANCE_MM,
+        label="XYZ plate min safe probe distance",
+    )
+    xyz_plate_x_offset_value = (
+        _safe_float(
+            app,
+            getattr(app, "xyz_plate_x_offset", None),
+            app.settings.get(
+                "xyz_plate_x_offset",
+                DEFAULT_SETTINGS.get(
+                    "xyz_plate_x_offset",
+                    tool_measurement.DEFAULT_XYZ_PLATE_X_OFFSET_MM,
+                ),
+            ),
+            "XYZ plate X offset",
+        )
+        if getattr(app, "xyz_plate_x_offset", None) is not None
+        else float(
+            app.settings.get(
+                "xyz_plate_x_offset",
+                DEFAULT_SETTINGS.get(
+                    "xyz_plate_x_offset",
+                    tool_measurement.DEFAULT_XYZ_PLATE_X_OFFSET_MM,
+                ),
+            )
+        )
+    )
+    xyz_plate_y_offset_value = (
+        _safe_float(
+            app,
+            getattr(app, "xyz_plate_y_offset", None),
+            app.settings.get(
+                "xyz_plate_y_offset",
+                DEFAULT_SETTINGS.get(
+                    "xyz_plate_y_offset",
+                    tool_measurement.DEFAULT_XYZ_PLATE_Y_OFFSET_MM,
+                ),
+            ),
+            "XYZ plate Y offset",
+        )
+        if getattr(app, "xyz_plate_y_offset", None) is not None
+        else float(
+            app.settings.get(
+                "xyz_plate_y_offset",
+                DEFAULT_SETTINGS.get(
+                    "xyz_plate_y_offset",
+                    tool_measurement.DEFAULT_XYZ_PLATE_Y_OFFSET_MM,
+                ),
+            )
+        )
+    )
+    xyz_plate_side_clearance_distance_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_side_clearance_distance",
+        key="xyz_plate_side_clearance_distance",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_SIDE_CLEARANCE_DISTANCE_MM,
+        label="XYZ plate side clearance distance",
+    )
+    xyz_plate_z_rough_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_z_rough_probe_speed",
+        key="xyz_plate_z_rough_probe_speed",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_Z_ROUGH_PROBE_FEED_MM_MIN,
+        label="XYZ plate Z rough probe speed",
+    )
+    xyz_plate_z_reprobe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_z_reprobe_speed",
+        key="xyz_plate_z_reprobe_speed",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_Z_REPROBE_FEED_MM_MIN,
+        label="XYZ plate Z re-probe speed",
+    )
+    xyz_plate_z_fine_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_z_fine_probe_speed",
+        key="xyz_plate_z_fine_probe_speed",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_Z_FINE_PROBE_FEED_MM_MIN,
+        label="XYZ plate Z fine probe speed",
+    )
+    xyz_plate_xy_rough_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_xy_rough_probe_speed",
+        key="xyz_plate_xy_rough_probe_speed",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_XY_ROUGH_PROBE_FEED_MM_MIN,
+        label="XYZ plate XY rough probe speed",
+    )
+    xyz_plate_xy_fine_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="xyz_plate_xy_fine_probe_speed",
+        key="xyz_plate_xy_fine_probe_speed",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_XY_FINE_PROBE_FEED_MM_MIN,
+        label="XYZ plate XY fine probe speed",
+    )
+    xyz_plate_probe_dwell_value = _read_nonnegative_float_or_default_setting(
+        app,
+        attr_name="xyz_plate_probe_dwell",
+        key="xyz_plate_probe_dwell",
+        default=tool_measurement.DEFAULT_XYZ_PLATE_PROBE_DWELL_S,
+        label="XYZ plate probe dwell",
+    )
+    bit_setter_x_value = (
+        _safe_float(
+            app,
+            getattr(app, "bit_setter_x", None),
+            app.settings.get(
+                "bit_setter_x",
+                DEFAULT_SETTINGS.get(
+                    "bit_setter_x", tool_measurement.DEFAULT_BIT_SETTER_X_MM
+                ),
+            ),
+            "bit setter X",
+        )
+        if getattr(app, "bit_setter_x", None) is not None
+        else float(
+            app.settings.get(
+                "bit_setter_x",
+                DEFAULT_SETTINGS.get(
+                    "bit_setter_x", tool_measurement.DEFAULT_BIT_SETTER_X_MM
+                ),
+            )
+        )
+    )
+    bit_setter_y_value = (
+        _safe_float(
+            app,
+            getattr(app, "bit_setter_y", None),
+            app.settings.get(
+                "bit_setter_y",
+                DEFAULT_SETTINGS.get(
+                    "bit_setter_y", tool_measurement.DEFAULT_BIT_SETTER_Y_MM
+                ),
+            ),
+            "bit setter Y",
+        )
+        if getattr(app, "bit_setter_y", None) is not None
+        else float(
+            app.settings.get(
+                "bit_setter_y",
+                DEFAULT_SETTINGS.get(
+                    "bit_setter_y", tool_measurement.DEFAULT_BIT_SETTER_Y_MM
+                ),
+            )
+        )
+    )
+    bit_setter_rough_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="bit_setter_rough_probe_speed",
+        key="bit_setter_rough_probe_speed",
+        default=tool_measurement.DEFAULT_TOOL_PROBE_ROUGH_FEED_MM_MIN,
+        label="bit setter rough probe speed",
+    )
+    bit_setter_fine_probe_speed_value = _read_positive_float_setting(
+        app,
+        attr_name="bit_setter_fine_probe_speed",
+        key="bit_setter_fine_probe_speed",
+        default=tool_measurement.DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN,
+        label="bit setter fine probe speed",
+    )
+    bit_setter_probe_dwell_value = _read_nonnegative_float_or_default_setting(
+        app,
+        attr_name="bit_setter_probe_dwell",
+        key="bit_setter_probe_dwell",
+        default=tool_measurement.DEFAULT_TOOL_PROBE_DWELL_S,
+        label="bit setter probe dwell",
     )
     grbl_popup_dedupe_value = _read_nonnegative_float_setting(
         app,
@@ -830,7 +1123,6 @@ def save_settings(app):
         _build_ui_settings(
             app,
             tooltip_timeout_value=tooltip_timeout_value,
-            grbl_popup_auto_dismiss_value=grbl_popup_auto_dismiss_value,
             grbl_popup_dedupe_value=grbl_popup_dedupe_value,
             pos_status_enabled=pos_status_enabled,
         )
@@ -843,6 +1135,22 @@ def save_settings(app):
             macro_total_timeout_value=macro_total_timeout_value,
             macro_probe_z_value=float(macro_probe_z_value),
             macro_probe_margin_value=macro_probe_margin_value,
+            xyz_plate_thickness_value=xyz_plate_thickness_value,
+            xyz_plate_min_safe_probe_distance_value=xyz_plate_min_safe_probe_distance_value,
+            xyz_plate_x_offset_value=float(xyz_plate_x_offset_value),
+            xyz_plate_y_offset_value=float(xyz_plate_y_offset_value),
+            xyz_plate_side_clearance_distance_value=xyz_plate_side_clearance_distance_value,
+            xyz_plate_z_rough_probe_speed_value=xyz_plate_z_rough_probe_speed_value,
+            xyz_plate_z_reprobe_speed_value=xyz_plate_z_reprobe_speed_value,
+            xyz_plate_z_fine_probe_speed_value=xyz_plate_z_fine_probe_speed_value,
+            xyz_plate_xy_rough_probe_speed_value=xyz_plate_xy_rough_probe_speed_value,
+            xyz_plate_xy_fine_probe_speed_value=xyz_plate_xy_fine_probe_speed_value,
+            xyz_plate_probe_dwell_value=xyz_plate_probe_dwell_value,
+            bit_setter_x_value=float(bit_setter_x_value),
+            bit_setter_y_value=float(bit_setter_y_value),
+            bit_setter_rough_probe_speed_value=bit_setter_rough_probe_speed_value,
+            bit_setter_fine_probe_speed_value=bit_setter_fine_probe_speed_value,
+            bit_setter_probe_dwell_value=bit_setter_probe_dwell_value,
         )
     )
     data.update(_build_kasa_settings(app))

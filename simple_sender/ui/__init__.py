@@ -22,8 +22,4 @@
 
 """UI components for Simple Sender."""
 
-from .viewer.gcode_viewer import GcodeViewer
-
-__all__ = [
-    "GcodeViewer",
-]
+__all__: list[str] = []

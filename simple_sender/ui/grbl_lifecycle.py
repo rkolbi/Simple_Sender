@@ -172,7 +172,7 @@ def _clear_loaded_job_after_restore_failure(app) -> None:
         try:
             refresh_file_info()
         except Exception as exc:
-            _log_suppressed("Failed refreshing File Info after reconnect restore failure", exc)
+            _log_suppressed("Failed refreshing Job Info after reconnect restore failure", exc)
     try:
         disable_job_controls(app)
     except Exception as exc:
@@ -712,6 +712,7 @@ def handle_connection_event(app, is_on: bool, port):
         preserve_latched_alarm = bool(alarm_latched) and not bool(getattr(app, "_user_disconnect", False))
         if preserve_latched_alarm:
             app._alarm_message = alarm_message
+            app._alarm_recovery_log_key = None
         else:
             app._alarm_latched = False
             app._alarm_clear_requested = False

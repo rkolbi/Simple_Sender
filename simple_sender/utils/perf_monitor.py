@@ -328,8 +328,7 @@ class AppPerformanceMonitor:
         self._quiet_idle_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         self._stream_cpu_stats = _RollingCpuStats(maxlen=self._cpu_sample_maxlen)
         self._phase_stats: dict[str, _PhaseSampleStats] = {
-            "idle_gcode_visible": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
-            "idle_gcode_hidden": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
+            "idle_connected": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
             "streaming": _PhaseSampleStats(maxlen=self._cpu_sample_maxlen),
         }
         self._sample_trace: deque[dict[str, float | int | str | None]] = deque(
@@ -473,15 +472,6 @@ class AppPerformanceMonitor:
             return connected and stream_state in {"running", "paused"}
         except Exception:
             return False
-
-    def _is_gcode_tab_visible(self) -> bool:
-        try:
-            label = str(getattr(self._app, "_active_tab_label", "") or "").strip().lower()
-        except Exception:
-            return False
-        if not label:
-            return False
-        return label in {"g-code", "gcode"}
 
     def _phase_metrics_snapshot(self) -> dict[str, dict[str, float | int | None]]:
         phase_metrics: dict[str, dict[str, float | int | None]] = {}
@@ -642,11 +632,9 @@ class AppPerformanceMonitor:
             connected_idle = self._connected_and_idle()
             if connected_idle:
                 self._idle_cpu_stats.add(cpu_pct)
-                phase_key = "idle_gcode_visible" if self._is_gcode_tab_visible() else "idle_gcode_hidden"
-                self._phase_stats[phase_key].add(cpu_pct, rss)
-                phase = phase_key
-                if phase_key == "idle_gcode_hidden":
-                    self._collect_hidden_idle_contributors(sample_cpu_ms=sample_cpu_ms)
+                self._phase_stats["idle_connected"].add(cpu_pct, rss)
+                phase = "idle_connected"
+                self._collect_hidden_idle_contributors(sample_cpu_ms=sample_cpu_ms)
             if self._connected_and_quiet_idle():
                 self._quiet_idle_cpu_stats.add(cpu_pct)
             if self._connected_and_streaming():
@@ -804,7 +792,7 @@ class AppPerformanceMonitor:
             lines.append(f"Streaming CPU avg/p95: {stream_cpu_avg:.2f}% / {stream_cpu_p95:.2f}%")
         if phase_metrics:
             lines.append("Phase CPU/RSS:")
-            for phase_name in ("idle_gcode_visible", "idle_gcode_hidden", "streaming"):
+            for phase_name in ("idle_connected", "streaming"):
                 phase = phase_metrics.get(phase_name)
                 if not isinstance(phase, dict):
                     continue

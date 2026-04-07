@@ -288,13 +288,9 @@ def update_joystick_polling_state(app):
 def restore_joystick_bindings_on_start(app):
     if not getattr(app, "_joystick_auto_enable_requested", False):
         return
-    if not hasattr(app, "btn_toggle_joystick_bindings"):
-        app.after(100, app._restore_joystick_bindings_on_start)
-        return
     app._joystick_auto_enable_requested = False
     if not app.joystick_bindings_enabled.get():
         return
-    app._refresh_joystick_toggle_text()
     app._update_joystick_polling_state()
 
 def get_pygame_module(app) -> ModuleType | None:

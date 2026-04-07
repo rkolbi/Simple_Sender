@@ -20,9 +20,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Settings UI package exports."""
+"""Settings UI package exports for the current popup-based settings surface."""
 
-from .dialog import build_app_settings_tab
+from .dialog import (
+    activate_app_settings_surface,
+    build_app_settings_panel,
+    deactivate_app_settings_surface,
+)
 from .scroll import (
     bind_app_settings_mousewheel,
     bind_app_settings_touch_scroll,
@@ -46,6 +50,7 @@ from .sections import (
     build_kasa_plug_section,
     build_keyboard_shortcuts_section,
     build_macros_section,
+    build_probing_setup_section,
     build_power_section,
     build_safety_aids_section,
     build_safety_section,
@@ -55,7 +60,9 @@ from .sections import (
 )
 
 __all__ = [
-    "build_app_settings_tab",
+    "activate_app_settings_surface",
+    "build_app_settings_panel",
+    "deactivate_app_settings_surface",
     "bind_app_settings_mousewheel",
     "bind_app_settings_touch_scroll",
     "on_app_settings_mousewheel",
@@ -76,6 +83,7 @@ __all__ = [
     "build_kasa_plug_section",
     "build_keyboard_shortcuts_section",
     "build_macros_section",
+    "build_probing_setup_section",
     "build_power_section",
     "build_safety_aids_section",
     "build_safety_section",

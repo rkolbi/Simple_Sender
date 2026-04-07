@@ -109,11 +109,14 @@ def _run_progress_text(app) -> str:
     line_pct, line_known = _run_progress_pct_from_lines(app)
     byte_pct = _run_progress_pct_from_bytes(app)
     if line_pct is not None and line_known:
-        pct = line_pct if byte_pct is None else min(line_pct, byte_pct)
+        pct = line_pct
+    elif line_pct is not None:
+        # Even estimated executable-line totals are a closer proxy for job
+        # completion than raw file-byte offsets, which are skewed heavily by
+        # comments, directives, and uneven line lengths.
+        pct = line_pct
     elif byte_pct is not None:
         pct = byte_pct
-    elif line_pct is not None:
-        pct = line_pct
     else:
         return "n/a"
     stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()

@@ -42,6 +42,7 @@ from simple_sender.ui.theme_helpers import (
     refresh_theme_widgets,
     text_display_theme_options,
 )
+from simple_sender.utils.config import DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -122,20 +123,20 @@ def on_theme_change(app, *_):
     )
 
 
-def on_optional_tab_visibility_change(app) -> None:
-    sync_tabs = getattr(app, "_sync_optional_tab_visibility", None)
-    if callable(sync_tabs):
+def on_auxiliary_button_visibility_change(app) -> None:
+    sync_buttons = getattr(app, "_sync_auxiliary_button_visibility", None)
+    if callable(sync_buttons):
         try:
-            sync_tabs()
+            sync_buttons()
         except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-            _log_suppressed("Failed syncing optional notebook tab visibility", exc)
+            _log_suppressed("Failed syncing auxiliary lower button visibility", exc)
     try:
-        app.status.config(text="Tab visibility updated")
+        app.status.config(text="Auxiliary button visibility updated")
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-        _log_suppressed("Failed updating status text for tab visibility change", exc)
+        _log_suppressed("Failed updating status text for auxiliary button visibility change", exc)
     _persist_ui_setting_change(
         app,
-        failure_text="Tab visibility changed for this session only; settings save failed",
+        failure_text="Auxiliary button visibility changed for this session only; settings save failed",
     )
 
 
@@ -387,6 +388,37 @@ def on_linux_file_dialog_scale_change(app, _event=None):
     _persist_ui_setting_change(
         app,
         failure_text="Linux file dialog scale changed for this session only; settings save failed",
+    )
+
+
+def on_linux_file_dialog_default_path_change(app, _event=None):
+    default_path = str(
+        DEFAULT_SETTINGS.get("linux_file_dialog_default_path", "/root/CNC_Jobs")
+        or "/root/CNC_Jobs"
+    ).strip() or "/root/CNC_Jobs"
+    path = default_path
+    if hasattr(app, "linux_file_dialog_default_path"):
+        try:
+            candidate = str(app.linux_file_dialog_default_path.get() or "").strip()
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+            candidate = ""
+        if candidate:
+            path = candidate
+    try:
+        app.linux_file_dialog_default_path.set(path)
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed writing normalized Linux file dialog default path", exc)
+    try:
+        app.settings["linux_file_dialog_default_path"] = path
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed persisting Linux file dialog default path", exc)
+    try:
+        app.status.config(text=f"Linux file dialog default path: {path}")
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed updating status text for Linux file dialog default path", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Linux file dialog default path changed for this session only; settings save failed",
     )
 
 

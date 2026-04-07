@@ -139,55 +139,55 @@ def _build_interface_logging_row(app, interface_frame, row: int) -> int:
     return row + 1
 
 
-def _build_interface_tab_visibility_row(app, interface_frame, row: int) -> int:
-    if not hasattr(app, "show_logs_tab"):
-        app.show_logs_tab = tk.BooleanVar(master=interface_frame, value=False)
-    if not hasattr(app, "show_raw_grbl_tab"):
-        app.show_raw_grbl_tab = tk.BooleanVar(master=interface_frame, value=False)
-    if not hasattr(app, "show_checklists_tab"):
-        app.show_checklists_tab = tk.BooleanVar(master=interface_frame, value=True)
-    on_optional_tab_visibility_change = getattr(
+def _build_interface_auxiliary_button_visibility_row(app, interface_frame, row: int) -> int:
+    if not hasattr(app, "show_logs_button"):
+        app.show_logs_button = tk.BooleanVar(master=interface_frame, value=False)
+    if not hasattr(app, "show_raw_grbl_button"):
+        app.show_raw_grbl_button = tk.BooleanVar(master=interface_frame, value=False)
+    if not hasattr(app, "show_checklists_button"):
+        app.show_checklists_button = tk.BooleanVar(master=interface_frame, value=True)
+    on_auxiliary_button_visibility_change = getattr(
         app,
-        "_on_optional_tab_visibility_change",
+        "_on_auxiliary_button_visibility_change",
         lambda *_args, **_kwargs: None,
     )
-    ttk.Label(interface_frame, text="Notebook tabs").grid(
+    ttk.Label(interface_frame, text="Auxiliary panel buttons").grid(
         row=row, column=0, sticky="w", pady=(10, 0)
     )
     tabs_row = ttk.Frame(interface_frame)
     tabs_row.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
     app.logs_tab_visibility_check = ttk.Checkbutton(
         tabs_row,
-        text="Show Logs Tab",
-        variable=app.show_logs_tab,
-        command=on_optional_tab_visibility_change,
+        text="Show Logs Button",
+        variable=app.show_logs_button,
+        command=on_auxiliary_button_visibility_change,
     )
     app.logs_tab_visibility_check.pack(side="left")
     apply_tooltip(
         app.logs_tab_visibility_check,
-        "Show or hide the Logs notebook tab.",
+        "Show or hide the Logs popup button.",
     )
     app.raw_grbl_tab_visibility_check = ttk.Checkbutton(
         tabs_row,
-        text="Show Raw $$ Tab",
-        variable=app.show_raw_grbl_tab,
-        command=on_optional_tab_visibility_change,
+        text="Show Raw $$ Button",
+        variable=app.show_raw_grbl_button,
+        command=on_auxiliary_button_visibility_change,
     )
     app.raw_grbl_tab_visibility_check.pack(side="left", padx=(12, 0))
     apply_tooltip(
         app.raw_grbl_tab_visibility_check,
-        "Show or hide the Raw $$ notebook tab.",
+        "Show or hide the Raw $$ popup button.",
     )
     app.checklists_tab_visibility_check = ttk.Checkbutton(
         tabs_row,
-        text="Show Checklists Tab",
-        variable=app.show_checklists_tab,
-        command=on_optional_tab_visibility_change,
+        text="Show Checklists Button",
+        variable=app.show_checklists_button,
+        command=on_auxiliary_button_visibility_change,
     )
     app.checklists_tab_visibility_check.pack(side="left", padx=(12, 0))
     apply_tooltip(
         app.checklists_tab_visibility_check,
-        "Show or hide the Checklists notebook tab.",
+        "Show or hide the Checklists popup button.",
     )
     return row + 2
 
@@ -371,7 +371,7 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     )
     next_row = _build_interface_performance_row(app, interface_frame, 1)
     next_row = _build_interface_logging_row(app, interface_frame, next_row)
-    next_row = _build_interface_tab_visibility_row(app, interface_frame, next_row)
+    next_row = _build_interface_auxiliary_button_visibility_row(app, interface_frame, next_row)
     next_row = _build_interface_indicators_row(app, interface_frame, next_row)
     next_row = _build_status_bar_button_visibility_row(app, interface_frame, next_row)
     _build_status_bar_quick_toggle_row(app, interface_frame, next_row)

@@ -5,32 +5,47 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+- No changes tracked yet.
+
+## [3.0] - 2026-04-05
+
 ### Changed
-- `Read Job` now uses the shared file-dialog path instead of the removed in-app browser flow:
-  - Linux dialogs honor `Linux File Dialog Scale`
-  - Linux dialogs apply the current theme and a readable minimum size before opening
-  - README now documents the current OS-picker workflow instead of the removed `Use System Picker` path
-- Application lifecycle/system controls are now documented and aligned with the current UI:
-  - `Close Application` is available on all platforms
-  - `Shutdown`, `Reboot`, and `Pi profile` remain Linux-only
-  - closing is explicitly documented as application lifecycle behavior, not machine power control
-- File metadata and run-confirmation summaries now keep tool metadata truthful:
-  - `Toolpaths` and `Tools` are shown as separate lists in File Info and Start Job confirmation when present
-  - the app no longer implies false toolpath-to-tool pairings
-- The old Overdrive-centered validation workflow is no longer treated as a current review surface:
-  - use File Info, Preflight, and the Start Job confirmation for truthful run review instead
-- Macro docs and runtime behavior now align on the single supported 4-line header + body format:
-  - malformed or legacy-layout macros are rejected clearly instead of being documented as accepted compatibility formats
-- Runtime-marker/duplicate-instance behavior is now documented as part of the supported deployment/update workflow:
-  - syncing over a live running instance is unsupported
-  - the app should be closed, or the Pi rebooted/shut down, before syncing updates
+- Lower UI redesigned around the current machine-side workflow:
+  - removed the visible lower G-code tab
+  - Console is now persistent on the left
+  - right-side machine controls remain visible alongside the Console
+  - Job Info, Checklists, Logs, Raw $$, GRBL Settings, and App Settings now open as large dark-themed popups
+- Workflow/macro architecture finalized for the current runtime:
+  - protected built-in workflow actions are now implemented directly in application code, not as macro files
+  - user macros are now the only file-backed macros
+  - editable user macro storage now uses `Macro-1` through `Macro-5`
+- Lower-UI cleanup/refactor completed:
+  - removed notebook-era lower-layout compatibility support from the active runtime model
+  - trimmed hidden legacy live-window/runtime work tied to the removed lower G-code pane
+  - runtime now uses a headless live-window/job-view state holder instead of a visible lower G-code widget surface
+  - aligned runtime naming, tests, and documentation with the current popup/button model
+- Probing and setup workflows were hardened across the release cycle:
+  - machine-Z-aware touchplate planning now clamps against real machine travel
+  - fixed-sensor / bitsetter probing now validates retract vs fine re-probe tuning before motion
+  - fixed-sensor fine sampling was retuned to eliminate the confirmed post-contact `ALARM:5` mismatch
+  - Tool Change gets a one-time slower retry pass only when first-round spread exceeds `0.050 mm`
+  - Run / Job Setup validity now matches Tool Change's current tool-reference format requirement
+- Release-facing docs now reflect the current lower UI, current setup/tool-reference expectations, and the supported deployment/update workflow.
 
 ### Fixed
-- The Start Job confirmation popup now follows the active Gemini/dark theme instead of falling back to a white dialog surface.
-- Recent UI-performance polish reduced avoidable hidden/background notebook work and trimmed minor status-turn UI overhead without changing machine-control semantics.
+- Alarm and workflow dialogs now follow the dark UI consistently, including the GRBL alarm popup, alarm recovery, Start Job confirmation, and Job Setup warning surfaces.
+- File metadata and run-confirmation summaries keep tool metadata truthful instead of implying false toolpath-to-tool pairings.
+- Recent lower-UI/runtime cleanup reduced avoidable hidden/background work without changing machine-control semantics.
+
+### Validation
+- Recent real-machine probing validation for the current bitsetter/tool-reference workflow completed successfully:
+  - accepted Job Setup and Tool Change measurement rounds
+  - tight clustering observed in the latest validation bundle, including `0.0050 mm` spreads
+  - no Tool Change retry pass was needed in that successful run
 
 ### Documentation
-- README, macro docs, deployment docs, and historical closeout docs were refreshed to match the current codebase and remove stale references to removed workflows.
+- README, macro docs, deployment docs, About docs, and release-facing notes were refreshed for the stable v3.0 release.
+- Added dedicated v3.0 release notes.
 
 ## [2.8] - 2026-03-31
 
@@ -172,7 +187,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - backup-bundle import validates settings, warns about repairs/collisions, and completes the async success path visibly
   - deferred-completion busy protection now covers macro start, probing, and settings refresh
   - the local release-gate baseline now reflects the latest `run_tests.bat` run (`1433 passed, 3 skipped`)
-- README now documents the stabilization baseline, the preflight service/facade boundary (`preflight_service.py` behind `diagnostics_preflight.py`), and expanded operator troubleshooting for preflight outcomes.
+- README now documents the stabilization baseline, the direct preflight service boundary, and expanded operator troubleshooting for preflight outcomes.
 - README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
 - README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-27; coverage test stage reported `1433 passed, 3 skipped`).
 - README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.

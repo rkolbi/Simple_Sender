@@ -22,8 +22,4 @@
 
 """G-code viewer helpers."""
 
-from .gcode_viewer import GcodeViewer
-
-__all__ = [
-    "GcodeViewer",
-]
+__all__: list[str] = []

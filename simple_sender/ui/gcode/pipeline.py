@@ -511,7 +511,7 @@ def clear_gcode(app):
         try:
             file_info_refresher()
         except Exception as exc:
-            _log_suppressed("Failed refreshing File Info after clearing G-code", exc)
+            _log_suppressed("Failed refreshing Job Info after clearing G-code", exc)
 
 
 def _reset_autolevel_state(app) -> None:

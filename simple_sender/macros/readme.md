@@ -1,73 +1,58 @@
-﻿# CNC Reference Macros
+# User Macros
 
-This folder contains the default sample macros shipped with Simple Sender.
+This folder is for file-backed **user macros** only.
 
-The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported) from:
-- `simple_sender/macros/`
-- `macros/` beside `main.py`
-- the directory that contains `main.py`
+Protected built-in workflows such as **Park at Work**, **Park at Bit Setter**, **Job Setup**, and **Tool Change** are now implemented in application code. They are not stored here, are not editable, and are not discovered/imported/exported as user macro assets.
+
+Editable user macro slots remain:
+- `User Macro 1` through `User Macro 5`
+- stored as `Macro-1` through `Macro-5` (optional `.txt` extensions supported)
+- discovered from:
+  - `simple_sender/macros/`
+  - `macros/` beside `main.py`
+  - the directory that contains `main.py`
 
 ## Setup
 
-1. Enable **Allow macro scripting (Python/eval)** in App Settings > Macros.
-2. Home the machine and verify your touch plate, clip, and fixed sensor are installed and clean.
-3. Edit machine-specific values inside the macro files (`SAFE_HEIGHT`, `PROBE_*`, `PLATE_THICKNESS`, offsets, etc.) before use, and review the current App Settings Z jog speed because Macro-3 / Macro-4 use that for the fixed-sensor coarse seek.
+1. Enable **Allow macro scripting (Python/eval)** in `App Settings > Macros` only if your user macros need scripting.
+2. Use `App Settings > Probing & Setup` for XYZ Plate and Bit Setter machine/workflow configuration. Those values are no longer authored in macro files.
 
-## Shipped Macros
+## Supported Macro File Format
 
-- `Macro-1` - **Park over WPos X/Y**: lifts to safe machine Z and returns to WCS X0/Y0.
-- `Macro-2` - **Park over Bit Setter**: parks over fixed sensor coordinates in machine coordinates.
-- `Macro-3` - **Job Setup**: guided setup chooser that asks for `XYZ Plate`, `Z Plate`, or `Manual`, then runs the matching setup flow and captures `macro.state.TOOL_REFERENCE`.
-- `Macro-4` - **Tool Change**: requires existing `macro.state.TOOL_REFERENCE` in the current `TOOL_REFERENCE_FORMAT`, re-probes after swap, then reapplies `G10 L20 Z[...]`; this same workflow is used when streamed files contain `TC:<tool name>` sender directives.
-- Backup/reference macro files are intentionally kept outside this folder to avoid accidental runtime loading.
+The current app supports only this header layout:
+- line 1: button label
+- line 2: tooltip
+- line 3: button color or blank
+- line 4: button text color or blank
+- line 5+: macro body
 
-## Recommended Flow
-
-1. Use `Macro-3` (**Job Setup**) and choose `XYZ Plate`, `Z Plate`, or `Manual`.
-2. Use `Macro-4` (**Tool Change**) for subsequent tool swaps (or let streamed `TC:<tool name>` lines trigger the same dialog/workflow automatically).
-3. Re-run `Macro-3` after disconnect/reconnect, controller reset/new session, or any reset path that clears setup assumptions.
-4. Use `Macro-1`/`Macro-2` for safe parking moves during setup and maintenance.
+Rules:
+- the file must include at least one non-blank body line
+- older/alternate header layouts are rejected instead of guessed or auto-migrated
+- malformed files are marked invalid in the UI and blocked from running until repaired
 
 ## Notes
 
-- Macro file header format:
-  - this is the only supported macro header format in the current app
-  - line 1 = button label
-  - line 2 = tooltip
-  - line 3 = button color (`#RRGGBB`, `#RGB`, named color, or `color: ...`/`color=...`) (leave blank if unused)
-  - line 4 = button text color (`#RRGGBB`, `#RGB`, named color, or `text_color: ...`/`foreground: ...`/`fg: ...`) (leave blank if unused)
-  - line 5+ = executed macro body
-  - the file must include at least one non-blank body line
-  - older/alternate header layouts are not auto-migrated or accepted as compatibility formats
-  - unsupported or malformed files are flagged as invalid in the UI and blocked from running until repaired
-- The bundled `Macro-1` through `Macro-4` files in this repo already use that current header format.
 - The macro runner snapshots modal state, forces `G21` during the run, and restores units/state via `STATE_RETURN`.
 - `%msg` lines log progress in the console.
-- Macro-3 and Macro-4 share the same fixed-sensor measurement helper. The coarse seek feed comes from the current App Settings Z jog speed, then the helper collects 5 exact samples, trims min/max, averages the middle 3, and enforces the normal spread tolerance.
-- Current fixed-sensor fine-cycle tuning is `5.0 mm` retract, `0.5 s` dwell, `6.0 mm` fine re-probe distance, and `175 mm/min` fine feed.
-- Tool Change only: if the first fixed-sensor round exceeds `0.050 mm` spread, one retry round is attempted automatically at `100 mm/min`. The retry still has to pass the normal spread rule or Macro-4 fails.
-- During file streaming, `TC:<tool name>` is handled as a sender directive (not GRBL G-code): the app pauses the stream, runs Macro-4 to move to the tool setter, then shows a single swap/cancel prompt, re-measures when resumed, and continues when complete.
-- During file streaming, exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines are sender directives that trigger configured vacuum outlet actions and are never sent to GRBL.
-- Run-button safety gate: starting a job checks the same current-format Job Setup tool-reference state required by Tool Change. If the stored reference is missing, invalid, or missing the current `TOOL_REFERENCE_FORMAT`, the app shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
-- Dry Run safeguards: when Dry Run is enabled, both Run and Resume paths prompt before start/resume side effects (`Continue in Dry Run`, `Switch to Normal Run and Start/Resume`, `Cancel`).
-- `Disable Macro Timeouts` in **App Settings > Macros** disables the normal prompt, line, and total timeout enforcement used for general macro runs.
-- `Macro-3 (Job Setup)` and `Macro-4 (Tool Change)` already use scoped operator-assisted unlimited-wait behavior where the operator is expected to respond to prompts or complete setup/tool-change actions. Streamed `TC:<tool name>` tool changes also use their own scoped no-timeout override while the stream is paused.
-- Checklist files (`checklist-*.chk`) in this folder feed the Checklists tab (with collapsible checklist titles) and release/start-job checklist dialogs.
+- `Disable Macro Timeouts` in `App Settings > Macros` disables the normal prompt, line, and total timeout enforcement used for general user-macro runs.
+- General user macros default to finite timeout guards (`120 s` per line, `900 s` total).
+- Checklist files (`checklist-*.chk`) in this folder feed the Checklists popup content and release/start-job checklist dialogs.
 
 ## Core Directives
 
-- `%wait`: pause macro execution until GRBL reports `Idle`.
-- `%update`: request a fresh status update before using `wx/wy/wz` or modal values.
-- `%msg <text>`: write status text to the console with a `[macro]` prefix.
-- `%if running`, `%if paused`, `%if not running`: gate a line by stream state.
-- `STATE_RETURN` (or `%state_return`): restore the modal snapshot captured at macro start.
+- `%wait`: pause macro execution until GRBL reports `Idle`
+- `%update`: request a fresh status update before using `wx/wy/wz` or modal values
+- `%msg <text>`: write status text to the console with a `[macro]` prefix
+- `%if running`, `%if paused`, `%if not running`: gate a line by stream state
+- `STATE_RETURN` (or `%state_return`): restore the modal snapshot captured at macro start
 
 ## Shared State
 
 - Macros can share values via `macro.state.*`, for example:
   - `%macro.state.STOCK_TOP = wz`
   - `G0 Z[macro.state.STOCK_TOP]`
-- The app also keeps runtime values in `_macro_vars` (`wx/wy/wz`, overrides, planner/rx bytes, `PRB`, etc.).
+- The app also keeps runtime values in `_macro_vars` (`wx/wy/wz`, overrides, planner/rx bytes, `PRB`, etc.)
 
 ## Reliability Checklist
 
@@ -75,15 +60,13 @@ The app loads `Macro-1` through `Macro-8` (optional `.txt` extensions supported)
 2. Make modal intent explicit (`G90`/`G91`, feed mode, units) near motion lines.
 3. Use `%wait` after long moves or probe cycles.
 4. End with `STATE_RETURN` if the macro changes modal state.
-5. Set line/total macro timeouts in `App Settings > Macros` for unattended routines, or turn on `Disable Macro Timeouts` only when you intentionally want general macros to wait indefinitely.
 
 ## Quick Troubleshooting
 
-- Button missing: ensure file name is `Macro-1`..`Macro-8` in a discovered macros directory.
+- User macro button missing from the main panel: ensure the assigned file is named `Macro-1`..`Macro-5` in a discovered macros directory.
 - Macro blocked: streaming/alarm/disconnected states prevent execution by design.
-- Macro marked `[invalid]`: the file does not match the supported 4-line header plus body format; repair the file structure and try again. Legacy/alternate header layouts are rejected instead of being guessed at.
-- Run warns `Job Setup Not Completed`: run `Macro-3` to repopulate the current-format tool reference for the current session, then retry.
-- Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the tool-change macro prerequisites (for example current `macro.state.TOOL_REFERENCE` plus `TOOL_REFERENCE_FORMAT`) are satisfied.
+- Macro marked `[invalid]`: the file does not match the supported 4-line header plus body format; repair the file structure and try again.
+- Run warns `Job Setup Not Completed`: run the built-in `Job Setup` workflow to repopulate the current-format tool reference for the current session, then retry.
+- Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the current Job Setup reference state is still valid.
 - Stale coordinates: insert `%update` before using `wx/wy/wz`.
-- Appears complete too early: keep Current Line mode on `Machine` and watch for final `Idle`.
 - Unexpected units/modal state: add `STATE_RETURN` or explicit restore lines.

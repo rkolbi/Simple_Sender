@@ -20,24 +20,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Bounded live G-code viewer (Past/Current/Next window).
-
-Lean sender mode keeps the G-code tab lightweight by rendering only a fixed
-window sourced from streaming worker queues. Legacy full-file text rendering
-entry points are intentionally no-ops.
-"""
+"""Headless live G-code state helpers used by the current runtime."""
 
 from __future__ import annotations
-
-import tkinter as tk
-from tkinter import ttk
 
 from ...utils.constants import (
     GCODE_LIVE_WINDOW_LOOKAHEAD_LINES,
     GCODE_LIVE_WINDOW_PAST_LINES,
-    COLOR_GCODE_CURRENT,
-    COLOR_GCODE_TEXT,
-    COLOR_GCODE_BG,
 )
 
 
@@ -51,59 +40,25 @@ def reset_gcode_view_for_run(app) -> None:
     app._last_error_index = -1
 
 
-class GcodeViewer(ttk.Frame):
-    """Text widget for bounded live Past/Current/Next G-code display."""
+class HeadlessGcodeView:
+    """Non-widget live-window/job-view state holder used by the current runtime.
 
-    def __init__(self, parent: tk.Widget):
-        super().__init__(parent)
+    The redesigned lower UI no longer exposes a visible G-code pane. Runtime
+    code still expects ``app.gview`` for lightweight job-present checks,
+    load/reset state, and current-line bookkeeping, so this headless object
+    keeps those semantics without a widget tree.
+    """
 
-        self.text = tk.Text(self, wrap="none", height=18, undo=False)
-        self.apply_theme_palette(None)
-
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
-        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
-        self.text.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
-
-        self.text.grid(row=0, column=0, sticky="nsew")
-        self.vsb.grid(row=0, column=1, sticky="ns")
-        self.hsb.grid(row=1, column=0, sticky="ew")
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-
+    def __init__(self) -> None:
         self.lines_count = 0
         self._sent_upto = -1
         self._acked_upto = -1
         self._current_idx = -1
-        self._live_mode = True
-        self._live_current_row: int | None = None
+        self._live_payload: dict[str, object] | None = None
 
-    def apply_theme_palette(self, palette: dict[str, str] | None) -> None:
-        colors = dict(palette) if isinstance(palette, dict) else {}
-        bg = colors.get("text_pane_bg", COLOR_GCODE_BG)
-        fg = colors.get("text_pane_fg", COLOR_GCODE_TEXT)
-        selection_bg = colors.get("selection_bg", COLOR_GCODE_CURRENT)
-        selection_fg = colors.get("selection_fg", fg)
-        current_bg = colors.get("text_pane_current_line_bg", COLOR_GCODE_CURRENT)
-        border = colors.get("text_pane_border", bg)
-        insert = colors.get("text_pane_insert", fg)
-        self.text.configure(
-            background=bg,
-            foreground=fg,
-            insertbackground=insert,
-            selectbackground=selection_bg,
-            selectforeground=selection_fg,
-            inactiveselectbackground=selection_bg,
-            highlightbackground=border,
-            highlightcolor=colors.get("accent", border),
-            highlightthickness=1,
-            relief="flat",
-            borderwidth=1,
-        )
-        self.text.tag_configure("current", background=current_bg, foreground=fg)
+    def apply_theme_palette(self, _palette: dict[str, str] | None) -> None:
+        return None
 
-    # ------------------------------------------------------------------
-    # Lean live-window API
-    # ------------------------------------------------------------------
     def set_live_window(
         self,
         past_lines: list[tuple[int, str]],
@@ -113,13 +68,6 @@ class GcodeViewer(ttk.Frame):
         next_buffered_count: int = 0,
         highlight_current: bool = True,
     ) -> None:
-        """Render a bounded live Look Ahead/Current/Past G-code window."""
-        self._live_mode = True
-        self._live_current_row = None
-        self._sent_upto = -1
-        self._acked_upto = -1
-        self._current_idx = -1
-
         current_idx: int | None = None
         if isinstance(current_line, tuple) and len(current_line) >= 1:
             try:
@@ -139,75 +87,36 @@ class GcodeViewer(ttk.Frame):
         past = list(filtered_past[-int(GCODE_LIVE_WINDOW_PAST_LINES):])
         look_ahead = list(next_lines[: int(GCODE_LIVE_WINDOW_LOOKAHEAD_LINES)])
 
-        lines: list[str] = ["--- Look Ahead ---"]
-        if not look_ahead:
-            lines.append("<none>")
-        else:
-            # Render farthest-first so the immediate next command sits closest
-            # to Current (Acked) for operator scanning.
-            for idx, raw in reversed(look_ahead):
-                lines.append(self._format_live_line(idx, raw))
-
-        lines.append("--- Current (Acked) ---")
-        if current_line is None:
-            lines.append("<none>")
-        else:
-            self._live_current_row = len(lines) + 1
-            lines.append(self._format_live_line(current_line[0], current_line[1]))
-
-        lines.append(f"--- Past (Last {int(GCODE_LIVE_WINDOW_PAST_LINES)} acked) ---")
-        for idx, raw in reversed(past):
-            lines.append(self._format_live_line(idx, raw))
-
-        self.lines_count = len(lines)
-        self.text.config(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.insert("end", "\n".join(lines) + "\n")
-        self.text.tag_remove("current", "1.0", "end")
-        if highlight_current and self._live_current_row is not None and current_line is not None:
-            start = f"{int(self._live_current_row)}.0"
-            end = f"{int(self._live_current_row) + 1}.0"
-            self.text.tag_add("current", start, end)
-        self.text.config(state="disabled")
-
-    @staticmethod
-    def _format_live_line(idx: int | None, line: str) -> str:
-        text = str(line or "")
-        if idx is None:
-            return f"      ? | {text}"
-        try:
-            line_no = int(idx) + 1
-        except Exception:
-            line_no = 0
-        if line_no <= 0:
-            return f"      ? | {text}"
-        return f"{line_no:7d} | {text}"
+        line_count = 2
+        line_count += max(1, int(len(look_ahead)))
+        line_count += 2
+        line_count += int(len(past))
+        self.lines_count = int(line_count)
+        self._live_payload = {
+            "past_lines": list(past),
+            "current_line": current_line,
+            "next_lines": list(look_ahead),
+            "next_buffered_count": int(next_buffered_count),
+            "highlight_current": bool(highlight_current),
+        }
+        if highlight_current and current_idx is not None:
+            self._current_idx = int(current_idx)
 
     def clear(self) -> None:
         self.lines_count = 0
         self._sent_upto = -1
         self._acked_upto = -1
         self._current_idx = -1
-        self._live_current_row = None
-        self.text.config(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.config(state="disabled")
+        self._live_payload = None
 
     def clear_highlights(self) -> None:
-        self.text.config(state="normal")
-        self.text.tag_remove("current", "1.0", "end")
-        self.text.config(state="disabled")
         self._current_idx = -1
-        self._live_current_row = None
 
     def mark_sent_upto(self, idx: int) -> None:
-        """Compatibility hook for status/resume code paths (state only, no render)."""
         self._sent_upto = int(idx)
 
     def mark_acked_upto(self, idx: int) -> None:
-        """Compatibility hook for status/resume code paths (state only, no render)."""
         self._acked_upto = int(idx)
 
     def highlight_current(self, idx: int) -> None:
-        """Compatibility hook for current-line tracking (state only, no render)."""
         self._current_idx = int(idx)

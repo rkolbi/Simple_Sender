@@ -48,6 +48,9 @@ class MacroStateMixin(MacroExecutorState):
     def _macro_log(self, message: str) -> None:
         self.ui_q.put(("log", f"[macro][tool] {message}"))
 
+    def _workflow_log(self, message: str) -> None:
+        self.ui_q.put(("log", f"[workflow][tool] {message}"))
+
     def _macro_wait_for_idle(self, timeout_s: float = 30.0):
         macro_wait_for_idle(
             app=self.app,
@@ -117,6 +120,34 @@ class MacroStateMixin(MacroExecutorState):
         self._macro_state_restored = restored
         return restored
 
+    def _workflow_restore_units(self):
+        macro_restore_units(
+            app=self.app,
+            grbl=self.grbl,
+            ui_q=self.ui_q,
+            macro_send=self._macro_send,
+            macro_vars=self._macro_vars,
+            macro_vars_lock=self._macro_vars_lock,
+            state=self._macro_saved_state,
+            log_prefix="[workflow]",
+            restore_label="unit restore",
+        )
+
+    def _workflow_restore_state(self) -> bool:
+        restored = macro_restore_state(
+            app=self.app,
+            grbl=self.grbl,
+            ui_q=self.ui_q,
+            macro_send=self._macro_send,
+            macro_vars=self._macro_vars,
+            macro_vars_lock=self._macro_vars_lock,
+            state=self._macro_saved_state,
+            log_prefix="[workflow]",
+            restore_label="Modal state restore",
+        )
+        self._macro_state_restored = restored
+        return restored
+
     def measure_tool_probe_machine_z(
         self,
         *,
@@ -125,21 +156,26 @@ class MacroStateMixin(MacroExecutorState):
         spread_tolerance_mm: float = tool_measurement.DEFAULT_TOOL_PROBE_SPREAD_TOLERANCE_MM,
         measurement_label: str = "Tool measurement",
         allow_tool_change_retry: bool = False,
+        log=None,
     ) -> tool_measurement.ToolProbeMeasurement:
         label = str(measurement_label)
         retry_enabled = bool(allow_tool_change_retry)
+        cycle_settings = tool_measurement.tool_probe_cycle_settings(self.app)
+        active_log = log if callable(log) else self._macro_log
         common_kwargs = {
             "macro_send": self._macro_send,
             "probe_controller": getattr(self.app, "probe_controller", None),
             "cancel_event": getattr(self, "_alarm_event", None),
             "probe_distance_mm": float(probe_distance_mm),
             "rapid_feed_mm_min": float(rapid_feed_mm_min),
+            "dwell_s": float(cycle_settings.dwell_s),
             "spread_tolerance_mm": float(spread_tolerance_mm),
-            "log": self._macro_log,
+            "log": active_log,
         }
         try:
             return tool_measurement.collect_high_precision_tool_probe_measurement(
                 measurement_label=label,
+                fine_probe_feed_mm_min=float(cycle_settings.fine_probe_feed_mm_min),
                 **common_kwargs,
             )
         except tool_measurement.ToolProbeSpreadExceededError as exc:
@@ -147,27 +183,30 @@ class MacroStateMixin(MacroExecutorState):
                 raise
             if exc.spread_mm <= _TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM:
                 raise
-            self._macro_log(
+            active_log(
                 (
                     f"{label} first-round spread={exc.spread_mm:0.4f} mm exceeded "
                     f"retry threshold {_TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM:0.4f} mm."
                 )
             )
-            self._macro_log(
+            active_log(
                 (
                     f"{label} retry starting: one-time fallback pass with reduced fine probe speed "
-                    f"{_TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN:0.0f} mm/min."
+                    f"{min(cycle_settings.fine_probe_feed_mm_min, _TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN):0.0f} mm/min."
                 )
             )
             retry_label = f"{label} retry"
             try:
                 retry_result = tool_measurement.collect_high_precision_tool_probe_measurement(
                     measurement_label=retry_label,
-                    fine_probe_feed_mm_min=_TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN,
+                    fine_probe_feed_mm_min=min(
+                        float(cycle_settings.fine_probe_feed_mm_min),
+                        _TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN,
+                    ),
                     **common_kwargs,
                 )
             except tool_measurement.ToolProbeSpreadExceededError as retry_exc:
-                self._macro_log(
+                active_log(
                     (
                         f"{retry_label} final result: rejected under normal rules; "
                         f"spread={retry_exc.spread_mm:0.4f} mm exceeded "
@@ -175,7 +214,7 @@ class MacroStateMixin(MacroExecutorState):
                     )
                 )
                 raise
-            self._macro_log(
+            active_log(
                 (
                     f"{retry_label} final result: accepted under normal rules; "
                     f"spread={retry_result.spread_mm:0.4f} mm."

@@ -152,9 +152,6 @@ class GrblWorkerState:
     _live_acked_ring: deque[tuple[int, str]]
     _live_current_acked: tuple[int, str] | None
     _live_pending_window: deque[tuple[int, str]]
-    _live_window_refresh_s: float
-    _live_window_last_emit_ts: float
-    _live_window_dirty: bool
     _resume_preamble: deque[str]
     _pause_after_idx: int | None
     _pause_after_reason: str | None
@@ -248,9 +245,6 @@ class GrblWorkerState:
         raise NotImplementedError
 
     def _emit_buffer_fill(self) -> None:
-        raise NotImplementedError
-
-    def _emit_live_gcode_window(self, *, force: bool = False) -> None:
         raise NotImplementedError
 
     def _next_manual_command_id(self) -> int:
@@ -379,6 +373,12 @@ class MacroExecutorState:
     def _macro_restore_state(self) -> bool:
         raise NotImplementedError
 
+    def _workflow_restore_units(self) -> None:
+        raise NotImplementedError
+
+    def _workflow_restore_state(self) -> bool:
+        raise NotImplementedError
+
     def _parse_macro_prompt(
         self,
         line: str,
@@ -478,10 +478,6 @@ UiEvent = (
     | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]
     | tuple[Literal["gcode_acked"], int]
-    | tuple[
-        Literal["live_gcode_window"],
-        dict[str, Any],
-    ]
     | tuple[Literal["progress"], int, int]
     | tuple[Literal["progress_bytes"], int, int]
 )

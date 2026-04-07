@@ -38,6 +38,265 @@ from simple_sender.ui.widgets_common import set_kb_id
 _KASA_OUTLET_OPTIONS = ("Outlet 1", "Outlet 2")
 
 
+def _add_numeric_setting(
+    app,
+    frame,
+    *,
+    row_index: int,
+    pair_index: int = 0,
+    label_text: str,
+    var,
+    attr_name: str,
+    tooltip_text: str,
+    suffix_text: str | None = None,
+) -> ttk.Entry:
+    base_col = int(pair_index) * 3
+    ttk.Label(frame, text=label_text).grid(
+        row=row_index,
+        column=base_col,
+        sticky="w",
+        padx=(0, 10 if pair_index == 0 else 0),
+        pady=4,
+    )
+    entry = ttk.Entry(
+        frame,
+        textvariable=var,
+        width=12,
+    )
+    entry.grid(row=row_index, column=base_col + 1, sticky="w", pady=4)
+    setattr(app, attr_name, entry)
+    attach_numeric_keypad(entry, allow_decimal=True)
+    if suffix_text:
+        ttk.Label(frame, text=suffix_text).grid(
+            row=row_index,
+            column=base_col + 2,
+            sticky="w",
+            padx=(8, 0),
+            pady=4,
+        )
+    apply_tooltip(entry, tooltip_text)
+    return entry
+
+
+def _build_xyz_plate_settings(app, frame: ttk.LabelFrame) -> None:
+    frame.grid_columnconfigure(1, weight=1)
+    frame.grid_columnconfigure(4, weight=1)
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=0,
+        pair_index=0,
+        label_text="XYZ Plate Thickness",
+        var=app.xyz_plate_thickness,
+        attr_name="xyz_plate_thickness_entry",
+        tooltip_text="Measured touch-plate thickness in mm used when setting Z during XYZ Plate and Z Plate setup.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=0,
+        pair_index=1,
+        label_text="XYZ Plate Min Safe Probe Distance",
+        var=app.xyz_plate_min_safe_probe_distance,
+        attr_name="xyz_plate_min_safe_probe_distance_entry",
+        tooltip_text="Minimum remaining downward machine-Z travel required before starting the touch-plate fast probe.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=1,
+        pair_index=0,
+        label_text="XYZ Plate X Offset",
+        var=app.xyz_plate_x_offset,
+        attr_name="xyz_plate_x_offset_entry",
+        tooltip_text="Work-coordinate X offset written after probing the XYZ plate X edge.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=1,
+        pair_index=1,
+        label_text="XYZ Plate Y Offset",
+        var=app.xyz_plate_y_offset,
+        attr_name="xyz_plate_y_offset_entry",
+        tooltip_text="Work-coordinate Y offset written after probing the XYZ plate Y edge.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=2,
+        pair_index=0,
+        label_text="XYZ Plate Side Clearance Distance",
+        var=app.xyz_plate_side_clearance_distance,
+        attr_name="xyz_plate_side_clearance_distance_entry",
+        tooltip_text="Distance in mm to move clear of the touch plate before probing the X and Y side edges.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=2,
+        pair_index=1,
+        label_text="XYZ Plate Z Rough Probe Speed",
+        var=app.xyz_plate_z_rough_probe_speed,
+        attr_name="xyz_plate_z_rough_probe_speed_entry",
+        tooltip_text="Initial Z touch-plate seek speed in mm/min for XYZ Plate and Z Plate setup.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=3,
+        pair_index=0,
+        label_text="XYZ Plate Z Re-Probe Speed",
+        var=app.xyz_plate_z_reprobe_speed,
+        attr_name="xyz_plate_z_reprobe_speed_entry",
+        tooltip_text="Intermediate Z re-probe speed in mm/min before the final fine touch-plate pass.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=3,
+        pair_index=1,
+        label_text="XYZ Plate Z Fine Probe Speed",
+        var=app.xyz_plate_z_fine_probe_speed,
+        attr_name="xyz_plate_z_fine_probe_speed_entry",
+        tooltip_text="Final fine Z touch-plate probe speed in mm/min.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=4,
+        pair_index=0,
+        label_text="XYZ Plate XY Rough Probe Speed",
+        var=app.xyz_plate_xy_rough_probe_speed,
+        attr_name="xyz_plate_xy_rough_probe_speed_entry",
+        tooltip_text="Initial X/Y edge-probe speed in mm/min for the XYZ plate workflow.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=4,
+        pair_index=1,
+        label_text="XYZ Plate XY Fine Probe Speed",
+        var=app.xyz_plate_xy_fine_probe_speed,
+        attr_name="xyz_plate_xy_fine_probe_speed_entry",
+        tooltip_text="Final X/Y edge-probe speed in mm/min for the XYZ plate workflow.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=5,
+        pair_index=0,
+        label_text="XYZ Plate Probe Dwell (Seconds)",
+        var=app.xyz_plate_probe_dwell,
+        attr_name="xyz_plate_probe_dwell_entry",
+        tooltip_text="Pause in seconds between the Z re-probe retract and the final fine touch-plate pass.",
+    )
+
+
+def _build_bit_setter_settings(app, frame: ttk.LabelFrame) -> None:
+    frame.grid_columnconfigure(1, weight=1)
+    frame.grid_columnconfigure(4, weight=1)
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=0,
+        pair_index=0,
+        label_text="Bit Setter X",
+        var=app.bit_setter_x,
+        attr_name="bit_setter_x_entry",
+        tooltip_text="Machine-coordinate X location of the fixed tool-height sensor / bit setter.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=0,
+        pair_index=1,
+        label_text="Bit Setter Y",
+        var=app.bit_setter_y,
+        attr_name="bit_setter_y_entry",
+        tooltip_text="Machine-coordinate Y location of the fixed tool-height sensor / bit setter.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=1,
+        pair_index=0,
+        label_text="Bit Setter Rough Probe Speed",
+        var=app.bit_setter_rough_probe_speed,
+        attr_name="bit_setter_rough_probe_speed_entry",
+        tooltip_text="Initial fixed-sensor coarse seek speed in mm/min for Job Setup and Tool Change.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=1,
+        pair_index=1,
+        label_text="Bit Setter Fine Probe Speed",
+        var=app.bit_setter_fine_probe_speed,
+        attr_name="bit_setter_fine_probe_speed_entry",
+        tooltip_text="Fine re-probe speed in mm/min for the high-precision fixed-sensor cycle.",
+    )
+    _add_numeric_setting(
+        app,
+        frame,
+        row_index=2,
+        pair_index=0,
+        label_text="Bit Setter Probe Dwell (Seconds)",
+        var=app.bit_setter_probe_dwell,
+        attr_name="bit_setter_probe_dwell_entry",
+        tooltip_text="Pause between fine retract and the next exact fixed-sensor probe sample.",
+    )
+
+
+def build_probing_setup_section(app, parent: ttk.Frame, row: int) -> int:
+    probing_frame = ttk.LabelFrame(parent, text="Probing & Setup", padding=8)
+    probing_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+    probing_frame.grid_columnconfigure(1, weight=1)
+    probing_frame.grid_columnconfigure(4, weight=1)
+
+    _add_numeric_setting(
+        app,
+        probing_frame,
+        row_index=0,
+        pair_index=0,
+        label_text="Probe Z start (machine, mm)",
+        var=app.macro_probe_z_location,
+        attr_name="macro_probe_z_location_entry",
+        tooltip_text="Machine-coordinate Z starting point for fixed-sensor probing in Job Setup and Tool Change (typically -5).",
+    )
+    _add_numeric_setting(
+        app,
+        probing_frame,
+        row_index=0,
+        pair_index=1,
+        label_text="Probe safety margin (mm)",
+        var=app.macro_probe_safety_margin,
+        attr_name="macro_probe_safety_margin_entry",
+        tooltip_text="Subtracted from the $132-based probe travel calculation used by Job Setup and Tool Change.",
+    )
+
+    app.xyz_plate_frame = ttk.LabelFrame(probing_frame, text="XYZ Plate", padding=6)
+    app.xyz_plate_frame.grid(
+        row=1,
+        column=0,
+        columnspan=6,
+        sticky="ew",
+        pady=(8, 6),
+    )
+    _build_xyz_plate_settings(app, app.xyz_plate_frame)
+
+    app.bit_setter_frame = ttk.LabelFrame(probing_frame, text="Bit Setter", padding=6)
+    app.bit_setter_frame.grid(
+        row=2,
+        column=0,
+        columnspan=6,
+        sticky="ew",
+        pady=(0, 0),
+    )
+    _build_bit_setter_settings(app, app.bit_setter_frame)
+    return row + 1
+
+
 def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     macro_frame = ttk.LabelFrame(parent, text="Macros", padding=8)
     macro_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
@@ -91,47 +350,23 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         app.disable_macro_timeouts_check,
-        "When enabled, macros will wait indefinitely instead of timing out.",
+        "When enabled, general macros will wait indefinitely instead of using the normal line/total timeout limits. Operator-assisted Job Setup/Tool Change waits already bypass those limits automatically.",
     )
-
-    ttk.Label(macro_frame, text="Probe Z start (machine, mm)").grid(
-        row=4, column=0, sticky="w", pady=4
-    )
-    app.macro_probe_z_location_entry = ttk.Entry(
+    ttk.Label(
         macro_frame,
-        textvariable=app.macro_probe_z_location,
-        width=12,
-    )
-    app.macro_probe_z_location_entry.grid(row=4, column=1, sticky="w", pady=4)
-    attach_numeric_keypad(app.macro_probe_z_location_entry, allow_decimal=True)
-    apply_tooltip(
-        app.macro_probe_z_location_entry,
-        "Machine-coordinate Z starting point for fixed-sensor probing in Macro 3/4/5 (typically -5).",
-    )
-
-    ttk.Label(macro_frame, text="Probe safety margin (mm)").grid(
-        row=5, column=0, sticky="w", pady=4
-    )
-    app.macro_probe_safety_margin_entry = ttk.Entry(
-        macro_frame,
-        textvariable=app.macro_probe_safety_margin,
-        width=12,
-    )
-    app.macro_probe_safety_margin_entry.grid(row=5, column=1, sticky="w", pady=4)
-    attach_numeric_keypad(app.macro_probe_safety_margin_entry, allow_decimal=True)
-    apply_tooltip(
-        app.macro_probe_safety_margin_entry,
-        "Subtracted from the $132-based probe travel calculation in Macro 3/4/5.",
-    )
+        text="General user macros use finite default timeouts. Protected built-in workflows run independently of those general macro timeout settings.",
+        wraplength=560,
+        justify="left",
+    ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(2, 4))
     app.btn_open_macro_manager = ttk.Button(
         macro_frame,
         text="Open Macro Manager",
         command=app._open_macro_manager,
     )
-    app.btn_open_macro_manager.grid(row=6, column=0, sticky="w", pady=(6, 2))
+    app.btn_open_macro_manager.grid(row=5, column=0, sticky="w", pady=(6, 2))
     apply_tooltip(
         app.btn_open_macro_manager,
-        "Edit, duplicate, and reorder Macro-1..Macro-8 from inside the app.",
+        "Edit, duplicate, and reorder the 5 file-backed user macro slots from inside the app.",
     )
 
     ttk.Label(
@@ -139,7 +374,7 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         text="Warning: enabled macros can execute arbitrary Python; disable for plain G-code macros.",
         wraplength=560,
         justify="left",
-    ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(2, 0))
+    ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(2, 0))
     return row + 1
 
 
@@ -440,6 +675,12 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.keyboard_live_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    # The controls surface is built lazily. Sync it to the already-loaded
+    # runtime binding state immediately so the enabled checkbox, binding table,
+    # and joystick toggle text all reflect reality without requiring a manual
+    # toggle cycle.
+    app._apply_keyboard_bindings()
+    app._refresh_joystick_toggle_text()
     return row + 1
 
 

@@ -34,6 +34,7 @@ from simple_sender.ui.macro_files import (
     get_writable_macro_dir,
     read_macro_slot,
     remove_macro_slot,
+    user_macro_slots,
     write_macro_slot,
 )
 from simple_sender.ui.theme_helpers import bind_listbox_theme, bind_text_display_theme, text_display_theme_options
@@ -82,7 +83,7 @@ class _MacroManagerDialog:
         left = ttk.Frame(root)
         left.grid(row=1, column=0, sticky="nsw", padx=(0, 10))
         left.grid_rowconfigure(1, weight=1)
-        ttk.Label(left, text="Macro slots").grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="User macro slots").grid(row=0, column=0, sticky="w")
         self.slot_list = tk.Listbox(left, height=12, exportselection=False, width=28)
         self.slot_list.grid(row=1, column=0, sticky="nsw")
         bind_listbox_theme(self.app, self.slot_list)
@@ -161,7 +162,7 @@ class _MacroManagerDialog:
             state="readonly",
             width=6,
             textvariable=self.duplicate_target,
-            values=["1", "2", "3", "4", "5", "6", "7", "8"],
+            values=[str(slot) for slot in user_macro_slots()],
         )
         self.duplicate_combo.grid(row=0, column=7, padx=(0, 6))
         self.btn_duplicate = ttk.Button(actions, text="Duplicate", command=self.duplicate_current)
@@ -252,7 +253,7 @@ class _MacroManagerDialog:
         self.slot_list.delete(0, "end")
         self._slot_data = {}
         invalid_headers: list[str] = []
-        for slot in range(1, 9):
+        for slot in user_macro_slots():
             name, tip, color, text_color, body, path, error = read_macro_slot(
                 self.app, slot
             )
@@ -260,13 +261,13 @@ class _MacroManagerDialog:
             label = name or "(empty)"
             if error:
                 label = f"{label} [invalid]"
-            self.slot_list.insert("end", f"Macro-{slot}: {label}")
+            self.slot_list.insert("end", f"User Macro {slot}: {label}")
             if error and path and os.path.isfile(path):
                 path_key = os.path.normcase(os.path.abspath(path))
                 if path_key not in self._warned_invalid_header_paths:
                     self._warned_invalid_header_paths.add(path_key)
                     invalid_headers.append(
-                        f"Macro-{slot} ({os.path.basename(path)}): {error}"
+                        f"User Macro {slot} ({os.path.basename(path)}): {error}"
                     )
         if invalid_headers:
             details = "\n".join(invalid_headers)
@@ -307,7 +308,8 @@ class _MacroManagerDialog:
             self.body_text.insert("1.0", body)
         duplicate_target = int(self.duplicate_target.get() or "0")
         if self._selected_slot == duplicate_target:
-            next_target = 1 if self._selected_slot == 8 else self._selected_slot + 1
+            slots = list(user_macro_slots())
+            next_target = slots[0] if self._selected_slot == slots[-1] else self._selected_slot + 1
             self.duplicate_target.set(str(next_target))
 
     def _on_slot_select(self, _event=None) -> None:
@@ -381,7 +383,7 @@ class _MacroManagerDialog:
         self._refresh_macro_buttons()
 
     def new_blank(self) -> None:
-        self.name_var.set(f"Macro {self._selected_slot}")
+        self.name_var.set(f"User Macro {self._selected_slot}")
         self.tip_var.set("")
         self.color_var.set("")
         self.text_color_var.set("")
@@ -393,7 +395,7 @@ class _MacroManagerDialog:
             return
         if not messagebox.askyesno(
             "Macro Manager",
-            f"Delete Macro-{self._selected_slot} from the editable macro directory?",
+            f"Delete User Macro {self._selected_slot} from the editable macro directory?",
         ):
             return
         try:
@@ -434,7 +436,7 @@ class _MacroManagerDialog:
         )
         if target_has_content and not messagebox.askyesno(
             "Macro Manager",
-            f"Macro-{target} already contains a macro. Overwrite it?",
+            f"User Macro {target} already contains a macro. Overwrite it?",
         ):
             return
         try:
@@ -444,7 +446,7 @@ class _MacroManagerDialog:
             return
         self.refresh()
         self._refresh_macro_buttons()
-        messagebox.showinfo("Macro Manager", f"Copied Macro-{source} to Macro-{target}.")
+        messagebox.showinfo("Macro Manager", f"Copied User Macro {source} to User Macro {target}.")
 
     def move_current(self, delta: int) -> None:
         if not self._macro_dir:
@@ -452,7 +454,8 @@ class _MacroManagerDialog:
             return
         source = int(self._selected_slot)
         target = source + int(delta)
-        if target < 1 or target > 8:
+        slots = list(user_macro_slots())
+        if target < slots[0] or target > slots[-1]:
             return
         src_name, src_tip, src_color, src_text_color, src_body = self._current_editor_values()
         if not src_name:
@@ -476,7 +479,7 @@ class _MacroManagerDialog:
             else:
                 removed = remove_macro_slot(self._macro_dir, source)
                 if not removed:
-                    raise OSError(f"Failed deleting moved source slot Macro-{source}.")
+                    raise OSError(f"Failed deleting moved source slot User Macro {source}.")
         except Exception as exc:
             try:
                 self._restore_slot_state(source, src_state)

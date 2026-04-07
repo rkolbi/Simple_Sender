@@ -22,11 +22,11 @@
 
 """Console UI package exports for the live production console surface."""
 
-from .panel import build_console_tab
+from .panel import build_console_panel
 from .utils import clear_console_log, save_console_log, send_console, setup_console_tags
 
 __all__ = [
-    "build_console_tab",
+    "build_console_panel",
     "clear_console_log",
     "save_console_log",
     "send_console",

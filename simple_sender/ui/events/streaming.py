@@ -57,15 +57,7 @@ def _set_streaming_lock_safe(
     set_streaming_lock = getattr(app, "_set_streaming_lock", None)
     if not callable(set_streaming_lock):
         return
-    if defer_toolbar_refresh:
-        try:
-            set_streaming_lock(bool(locked), defer_toolbar_refresh=True)
-            return
-        except TypeError:
-            # Backward-compatible fallback for test doubles/legacy implementations
-            # that only accept positional lock state.
-            pass
-    set_streaming_lock(bool(locked))
+    set_streaming_lock(bool(locked), defer_toolbar_refresh=defer_toolbar_refresh)
 
 
 def _schedule_stream_ui_callback(

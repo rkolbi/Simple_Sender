@@ -39,6 +39,7 @@ from simple_sender.ui.pi_profile import (
     apply_pi_profile,
 )
 from simple_sender.utils.exceptions import SettingsSaveError
+from simple_sender.ui.theme_helpers import bind_touch_scale_theme
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 
@@ -59,6 +60,19 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _replace_var_trace(owner, var, attr_name: str, callback, *, context: str) -> None:
+    prior_trace = getattr(owner, attr_name, None)
+    if prior_trace is not None:
+        try:
+            var.trace_remove("write", prior_trace)
+        except Exception as exc:
+            _log_suppressed(f"Failed removing prior {context} trace", exc)
+    try:
+        setattr(owner, attr_name, var.trace_add("write", callback))
+    except Exception as exc:
+        _log_suppressed(f"Failed wiring {context} trace", exc)
 
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
@@ -250,11 +264,12 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         )
 
     _update_ultra_large_threshold_info()
-    app.ultra_large_size_threshold_info_trace = (
-        app.ultra_large_size_threshold_mb.trace_add(
-            "write",
-            _update_ultra_large_threshold_info,
-        )
+    _replace_var_trace(
+        app,
+        app.ultra_large_size_threshold_mb,
+        "ultra_large_size_threshold_info_trace",
+        _update_ultra_large_threshold_info,
+        context="ultra-large threshold info",
     )
     app.ultra_large_size_threshold_info_label = ttk.Label(
         developer_frame,
@@ -370,14 +385,16 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     return row + 1
 
 
-def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
-    theme_frame = ttk.LabelFrame(parent, text="Theme", padding=8)
-    theme_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-    theme_frame.grid_columnconfigure(1, weight=1)
+def _ensure_theme_section_vars(app, parent: ttk.Frame) -> None:
     if not hasattr(app, "ui_scale"):
         app.ui_scale = tk.DoubleVar(master=parent, value=1.0)
     if not hasattr(app, "linux_file_dialog_scale"):
         app.linux_file_dialog_scale = tk.DoubleVar(master=parent, value=1.4)
+    if sys.platform.startswith("linux") and not hasattr(app, "linux_file_dialog_default_path"):
+        app.linux_file_dialog_default_path = tk.StringVar(
+            master=parent,
+            value="/root/CNC_Jobs",
+        )
     if not hasattr(app, "scrollbar_width"):
         app.scrollbar_width = tk.StringVar(master=parent, value="wide")
     if not hasattr(app, "touch_scroll_mode"):
@@ -388,6 +405,130 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.tooltip_enabled = tk.BooleanVar(master=parent, value=True)
     if not hasattr(app, "tooltip_timeout_sec"):
         app.tooltip_timeout_sec = tk.DoubleVar(master=parent, value=10.0)
+
+
+def _build_linux_file_dialog_settings(app, theme_frame: ttk.LabelFrame, row: int) -> int:
+    ttk.Label(theme_frame, text="Linux File Dialog Scale").grid(
+        row=row, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.linux_file_dialog_scale_combo = ttk.Combobox(
+        theme_frame,
+        state="readonly",
+        values=["1.4", "1.6", "1.8", "2.0", "2.2", "2.4", "2.6", "2.8", "3.0"],
+        textvariable=app.linux_file_dialog_scale,
+        width=12,
+    )
+    app.linux_file_dialog_scale_combo.grid(row=row, column=1, sticky="w", pady=4)
+    on_linux_file_dialog_scale_change = getattr(
+        app,
+        "_on_linux_file_dialog_scale_change",
+        lambda *_args, **_kwargs: None,
+    )
+    app.linux_file_dialog_scale_combo.bind(
+        "<<ComboboxSelected>>",
+        on_linux_file_dialog_scale_change,
+    )
+    apply_tooltip(
+        app.linux_file_dialog_scale_combo,
+        "Scale Linux Tk file dialogs for touchscreen use; the larger of UI scale and this value applies the next time a file dialog opens.",
+    )
+    row += 1
+
+    ttk.Label(theme_frame, text="Linux File Dialog Default Path").grid(
+        row=row, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.linux_file_dialog_default_path_entry = ttk.Entry(
+        theme_frame,
+        textvariable=app.linux_file_dialog_default_path,
+        width=32,
+    )
+    app.linux_file_dialog_default_path_entry.grid(row=row, column=1, sticky="ew", pady=4)
+    on_linux_file_dialog_default_path_change = getattr(
+        app,
+        "_on_linux_file_dialog_default_path_change",
+        lambda *_args, **_kwargs: None,
+    )
+    app.linux_file_dialog_default_path_entry.bind(
+        "<Return>",
+        on_linux_file_dialog_default_path_change,
+    )
+    app.linux_file_dialog_default_path_entry.bind(
+        "<FocusOut>",
+        on_linux_file_dialog_default_path_change,
+    )
+    apply_tooltip(
+        app.linux_file_dialog_default_path_entry,
+        "Linux file dialogs open here by default when no valid per-dialog folder is available. Clear the field to restore /root/CNC_Jobs.",
+    )
+    return row + 1
+
+
+def _build_tooltip_settings(app, theme_frame: ttk.LabelFrame, row: int) -> int:
+    def _sync_tooltip_timeout_state() -> None:
+        try:
+            enabled = bool(app.tooltip_enabled.get())
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            enabled = True
+        state = "normal" if enabled else "disabled"
+        try:
+            app.tooltip_timeout_entry.configure(state=state)
+        except (AttributeError, tk.TclError) as exc:
+            _log_suppressed("Failed updating tooltip timeout entry enabled state", exc)
+
+    def _on_tooltip_setting_change() -> None:
+        refresh_tooltips = getattr(app, "_refresh_tooltips_toggle_text", None)
+        if callable(refresh_tooltips):
+            refresh_tooltips()
+        _sync_tooltip_timeout_state()
+
+    app.tooltips_enabled_check = ttk.Checkbutton(
+        theme_frame,
+        text="Enable tooltips",
+        variable=app.tooltip_enabled,
+        command=_on_tooltip_setting_change,
+    )
+    app.tooltips_enabled_check.grid(
+        row=row, column=0, columnspan=3, sticky="w", pady=(6, 0)
+    )
+    apply_tooltip(
+        app.tooltips_enabled_check,
+        "Show tooltips on hover (disabled controls include the reason).",
+    )
+    _replace_var_trace(
+        app,
+        app.tooltip_enabled,
+        "tooltip_enabled_state_trace",
+        lambda *_args: _sync_tooltip_timeout_state(),
+        context="tooltip-enabled state",
+    )
+    row += 1
+
+    ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
+        row=row, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    tooltip_timeout_row = ttk.Frame(theme_frame)
+    tooltip_timeout_row.grid(row=row, column=1, sticky="w", pady=4)
+    app.tooltip_timeout_entry = ttk.Entry(
+        tooltip_timeout_row, textvariable=app.tooltip_timeout_sec, width=10
+    )
+    app.tooltip_timeout_entry.pack(side="left")
+    attach_numeric_keypad(app.tooltip_timeout_entry, allow_decimal=True)
+    ttk.Label(tooltip_timeout_row, text="(0 = no auto-hide)").pack(
+        side="left", padx=(6, 0)
+    )
+    apply_tooltip(
+        app.tooltip_timeout_entry,
+        "How long tooltips stay visible before hiding automatically (0 keeps them open).",
+    )
+    _sync_tooltip_timeout_state()
+    return row + 1
+
+
+def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
+    theme_frame = ttk.LabelFrame(parent, text="Theme", padding=8)
+    theme_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+    theme_frame.grid_columnconfigure(1, weight=1)
+    _ensure_theme_section_vars(app, parent)
     ttk.Label(theme_frame, text="UI theme").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
@@ -439,45 +580,11 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.ui_scale_apply_btn,
         "Apply the UI scale immediately.",
     )
-
-    scrollbar_row = 2
-    touch_scroll_row = 3
-    tooltips_enabled_row = 4
-    tooltip_timeout_row_index = 5
-    numeric_keypad_row = 6
+    next_row = 2
     if sys.platform.startswith("linux"):
-        ttk.Label(theme_frame, text="Linux File Dialog Scale").grid(
-            row=2, column=0, sticky="w", padx=(0, 10), pady=4
-        )
-        app.linux_file_dialog_scale_combo = ttk.Combobox(
-            theme_frame,
-            state="readonly",
-            values=["1.4", "1.6", "1.8", "2.0", "2.2", "2.4", "2.6", "2.8", "3.0"],
-            textvariable=app.linux_file_dialog_scale,
-            width=12,
-        )
-        app.linux_file_dialog_scale_combo.grid(row=2, column=1, sticky="w", pady=4)
-        on_linux_file_dialog_scale_change = getattr(
-            app,
-            "_on_linux_file_dialog_scale_change",
-            lambda *_args, **_kwargs: None,
-        )
-        app.linux_file_dialog_scale_combo.bind(
-            "<<ComboboxSelected>>",
-            on_linux_file_dialog_scale_change,
-        )
-        apply_tooltip(
-            app.linux_file_dialog_scale_combo,
-            "Scale Linux Tk file dialogs for touchscreen use; the larger of UI scale and this value applies the next time a file dialog opens.",
-        )
-        scrollbar_row += 1
-        touch_scroll_row += 1
-        tooltips_enabled_row += 1
-        tooltip_timeout_row_index += 1
-        numeric_keypad_row += 1
-
+        next_row = _build_linux_file_dialog_settings(app, theme_frame, next_row)
     ttk.Label(theme_frame, text="Scrollbar width").grid(
-        row=scrollbar_row, column=0, sticky="w", padx=(0, 10), pady=4
+        row=next_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.scrollbar_width_combo = ttk.Combobox(
         theme_frame,
@@ -486,7 +593,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.scrollbar_width,
         width=12,
     )
-    app.scrollbar_width_combo.grid(row=scrollbar_row, column=1, sticky="w", pady=4)
+    app.scrollbar_width_combo.grid(row=next_row, column=1, sticky="w", pady=4)
     on_scrollbar_width_change = getattr(
         app,
         "_on_scrollbar_width_change",
@@ -497,8 +604,9 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.scrollbar_width_combo,
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
+    next_row += 1
     ttk.Label(theme_frame, text="Touch scroll mode").grid(
-        row=touch_scroll_row, column=0, sticky="w", padx=(0, 10), pady=4
+        row=next_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.touch_scroll_mode_combo = ttk.Combobox(
         theme_frame,
@@ -507,7 +615,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.touch_scroll_mode,
         width=20,
     )
-    app.touch_scroll_mode_combo.grid(row=touch_scroll_row, column=1, sticky="w", pady=4)
+    app.touch_scroll_mode_combo.grid(row=next_row, column=1, sticky="w", pady=4)
     on_touch_scroll_mode_change = getattr(
         app,
         "_on_touch_scroll_mode_change",
@@ -520,69 +628,15 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.touch_scroll_mode_combo,
         "Thumb only keeps swipe scrolling off in App Settings; thumb_and_swipe enables both thumb drag and swipe.",
     )
-
-    def _sync_tooltip_timeout_state() -> None:
-        try:
-            enabled = bool(app.tooltip_enabled.get())
-        except (AttributeError, tk.TclError, TypeError, ValueError):
-            enabled = True
-        state = "normal" if enabled else "disabled"
-        try:
-            app.tooltip_timeout_entry.configure(state=state)
-        except (AttributeError, tk.TclError) as exc:
-            _log_suppressed("Failed updating tooltip timeout entry enabled state", exc)
-
-    def _on_tooltip_setting_change() -> None:
-        refresh_tooltips = getattr(app, "_refresh_tooltips_toggle_text", None)
-        if callable(refresh_tooltips):
-            refresh_tooltips()
-        _sync_tooltip_timeout_state()
-
-    app.tooltips_enabled_check = ttk.Checkbutton(
-        theme_frame,
-        text="Enable tooltips",
-        variable=app.tooltip_enabled,
-        command=_on_tooltip_setting_change,
-    )
-    app.tooltips_enabled_check.grid(
-        row=tooltips_enabled_row, column=0, columnspan=3, sticky="w", pady=(6, 0)
-    )
-    apply_tooltip(
-        app.tooltips_enabled_check,
-        "Show tooltips on hover (disabled controls include the reason).",
-    )
-    try:
-        app.tooltip_enabled.trace_add(
-            "write", lambda *_args: _sync_tooltip_timeout_state()
-        )
-    except (AttributeError, tk.TclError) as exc:
-        _log_suppressed("Failed wiring tooltip-enabled variable trace handler", exc)
-
-    ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
-        row=tooltip_timeout_row_index, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    tooltip_timeout_row = ttk.Frame(theme_frame)
-    tooltip_timeout_row.grid(row=tooltip_timeout_row_index, column=1, sticky="w", pady=4)
-    app.tooltip_timeout_entry = ttk.Entry(
-        tooltip_timeout_row, textvariable=app.tooltip_timeout_sec, width=10
-    )
-    app.tooltip_timeout_entry.pack(side="left")
-    attach_numeric_keypad(app.tooltip_timeout_entry, allow_decimal=True)
-    ttk.Label(tooltip_timeout_row, text="(0 = no auto-hide)").pack(
-        side="left", padx=(6, 0)
-    )
-    apply_tooltip(
-        app.tooltip_timeout_entry,
-        "How long tooltips stay visible before hiding automatically (0 keeps them open).",
-    )
-    _sync_tooltip_timeout_state()
+    next_row += 1
+    next_row = _build_tooltip_settings(app, theme_frame, next_row)
     app.numeric_keypad_check = ttk.Checkbutton(
         theme_frame,
         text="Enable numeric keypad popups (click numeric fields)",
         variable=app.numeric_keypad_enabled,
     )
     app.numeric_keypad_check.grid(
-        row=numeric_keypad_row, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        row=next_row, column=0, columnspan=3, sticky="w", pady=(6, 0)
     )
     apply_tooltip(
         app.numeric_keypad_check,
@@ -608,12 +662,12 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     app.all_stop_combo.bind("<<ComboboxSelected>>", app._on_all_stop_mode_change)
     apply_tooltip(
         app.all_stop_combo,
-        "Select how ALL STOP behaves: Soft Reset (Ctrl-X) immediately resets, Stop Stream + Reset halts sending first.",
+        "Select how ALL STOP behaves after first stopping the active stream: Soft Reset always sends Ctrl-X; Stop Stream + Reset avoids an extra reset when stop already performs one.",
     )
     app._sync_all_stop_mode_combo()
     app.all_stop_desc = ttk.Label(
         safety,
-        text="Soft Reset (Ctrl-X) stops GRBL immediately. Stop Stream + Reset halts sending first, then resets.",
+        text="Both ALL STOP modes halt the active stream first. Soft Reset always sends Ctrl-X afterward; Stop Stream + Reset skips an extra reset when stop already performs one.",
         wraplength=560,
         justify="left",
     )
@@ -684,14 +738,16 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(estimation, text="Estimator adjustment").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
-    app.estimate_factor_scale = ttk.Scale(
+    app.estimate_factor_scale = tk.Scale(
         estimation,
         from_=0.5,
         to=2.0,
         orient="horizontal",
         variable=app.estimate_factor,
         command=app._on_estimate_factor_change,
+        resolution=0.01,
     )
+    bind_touch_scale_theme(app, app.estimate_factor_scale)
     app.estimate_factor_scale.grid(row=1, column=1, sticky="ew", pady=4)
     app.estimate_factor_value = ttk.Label(
         estimation, textvariable=app._estimate_factor_label
@@ -907,31 +963,11 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         app.grbl_popup_enabled_check,
         "Show a non-blocking popup with alarm/error code definitions.",
     )
-    ttk.Label(dialog_frame, text="GRBL popup auto-dismiss setting (seconds)").grid(
+    ttk.Label(dialog_frame, text="GRBL popup dedupe interval (seconds)").grid(
         row=7, column=0, sticky="w", padx=(0, 10), pady=4
     )
-    grbl_popup_dismiss_row = ttk.Frame(dialog_frame)
-    grbl_popup_dismiss_row.grid(row=7, column=1, sticky="w", pady=4)
-    app.grbl_popup_auto_dismiss_entry = ttk.Entry(
-        grbl_popup_dismiss_row, textvariable=app.grbl_popup_auto_dismiss_sec, width=12
-    )
-    app.grbl_popup_auto_dismiss_entry.pack(side="left")
-    attach_numeric_keypad(app.grbl_popup_auto_dismiss_entry, allow_decimal=True)
-    ttk.Label(grbl_popup_dismiss_row, text="sec (0=off)").pack(side="left", padx=(6, 0))
-    app.grbl_popup_auto_dismiss_entry.bind("<Return>", app._apply_error_dialog_settings)
-    app.grbl_popup_auto_dismiss_entry.bind(
-        "<FocusOut>", app._apply_error_dialog_settings
-    )
-    apply_tooltip(
-        app.grbl_popup_auto_dismiss_entry,
-        "Retained for compatibility with existing settings. Current GRBL alarm/error popups stay "
-        "visible until the operator dismisses them manually.",
-    )
-    ttk.Label(dialog_frame, text="GRBL popup dedupe interval (seconds)").grid(
-        row=8, column=0, sticky="w", padx=(0, 10), pady=4
-    )
     grbl_popup_dedupe_row = ttk.Frame(dialog_frame)
-    grbl_popup_dedupe_row.grid(row=8, column=1, sticky="w", pady=4)
+    grbl_popup_dedupe_row.grid(row=7, column=1, sticky="w", pady=4)
     app.grbl_popup_dedupe_entry = ttk.Entry(
         grbl_popup_dedupe_row, textvariable=app.grbl_popup_dedupe_sec, width=12
     )
@@ -952,10 +988,8 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
     power_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     power_frame.grid_columnconfigure(1, weight=1)
 
-    def _invoke_app_action(method_name: str, *, fallback_name: str | None = None) -> bool:
+    def _invoke_app_action(method_name: str) -> bool:
         action = getattr(app, method_name, None)
-        if not callable(action) and fallback_name is not None:
-            action = getattr(app, fallback_name, None)
         if not callable(action):
             return False
         try:
@@ -1054,10 +1088,7 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
     app.btn_close_application = ttk.Button(
         app_row,
         text="Close Application",
-        command=lambda: _invoke_app_action(
-            "_close_application",
-            fallback_name="_on_close",
-        ),
+        command=lambda: _invoke_app_action("_close_application"),
     )
     app.btn_close_application.pack(side="left")
     apply_tooltip(

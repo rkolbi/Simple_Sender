@@ -26,16 +26,22 @@
 # Standard library imports
 import logging
 import os
+import queue
 import threading
 import time
 import types
 from tkinter import messagebox
 
+from simple_sender.builtin_workflow_runtime import execute_builtin_workflow
+from simple_sender.builtin_workflows import (
+    builtin_workflow_action,
+)
 from simple_sender.macro_timeouts import macro_timeouts_disabled
 from simple_sender.macro_state import macro_fast_poll_scope
 from simple_sender.utils.constants import (
     MACRO_LINE_TIMEOUT,
     MACRO_TOTAL_TIMEOUT,
+    USER_MACRO_SLOT_COUNT,
 )
 from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 from simple_sender.types import MacroExecutorState
@@ -52,6 +58,13 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
+
+    def is_macro_active(self) -> bool:
+        try:
+            return bool(getattr(self._macro_lock, "locked", lambda: False)())
+        except Exception as exc:
+            _log_suppressed("Failed checking macro/workflow runtime lock", exc)
+            return False
 
     @staticmethod
     def _format_macro_file_error(path: str | None, exc: MacroFormatError) -> str:
@@ -111,14 +124,135 @@ class MacroRunnerMixin(MacroExecutorState):
             return
         self.ui_q.put(("log", f"[macro][audit] {message}"))
 
-    def _prepare_tool_change_prompt_context(
+    def _workflow_audit(self, message: str, *, force: bool = False) -> None:
+        if not force and not self._macro_audit_enabled():
+            return
+        self.ui_q.put(("log", f"[workflow][audit] {message}"))
+
+    def _reset_prompt_state(self) -> None:
+        with self._macro_vars_lock:
+            self._macro_local_vars = {"app": self.app, "os": os}
+            self._macro_vars["app"] = self.app
+            self._macro_vars["os"] = os
+            self._macro_vars["prompt_choice"] = ""
+            self._macro_vars["prompt_choice_key"] = None
+            self._macro_vars["prompt_choice_label"] = ""
+            self._macro_vars["prompt_index"] = -1
+            self._macro_vars["prompt_cancelled"] = False
+            macro_ns = self._macro_vars.get("macro")
+            if isinstance(macro_ns, types.SimpleNamespace):
+                setattr(macro_ns, "prompt_choice", "")
+                setattr(macro_ns, "prompt_choice_key", None)
+                setattr(macro_ns, "prompt_choice_label", "")
+                setattr(macro_ns, "prompt_index", -1)
+                setattr(macro_ns, "prompt_cancelled", False)
+
+    def _workflow_prompt(
+        self,
+        title: str,
+        message: str,
+        choices: list[str],
+        *,
+        cancel_label: str = "Cancel",
+        button_keys: dict[str, str | None] | None = None,
+    ) -> dict[str, object]:
+        prompt_choices = [str(choice) for choice in choices]
+        cancel_text = str(cancel_label or "Cancel").strip() or "Cancel"
+        if cancel_text not in prompt_choices:
+            prompt_choices.append(cancel_text)
+        prompt_timeout_s = float(getattr(self.app, "_macro_prompt_timeout_s", 0.0) or 0.0)
+        if macro_timeouts_disabled(self.app):
+            prompt_timeout_s = 0.0
+        if prompt_timeout_s < 0.0:
+            prompt_timeout_s = 0.0
+        result_q: queue.Queue[str] = queue.Queue(maxsize=1)
+        self.ui_q.put(("macro_prompt", str(title), str(message), prompt_choices, cancel_text, result_q))
+        prompt_started = time.monotonic()
+        while True:
+            try:
+                choice = str(result_q.get(timeout=0.2))
+                break
+            except queue.Empty:
+                if self._alarm_event.is_set():
+                    choice = cancel_text
+                    self.ui_q.put(("log", "[workflow] Prompt canceled by ALL STOP; workflow aborted."))
+                    break
+                if getattr(self.app, "_closing", False):
+                    choice = cancel_text
+                    break
+                if prompt_timeout_s and (time.monotonic() - prompt_started) >= prompt_timeout_s:
+                    choice = cancel_text
+                    self.ui_q.put(
+                        ("log", f"[workflow] Prompt timed out after {prompt_timeout_s:.1f}s; workflow canceled."),
+                    )
+                    break
+        if choice not in prompt_choices:
+            choice = cancel_text
+        choice_index = prompt_choices.index(choice) if choice in prompt_choices else -1
+        key = None
+        if isinstance(button_keys, dict):
+            key = button_keys.get(choice)
+        with self._macro_vars_lock:
+            self._macro_vars["prompt_choice"] = choice
+            self._macro_vars["prompt_choice_key"] = key
+            self._macro_vars["prompt_choice_label"] = choice
+            self._macro_vars["prompt_index"] = choice_index
+            self._macro_vars["prompt_cancelled"] = choice == cancel_text
+            macro_ns = self._macro_vars.get("macro")
+            if isinstance(macro_ns, types.SimpleNamespace):
+                setattr(macro_ns, "prompt_choice", choice)
+                setattr(macro_ns, "prompt_choice_key", key)
+                setattr(macro_ns, "prompt_choice_label", choice)
+                setattr(macro_ns, "prompt_index", choice_index)
+                setattr(macro_ns, "prompt_cancelled", choice == cancel_text)
+        self.ui_q.put(("log", f"[workflow] Prompt: {message} | Selected: {choice}"))
+        if choice == cancel_text:
+            self.ui_q.put(("log", "[workflow] Prompt canceled; workflow aborted."))
+            raise RuntimeError("Workflow canceled.")
+        return {
+            "choice": choice,
+            "key": key,
+            "index": choice_index,
+            "cancelled": False,
+        }
+
+    def _start_status_indicator(self, label: str, *, workflow: bool) -> None:
+        post_ui = getattr(self.app, "_post_ui_thread", None)
+        if workflow and hasattr(self.app, "_start_workflow_status"):
+            callback = self.app._start_workflow_status
+        else:
+            callback = getattr(self.app, "_start_macro_status", None)
+        if not callable(callback):
+            return
+        if callable(post_ui):
+            post_ui(callback, label)
+            return
+        try:
+            callback(label)
+        except (AttributeError, RuntimeError) as exc:
+            _log_suppressed("Failed starting status indicator on UI thread", exc)
+
+    def _stop_status_indicator(self, *, workflow: bool) -> None:
+        post_ui = getattr(self.app, "_post_ui_thread", None)
+        if workflow and hasattr(self.app, "_stop_workflow_status"):
+            callback = self.app._stop_workflow_status
+        else:
+            callback = getattr(self.app, "_stop_macro_status", None)
+        if not callable(callback):
+            return
+        if callable(post_ui):
+            post_ui(callback)
+            return
+        try:
+            callback()
+        except (AttributeError, RuntimeError) as exc:
+            _log_suppressed("Failed stopping status indicator on UI thread", exc)
+
+    def _prepare_tool_change_workflow_context(
         self,
         *,
-        index: int,
         allow_streaming_paused: bool,
     ) -> None:
-        if int(index) != 4:
-            return
         stream_tool_change_active = bool(
             allow_streaming_paused
             and bool(getattr(self.grbl, "_stream_tool_change_active", False))
@@ -137,19 +271,25 @@ class MacroRunnerMixin(MacroExecutorState):
             _log_suppressed("Failed preparing tool-change prompt context", exc)
 
     @staticmethod
-    def _operator_assisted_macro_has_unlimited_wait(index: int) -> bool:
-        return int(index) in {3, 4}
+    def _is_editable_user_macro_index(index: int) -> bool:
+        return 1 <= int(index) <= int(USER_MACRO_SLOT_COUNT)
 
-    def run_macro(self, index: int, allow_streaming_paused: bool = False) -> bool:
+    def _macro_start_blocked(
+        self,
+        *,
+        allow_streaming_paused: bool,
+        title: str,
+        noun: str,
+    ) -> bool:
         if not self.grbl.is_connected():
-            messagebox.showwarning("Macro blocked", "Connect to GRBL first.")
-            return False
+            messagebox.showwarning(title, "Connect to GRBL first.")
+            return True
         if bool(getattr(self.app, "_stream_done_pending_idle", False)):
             messagebox.showwarning(
-                "Macro blocked",
-                "Wait for the previous job to fully finish before running a macro.",
+                title,
+                f"Wait for the previous job to fully finish before running a {noun}.",
             )
-            return False
+            return True
         if self.grbl.is_streaming():
             allow_during_tool_change = bool(
                 allow_streaming_paused
@@ -157,20 +297,89 @@ class MacroRunnerMixin(MacroExecutorState):
                 and bool(getattr(self.grbl, "_stream_tool_change_active", False))
             )
             if not allow_during_tool_change:
-                messagebox.showwarning("Macro blocked", "Stop the stream before running a macro.")
-                return False
+                messagebox.showwarning(title, f"Stop the stream before running a {noun}.")
+                return True
         if bool(getattr(self.app, "_alarm_locked", False)):
-            messagebox.showwarning("Macro blocked", "Clear the alarm before running a macro.")
-            return False
-        self._prepare_tool_change_prompt_context(
-            index=int(index),
-            allow_streaming_paused=bool(allow_streaming_paused),
+            messagebox.showwarning(title, "Clear the alarm before running a workflow.")
+            return True
+        if not self._macro_lock.acquire(blocking=False):
+            messagebox.showwarning(title, "Another workflow is already running.")
+            return True
+        return False
+
+    def _start_macro_execution(
+        self,
+        *,
+        lines: list[str],
+        path: str | None,
+        body_start: int,
+        name: str,
+        tip: str,
+        log_label: str,
+        unlimited_time_override: bool,
+    ) -> bool:
+        ts = time.strftime("%H:%M:%S")
+        if bool(self.app.gui_logging_enabled.get()):
+            if tip:
+                self.app.streaming_controller.log(
+                    f"[{ts}] {log_label}: {name} | Tip: {tip}"
+                )
+            else:
+                self.app.streaming_controller.log(f"[{ts}] {log_label}: {name}")
+            self.app.streaming_controller.log(f"[{ts}] {log_label} contents:")
+            for raw in lines[body_start:]:
+                self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
+        self._last_macro_run_success = None
+        t = threading.Thread(
+            target=self._run_macro_worker,
+            args=(
+                lines,
+                path,
+                body_start,
+                unlimited_time_override,
+            ),
+            daemon=True,
         )
+        t.start()
+        return True
+
+    def _start_builtin_workflow_execution(
+        self,
+        *,
+        action,
+    ) -> bool:
+        ts = time.strftime("%H:%M:%S")
+        if bool(self.app.gui_logging_enabled.get()):
+            self.app.streaming_controller.log(
+                f"[{ts}] Workflow: {action.label} | Tip: {action.tooltip}"
+            )
+        self._last_macro_run_success = None
+        t = threading.Thread(
+            target=self._run_builtin_workflow_worker,
+            args=(action,),
+            daemon=True,
+        )
+        t.start()
+        return True
+
+    def run_macro(self, index: int, allow_streaming_paused: bool = False) -> bool:
+        index = int(index)
+        if not self._is_editable_user_macro_index(index):
+            self._last_macro_run_success = False
+            messagebox.showerror(
+                "Macro error",
+                "Only editable user macros can run through the generic macro path.",
+            )
+            return False
+        if self._macro_start_blocked(
+            allow_streaming_paused=bool(allow_streaming_paused),
+            title="Macro blocked",
+            noun="macro",
+        ):
+            return False
         path = self.macro_path(index)
         if not path:
-            return False
-        if not self._macro_lock.acquire(blocking=False):
-            messagebox.showwarning("Macro busy", "Another macro is running.")
+            self._macro_lock.release()
             return False
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -191,28 +400,137 @@ class MacroRunnerMixin(MacroExecutorState):
             return False
         if not name:
             name = f"Macro {index}"
-        ts = time.strftime("%H:%M:%S")
-        if bool(self.app.gui_logging_enabled.get()):
-            if tip:
-                self.app.streaming_controller.log(f"[{ts}] Macro: {name} | Tip: {tip}")
-            else:
-                self.app.streaming_controller.log(f"[{ts}] Macro: {name}")
-            self.app.streaming_controller.log(f"[{ts}] Macro contents:")
-            for raw in lines[body_start:]:
-                self.app.streaming_controller.log(f"[{ts}]   {raw.rstrip()}")
-        self._last_macro_run_success = None
-        t = threading.Thread(
-            target=self._run_macro_worker,
-            args=(
-                lines,
-                path,
-                body_start,
-                self._operator_assisted_macro_has_unlimited_wait(int(index)),
-            ),
-            daemon=True,
+        return self._start_macro_execution(
+            lines=lines,
+            path=path,
+            body_start=body_start,
+            name=name,
+            tip=tip,
+            log_label="Macro",
+            unlimited_time_override=False,
         )
-        t.start()
-        return True
+
+    def run_builtin_workflow(
+        self,
+        workflow_id: str,
+        allow_streaming_paused: bool = False,
+    ) -> bool:
+        action = builtin_workflow_action(workflow_id)
+        if action.kind == "direct":
+            command = getattr(self.app, str(action.command_attr or ""), None)
+            if not callable(command):
+                messagebox.showerror(
+                    "Workflow error",
+                    f"Built-in workflow '{action.label}' is unavailable.",
+                )
+                return False
+            try:
+                return bool(command())
+            except Exception as exc:
+                messagebox.showerror(
+                    "Workflow error",
+                    f"Built-in workflow '{action.label}' failed:\n{exc}",
+                )
+                return False
+
+        if self._macro_start_blocked(
+            allow_streaming_paused=bool(allow_streaming_paused),
+            title="Workflow blocked",
+            noun="workflow",
+        ):
+            return False
+        if str(workflow_id) == "tool_change":
+            self._prepare_tool_change_workflow_context(
+                allow_streaming_paused=bool(allow_streaming_paused),
+            )
+        return self._start_builtin_workflow_execution(action=action)
+
+    def _run_builtin_workflow_worker(self, action) -> None:
+        start = time.perf_counter()
+        previous_workflow_override = bool(
+            getattr(self.app, "_builtin_workflow_unlimited_time_active", False)
+        )
+        previous_operator_override = bool(
+            getattr(self.app, "_operator_assisted_workflow_unlimited_time_active", False)
+        )
+        try:
+            self.app._builtin_workflow_unlimited_time_active = True
+            self.app._operator_assisted_workflow_unlimited_time_active = bool(
+                getattr(action, "operator_assisted", False)
+            )
+        except Exception as exc:
+            _log_suppressed("Failed enabling workflow no-timeout override", exc)
+        self._alarm_event.clear()
+        self._alarm_notified = False
+        self._manual_error_event.clear()
+        self._manual_error_message = ""
+        aborted = False
+        workflow_name = str(getattr(action, "label", "Workflow") or "Workflow")
+        self._workflow_audit(f"Start workflow_id={action.workflow_id!r} name={workflow_name!r}", force=True)
+        self._start_status_indicator(workflow_name, workflow=True)
+        try:
+            with macro_fast_poll_scope(self.app, "_macro_active_fast_poll_count"):
+                self._reset_prompt_state()
+                self._macro_state_restored = False
+                self._macro_saved_state = None
+                with self._macro_vars_lock:
+                    modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+                self._macro_send("$G")
+                modal_ok = self._macro_wait_for_modal(modal_seq)
+                status_ok = self._macro_wait_for_status()
+                if not modal_ok or not status_ok:
+                    aborted = True
+                    self.ui_q.put(("log", "[workflow] Snapshot failed; workflow aborted."))
+                    self._workflow_audit("Snapshot failed; aborting.", force=True)
+                    return
+                self._macro_saved_state = self._snapshot_macro_state()
+                if self.grbl.is_connected():
+                    self._macro_force_mm()
+                execute_builtin_workflow(self, action.workflow_id)
+                self._workflow_audit("Workflow finished normally.", force=True)
+        except Exception as exc:
+            aborted = True
+            canceled = bool(
+                isinstance(exc, RuntimeError)
+                and str(exc).strip().lower() == "workflow canceled."
+            )
+            if canceled:
+                self._workflow_audit("Runtime canceled by operator.", force=True)
+            else:
+                logger.exception("Built-in workflow '%s' failed", action.workflow_id)
+                self.ui_q.put(("log", f"[workflow] {workflow_name} failed: {exc}"))
+                self._workflow_audit(f"Runtime error: {exc}", force=True)
+                self.app._log_exception(
+                    "Workflow error",
+                    exc,
+                    show_dialog=True,
+                    dialog_title="Workflow error",
+                )
+        finally:
+            try:
+                self.app._builtin_workflow_unlimited_time_active = bool(previous_workflow_override)
+                self.app._operator_assisted_workflow_unlimited_time_active = bool(previous_operator_override)
+            except Exception as exc:
+                _log_suppressed("Failed restoring workflow timeout overrides", exc)
+            self._last_macro_run_success = not aborted
+            try:
+                if not self._macro_state_restored:
+                    self._workflow_restore_units()
+            except Exception as exc:
+                logger.exception("Workflow unit restore failed: %s", exc)
+                self.ui_q.put(("log", f"[workflow] Unit restore failed: {exc}"))
+            self._macro_saved_state = None
+            self._macro_state_restored = False
+            if self._macro_lock.locked():
+                self._macro_lock.release()
+            else:
+                logger.warning("Built-in workflow finished without a held workflow lock.")
+            self._stop_status_indicator(workflow=True)
+            duration = time.perf_counter() - start
+            self._workflow_audit(
+                f"Done workflow_id={action.workflow_id!r} name={workflow_name!r} duration={duration:.2f}s",
+                force=True,
+            )
 
     def _run_macro_worker(
         self,
@@ -223,15 +541,25 @@ class MacroRunnerMixin(MacroExecutorState):
     ):
         start = time.perf_counter()
         executed = 0
-        previous_unlimited_override = bool(
-            getattr(self.app, "_macro_operator_assisted_unlimited_time_active", False)
+        previous_operator_override = bool(
+            getattr(self.app, "_operator_assisted_workflow_unlimited_time_active", False)
+        )
+        previous_workflow_override = bool(
+            getattr(self.app, "_builtin_workflow_unlimited_time_active", False)
         )
         if unlimited_time_override:
             try:
-                self.app._macro_operator_assisted_unlimited_time_active = True
+                self.app._builtin_workflow_unlimited_time_active = True
             except Exception as exc:
                 _log_suppressed(
-                    "Failed enabling operator-assisted macro no-timeout override",
+                    "Failed enabling workflow no-timeout override",
+                    exc,
+                )
+            try:
+                self.app._operator_assisted_workflow_unlimited_time_active = False
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed applying operator-assisted workflow timeout override",
                     exc,
                 )
         line_timeout_s = self._macro_line_timeout_s()
@@ -249,33 +577,11 @@ class MacroRunnerMixin(MacroExecutorState):
             ),
             force=True,
         )
-        post_ui = getattr(self.app, "_post_ui_thread", None)
-        if callable(post_ui) and hasattr(self.app, "_start_macro_status"):
-            post_ui(self.app._start_macro_status, name)
-        elif hasattr(self.app, "_start_macro_status"):
-            try:
-                self.app._start_macro_status(name)
-            except (AttributeError, RuntimeError) as exc:
-                _log_suppressed("Failed starting macro status indicator on UI thread", exc)
+        self._start_status_indicator(name, workflow=False)
         try:
             with macro_fast_poll_scope(self.app, "_macro_active_fast_poll_count"):
                 try:
-                    with self._macro_vars_lock:
-                        self._macro_local_vars = {"app": self.app, "os": os}
-                        self._macro_vars["app"] = self.app
-                        self._macro_vars["os"] = os
-                        self._macro_vars["prompt_choice"] = ""
-                        self._macro_vars["prompt_choice_key"] = None
-                        self._macro_vars["prompt_choice_label"] = ""
-                        self._macro_vars["prompt_index"] = -1
-                        self._macro_vars["prompt_cancelled"] = False
-                        macro_ns = self._macro_vars.get("macro")
-                        if isinstance(macro_ns, types.SimpleNamespace):
-                            setattr(macro_ns, "prompt_choice", "")
-                            setattr(macro_ns, "prompt_choice_key", None)
-                            setattr(macro_ns, "prompt_choice_label", "")
-                            setattr(macro_ns, "prompt_index", -1)
-                            setattr(macro_ns, "prompt_cancelled", False)
+                    self._reset_prompt_state()
                     self._macro_state_restored = False
                     self._macro_saved_state = None
                     with self._macro_vars_lock:
@@ -401,12 +707,21 @@ class MacroRunnerMixin(MacroExecutorState):
         finally:
             if unlimited_time_override:
                 try:
-                    self.app._macro_operator_assisted_unlimited_time_active = bool(
-                        previous_unlimited_override
+                    self.app._builtin_workflow_unlimited_time_active = bool(
+                        previous_workflow_override
                     )
                 except Exception as exc:
                     _log_suppressed(
-                        "Failed restoring operator-assisted macro no-timeout override",
+                        "Failed restoring workflow no-timeout override",
+                        exc,
+                    )
+                try:
+                    self.app._operator_assisted_workflow_unlimited_time_active = bool(
+                        previous_operator_override
+                    )
+                except Exception as exc:
+                    _log_suppressed(
+                        "Failed restoring operator-assisted workflow no-timeout override",
                         exc,
                     )
             self._last_macro_run_success = not aborted
@@ -422,13 +737,7 @@ class MacroRunnerMixin(MacroExecutorState):
                 self._macro_lock.release()
             else:
                 logger.warning("Macro worker finished without a held macro lock.")
-            if callable(post_ui) and hasattr(self.app, "_stop_macro_status"):
-                post_ui(self.app._stop_macro_status)
-            elif hasattr(self.app, "_stop_macro_status"):
-                try:
-                    self.app._stop_macro_status()
-                except (AttributeError, RuntimeError) as exc:
-                    _log_suppressed("Failed stopping macro status indicator on UI thread", exc)
+            self._stop_status_indicator(workflow=False)
             duration = time.perf_counter() - start
             if duration >= 0.2:
                 avg = duration / executed if executed else duration

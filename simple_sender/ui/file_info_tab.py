@@ -31,7 +31,6 @@ from simple_sender.ui.theme_helpers import (
     notebook_page_style_name,
     text_display_theme_options,
 )
-from simple_sender.ui.widgets_tooltips import set_tab_tooltip
 
 
 def _job_loaded_for_file_info(app) -> bool:
@@ -351,11 +350,8 @@ def refresh_file_info_tab(app) -> None:
             return
 
 
-def build_file_info_tab(app, notebook) -> None:
-    tab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
-    notebook.add(tab, text="File Info")
-    set_tab_tooltip(notebook, tab, "Loaded file metadata and quick-scan metrics.")
-    app.file_info_tab = tab
+def build_file_info_panel(app, parent) -> ttk.Frame:
+    tab = ttk.Frame(parent, padding=6, style=notebook_page_style_name())
     content = ttk.Frame(tab, style=notebook_page_style_name())
     content.pack(fill="both", expand=True)
     text_widget = tk.Text(
@@ -376,4 +372,6 @@ def build_file_info_tab(app, notebook) -> None:
     bind_text_display_theme(app, text_widget)
     app.file_info_text = text_widget
     app.file_info_scrollbar = scrollbar
+    app.file_info_tab = tab
     refresh_file_info_tab(app)
+    return tab

@@ -24,13 +24,16 @@ import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from simple_sender.ui.alarm_state import (
+    alarm_recovery_evidence_lines,
+    alarm_recovery_guidance_text,
+)
 from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 
 logger = logging.getLogger(__name__)
 _ALARM_RECOVERY_WRAPLENGTH = 460
 _ALARM_RECOVERY_SECTION_PAD_Y = (0, 8)
 _ALARM_RECOVERY_BUTTON_PAD_X = (0, 6)
-
 
 def show_alarm_recovery(app) -> None:
     """Open the alarm recovery dialog when an alarm lock is active."""
@@ -53,24 +56,20 @@ def show_alarm_recovery(app) -> None:
         wraplength=_ALARM_RECOVERY_WRAPLENGTH,
         justify="left",
     ).pack(fill="x", pady=_ALARM_RECOVERY_SECTION_PAD_Y)
-    extra_lines = []
-    last_status = getattr(app, "_last_status_raw", "") or ""
-    if last_status:
-        extra_lines.append(f"Last status: {last_status.strip()}")
-    pins = getattr(app, "_last_status_pins", None)
-    if pins:
-        extra_lines.append(f"Pins: {pins}")
+    extra_lines = alarm_recovery_evidence_lines(
+        getattr(app, "_last_status_raw", ""),
+        getattr(app, "_last_status_pins", None),
+    )
     if extra_lines:
         ttk.Label(
             frm,
-            text="\n".join(extra_lines),
+            text="Controller evidence:\n" + "\n".join(extra_lines),
             wraplength=_ALARM_RECOVERY_WRAPLENGTH,
             justify="left",
         ).pack(fill="x", pady=_ALARM_RECOVERY_SECTION_PAD_Y)
     ttk.Label(
         frm,
-        text="Suggested steps: Unlock ($X) to clear the alarm, then Home ($H) if required. "
-        "If motion feels unsafe, use Reset (Ctrl-X).",
+        text=alarm_recovery_guidance_text(getattr(app, "_alarm_message", "")),
         wraplength=_ALARM_RECOVERY_WRAPLENGTH,
         justify="left",
         ).pack(fill="x", pady=(0, 10))

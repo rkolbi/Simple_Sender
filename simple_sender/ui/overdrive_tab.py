@@ -23,18 +23,13 @@
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.scrollable_container import build_scrollable_container
+from simple_sender.ui.override_controls import send_override_realtime
+from simple_sender.ui.theme_helpers import bind_touch_scale_theme, touch_scale_metrics
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
-from simple_sender.ui.override_controls import send_override_realtime
 from simple_sender.utils.constants import (
     DEFAULT_SPINDLE_RPM,
-    RT_FO_MINUS_10,
-    RT_FO_PLUS_10,
-    RT_FO_RESET,
-    RT_SO_MINUS_10,
-    RT_SO_PLUS_10,
     RT_SO_RESET,
 )
 
@@ -83,6 +78,63 @@ def _current_spindle_rpm(app) -> int:
         return 0
 
 
+def _current_spindle_modal(app) -> str:
+    try:
+        with app.macro_executor.macro_vars() as macro_vars:
+            token = str(macro_vars.get("spindle", "M5") or "M5").strip().upper()
+    except Exception:
+        token = "M5"
+    if token not in {"M3", "M4", "M5"}:
+        return "M5"
+    return token
+
+
+def _running_spindle_command_modal(app) -> str | None:
+    rpm = _current_spindle_rpm(app)
+    if rpm <= 0:
+        return None
+    modal = _current_spindle_modal(app)
+    if modal in {"M3", "M4"}:
+        return modal
+    return "M3"
+
+
+def _apply_spindle_rpm(app) -> None:
+    rpm = _save_spindle_control_rpm_setting(app)
+    modal = _running_spindle_command_modal(app)
+    if modal is None:
+        return
+
+    command = f"{modal} S{rpm}"
+
+    def _command() -> None:
+        if not send_override_realtime(app, RT_SO_RESET, label="Spindle override reset"):
+            return
+        try:
+            app._set_spindle_override_slider_value(100)
+        except Exception:
+            pass
+        accepted = bool(app.grbl.send_immediate(command))
+        if accepted:
+            try:
+                app.status.config(text=f"Spindle speed updated: {rpm} RPM")
+            except Exception:
+                pass
+            return
+        try:
+            app.status.config(text=f"Spindle speed update rejected: controller did not accept {command}")
+        except Exception:
+            pass
+        ui_q = getattr(app, "ui_q", None)
+        if ui_q is not None:
+            try:
+                ui_q.put(("log", f"[spindle] Controller rejected {command}; spindle speed remains unchanged."))
+            except Exception:
+                pass
+
+    app._confirm_and_run("Apply spindle RPM", _command)
+
+
 def _run_spindle_on(app) -> None:
     rpm = _save_spindle_control_rpm_setting(app)
     def _command() -> None:
@@ -122,35 +174,66 @@ def _run_spindle_off(app) -> None:
     app._confirm_and_run("Spindle OFF", _command)
 
 
-def _run_override_button(app, command: bytes, *, label: str) -> None:
-    send_override_realtime(app, command, label=label)
+def _override_scale_metrics(app) -> tuple[int, int]:
+    return touch_scale_metrics(app)
+
+
+def _build_override_section(
+    app,
+    parent,
+    *,
+    title: str,
+    scale_attr: str,
+    value_label_attr: str,
+    display_var,
+    slider_command,
+) -> None:
+    section = ttk.Labelframe(parent, text=title, padding=8)
+    section.pack(fill="x", pady=(0, 10))
+    control_row = ttk.Frame(section)
+    control_row.pack(fill="x")
+    slider_host = ttk.Frame(control_row)
+    slider_host.pack(side="left", fill="x", expand=True, pady=(2, 2))
+    scale = tk.Scale(
+        slider_host,
+        from_=10,
+        to=200,
+        orient="horizontal",
+        command=slider_command,
+    )
+    bind_touch_scale_theme(app, scale)
+    scale.pack(fill="x")
+    setattr(app, scale_attr, scale)
+    scale.set(100)
+    value_label = ttk.Label(control_row, textvariable=display_var)
+    value_label.pack(side="right", padx=(10, 0))
+    setattr(app, value_label_attr, value_label)
 
 
 def build_overdrive_tab(app, parent):
-    container = ttk.Frame(parent)
-    container.pack(fill="both", expand=True)
-    scroll_container = build_scrollable_container(
-        container,
-        app=app,
-        tk_module=tk,
-        ttk_module=ttk,
-        bind_mousewheel_support=True,
-    )
-    content = scroll_container.content
+    content = ttk.Frame(parent)
+    content.pack(fill="both", expand=True)
+    app.overdrive_scrollbar = None
 
-    tools_frame = ttk.Labelframe(content, text="Tools", padding=8)
-    tools_frame.pack(fill="x", pady=(0, 10))
-
-    app.btn_spoilboard = ttk.Button(
-        tools_frame,
-        text="Spoilboard",
-        command=lambda: app._confirm_and_run("Spoilboard Generator", app._show_spoilboard_generator_dialog),
+    _build_override_section(
+        app,
+        content,
+        title="Feed Override",
+        scale_attr="feed_override_scale",
+        value_label_attr="feed_override_value_label",
+        display_var=app.feed_override_display,
+        slider_command=app._on_feed_override_slider,
     )
-    set_kb_id(app.btn_spoilboard, "spoilboard_generator")
-    app.btn_spoilboard.pack(side="left")
-    app._manual_controls.append(app.btn_spoilboard)
-    app._offline_controls.add(app.btn_spoilboard)
-    apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
+
+    _build_override_section(
+        app,
+        content,
+        title="Spindle Override",
+        scale_attr="spindle_override_scale",
+        value_label_attr="spindle_override_value_label",
+        display_var=app.spindle_override_display,
+        slider_command=app._on_spindle_override_slider,
+    )
 
     spindle_frame = ttk.Labelframe(content, text="Spindle Control", padding=8)
     spindle_frame.pack(fill="x", pady=(0, 10))
@@ -202,7 +285,7 @@ def build_overdrive_tab(app, parent):
     app.btn_spindle_rpm_apply = ttk.Button(
         rpm_row,
         text="Apply RPM",
-        command=lambda: _save_spindle_control_rpm_setting(app),
+        command=lambda: _apply_spindle_rpm(app),
     )
     app.btn_spindle_rpm_apply.pack(side="left")
     apply_tooltip(
@@ -211,125 +294,22 @@ def build_overdrive_tab(app, parent):
     )
     apply_tooltip(
         app.btn_spindle_rpm_apply,
-        "Save the Spindle ON RPM.",
+        "Apply the RPM to a running spindle, or save it for Spindle ON.",
     )
 
-    info_label = ttk.Label(content, textvariable=app.override_info_var, anchor="center")
-    info_label.pack(fill="x", pady=(0, 4))
-    note_label = ttk.Label(
-        content,
-        text="Note: GRBL 1.1h feed/spindle overrides move in 10% steps.",
-        anchor="center",
-        wraplength=520,
+    tools_frame = ttk.Labelframe(content, text="Tools", padding=8)
+    tools_frame.pack(fill="x", pady=(0, 10))
+    app.btn_spoilboard = ttk.Button(
+        tools_frame,
+        text="Spoilboard",
+        command=lambda: app._confirm_and_run("Spoilboard Generator", app._show_spoilboard_generator_dialog),
     )
-    note_label.pack(fill="x", pady=(0, 10))
+    set_kb_id(app.btn_spoilboard, "spoilboard_generator")
+    app.btn_spoilboard.pack(side="left")
+    app._manual_controls.append(app.btn_spoilboard)
+    app._offline_controls.add(app.btn_spoilboard)
+    apply_tooltip(app.btn_spoilboard, "Generate spoilboard surfacing G-code.")
 
-    feed_frame = ttk.Labelframe(content, text="Feed Override", padding=8)
-    feed_frame.pack(fill="x", pady=(0, 10))
-    feed_slider_row = ttk.Frame(feed_frame)
-    feed_slider_row.pack(fill="x", pady=(0, 6))
-    app.feed_override_scale = ttk.Scale(
-        feed_slider_row,
-        from_=10,
-        to=200,
-        orient="horizontal",
-        command=app._on_feed_override_slider,
-    )
-    app.feed_override_scale.pack(side="left", fill="x", expand=True)
-    app.feed_override_scale.set(100)
-    ttk.Label(feed_slider_row, textvariable=app.feed_override_display).pack(side="right", padx=(10, 0))
-
-    feed_btn_row = ttk.Frame(feed_frame)
-    feed_btn_row.pack(fill="x")
-    app.btn_fo_plus = ttk.Button(
-        feed_btn_row,
-        text="+10%",
-        command=lambda: _run_override_button(app, RT_FO_PLUS_10, label="Feed override +10%"),
-    )
-    set_kb_id(app.btn_fo_plus, "feed_override_plus_10")
-    app.btn_fo_plus.pack(side="left", expand=True, fill="x")
-    app._manual_controls.append(app.btn_fo_plus)
-    app._override_controls.append(app.btn_fo_plus)
-    apply_tooltip(app.btn_fo_plus, "Increase feed override by 10%.")
-    attach_log_gcode(app.btn_fo_plus, "RT 0x91")
-
-    app.btn_fo_minus = ttk.Button(
-        feed_btn_row,
-        text="-10%",
-        command=lambda: _run_override_button(app, RT_FO_MINUS_10, label="Feed override -10%"),
-    )
-    set_kb_id(app.btn_fo_minus, "feed_override_minus_10")
-    app.btn_fo_minus.pack(side="left", expand=True, fill="x", padx=6)
-    app._manual_controls.append(app.btn_fo_minus)
-    app._override_controls.append(app.btn_fo_minus)
-    apply_tooltip(app.btn_fo_minus, "Decrease feed override by 10%.")
-    attach_log_gcode(app.btn_fo_minus, "RT 0x92")
-
-    app.btn_fo_reset = ttk.Button(
-        feed_btn_row,
-        text="Reset",
-        command=lambda: _run_override_button(app, RT_FO_RESET, label="Feed override reset"),
-    )
-    set_kb_id(app.btn_fo_reset, "feed_override_reset")
-    app.btn_fo_reset.pack(side="left", expand=True, fill="x")
-    app._manual_controls.append(app.btn_fo_reset)
-    app._override_controls.append(app.btn_fo_reset)
-    apply_tooltip(app.btn_fo_reset, "Reset feed override to 100%.")
-    attach_log_gcode(app.btn_fo_reset, "RT 0x90")
-
-    spindle_override_frame = ttk.Labelframe(content, text="Spindle Override", padding=8)
-    spindle_override_frame.pack(fill="x", pady=(0, 10))
-    spindle_slider_row = ttk.Frame(spindle_override_frame)
-    spindle_slider_row.pack(fill="x", pady=(0, 6))
-    app.spindle_override_scale = ttk.Scale(
-        spindle_slider_row,
-        from_=10,
-        to=200,
-        orient="horizontal",
-        command=app._on_spindle_override_slider,
-    )
-    app.spindle_override_scale.pack(side="left", fill="x", expand=True)
-    app.spindle_override_scale.set(100)
-    ttk.Label(spindle_slider_row, textvariable=app.spindle_override_display).pack(side="right", padx=(10, 0))
-
-    spindle_btn_row = ttk.Frame(spindle_override_frame)
-    spindle_btn_row.pack(fill="x")
-    app.btn_so_plus = ttk.Button(
-        spindle_btn_row,
-        text="+10%",
-        command=lambda: _run_override_button(app, RT_SO_PLUS_10, label="Spindle override +10%"),
-    )
-    set_kb_id(app.btn_so_plus, "spindle_override_plus_10")
-    app.btn_so_plus.pack(side="left", expand=True, fill="x")
-    app._manual_controls.append(app.btn_so_plus)
-    app._override_controls.append(app.btn_so_plus)
-    apply_tooltip(app.btn_so_plus, "Increase spindle override by 10%.")
-    attach_log_gcode(app.btn_so_plus, "RT 0x9A")
-
-    app.btn_so_minus = ttk.Button(
-        spindle_btn_row,
-        text="-10%",
-        command=lambda: _run_override_button(app, RT_SO_MINUS_10, label="Spindle override -10%"),
-    )
-    set_kb_id(app.btn_so_minus, "spindle_override_minus_10")
-    app.btn_so_minus.pack(side="left", expand=True, fill="x", padx=6)
-    app._manual_controls.append(app.btn_so_minus)
-    app._override_controls.append(app.btn_so_minus)
-    apply_tooltip(app.btn_so_minus, "Decrease spindle override by 10%.")
-    attach_log_gcode(app.btn_so_minus, "RT 0x9B")
-
-    app.btn_so_reset = ttk.Button(
-        spindle_btn_row,
-        text="Reset",
-        command=lambda: _run_override_button(app, RT_SO_RESET, label="Spindle override reset"),
-    )
-    set_kb_id(app.btn_so_reset, "spindle_override_reset")
-    app.btn_so_reset.pack(side="left", expand=True, fill="x")
-    app._manual_controls.append(app.btn_so_reset)
-    app._override_controls.append(app.btn_so_reset)
-    apply_tooltip(app.btn_so_reset, "Reset spindle override to 100%.")
-    attach_log_gcode(app.btn_so_reset, "RT 0x99")
     app._set_feed_override_slider_value(100)
     app._set_spindle_override_slider_value(100)
-    app._refresh_override_info()
 

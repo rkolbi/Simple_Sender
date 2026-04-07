@@ -130,6 +130,7 @@ def _touch_scroll_allowed(app, widget) -> bool:
             tk.Entry,
             tk.Text,
             tk.Listbox,
+            tk.Scale,
             tk.Spinbox,
             ttk.Button,
             ttk.Checkbutton,

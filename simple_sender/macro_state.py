@@ -296,6 +296,8 @@ def macro_restore_units(
     macro_vars: dict[str, Any],
     macro_vars_lock,
     state: dict[str, str] | None,
+    log_prefix: str = "[macro]",
+    restore_label: str = "unit restore",
 ) -> None:
     if not state:
         return
@@ -303,7 +305,12 @@ def macro_restore_units(
     if not units:
         return
     if not grbl.is_connected() or getattr(app, "_alarm_locked", False):
-        ui_q.put(("log", "[macro] Skipped unit restore due to disconnect/alarm."))
+        ui_q.put(
+            (
+                "log",
+                f"{str(log_prefix).strip() or '[macro]'} Skipped {restore_label} due to disconnect/alarm.",
+            )
+        )
         return
     macro_send(units)
     try:
@@ -323,12 +330,17 @@ def macro_restore_state(
     macro_vars: dict[str, Any],
     macro_vars_lock,
     state: dict[str, str] | None,
+    log_prefix: str = "[macro]",
+    restore_label: str = "STATE_RETURN",
+    restored_message: str = "restored modal state.",
 ) -> bool:
+    prefix = str(log_prefix).strip() or "[macro]"
+    label = str(restore_label or "STATE_RETURN").strip() or "STATE_RETURN"
     if not state:
-        ui_q.put(("log", "[macro] STATE_RETURN skipped: no saved state."))
+        ui_q.put(("log", f"{prefix} {label} skipped: no saved state."))
         return False
     if not grbl.is_connected() or getattr(app, "_alarm_locked", False):
-        ui_q.put(("log", "[macro] STATE_RETURN skipped due to disconnect/alarm."))
+        ui_q.put(("log", f"{prefix} {label} skipped due to disconnect/alarm."))
         return False
     tokens = [
         state.get("WCS", ""),
@@ -350,5 +362,5 @@ def macro_restore_state(
             _log_suppressed("Failed syncing app unit mode during macro state restore", exc)
         with macro_vars_lock:
             macro_vars["units"] = units
-    ui_q.put(("log", "[macro] STATE_RETURN restored modal state."))
+    ui_q.put(("log", f"{prefix} {label} {restored_message}"))
     return True

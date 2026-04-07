@@ -61,39 +61,6 @@ from simple_sender.utils.constants import (
     WATCHDOG_HOMING_TIMEOUT,
 )
 
-_APP_INIT_DEPS = (
-    copy,
-    os,
-    queue,
-    tk,
-    ttk,
-    tkfont,
-    ProbeController,
-    AutoLevelProbeRunner,
-    GrblWorker,
-    MacroExecutor,
-    StreamingController,
-    AccessoryRouter,
-    create_default_kasa_controller,
-    GRBLSettingsController,
-    MacroPanel,
-    UiEventQueue,
-    DEFAULT_SETTINGS,
-    Settings,
-    get_settings_path,
-    STATUS_POLL_DEFAULT,
-    UI_EVENT_QUEUE_MAXSIZE,
-    UI_QUEUE_MAINTENANCE_INTERVAL_S,
-    UI_QUEUE_IDLE_MAINTENANCE_INTERVAL_S,
-    UI_QUEUE_RECONNECT_CHECK_INTERVAL_S,
-    UI_QUEUE_IDLE_RECONNECT_CHECK_INTERVAL_S,
-    GCODE_STREAMING_LINE_THRESHOLD,
-    GCODE_ULTRA_LARGE_SIZE_THRESHOLD,
-    WATCHDOG_HOMING_TIMEOUT,
-    PYGAME_AVAILABLE,
-)
-
-
 def init_settings_store(app, script_dir: str) -> tuple[float, float]:
     return _init_settings_store(app, script_dir, module=sys.modules[__name__])
 

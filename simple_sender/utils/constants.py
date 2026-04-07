@@ -231,7 +231,7 @@ GCODE_STATS_FULL_SCAN_THROTTLE_SLEEP_S = 0.001
 """Sleep duration (s) for periodic full-scan estimate yields."""
 
 GCODE_STATS_FULL_SCAN_BACKGROUND_TAB_SLEEP_S = 0.004
-"""Extra sleep duration (s) while parsing estimates away from the G-code tab."""
+"""Extra sleep duration (s) while parsing estimates away from the primary job view."""
 
 GCODE_STATS_SAMPLE_QUICK_MAX_LINES = 1000
 """Maximum sampled lines used for the immediate post-load baseline estimate pass."""
@@ -451,6 +451,9 @@ MACRO_PREFIXES = ("Macro-",)
 MACRO_EXTS = ("", ".txt")
 """Valid extensions for macro files."""
 
+USER_MACRO_SLOT_COUNT = 5
+"""Number of editable user-macro slots exposed in the UI."""
+
 MACRO_WAIT_TIMEOUT = 30.0
 """Default timeout for %wait command (seconds)."""
 
@@ -460,11 +463,11 @@ MACRO_PROMPT_TIMEOUT = 120.0
 MACRO_WAIT_POLL_INTERVAL = 0.1
 """Polling interval for %wait command (seconds)."""
 
-MACRO_LINE_TIMEOUT = 0.0
-"""Default maximum execution time for a single macro line (seconds, 0 disables)."""
+MACRO_LINE_TIMEOUT = 120.0
+"""Default maximum execution time for a single general macro line (seconds, 0 disables)."""
 
-MACRO_TOTAL_TIMEOUT = 0.0
-"""Default maximum execution time for an entire macro run (seconds, 0 disables)."""
+MACRO_TOTAL_TIMEOUT = 900.0
+"""Default maximum execution time for an entire general macro run (seconds, 0 disables)."""
 
 MACRO_STDEXPR = False
 """Use standard Python expressions instead of bracket notation."""

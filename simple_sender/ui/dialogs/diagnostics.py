@@ -73,12 +73,6 @@ from .diagnostics_performance_actions import (
     apply_performance_test_preset as _apply_performance_test_preset_impl,
     save_performance_report_to_logs as _save_performance_report_to_logs_impl,
 )
-from .diagnostics_preflight import (
-    evaluate_run_preflight as _evaluate_run_preflight_impl,
-    format_validation_summary as _format_validation_summary,
-    get_bounds as _get_bounds,
-    get_travel_limits as _get_travel_limits,
-)
 from .diagnostics_session_text import (
     build_session_diagnostics_lines as _build_session_diagnostics_lines_impl,
 )
@@ -95,6 +89,7 @@ from .diagnostics_report_export import (
 from .diagnostics_bundle_export import (
     export_diagnostics_bundle as _export_diagnostics_bundle_impl,
 )
+from simple_sender.services.preflight_service import PreflightService
 
 CHECKLIST_ITEMS = [
     "Connect/disconnect: port list refreshes, status shows connected, $G and $$ populate settings.",
@@ -301,6 +296,54 @@ def _bounded_ssmeta(ssmeta: Any) -> dict[str, str]:
     return out
 
 
+_DEFAULT_PREFLIGHT_SERVICE = PreflightService()
+
+
+def _format_validation_summary(report: Any) -> list[str]:
+    if report is None:
+        return []
+    summary = []
+    if getattr(report, "long_line_count", 0):
+        summary.append(f"Overlong lines: {report.long_line_count}")
+    unsupported_axes = getattr(report, "unsupported_axes", {})
+    if unsupported_axes:
+        axes = ", ".join(f"{k} x{v}" for k, v in unsupported_axes.items())
+        summary.append(f"Unsupported axes: {axes}")
+    unsupported_g = getattr(report, "unsupported_g_codes", {})
+    if unsupported_g:
+        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_g.items())
+        summary.append(f"Unsupported G-codes: {codes}")
+    unsupported_m = getattr(report, "unsupported_m_codes", {})
+    if unsupported_m:
+        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_m.items())
+        summary.append(f"Unsupported M-codes: {codes}")
+    grbl_warnings = getattr(report, "grbl_warnings", {})
+    if grbl_warnings:
+        warnings = ", ".join(f"{k} x{v}" for k, v in grbl_warnings.items())
+        summary.append(f"GRBL warnings: {warnings}")
+    unsupported_words = getattr(report, "unsupported_words", {})
+    if unsupported_words:
+        words = ", ".join(f"{k} x{v}" for k, v in unsupported_words.items())
+        summary.append(f"Unknown words: {words}")
+    hazards = sorted(getattr(report, "modal_hazards", set()))
+    if hazards:
+        summary.append(f"Modal hazards: {', '.join(hazards)}")
+    if getattr(report, "line_issue_count", 0):
+        summary.append(f"Line issues: {report.line_issue_count}")
+    return summary
+
+
+def _get_bounds(app: Any):
+    bounds = _DEFAULT_PREFLIGHT_SERVICE.get_bounds(app)
+    if bounds is None:
+        return None
+    return bounds.as_tuple()
+
+
+def _get_travel_limits(app: Any) -> dict[str, float]:
+    return _DEFAULT_PREFLIGHT_SERVICE.get_travel_limits(app).as_dict()
+
+
 def _runtime_metrics(app: Any) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     metrics["build_info"] = _collect_build_info(app)
@@ -375,8 +418,7 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
                     phase_sample_counts: dict[str, int] = {}
                     missing_phases: list[str] = []
                     for phase_name in (
-                        "idle_gcode_visible",
-                        "idle_gcode_hidden",
+                        "idle_connected",
                         "streaming",
                     ):
                         phase_entry = phase_metrics.get(phase_name)
@@ -398,7 +440,7 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
                         )
                     else:
                         metrics["perf_phase_sampling_note"] = (
-                            "Phase sampling populated for idle-visible, idle-hidden, and streaming."
+                            "Phase sampling populated for idle-connected and streaming."
                         )
                 else:
                     metrics["perf_phase_sampling_note"] = (
@@ -1125,7 +1167,7 @@ def _format_runtime_metrics(
     phase_metrics = metrics.get("perf_phase_metrics")
     if isinstance(phase_metrics, dict) and phase_metrics:
         lines.append("- Phase CPU/RSS:")
-        for phase_name in ("idle_gcode_visible", "idle_gcode_hidden", "streaming"):
+        for phase_name in ("idle_connected", "streaming"):
             phase = phase_metrics.get(phase_name)
             if not isinstance(phase, dict):
                 continue
@@ -1761,14 +1803,11 @@ def open_run_checklist(app: Any) -> None:
 
 
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
-    return cast(
-        tuple[list[str], list[str]],
-        _evaluate_run_preflight_impl(
-            app,
-            get_bounds=_get_bounds,
-            get_travel_limits=_get_travel_limits,
-        ),
-    )
+    result = PreflightService(
+        get_bounds=_get_bounds,
+        get_travel_limits=_get_travel_limits,
+    ).validate_job(app)
+    return list(result.failures), list(result.warnings)
 
 
 def run_preflight_check(app) -> None:

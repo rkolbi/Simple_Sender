@@ -24,6 +24,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Callable, cast
 
+from simple_sender.builtin_workflows import BUILTIN_WORKFLOW_ACTIONS
+from simple_sender.ui.macro_files import user_macro_slots
 from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
@@ -48,6 +50,12 @@ class MacroPanel:
 
     def _macro_path(self, index: int) -> str | None:
         return cast(str | None, self.app.macro_executor.macro_path(index))
+
+    def _user_macro_path(self, slot: int) -> str | None:
+        resolver = getattr(self.app.macro_executor, "user_macro_path", None)
+        if callable(resolver):
+            return cast(str | None, resolver(slot))
+        return None
 
     def _validate_macro_color(self, color: str) -> bool:
         checker = getattr(self.app, "winfo_rgb", None)
@@ -213,9 +221,15 @@ class MacroPanel:
     def _run_macro(self, index: int) -> None:
         self.app.macro_executor.run_macro(index)
 
+    def _run_builtin_workflow(self, workflow_id: str) -> None:
+        self.app.macro_executor.run_builtin_workflow(workflow_id)
+
     def _load_macro_buttons(self) -> None:
         if not self._left_frame:
             return
+        def _noop() -> None:
+            return None
+
         def _run_command(index: int) -> Callable[[], None]:
             return lambda: self._run_macro(index)
 
@@ -231,45 +245,68 @@ class MacroPanel:
             for w in self._right_frame.winfo_children():
                 w.destroy()
 
-        entries: list[tuple[int, str]] = []
-        for idx in (1, 2, 3, 4, 5, 6, 7, 8):
-            path = self._macro_path(idx)
-            if path:
-                entries.append((idx, path))
-
         self._left_frame.grid_rowconfigure(0, weight=0)
-        total_buttons = len(entries) + 1  # Home button + configured macro buttons
+        populated_user_slots: list[tuple[int, int, str]] = []
+        for slot in user_macro_slots():
+            path = self._user_macro_path(slot)
+            if not path:
+                continue
+            physical_index = self.app.macro_executor.user_macro_storage_index(slot)
+            populated_user_slots.append((slot, physical_index, path))
+        total_buttons = len(BUILTIN_WORKFLOW_ACTIONS) + len(populated_user_slots)
         for col in range(total_buttons):
             self._left_frame.grid_columnconfigure(col, weight=1, uniform="macro_buttons")
 
         default_style = getattr(self.app, "macro_button_style", "TButton")
-        home_btn = ttk.Button(
-            self._left_frame,
-            text="Home",
-            style=default_style,
-            command=self.app._start_homing,
-        )
-        self.app.btn_home_mpos = home_btn
-        set_kb_id(home_btn, "home")
-        home_btn.grid(row=0, column=0, padx=(0, 6) if total_buttons > 1 else 0, pady=2, sticky="ew")
-        apply_tooltip(home_btn, "Run the homing cycle.")
-        attach_log_gcode(home_btn, "$H")
-        self.app._manual_controls.append(home_btn)
-        self._macro_buttons.append(home_btn)
+        for col, action in enumerate(BUILTIN_WORKFLOW_ACTIONS):
+            command: Callable[[], None]
+            if action.kind == "direct":
+                direct_command = getattr(self.app, str(action.command_attr or ""), None)
+                command = direct_command if callable(direct_command) else _noop
+            else:
+                workflow_id = action.workflow_id
 
-        for col, (idx, path) in enumerate(entries, start=1):
-            name, tip, color, text_color, _body_start = self._read_macro_header(path, idx)
+                def _built_in_command(workflow_id: str = workflow_id) -> None:
+                    self._run_builtin_workflow(workflow_id)
+
+                command = _built_in_command
+            btn = ttk.Button(
+                self._left_frame,
+                text=action.label,
+                style=default_style,
+                command=command,
+            )
+            if action.workflow_id == "home":
+                self.app.btn_home_mpos = btn
+            set_kb_id(btn, action.kb_id)
+            padx = (0, 6) if col < total_buttons - 1 else 0
+            btn.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
+            apply_tooltip(btn, action.tooltip)
+            if action.log_gcode:
+                attach_log_gcode(btn, action.log_gcode)
+            self.app._manual_controls.append(btn)
+            self._macro_buttons.append(btn)
+        builtin_count = len(BUILTIN_WORKFLOW_ACTIONS)
+        for offset, (_slot, physical_index, path) in enumerate(
+            populated_user_slots,
+            start=builtin_count,
+        ):
+            name, tip, color, text_color, _body_start = self._read_macro_header(
+                path, physical_index
+            )
+            style = self._button_style_for_color(color, text_color)
             btn = ttk.Button(
                 self._left_frame,
                 text=name,
-                style=self._button_style_for_color(color, text_color),
-                command=_run_command(idx),
+                style=style,
+                command=_run_command(physical_index),
+                state="normal",
             )
-            set_kb_id(btn, f"macro_{idx}")
-            padx = (0, 6) if col < total_buttons - 1 else 0
-            btn.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
+            set_kb_id(btn, f"macro_{physical_index - 5}")
+            padx = (0, 6) if offset < total_buttons - 1 else 0
+            btn.grid(row=0, column=offset, padx=padx, pady=2, sticky="ew")
             apply_tooltip(btn, tip)
-            btn.bind("<Button-3>", _sample_bind(idx))
+            btn.bind("<Button-3>", _sample_bind(physical_index))
             self.app._manual_controls.append(btn)
             self._macro_buttons.append(btn)
         self.app._refresh_keyboard_table()

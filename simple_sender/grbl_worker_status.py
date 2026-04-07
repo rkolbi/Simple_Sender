@@ -699,8 +699,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             int(stream_file_size_bytes),
                         )
                     )
-                self._emit_live_gcode_window(force=False)
-            
+
             if line_lower == "ok":
                 if ack_line_idx is not None:
                     self._maybe_pause_after_ack(ack_line_idx)
@@ -935,9 +934,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 )
                 if manual_motion_active:
                     interval = min(float(interval), float(_MANUAL_MOTION_STATUS_INTERVAL_S))
-                if bool(getattr(self, "_live_window_dirty", False)):
-                    self._emit_live_gcode_window(force=False)
-                
+
                 # Wait for interval or stop signal
                 if self._wait_status_interval(stop_evt, interval):
                     break

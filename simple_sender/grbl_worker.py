@@ -89,7 +89,6 @@ from .utils.constants import (
     WATCHDOG_SETTINGS_DUMP_TIMEOUT,
     GCODE_LIVE_WINDOW_PAST_LINES,
     GCODE_LIVE_WINDOW_NEXT_LINES,
-    GCODE_LIVE_WINDOW_REFRESH_MS,
 )
 from .utils.exceptions import SerialWriteError
 
@@ -97,8 +96,6 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _RX_LOGGER = None
 _RX_LOGGER_LOCK = threading.Lock()
-_REEXPORTED_GRBL_ERROR_HELPERS = (annotate_grbl_alarm, annotate_grbl_error)
-_REEXPORTED_REALTIME_CONSTANTS = (RT_RESUME, RT_JOG_CANCEL)
 TX_LINE_RATE_WINDOW_S = 5.0
 # Keep a short rolling window for diagnostics without growing runtime memory.
 QUEUE_DEPTH_SNAPSHOT_MAX = 64
@@ -269,11 +266,6 @@ class GrblWorker(
         self._live_pending_window: deque[tuple[int, str]] = deque(
             maxlen=max(1, int(GCODE_LIVE_WINDOW_NEXT_LINES))
         )
-        self._live_window_refresh_s = max(
-            0.02, float(GCODE_LIVE_WINDOW_REFRESH_MS) / 1000.0
-        )
-        self._live_window_last_emit_ts = 0.0
-        self._live_window_dirty = False
         self._last_manual_source: str | None = None
         self._settings_dump_active = False
         self._settings_dump_seen = False
@@ -754,8 +746,6 @@ class GrblWorker(
             self._live_acked_ring.clear()
             self._live_current_acked = None
             self._live_pending_window.clear()
-            self._live_window_dirty = True
-            self._live_window_last_emit_ts = 0.0
             self._manual_source_queue.clear()
             self._resolve_queued_manual_trackers_locked(
                 self._manual_tracker_queue,
@@ -776,83 +766,6 @@ class GrblWorker(
             self._last_tx_emit_ts = 0.0
             self._tx_line_ts_window.clear()
             self._tx_lines_per_sec = 0.0
-        self._emit_live_gcode_window(force=True)
-
-    @staticmethod
-    def _safe_live_idx(value: Any) -> int | None:
-        try:
-            return int(value)
-        except Exception:
-            return None
-
-    def _emit_live_gcode_window(self, *, force: bool = False) -> None:
-        """Emit bounded live Past/Current/Next window payload to UI queue."""
-        now = time.monotonic()
-        if not force:
-            last_emit = float(getattr(self, "_live_window_last_emit_ts", 0.0) or 0.0)
-            if (now - last_emit) < float(getattr(self, "_live_window_refresh_s", 0.125)):
-                self._live_window_dirty = True
-                return
-        with self._stream_lock:
-            past_lines = list(self._live_acked_ring)
-            current_line = self._live_current_acked
-            pending: list[tuple[int, str]] = []
-            seen: set[int] = set()
-            for item in self._stream_line_queue:
-                if not bool(getattr(item, "is_gcode", False)):
-                    continue
-                idx = self._safe_live_idx(getattr(item, "idx", None))
-                if idx is None:
-                    continue
-                if idx in seen:
-                    continue
-                seen.add(idx)
-                pending.append((idx, str(getattr(item, "line", "") or "")))
-                if len(pending) >= int(GCODE_LIVE_WINDOW_NEXT_LINES):
-                    break
-            pending_item = self._stream_pending_item
-            if (
-                pending_item is not None
-                and bool(getattr(pending_item, "is_gcode", False))
-                and len(pending) < int(GCODE_LIVE_WINDOW_NEXT_LINES)
-            ):
-                idx = self._safe_live_idx(getattr(pending_item, "idx", None))
-                if idx is not None and idx not in seen:
-                    pending.append((idx, str(getattr(pending_item, "line", "") or "")))
-            self._live_pending_window.clear()
-            self._live_pending_window.extend(pending)
-            pending_depth = int(len(pending))
-            acked_offset = max(0, int(getattr(self, "_ack_byte_offset", 0) or 0))
-            file_size = max(0, int(getattr(self, "_stream_file_size_bytes", 0) or 0))
-            last_acked_idx = (
-                int(current_line[0])
-                if isinstance(current_line, tuple) and len(current_line) >= 1
-                else int(getattr(self, "_ack_index", -1) or -1)
-            )
-        progress_pct = 0.0
-        if file_size > 0:
-            acked_offset = min(acked_offset, file_size)
-            progress_pct = max(
-                0.0,
-                min(100.0, (float(acked_offset) / float(file_size)) * 100.0),
-            )
-        payload = {
-            "past_lines": past_lines,
-            "current_line": current_line,
-            "next_lines": pending,
-            "next_buffered_count": pending_depth,
-            "pending_depth": pending_depth,
-            "last_acked_index": int(last_acked_idx),
-            "acked_byte_offset": int(acked_offset),
-            "file_size_bytes": int(file_size),
-            "stream_progress_pct": float(progress_pct),
-        }
-        try:
-            self.ui_q.put(("live_gcode_window", payload))
-            self._live_window_last_emit_ts = now
-            self._live_window_dirty = False
-        except Exception as exc:
-            _log_suppressed("Failed queueing live G-code window payload", exc)
 
     def _record_tx_line(self) -> None:
         now = time.time()
@@ -991,8 +904,8 @@ class GrblWorker(
                 live_current_acked_index = int(self._live_current_acked[0])
         except Exception:
             live_current_acked_index = -1
-        # Return a compatibility-stable diagnostics shape used by UI reporting,
-        # exports, and tests.
+        # Return a stable diagnostics shape used by UI reporting, exports,
+        # and tests.
         return {
             "tx_lines_per_sec": float(self._tx_lines_per_sec),
             "ok_latency_ms_last": float(self._ok_latency_ms_last),

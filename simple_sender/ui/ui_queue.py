@@ -47,7 +47,6 @@ _logged_suppressed: set[tuple[str, str]] = set()
 _LOW_IMPACT_UI_EVENT_KINDS = frozenset(
     {
         "buffer_fill",
-        "live_gcode_window",
         "log_rx",
         "log_tx",
         "progress_bytes",
@@ -476,7 +475,6 @@ class UiEventQueue:
         "gcode_load_progress",
         "gcode_acked",
         "gcode_sent",
-        "live_gcode_window",
         "progress",
         "progress_bytes",
         "status",

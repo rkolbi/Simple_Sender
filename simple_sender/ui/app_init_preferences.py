@@ -23,11 +23,14 @@
 import logging
 import sys
 
+from simple_sender import tool_measurement
 from simple_sender.ui.theme_helpers import resolve_theme_choice
 from simple_sender.ui.ttk_themes import register_simple_sender_themes
 from simple_sender.utils.constants import (
     JOG_DRO_SMOOTHING_CHOICES,
     JOG_DRO_SMOOTHING_OFF,
+    MACRO_LINE_TIMEOUT,
+    MACRO_TOTAL_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,9 +77,6 @@ def _init_behavior_preferences(
     app.pi_profile_enabled = tk.BooleanVar(value=setting("pi_profile_enabled", False))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
     app.grbl_popup_enabled = tk.BooleanVar(value=setting("grbl_popup_enabled", True))
-    app.grbl_popup_auto_dismiss_sec = tk.DoubleVar(
-        value=setting("grbl_popup_auto_dismiss_sec", 12.0)
-    )
     app.grbl_popup_dedupe_sec = tk.DoubleVar(
         value=setting("grbl_popup_dedupe_sec", 3.0)
     )
@@ -84,13 +84,13 @@ def _init_behavior_preferences(
     app.macro_line_timeout_sec = tk.DoubleVar(
         value=setting(
             "macro_line_timeout_sec",
-            default_settings.get("macro_line_timeout_sec", 0.0),
+            default_settings.get("macro_line_timeout_sec", MACRO_LINE_TIMEOUT),
         )
     )
     app.macro_total_timeout_sec = tk.DoubleVar(
         value=setting(
             "macro_total_timeout_sec",
-            default_settings.get("macro_total_timeout_sec", 0.0),
+            default_settings.get("macro_total_timeout_sec", MACRO_TOTAL_TIMEOUT),
         )
     )
     app.disable_macro_timeouts = tk.BooleanVar(
@@ -109,6 +109,49 @@ def _init_behavior_preferences(
         value=setting(
             "macro_probe_safety_margin",
             default_settings.get("macro_probe_safety_margin", 3.0),
+        )
+    )
+    app.bit_setter_x = tk.DoubleVar(
+        value=setting(
+            "bit_setter_x",
+            default_settings.get(
+                "bit_setter_x", tool_measurement.DEFAULT_BIT_SETTER_X_MM
+            ),
+        )
+    )
+    app.bit_setter_y = tk.DoubleVar(
+        value=setting(
+            "bit_setter_y",
+            default_settings.get(
+                "bit_setter_y", tool_measurement.DEFAULT_BIT_SETTER_Y_MM
+            ),
+        )
+    )
+    app.bit_setter_rough_probe_speed = tk.DoubleVar(
+        value=setting(
+            "bit_setter_rough_probe_speed",
+            default_settings.get(
+                "bit_setter_rough_probe_speed",
+                tool_measurement.DEFAULT_TOOL_PROBE_ROUGH_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.bit_setter_fine_probe_speed = tk.DoubleVar(
+        value=setting(
+            "bit_setter_fine_probe_speed",
+            default_settings.get(
+                "bit_setter_fine_probe_speed",
+                tool_measurement.DEFAULT_TOOL_PROBE_FINE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.bit_setter_probe_dwell = tk.DoubleVar(
+        value=setting(
+            "bit_setter_probe_dwell",
+            default_settings.get(
+                "bit_setter_probe_dwell",
+                tool_measurement.DEFAULT_TOOL_PROBE_DWELL_S,
+            ),
         )
     )
     app.performance_mode = tk.BooleanVar(value=setting("performance_mode", False))
@@ -208,6 +251,105 @@ def _init_behavior_preferences(
     app._joystick_auto_enable_requested = bool(app.joystick_bindings_enabled.get())
     app.job_completion_popup = tk.BooleanVar(value=setting("job_completion_popup", True))
     app.job_completion_beep = tk.BooleanVar(value=setting("job_completion_beep", False))
+    app.xyz_plate_thickness = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_thickness",
+            default_settings.get(
+                "xyz_plate_thickness",
+                tool_measurement.DEFAULT_XYZ_PLATE_THICKNESS_MM,
+            ),
+        )
+    )
+    app.xyz_plate_min_safe_probe_distance = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_min_safe_probe_distance",
+            default_settings.get(
+                "xyz_plate_min_safe_probe_distance",
+                tool_measurement.DEFAULT_XYZ_PLATE_MIN_SAFE_PROBE_DISTANCE_MM,
+            ),
+        )
+    )
+    app.xyz_plate_x_offset = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_x_offset",
+            default_settings.get(
+                "xyz_plate_x_offset",
+                tool_measurement.DEFAULT_XYZ_PLATE_X_OFFSET_MM,
+            ),
+        )
+    )
+    app.xyz_plate_y_offset = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_y_offset",
+            default_settings.get(
+                "xyz_plate_y_offset",
+                tool_measurement.DEFAULT_XYZ_PLATE_Y_OFFSET_MM,
+            ),
+        )
+    )
+    app.xyz_plate_side_clearance_distance = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_side_clearance_distance",
+            default_settings.get(
+                "xyz_plate_side_clearance_distance",
+                tool_measurement.DEFAULT_XYZ_PLATE_SIDE_CLEARANCE_DISTANCE_MM,
+            ),
+        )
+    )
+    app.xyz_plate_z_rough_probe_speed = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_z_rough_probe_speed",
+            default_settings.get(
+                "xyz_plate_z_rough_probe_speed",
+                tool_measurement.DEFAULT_XYZ_PLATE_Z_ROUGH_PROBE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.xyz_plate_z_reprobe_speed = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_z_reprobe_speed",
+            default_settings.get(
+                "xyz_plate_z_reprobe_speed",
+                tool_measurement.DEFAULT_XYZ_PLATE_Z_REPROBE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.xyz_plate_z_fine_probe_speed = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_z_fine_probe_speed",
+            default_settings.get(
+                "xyz_plate_z_fine_probe_speed",
+                tool_measurement.DEFAULT_XYZ_PLATE_Z_FINE_PROBE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.xyz_plate_xy_rough_probe_speed = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_xy_rough_probe_speed",
+            default_settings.get(
+                "xyz_plate_xy_rough_probe_speed",
+                tool_measurement.DEFAULT_XYZ_PLATE_XY_ROUGH_PROBE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.xyz_plate_xy_fine_probe_speed = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_xy_fine_probe_speed",
+            default_settings.get(
+                "xyz_plate_xy_fine_probe_speed",
+                tool_measurement.DEFAULT_XYZ_PLATE_XY_FINE_PROBE_FEED_MM_MIN,
+            ),
+        )
+    )
+    app.xyz_plate_probe_dwell = tk.DoubleVar(
+        value=setting(
+            "xyz_plate_probe_dwell",
+            default_settings.get(
+                "xyz_plate_probe_dwell",
+                tool_measurement.DEFAULT_XYZ_PLATE_PROBE_DWELL_S,
+            ),
+        )
+    )
     app.console_positions_enabled = tk.BooleanVar(
         value=bool(setting("console_positions_enabled", True))
     )
@@ -218,6 +360,21 @@ def _init_behavior_preferences(
             default_settings.get("linux_file_dialog_scale", 1.4),
         )
     )
+    if sys.platform.startswith("linux"):
+        linux_file_dialog_default_path = str(
+            setting(
+                "linux_file_dialog_default_path",
+                default_settings.get("linux_file_dialog_default_path", "/root/CNC_Jobs"),
+            )
+            or ""
+        ).strip()
+        if not linux_file_dialog_default_path:
+            linux_file_dialog_default_path = str(
+                default_settings.get("linux_file_dialog_default_path", "/root/CNC_Jobs")
+            ).strip() or "/root/CNC_Jobs"
+        app.linux_file_dialog_default_path = tk.StringVar(
+            value=linux_file_dialog_default_path
+        )
     app.scrollbar_width = tk.StringVar(value=setting("scrollbar_width", "wide"))
     touch_scroll_mode_raw = str(
         setting(
@@ -357,15 +514,23 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
 
 
 def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
-    app.version_var = tk.StringVar(value=f"Simple Sender  -  Version: v{app_version}")
+    app.version_var = tk.StringVar(
+        value=f"Simple Sender  -  Version: v{app_version}"
+    )
     app.show_resume_from_button = tk.BooleanVar(value=setting("show_resume_from_button", True))
     app.show_recover_button = tk.BooleanVar(value=setting("show_recover_button", True))
     app.show_endstop_indicator = tk.BooleanVar(value=setting("show_endstop_indicator", True))
     app.show_probe_indicator = tk.BooleanVar(value=setting("show_probe_indicator", True))
     app.show_hold_indicator = tk.BooleanVar(value=setting("show_hold_indicator", True))
-    app.show_logs_tab = tk.BooleanVar(value=setting("show_logs_tab", False))
-    app.show_raw_grbl_tab = tk.BooleanVar(value=setting("show_raw_grbl_tab", False))
-    app.show_checklists_tab = tk.BooleanVar(value=setting("show_checklists_tab", True))
+    app.show_logs_button = tk.BooleanVar(
+        value=setting("show_logs_button", False)
+    )
+    app.show_raw_grbl_button = tk.BooleanVar(
+        value=setting("show_raw_grbl_button", False)
+    )
+    app.show_checklists_button = tk.BooleanVar(
+        value=setting("show_checklists_button", True)
+    )
     app.auto_level_enabled = tk.BooleanVar(value=setting("auto_level_enabled", True))
     app.show_autolevel_overlay = tk.BooleanVar(value=setting("show_autolevel_overlay", True))
     app.show_quick_tips_button = tk.BooleanVar(value=setting("show_quick_tips_button", True))

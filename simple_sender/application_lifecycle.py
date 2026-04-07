@@ -57,7 +57,7 @@ class LifecycleMixin:
         handle_event(self, evt)
 
     def _on_close(self):
-        on_close(self)
+        return close_application(self)
 
     def _close_application(self) -> bool:
         return bool(close_application(self))

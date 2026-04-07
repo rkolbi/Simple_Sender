@@ -35,7 +35,7 @@ from simple_sender.ui.theme_helpers import (
     text_display_theme_options,
 )
 from simple_sender.ui.widgets_keypad import attach_numeric_keypad
-from simple_sender.ui.widgets_tooltips import ToolTip, apply_tooltip, set_tab_tooltip
+from simple_sender.ui.widgets_tooltips import ToolTip, apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
     GRBL_NON_NUMERIC_SETTINGS,
@@ -152,11 +152,9 @@ class GRBLSettingsController:
             except Exception as exc:
                 _log_suppressed("Failed posting settings callback via ui_q", exc)
 
-    def build_tabs(self, notebook: ttk.Notebook) -> None:
-        rtab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
+    def _build_raw_settings_view(self, parent) -> ttk.Frame:
+        rtab = ttk.Frame(parent, padding=6, style=notebook_page_style_name())
         self.settings_raw_tab = rtab
-        notebook.add(rtab, text="Raw $$")
-        set_tab_tooltip(notebook, rtab, "View the raw $$ settings dump from GRBL.")
         self.settings_raw_text = tk.Text(rtab, wrap="word", height=12, state="disabled")
         themed_options = text_display_theme_options(self.app)
         if themed_options:
@@ -169,10 +167,10 @@ class GRBLSettingsController:
         rsb.grid(row=0, column=1, sticky="ns")
         rtab.grid_rowconfigure(0, weight=1)
         rtab.grid_columnconfigure(0, weight=1)
+        return rtab
 
-        stab = ttk.Frame(notebook, padding=6, style=notebook_page_style_name())
-        notebook.add(stab, text="GRBL Settings")
-        set_tab_tooltip(notebook, stab, "Edit GRBL configuration values and save changes.")
+    def _build_settings_view(self, parent) -> ttk.Frame:
+        stab = ttk.Frame(parent, padding=6, style=notebook_page_style_name())
         sbar = ttk.Frame(stab)
         sbar.pack(fill="x", pady=(0, 6))
         self.btn_refresh = ttk.Button(
@@ -224,6 +222,15 @@ class GRBLSettingsController:
         self.settings_tip = ToolTip(self.settings_tree, "")
         self.settings_tree.tag_configure("edited", background="#fff5c2")
         self.settings_tree.tag_configure("verify_failed", background="#ffd9b3")
+        return stab
+
+    def build_views(self, *, raw_parent=None, settings_parent=None) -> tuple[ttk.Frame | None, ttk.Frame | None]:
+        raw_view = self._build_raw_settings_view(raw_parent) if raw_parent is not None else None
+        settings_view = (
+            self._build_settings_view(settings_parent) if settings_parent is not None else None
+        )
+        return raw_view, settings_view
+
 
     def start_capture(self, header: str = "Requesting $$...") -> None:
         self._settings_capture = True

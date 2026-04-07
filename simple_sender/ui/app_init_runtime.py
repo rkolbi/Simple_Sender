@@ -709,7 +709,6 @@ def _init_stream_and_override_state(
     app.spindle_override_scale = None
     app.feed_override_display = tk.StringVar(value="100%")
     app.spindle_override_display = tk.StringVar(value="100%")
-    app.override_info_var = tk.StringVar(value="Overrides: Feed 100% | Spindle 100%")
     app._feed_override_slider_locked = False
     app._spindle_override_slider_locked = False
     app._feed_override_slider_last_position = 100

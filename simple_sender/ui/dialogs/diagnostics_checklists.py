@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Diagnostics checklist dialog helpers kept behind the diagnostics facade."""
+"""Diagnostics checklist dialog helpers."""
 
 from __future__ import annotations
 

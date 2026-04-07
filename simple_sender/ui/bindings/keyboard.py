@@ -96,6 +96,7 @@ def apply_keyboard_bindings(app):
                 app._key_sequence_map.pop(conflict_seq, None)
             continue
         app._key_sequence_map[seq] = btn
+    _rebuild_joystick_binding_map(app)
     app._refresh_keyboard_table()
     if not bool(app.keyboard_bindings_enabled.get()):
         app._clear_key_sequence_buffer()
@@ -105,13 +106,33 @@ def apply_keyboard_bindings(app):
     app.bind_all("<KeyPress>", app._on_key_sequence, add="+")
     app.bind_all("<KeyRelease>", app._on_key_modifier_release, add="+")
 
+
+def _rebuild_joystick_binding_map(app) -> None:
+    """Keep runtime joystick action routing independent from Settings UI widgets.
+
+    The joystick action map is needed by the live input path at startup, before
+    the App Settings popup and its keyboard table exist. Rebuild it from the
+    current button tree and saved bindings every time bindings are applied so
+    opening App Settings is never required to make joystick input functional.
+    """
+
+    app._joystick_binding_map.clear()
+    for btn in app._collect_buttons():
+        binding_id = app._button_binding_id(btn)
+        binding = app._joystick_bindings.get(binding_id)
+        if not binding:
+            continue
+        tuple_key = app._joystick_binding_key(binding)
+        if tuple_key:
+            app._joystick_binding_map[tuple_key] = btn
+
 def refresh_keyboard_table(app):
+    _rebuild_joystick_binding_map(app)
     if not hasattr(app, "kb_table"):
         return
     app.kb_table.delete(*app.kb_table.get_children())
     app.kb_table.tag_configure("conflict", background="#f7d6d6")
     app._kb_item_to_button = {}
-    app._joystick_binding_map.clear()
     for btn in app._collect_buttons():
         binding_id = app._button_binding_id(btn)
         label = app._button_label(btn)
@@ -128,9 +149,6 @@ def refresh_keyboard_table(app):
             display = app._joystick_binding_display(binding)
             if display:
                 joystick_label = display
-            tuple_key = app._joystick_binding_key(binding)
-            if tuple_key:
-                app._joystick_binding_map[tuple_key] = btn
         tags = ("conflict",) if binding_id in app._kb_conflicts else ()
         item = app.kb_table.insert(
             "",

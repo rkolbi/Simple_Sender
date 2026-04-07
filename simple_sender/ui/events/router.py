@@ -927,11 +927,6 @@ def handle_event(app: Any, evt: UiEvent):
         case ("gcode_acked", idx):
             app.streaming_controller.handle_gcode_acked(idx)
             return
-        case ("live_gcode_window", payload):
-            app.streaming_controller.handle_live_gcode_window(
-                cast(dict[str, Any], payload)
-            )
-            return
         case ("progress", done, total):
             app.streaming_controller.handle_progress(done, total)
             return

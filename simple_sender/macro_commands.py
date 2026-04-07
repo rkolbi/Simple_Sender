@@ -196,7 +196,10 @@ def _handle_named_macro_command(
         )
         return True
     if cmd in ("QUIT", "EXIT"):
-        app._call_on_ui_thread(app._on_close)
+        closed = app._call_on_ui_thread(app._on_close)
+        if closed is False:
+            ui_q.put(("log", f"[macro] {cmd} canceled; application remained open."))
+            return False
         return True
     if cmd == "LOAD" and len(cmd_parts) > 1:
         path = " ".join(cmd_parts[1:]).strip()

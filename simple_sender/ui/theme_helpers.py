@@ -847,6 +847,84 @@ def bind_scrollbar_theme(app, widget) -> None:
     )
 
 
+def touch_scale_metrics(
+    app,
+    *,
+    minimum_thickness: int = 32,
+    thickness_offset: int = 10,
+    length_offset: int = 12,
+) -> tuple[int, int]:
+    width = _scrollbar_width_value(app)
+    if width is None:
+        width = 24
+    thickness = max(int(minimum_thickness), int(width) + int(thickness_offset))
+    slider_length = max(thickness + 2, int(width) + int(length_offset))
+    return thickness, slider_length
+
+
+def apply_touch_scale_theme(
+    app,
+    widget,
+    *,
+    minimum_thickness: int = 32,
+    thickness_offset: int = 10,
+    length_offset: int = 12,
+) -> None:
+    if widget is None:
+        return
+    exists = getattr(widget, "winfo_exists", None)
+    if callable(exists):
+        try:
+            if not bool(exists()):
+                return
+        except Exception:
+            return
+    colors = plain_tk_theme_defaults(app)
+    thickness, slider_length = touch_scale_metrics(
+        app,
+        minimum_thickness=minimum_thickness,
+        thickness_offset=thickness_offset,
+        length_offset=length_offset,
+    )
+    try:
+        widget.configure(
+            width=thickness,
+            sliderlength=slider_length,
+            showvalue=0,
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            background=colors["frame_bg"],
+            foreground=colors["fg"],
+            activebackground=colors["accent"],
+            troughcolor=colors["text_bg"],
+        )
+    except Exception as exc:
+        _log_suppressed("Failed applying themed touch-scale widget", exc)
+
+
+def bind_touch_scale_theme(
+    app,
+    widget,
+    *,
+    minimum_thickness: int = 32,
+    thickness_offset: int = 10,
+    length_offset: int = 12,
+) -> None:
+    _bind_theme_managed_widget(
+        app,
+        widget,
+        apply_callback_name="_simple_sender_touch_scale_theme_refresh",
+        apply_func=lambda app_obj, widget_obj: apply_touch_scale_theme(
+            app_obj,
+            widget_obj,
+            minimum_thickness=minimum_thickness,
+            thickness_offset=thickness_offset,
+            length_offset=length_offset,
+        ),
+    )
+
+
 def resolve_theme_choice(app, theme: str | None, *, default_theme: str | None = None) -> str:
     available = list(getattr(app, "available_themes", ()) or ())
     candidates: list[str] = []

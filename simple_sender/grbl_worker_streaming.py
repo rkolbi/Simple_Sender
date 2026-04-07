@@ -225,7 +225,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._stream_file_size_bytes = self._resolve_stream_file_size_bytes(lines)
         self._reset_stream_buffer()
         self.ui_q.put(("stream_state", "loaded", len(lines)))
-        self._emit_live_gcode_window(force=True)
         logger.info(f"Loaded {len(lines)} lines of G-code")
     
     def start_stream(self) -> None:
@@ -253,7 +252,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if self._dry_run_sanitize:
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("stream_state", "running", None))
-        self._emit_live_gcode_window(force=True)
         logger.info("Started G-code streaming")
     
     def start_stream_from(
@@ -322,7 +320,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
         self.ui_q.put(("progress", start_index, len(self._gcode)))
         self.ui_q.put(("stream_state", "running", None))
-        self._emit_live_gcode_window(force=True)
         logger.info(f"Resumed streaming from line {start_index}")
     
     def pause_stream(self) -> bool | None:
@@ -629,8 +626,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     int(stream_file_size_bytes),
                 )
             )
-        self._emit_live_gcode_window(force=False)
-
     def _start_stream_tool_change_locked(
         self,
         item: StreamPendingItem,
@@ -677,7 +672,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._paused = False
             self.ui_q.put(("log", f"[stream] Tool change canceled: {detail}"))
             self.ui_q.put(("stream_state", "stopped", None))
-            self._emit_live_gcode_window(force=True)
             return
         idx = pending_item.idx
         line_text = pending_item.line
@@ -942,7 +936,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self.ui_q.put(("spindle_state", bool(spindle_state), queue_item.idx))
             if queue_item.is_gcode:
                 self.ui_q.put(("gcode_sent", queue_item.idx, queue_item.line))
-                self._emit_live_gcode_window(force=False)
 
         with self._stream_lock:
             send_index = self._send_index
@@ -969,7 +962,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 )
             self._streaming = False
             self.ui_q.put(("stream_state", "done", None))
-            self._emit_live_gcode_window(force=True)
             logger.info("Streaming complete")
 
     def _purge_pending_jogs(self) -> None:

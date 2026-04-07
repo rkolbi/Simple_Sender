@@ -29,6 +29,7 @@ from simple_sender import tool_measurement
 from simple_sender.utils.constants import (
     MACRO_EXTS,
     MACRO_PREFIXES,
+    USER_MACRO_SLOT_COUNT,
 )
 
 from simple_sender.macro_executor_commands import MacroCommandMixin
@@ -153,3 +154,13 @@ class MacroExecutor(MacroPromptMixin, MacroStateMixin, MacroCommandMixin, MacroR
                     if os.path.isfile(candidate):
                         return candidate
         return None
+
+    @staticmethod
+    def user_macro_storage_index(slot: int) -> int:
+        return int(slot)
+
+    def user_macro_path(self, slot: int) -> str | None:
+        slot_num = int(slot)
+        if slot_num < 1 or slot_num > int(USER_MACRO_SLOT_COUNT):
+            return None
+        return self.macro_path(self.user_macro_storage_index(slot_num))

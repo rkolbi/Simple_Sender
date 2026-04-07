@@ -54,11 +54,12 @@ from simple_sender.ui.ui_actions import (
     apply_scrollbar_width,
     apply_ui_scale,
     bind_touch_command_feedback,
+    on_auxiliary_button_visibility_change,
     on_touch_command_feedback,
+    on_linux_file_dialog_default_path_change,
     on_gui_logging_change,
     on_linux_file_dialog_scale_change,
     on_performance_mode_change,
-    on_optional_tab_visibility_change,
     on_scrollbar_width_change,
     on_touch_scroll_mode_change,
     on_theme_change,
@@ -116,8 +117,8 @@ class UiTogglesMixin:
     def _on_performance_mode_change(self):
         on_performance_mode_change(self)
 
-    def _on_optional_tab_visibility_change(self):
-        on_optional_tab_visibility_change(self)
+    def _on_auxiliary_button_visibility_change(self):
+        on_auxiliary_button_visibility_change(self)
 
     def _on_theme_change(self, *_):
         on_theme_change(self)
@@ -130,6 +131,9 @@ class UiTogglesMixin:
 
     def _on_linux_file_dialog_scale_change(self, _event=None):
         on_linux_file_dialog_scale_change(self, _event)
+
+    def _on_linux_file_dialog_default_path_change(self, _event=None):
+        on_linux_file_dialog_default_path_change(self, _event)
 
     def _apply_scrollbar_width(self, value: str | None = None):
         return apply_scrollbar_width(self, value)

@@ -84,7 +84,7 @@ _APP_TYPE_CHECKING_STUBS: tuple[str, ...] = (
     "_drain_ui_queue",
     "_restore_joystick_bindings_on_start",
     "_on_app_focus_out",
-    "_on_close",
+    "_close_application",
     "_bind_touch_command_feedback",
     "refresh_ports",
     "_load_grbl_setting_info",
@@ -216,7 +216,7 @@ class App(tk.Tk):
         def _drain_ui_queue(self) -> None: ...
         def _restore_joystick_bindings_on_start(self) -> None: ...
         def _on_app_focus_out(self, event: Any | None = None) -> None: ...
-        def _on_close(self) -> None: ...
+        def _close_application(self) -> bool: ...
         def _bind_touch_command_feedback(self) -> None: ...
         def refresh_ports(self, auto_connect: bool = False) -> None: ...
         def _load_grbl_setting_info(self) -> None: ...
@@ -270,7 +270,7 @@ class App(tk.Tk):
         self.after(UI_QUEUE_DRAIN_INTERVAL_MS, self._drain_ui_queue)
         self.after(JOYSTICK_RESTORE_DELAY_MS, self._restore_joystick_bindings_on_start)
         self.bind_all("<FocusOut>", self._on_app_focus_out)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.protocol("WM_DELETE_WINDOW", self._close_application)
 
         self.refresh_ports(auto_connect=False)
         if not self.connected and bool(self.reconnect_on_open.get()):

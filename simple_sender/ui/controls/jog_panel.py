@@ -131,10 +131,7 @@ def _jog_axis_to_target(
     dx, dy, dz = _axis_components(axis, delta)
     if abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON and abs(dz) < JOG_FEED_EPSILON:
         return False
-    result = jog_move(dx, dy, dz, source=source)
-    # Preserve legacy callback compatibility: explicit False means rejection,
-    # while older side-effect-only helpers may still return None.
-    return result is not False
+    return bool(jog_move(dx, dy, dz, source=source))
 
 
 def _bind_position_column_sync(app, align) -> None:

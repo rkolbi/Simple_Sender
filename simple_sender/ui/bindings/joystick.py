@@ -125,8 +125,6 @@ def _manual_control_ready(app) -> bool:
 
 
 def _manual_ready_fast_poll_allowed(app) -> bool:
-    if bool(getattr(app, "_app_settings_tab_active", False)):
-        return False
     if _noninteractive_tab_idle(app):
         return False
     return True
@@ -290,6 +288,11 @@ def poll_joystick_events(
                 and _manual_control_ready(app)
                 and not bool(getattr(app, "_joystick_capture_state", None))
             )
+            manual_ready_fast_poll = (
+                manual_ready
+                and _manual_ready_fast_poll_allowed(app)
+                and not bool(getattr(app, "_active_joystick_hold_binding", None))
+            )
             if getattr(app, "_active_joystick_hold_binding", None):
                 interval = joystick_hold.JOYSTICK_HOLD_POLL_INTERVAL_MS
                 app._joystick_poll_idle_streak = 0
@@ -309,27 +312,17 @@ def poll_joystick_events(
                     and not app._joystick_capture_state
                 ):
                     interval = max(interval, int(JOYSTICK_DISCOVERY_INTERVAL_MS))
-            if (
-                manual_ready
-                and _manual_ready_fast_poll_allowed(app)
-                and not bool(getattr(app, "_active_joystick_hold_binding", None))
-            ):
-                manual_ready_interval = max(
-                    base_interval,
-                    int(
-                        getattr(
-                            app,
-                            "_joystick_poll_manual_ready_interval_ms",
-                            max(base_interval, 80),
-                        )
-                        or max(base_interval, 80)
-                    ),
-                )
-                interval = min(interval, manual_ready_interval)
+            if manual_ready_fast_poll:
+                # Jogging is a manual-control path, not a streaming path. Keep
+                # the poll loop at the base cadence whenever the machine is
+                # ready for manual motion so first-press response stays
+                # predictable instead of drifting up to a slower idle cap.
+                interval = base_interval
             if (
                 bool(getattr(app, "_app_settings_tab_active", False))
                 and not bool(getattr(app, "_joystick_capture_state", None))
                 and not bool(getattr(app, "_active_joystick_hold_binding", None))
+                and not manual_ready_fast_poll
                 and not _app_settings_interaction_recent(app, now=time.monotonic())
             ):
                 app_settings_idle_interval = max(

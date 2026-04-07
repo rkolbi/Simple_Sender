@@ -84,14 +84,22 @@ def _report_shutdown_failure(app, context: str, exc: BaseException) -> None:
 
 def _macro_running(app) -> bool:
     macro_executor = getattr(app, "macro_executor", None)
-    if macro_executor is None or not hasattr(macro_executor, "macro_vars"):
+    if macro_executor is None:
         return False
     try:
-        with macro_executor.macro_vars() as macro_vars:
-            return bool(macro_vars.get("running", False))
+        checker = getattr(macro_executor, "is_macro_active", None)
+        if callable(checker):
+            return bool(checker())
+        lock = getattr(macro_executor, "_macro_lock", None)
+        if lock is not None and hasattr(lock, "locked"):
+            return bool(lock.locked())
+        if hasattr(macro_executor, "macro_vars"):
+            with macro_executor.macro_vars() as macro_vars:
+                return bool(macro_vars.get("running", False))
     except Exception as exc:
         _log_suppressed("Failed checking macro-running state before app lifecycle action", exc)
         return False
+    return False
 
 
 def _lifecycle_risk_reasons(app) -> list[str]:
@@ -125,7 +133,7 @@ def _lifecycle_risk_reasons(app) -> list[str]:
     if bool(getattr(app, "_homing_in_progress", False)):
         reasons.append("Homing is currently active.")
     if _macro_running(app):
-        reasons.append("A macro is currently running.")
+        reasons.append("A macro or workflow is currently active.")
 
     deduped: list[str] = []
     seen: set[str] = set()

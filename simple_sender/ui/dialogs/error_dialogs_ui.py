@@ -132,15 +132,6 @@ class ErrorDialogManager:
                 value = fallback
             return value
 
-        def coerce_non_negative_float(var, fallback):
-            try:
-                value = float(var.get())
-            except Exception:
-                value = fallback
-            if value < 0:
-                value = fallback
-            return value
-
         self.interval = coerce_float(
             self.app.error_dialog_interval_var,
             self.interval,
@@ -156,17 +147,13 @@ class ErrorDialogManager:
         self.app.error_dialog_interval_var.set(self.interval)
         self.app.error_dialog_burst_window_var.set(self.burst_window)
         self.app.error_dialog_burst_limit_var.set(self.burst_limit)
-        if hasattr(self.app, "grbl_popup_auto_dismiss_sec"):
-            dismiss = coerce_non_negative_float(
-                self.app.grbl_popup_auto_dismiss_sec,
-                getattr(self.app, "settings", {}).get("grbl_popup_auto_dismiss_sec", 12.0),
-            )
-            self.app.grbl_popup_auto_dismiss_sec.set(dismiss)
         if hasattr(self.app, "grbl_popup_dedupe_sec"):
-            dedupe = coerce_non_negative_float(
-                self.app.grbl_popup_dedupe_sec,
-                getattr(self.app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0),
-            )
+            try:
+                dedupe = float(self.app.grbl_popup_dedupe_sec.get())
+            except Exception:
+                dedupe = getattr(self.app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0)
+            if dedupe < 0:
+                dedupe = getattr(self.app, "settings", {}).get("grbl_popup_dedupe_sec", 3.0)
             self.app.grbl_popup_dedupe_sec.set(dedupe)
         if hasattr(self.app, "grbl_popup_enabled") and not bool(self.app.grbl_popup_enabled.get()):
             _close_grbl_code_popup(self.app)
@@ -225,7 +212,7 @@ def _close_grbl_code_popup(app) -> None:
         try:
             app.after_cancel(after_id)
         except Exception as exc:
-            _log_suppressed("Failed canceling GRBL code popup auto-dismiss timer", exc)
+            _log_suppressed("Failed canceling GRBL code popup timer", exc)
     app._grbl_code_popup_after_id = None
     popup = getattr(app, "_grbl_code_popup", None)
     try:
@@ -312,34 +299,6 @@ def _get_non_negative_float_setting(app, attr: str, default: float) -> float:
     return value
 
 
-def _schedule_grbl_popup_close(app, *, allow_auto_close: bool = True) -> None:
-    auto_close_s = _get_non_negative_float_setting(
-        app,
-        "grbl_popup_auto_dismiss_sec",
-        12.0,
-    )
-    after_id = getattr(app, "_grbl_code_popup_after_id", None)
-    if after_id is not None:
-        try:
-            app.after_cancel(after_id)
-        except Exception as exc:
-            _log_suppressed("Failed canceling existing GRBL code popup auto-dismiss timer before reschedule", exc)
-    app._grbl_code_popup_after_id = None
-    if not bool(allow_auto_close):
-        return
-    if auto_close_s <= 0:
-        return
-    if not hasattr(app, "after"):
-        return
-    try:
-        app._grbl_code_popup_after_id = app.after(
-            int(round(auto_close_s * 1000)),
-            lambda: _close_grbl_code_popup(app),
-        )
-    except Exception:
-        app._grbl_code_popup_after_id = None
-
-
 def _maybe_log_grbl_popup_dedupe(app, code_token: str, dedupe_key: str, dedupe_s: float, now_mono: float) -> None:
     last_log_by_code = getattr(app, "_grbl_code_popup_last_suppressed_log_ts_by_code", None)
     if not isinstance(last_log_by_code, dict):
@@ -392,8 +351,12 @@ def show_grbl_code_popup(app, message: str | None) -> None:
         popup.deiconify()
         popup.lift()
         center_window(popup, app)
-        # Safety-first behavior: alarms/errors stay visible until the operator
-        # explicitly dismisses them.
-        _schedule_grbl_popup_close(app, allow_auto_close=False)
+        after_id = getattr(app, "_grbl_code_popup_after_id", None)
+        if after_id is not None:
+            try:
+                app.after_cancel(after_id)
+            except Exception as exc:
+                _log_suppressed("Failed canceling prior GRBL code popup timer before refresh", exc)
+        app._grbl_code_popup_after_id = None
     except Exception:
         return

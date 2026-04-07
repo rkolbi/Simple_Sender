@@ -448,11 +448,6 @@ def open_gcode(app):
     path = choose_gcode_path(app, initial_dir)
     if not path:
         return
-    try:
-        if getattr(app, "notebook", None) is not None and getattr(app, "gcode_tab", None) is not None:
-            app.notebook.select(app.gcode_tab)
-    except Exception as exc:
-        _log_suppressed("Failed switching notebook to G-code tab after file selection", exc)
     app._load_gcode_from_path(path)
 
 

@@ -92,7 +92,7 @@ def _restore_macro_timeouts_for_tool_change(
 
 def _tool_change_workflow_timeout_s(app) -> float:
     if bool(getattr(app, "_tool_change_unlimited_time_active", False)) or bool(
-        getattr(app, "_macro_operator_assisted_unlimited_time_active", False)
+        getattr(app, "_operator_assisted_workflow_unlimited_time_active", False)
     ):
         return 0.0
     try:
@@ -102,7 +102,7 @@ def _tool_change_workflow_timeout_s(app) -> float:
     return max(30.0, timeout_s)
 
 
-def _wait_for_macro_finish(app, *, timeout_s: float) -> str:
+def _wait_for_workflow_finish(app, *, timeout_s: float) -> str:
     executor = getattr(app, "macro_executor", None)
     lock = getattr(executor, "_macro_lock", None)
     if lock is None or not hasattr(lock, "locked"):
@@ -124,7 +124,7 @@ def _wait_for_macro_finish(app, *, timeout_s: float) -> str:
     return "success" if bool(getattr(executor, "_last_macro_run_success", False)) else "failed"
 
 
-def _tool_change_macro_prompt_cancelled(app) -> bool:
+def _tool_change_workflow_prompt_cancelled(app) -> bool:
     executor = getattr(app, "macro_executor", None)
     vars_ctx = getattr(executor, "macro_vars", None)
     if not callable(vars_ctx):
@@ -162,15 +162,15 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
 
         started = bool(
             app._call_on_ui_thread(
-                app.macro_executor.run_macro,
-                4,
+                app.macro_executor.run_builtin_workflow,
+                "tool_change",
                 True,
                 timeout=None,
             )
         )
         if started:
             workflow_timeout_s = _tool_change_workflow_timeout_s(app)
-            wait_status = _wait_for_macro_finish(app, timeout_s=workflow_timeout_s)
+            wait_status = _wait_for_workflow_finish(app, timeout_s=workflow_timeout_s)
             succeeded = wait_status == "success"
             timed_out = wait_status == "timed_out"
     except Exception as exc:
@@ -185,7 +185,7 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
     if started and succeeded:
         app.grbl.complete_stream_tool_change(True)
         return
-    reason = "Tool-change macro failed."
+    reason = "Tool-change workflow failed."
     if _all_stop_cancel_requested(app):
         reason = "Canceled by ALL STOP."
     elif timed_out:
@@ -194,9 +194,9 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
             try:
                 cancel_macro("Tool-change workflow timed out.")
             except Exception as exc:
-                _log_suppressed("Failed canceling timed-out tool-change macro", exc)
+                _log_suppressed("Failed canceling timed-out tool-change workflow", exc)
         reason = "Tool-change workflow timed out."
-    elif _tool_change_macro_prompt_cancelled(app):
+    elif _tool_change_workflow_prompt_cancelled(app):
         reason = "Tool change canceled by user."
     app.grbl.complete_stream_tool_change(False, reason)
 

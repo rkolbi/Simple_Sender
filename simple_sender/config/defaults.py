@@ -83,7 +83,7 @@ class AppConfig:
 
     @classmethod
     def for_raspberry_pi(cls) -> "AppConfig":
-        """Create a low-power default profile without changing legacy values."""
+        """Create a low-power default profile from the current baseline values."""
 
         default = cls()
         return cls(
@@ -101,7 +101,7 @@ class AppConfig:
 
 
 DEFAULT_APP_CONFIG = AppConfig()
-"""Grouped application defaults preserving existing runtime values."""
+"""Grouped application defaults for the current runtime."""
 
 
 RASPBERRY_PI_APP_CONFIG = AppConfig.for_raspberry_pi()

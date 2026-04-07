@@ -21,20 +21,111 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
-import time
+import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.settings import build_app_settings_tab
-from simple_sender.ui.checklists_tab import build_checklists_tab
-from simple_sender.ui.console import build_console_tab
+from simple_sender.ui.checklists_tab import build_checklists_panel
+from simple_sender.ui.console import build_console_panel
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
+from simple_sender.ui.file_info_tab import build_file_info_panel
 from simple_sender.ui.log_viewer import LogViewer
-from simple_sender.ui.viewer.gcode_viewer import GcodeViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
-from simple_sender.ui.file_info_tab import build_file_info_tab
-from simple_sender.ui.theme_helpers import bind_scrollbar_theme, notebook_page_style_name, register_theme_refresh
-from simple_sender.ui.widgets_tooltips import set_tab_tooltip
+from simple_sender.ui.settings import (
+    activate_app_settings_surface,
+    build_app_settings_panel,
+    deactivate_app_settings_surface,
+)
+from simple_sender.ui.theme_helpers import (
+    notebook_page_style_name,
+)
+from simple_sender.ui.viewer.gcode_viewer import HeadlessGcodeView
+from simple_sender.ui.widgets_common import set_kb_id
+from simple_sender.ui.widgets_tooltips import apply_tooltip, set_tab_tooltip
 
 logger = logging.getLogger(__name__)
+
+_POPUP_GEOMETRY = {
+    "file_info": (1200, 860),
+    "grbl_settings": (1280, 900),
+    "logs": (1280, 900),
+    "checklists": (1100, 860),
+    "app_settings": (1380, 940),
+}
+
+
+def _lower_popup_button_entries(app) -> list[dict]:
+    entries = [
+        {
+            "button": getattr(app, "btn_job_info_popup", None),
+            "label": "Job Info",
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_checklists_popup", None),
+            "label": "Checklists",
+            "variable_name": "show_checklists_button",
+            "default": True,
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_logs_popup", None),
+            "label": "Logs",
+            "variable_name": "show_logs_button",
+            "default": False,
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_raw_grbl_popup", None),
+            "label": "Raw $$",
+            "variable_name": "show_raw_grbl_button",
+            "default": False,
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_grbl_settings_popup", None),
+            "label": "GRBL Settings",
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_app_settings_popup", None),
+            "label": "App Settings",
+            "pack_kwargs": {"side": "left"},
+        },
+    ]
+    return [entry for entry in entries if entry.get("button") is not None]
+
+
+def _sync_lower_popup_button_order(app) -> None:
+    entries = getattr(app, "_lower_popup_buttons", None)
+    if not isinstance(entries, list) or not entries:
+        entries = _lower_popup_button_entries(app)
+    visible_entries: list[dict] = []
+    for entry in entries:
+        variable_name = str(entry.get("variable_name") or "").strip()
+        if variable_name:
+            should_show = _auxiliary_button_should_be_visible(
+                app,
+                variable_name,
+                bool(entry.get("default", False)),
+            )
+        else:
+            should_show = True
+        button = entry.get("button")
+        if button is None:
+            continue
+        if bool(getattr(button, "winfo_manager", lambda: "")()):
+            try:
+                button.pack_forget()
+            except Exception:
+                logger.exception("Failed resetting lower popup button %r", entry.get("label"))
+        if should_show:
+            visible_entries.append(entry)
+    for entry in visible_entries:
+        _set_button_visibility(
+            entry.get("button"),
+            True,
+            dict(entry.get("pack_kwargs") or {}),
+        )
 
 
 def _var_bool(value, default: bool) -> bool:
@@ -49,271 +140,321 @@ def _var_bool(value, default: bool) -> bool:
     return bool(value)
 
 
-def _managed_notebook_tabs(nb) -> tuple[str, ...]:
-    try:
-        return tuple(str(tab_id) for tab_id in nb.tabs())
-    except Exception:
-        return ()
-
-
-def _notebook_has_tab(nb, tab) -> bool:
-    try:
-        return str(tab) in _managed_notebook_tabs(nb)
-    except Exception:
-        return False
-
-
-def _notebook_tab_state(nb, tab) -> str:
-    if tab is None or not _notebook_has_tab(nb, tab):
-        return "missing"
-    try:
-        return str(nb.tab(tab, "state") or "normal").strip().lower() or "normal"
-    except Exception:
-        return "normal"
-
-
-def _tab_should_be_visible(app, variable_name: str, default: bool) -> bool:
+def _auxiliary_button_should_be_visible(app, variable_name: str, default: bool) -> bool:
     return _var_bool(getattr(app, variable_name, None), default)
 
 
-def _register_optional_tabs(app) -> None:
-    raw_tab = getattr(getattr(app, "settings_controller", None), "settings_raw_tab", None)
-    app._optional_notebook_tabs = {
-        "logs": {
-            "tab": getattr(app, "logs_tab", None),
-            "label": "Logs",
-            "variable_name": "show_logs_tab",
-            "default": False,
-        },
-        "raw_grbl": {
-            "tab": raw_tab,
-            "label": "Raw $$",
-            "variable_name": "show_raw_grbl_tab",
-            "default": False,
-        },
-        "checklists": {
-            "tab": getattr(app, "checklists_tab", None),
-            "label": "Checklists",
-            "variable_name": "show_checklists_tab",
-            "default": True,
-        },
-    }
-
-
-def sync_optional_tab_visibility(app, nb=None):
-    if nb is None:
-        nb = getattr(app, "notebook", None)
-    if not nb:
+def _set_button_visibility(button, should_show: bool, pack_kwargs: dict | None = None) -> None:
+    if button is None:
         return
-    registry = getattr(app, "_optional_notebook_tabs", None)
-    if not isinstance(registry, dict) or not registry:
-        return
-    gcode_tab = getattr(app, "gcode_tab", None)
-    selected_tab = None
     try:
-        selected_tab = nb.select()
+        visible = bool(button.winfo_manager())
     except Exception:
-        selected_tab = None
-    for entry in registry.values():
-        tab = entry.get("tab")
-        if tab is None or not _notebook_has_tab(nb, tab):
-            continue
-        should_show = _tab_should_be_visible(
-            app,
-            str(entry.get("variable_name") or ""),
-            bool(entry.get("default", False)),
-        )
-        tab_state = _notebook_tab_state(nb, tab)
-        if should_show:
-            if tab_state == "hidden":
-                try:
-                    nb.add(tab)
-                except Exception:
-                    logger.exception("Failed restoring notebook tab %r", entry.get("label"))
-            continue
-        if str(selected_tab) == str(tab):
-            fallback = None
-            if gcode_tab is not None and _notebook_has_tab(nb, gcode_tab):
-                gcode_state = _notebook_tab_state(nb, gcode_tab)
-                if gcode_state != "hidden" and str(gcode_tab) != str(tab):
-                    fallback = gcode_tab
-            if fallback is None:
-                for candidate in _managed_notebook_tabs(nb):
-                    if candidate == str(tab):
-                        continue
-                    try:
-                        if str(nb.tab(candidate, "state") or "normal").strip().lower() == "hidden":
-                            continue
-                    except Exception:
-                        pass
-                    fallback = candidate
-                    break
-            if fallback is not None:
-                try:
-                    nb.select(fallback)
-                    selected_tab = fallback
-                except Exception:
-                    logger.exception("Failed selecting fallback notebook tab while hiding %r", entry.get("label"))
-        if tab_state != "hidden":
+        visible = False
+    if should_show:
+        if not visible:
+            kwargs = dict(pack_kwargs or {})
             try:
-                nb.hide(tab)
+                button.pack(**kwargs)
             except Exception:
-                logger.exception("Failed hiding notebook tab %r", entry.get("label"))
-    update_tab_visibility(app, nb)
-
-
-def update_tab_visibility(app, nb=None):
-    """Sync app-level tab state and tab-specific bindings from the active notebook tab."""
-
-    if nb is None:
-        nb = getattr(app, "notebook", None)
-    if not nb:
+                logger.exception("Failed showing lower access button %r", button)
         return
+    if visible:
+        try:
+            button.pack_forget()
+        except Exception:
+            logger.exception("Failed hiding lower access button %r", button)
+
+
+def _register_optional_buttons(app) -> None:
+    app._lower_popup_buttons = _lower_popup_button_entries(app)
+
+
+def sync_auxiliary_button_visibility(app) -> None:
+    if getattr(app, "_lower_popup_buttons", None):
+        _sync_lower_popup_button_order(app)
+
+
+def _build_gcode_view_runtime_state(app) -> None:
+    """Install the headless job-view state holder used by the current runtime.
+
+    The old lower G-code pane is gone. Runtime helpers still rely on ``app.gview``
+    for light state bookkeeping, so use a non-widget state holder instead of
+    keeping an off-screen Text/Scrollbar tree alive.
+    """
+
+    app._gcode_view_host = None
+    app.gcode_live_header_label = None
+    app.gcode_stats_label = None
+    app.gview = HeadlessGcodeView()
+
+
+def _show_popup_window(
+    app,
+    *,
+    key: str,
+    title: str,
+    build_body,
+    width: int,
+    height: int,
+    on_show=None,
+    on_hide=None,
+) -> tk.Toplevel:
+    popup_windows = getattr(app, "_lower_popup_windows", None)
+    if not isinstance(popup_windows, dict):
+        popup_windows = {}
+        app._lower_popup_windows = popup_windows
+
+    popup = popup_windows.get(key)
+    popup_exists = False
+    if popup is not None:
+        try:
+            popup_exists = bool(popup.winfo_exists())
+        except Exception:
+            popup_exists = False
+    if not popup_exists:
+        popup = tk.Toplevel(app)
+        popup_windows[key] = popup
+        popup.title(title)
+        popup.geometry(f"{int(width)}x{int(height)}")
+        popup.minsize(max(900, int(width * 0.7)), max(650, int(height * 0.7)))
+        apply_toplevel_theme(popup, app)
+        body = ttk.Frame(popup, padding=8, style=notebook_page_style_name())
+        body.pack(fill="both", expand=True)
+        build_body(body, popup)
+
+        def _hide_popup() -> None:
+            if callable(on_hide):
+                try:
+                    on_hide()
+                except Exception:
+                    logger.exception("Failed hiding lower popup %r", key)
+            try:
+                popup.withdraw()
+            except Exception:
+                logger.exception("Failed withdrawing lower popup %r", key)
+
+        popup.protocol("WM_DELETE_WINDOW", _hide_popup)
+        center_window(popup, app)
+    else:
+        if popup is None:
+            raise RuntimeError(f"Lower popup window {key!r} is missing from the popup cache")
+        try:
+            popup.deiconify()
+        except Exception:
+            logger.exception("Failed restoring lower popup %r", key)
+    if popup is None:
+        raise RuntimeError(f"Lower popup window {key!r} could not be created")
+    apply_toplevel_theme(popup, app)
     try:
-        tab_id = nb.select()
-        label = nb.tab(tab_id, "text")
-    except Exception as exc:
-        logger.exception("Failed resolving active notebook tab while updating tab visibility")
-        return
-    try:
-        app._active_tab_label = str(label)
-        app._app_settings_tab_active = (label == "App Settings")
-        if app._app_settings_tab_active:
-            note_interaction = getattr(app, "_note_app_settings_interaction", None)
-            if callable(note_interaction):
-                note_interaction()
+        popup.lift()
+        popup.focus_force()
     except Exception:
         pass
-    try:
-        app._update_quick_button_visibility()
-    except Exception as exc:
-        logger.debug(
-            "Failed updating quick-button visibility for active tab %r",
-            label,
-            exc_info=exc,
-        )
-    streaming_controller = getattr(app, "streaming_controller", None)
-    handle_active_tab_changed = getattr(streaming_controller, "handle_active_tab_changed", None)
-    if callable(handle_active_tab_changed):
-        try:
-            handle_active_tab_changed()
-        except Exception as exc:
-            logger.debug(
-                "Failed syncing streaming controller for active tab %r",
-                label,
-                exc_info=exc,
-            )
-    try:
-        if label == "App Settings":
-            app._bind_app_settings_mousewheel()
-            app._bind_app_settings_touch_scroll()
-            refresh_sticky = getattr(app, "_refresh_app_settings_sticky_header", None)
-            if callable(refresh_sticky):
-                refresh_sticky(force=True)
-            resume_lazy_build = getattr(app, "_resume_app_settings_lazy_build", None)
-            if callable(resume_lazy_build):
-                resume_lazy_build()
-        else:
-            suspend_background = getattr(app, "_suspend_app_settings_background_work", None)
-            if callable(suspend_background):
-                suspend_background()
-            app._unbind_app_settings_mousewheel()
-            app._unbind_app_settings_touch_scroll()
-    except Exception as exc:
-        logger.debug(
-            "Failed updating App Settings input bindings for active tab %r",
-            label,
-            exc_info=exc,
-        )
+    if callable(on_show):
+        on_show()
+    return popup
 
 
-def on_tab_changed(app, event):
-    update_tab_visibility(app, event.widget)
-    if not bool(app.gui_logging_enabled.get()):
-        return
-    nb = event.widget
-    try:
-        tab_id = nb.select()
-        label = nb.tab(tab_id, "text")
-    except Exception:
-        return
-    if not label:
-        return
-    ts = time.strftime("%H:%M:%S")
-    app.streaming_controller.log(f"[{ts}] Tab: {label}")
-
-
-def build_gcode_tab(app, notebook):
-    nb = notebook
-    # Gcode tab
-    gtab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
-    nb.add(gtab, text="G-code")
-    set_tab_tooltip(nb, gtab, "Live Past/Current/Next G-code window and job stats.")
-    app.gcode_tab = gtab
-    live_row = ttk.Frame(gtab)
-    live_row.pack(fill="x", pady=(0, 4))
-    app.gcode_live_header_label = ttk.Label(
-        live_row,
-        textvariable=app.gcode_live_header_var,
-        anchor="w",
-        justify="left",
-    )
-    app.gcode_live_header_label.pack(side="left", fill="x", expand=True)
-    stats_row = ttk.Frame(gtab)
-    stats_row.pack(fill="x", pady=(0, 6))
-    app.gcode_stats_label = ttk.Label(
-        stats_row,
-        textvariable=app.gcode_stats_var,
-        anchor="w",
-        justify="left",
-    )
-    app.gcode_stats_label.pack(side="left", fill="x", expand=True)
-    app.gview = GcodeViewer(gtab)
-    app.gview.apply_theme_palette(getattr(app, "theme_palette", None))
-    bind_scrollbar_theme(app, app.gview.vsb)
-    bind_scrollbar_theme(app, app.gview.hsb)
-    register_theme_refresh(
+def _show_file_info_popup(app) -> tk.Toplevel:
+    return _show_popup_window(
         app,
-        lambda: getattr(app, "gview", None) and app.gview.apply_theme_palette(getattr(app, "theme_palette", None)),
+        key="file_info",
+        title="Job Info",
+        width=_POPUP_GEOMETRY["file_info"][0],
+        height=_POPUP_GEOMETRY["file_info"][1],
+        build_body=lambda body, _popup: build_file_info_panel(app, body).pack(fill="both", expand=True),
     )
-    app.gview.pack(fill="both", expand=True)
+
+
+def _show_logs_popup(app) -> None:
+    def _build(body, _popup) -> None:
+        viewer = LogViewer(body, app)
+        viewer.pack(fill="both", expand=True)
+        app.logs_viewer = viewer
+
+    _show_popup_window(
+        app,
+        key="logs",
+        title="Logs",
+        width=_POPUP_GEOMETRY["logs"][0],
+        height=_POPUP_GEOMETRY["logs"][1],
+        build_body=_build,
+    )
+
+
+def _show_checklists_popup(app) -> None:
+    _show_popup_window(
+        app,
+        key="checklists",
+        title="Checklists",
+        width=_POPUP_GEOMETRY["checklists"][0],
+        height=_POPUP_GEOMETRY["checklists"][1],
+        build_body=lambda body, _popup: build_checklists_panel(app, body).pack(fill="both", expand=True),
+    )
+
+
+def _show_grbl_settings_popup(app, *, select_raw: bool) -> tk.Toplevel:
+    def _build(body, _popup) -> None:
+        nb = ttk.Notebook(body)
+        nb.pack(fill="both", expand=True)
+        raw_view, settings_view = app.settings_controller.build_views(
+            raw_parent=nb,
+            settings_parent=nb,
+        )
+        if raw_view is not None:
+            nb.add(raw_view, text="Raw $$")
+            set_tab_tooltip(nb, raw_view, "View the raw $$ settings dump from GRBL.")
+            app._grbl_settings_popup_raw_tab = raw_view
+        if settings_view is not None:
+            nb.add(settings_view, text="GRBL Settings")
+            set_tab_tooltip(nb, settings_view, "Edit GRBL configuration values and save changes.")
+            app._grbl_settings_popup_settings_tab = settings_view
+        app._grbl_settings_popup_notebook = nb
+
+    popup = _show_popup_window(
+        app,
+        key="grbl_settings",
+        title="GRBL Settings",
+        width=_POPUP_GEOMETRY["grbl_settings"][0],
+        height=_POPUP_GEOMETRY["grbl_settings"][1],
+        build_body=_build,
+    )
+    nb = getattr(app, "_grbl_settings_popup_notebook", None)
+    if nb is None:
+        return popup
+    target = (
+        getattr(app, "_grbl_settings_popup_raw_tab", None)
+        if bool(select_raw)
+        else getattr(app, "_grbl_settings_popup_settings_tab", None)
+    )
+    if target is not None:
+        try:
+            nb.select(target)
+        except Exception:
+            logger.exception("Failed selecting GRBL popup page")
+    try:
+        popup.lift()
+    except Exception:
+        pass
+    return popup
+
+
+def _show_app_settings_popup(app) -> None:
+    def _on_show() -> None:
+        try:
+            activate_app_settings_surface(app)
+        except Exception:
+            logger.exception("Failed activating App Settings popup surface")
+
+    def _on_hide() -> None:
+        try:
+            deactivate_app_settings_surface(app)
+        except Exception:
+            logger.exception("Failed deactivating App Settings popup surface")
+
+    _show_popup_window(
+        app,
+        key="app_settings",
+        title="App Settings",
+        width=_POPUP_GEOMETRY["app_settings"][0],
+        height=_POPUP_GEOMETRY["app_settings"][1],
+        build_body=lambda body, _popup: build_app_settings_panel(app, body).pack(fill="both", expand=True),
+        on_show=_on_show,
+        on_hide=_on_hide,
+    )
+
+
+def _build_popup_button(parent, *, text: str, command, kb_id: str, tooltip: str):
+    button = ttk.Button(parent, text=text, command=command)
+    set_kb_id(button, kb_id)
+    apply_tooltip(button, tooltip)
+    return button
 
 
 def build_main_tabs(app, parent):
-    # Bottom notebook: G-code + Console + Settings + Checklists
-    nb = ttk.Notebook(parent)
-    app.notebook = nb
-    nb.pack(side="top", fill="both", expand=True, pady=(10, 0))
-    nb.bind("<<NotebookTabChanged>>", app._on_tab_changed)
+    shell = ttk.Frame(parent, padding=(0, 10, 0, 0), style=notebook_page_style_name())
+    shell.pack(side="top", fill="both", expand=True)
+    shell.grid_columnconfigure(0, weight=1)
+    shell.grid_columnconfigure(1, weight=1)
+    shell.grid_rowconfigure(0, weight=0)
+    shell.grid_rowconfigure(1, weight=1)
 
-    # Gcode tab
-    build_gcode_tab(app, nb)
+    app.notebook = None
+    app.file_info_tab = None
+    app.logs_tab = None
+    app.checklists_tab = None
+    app._lower_popup_windows = {}
 
-    # File Info tab
-    build_file_info_tab(app, nb)
+    _build_gcode_view_runtime_state(app)
 
-    # Console tab
-    build_console_tab(app, nb)
+    control_row = ttk.Frame(shell, style=notebook_page_style_name())
+    control_row.grid(row=0, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
+    app.lower_control_row = control_row
 
-    # Logs tab
-    ltab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
-    nb.add(ltab, text="Logs")
-    set_tab_tooltip(nb, ltab, "Review streaming and UI log output.")
-    app.logs_tab = ltab
-    app.logs_viewer = LogViewer(ltab, app)
-    app.logs_viewer.pack(fill="both", expand=True)
+    left_buttons = ttk.Frame(control_row, style=notebook_page_style_name())
+    left_buttons.pack(side="left", anchor="w")
+    app.lower_button_row = left_buttons
+    app.lower_optional_button_row = left_buttons
+    app.lower_primary_button_row = left_buttons
 
-    otab = ttk.Frame(nb, padding=6, style=notebook_page_style_name())
-    nb.add(otab, text="Overdrive")
-    set_tab_tooltip(nb, otab, "Adjust feed/spindle overrides and quick controls.")
-    build_overdrive_tab(app, otab)
-    app.settings_controller.build_tabs(nb)
+    app.btn_logs_popup = _build_popup_button(
+        left_buttons,
+        text="Logs",
+        command=lambda: _show_logs_popup(app),
+        kb_id="show_logs_popup",
+        tooltip="Open the log viewer in a large popup.",
+    )
+    app.btn_raw_grbl_popup = _build_popup_button(
+        left_buttons,
+        text="Raw $$",
+        command=lambda: _show_grbl_settings_popup(app, select_raw=True),
+        kb_id="show_raw_grbl_popup",
+        tooltip="Open the raw GRBL settings dump in a large popup.",
+    )
+    app.btn_checklists_popup = _build_popup_button(
+        left_buttons,
+        text="Checklists",
+        command=lambda: _show_checklists_popup(app),
+        kb_id="show_checklists_popup",
+        tooltip="Open setup and safety checklists in a large popup.",
+    )
 
-    # App Settings tab
-    build_app_settings_tab(app, nb)
+    app.btn_job_info_popup = _build_popup_button(
+        left_buttons,
+        text="Job Info",
+        command=lambda: _show_file_info_popup(app),
+        kb_id="show_job_info_popup",
+        tooltip="Open loaded job details in a large popup.",
+    )
+    app.btn_file_info_popup = app.btn_job_info_popup
+    app.btn_grbl_settings_popup = _build_popup_button(
+        left_buttons,
+        text="GRBL Settings",
+        command=lambda: _show_grbl_settings_popup(app, select_raw=False),
+        kb_id="show_grbl_settings_popup",
+        tooltip="Open GRBL Settings in a large popup.",
+    )
+    app.btn_app_settings_popup = _build_popup_button(
+        left_buttons,
+        text="App Settings",
+        command=lambda: _show_app_settings_popup(app),
+        kb_id="show_app_settings_popup",
+        tooltip="Open App Settings in a large popup.",
+    )
 
-    # Checklists tab
-    app.checklists_tab = build_checklists_tab(app, nb)
+    console_pane = ttk.Labelframe(shell, text="Console", padding=0)
+    console_pane.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+    overdrive_pane = ttk.Frame(shell, padding=0, style=notebook_page_style_name())
+    overdrive_pane.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+    app.lower_split_frame = shell
+    app.console_pane = console_pane
+    app.overdrive_pane = overdrive_pane
 
-    _register_optional_tabs(app)
-    sync_optional_tab_visibility(app, nb)
+    build_console_panel(app, console_pane).pack(fill="both", expand=True)
+    build_overdrive_tab(app, overdrive_pane)
+
+    _register_optional_buttons(app)
+    sync_auxiliary_button_visibility(app)
+    app._active_tab_label = "Console"
+    app._app_settings_tab_active = False

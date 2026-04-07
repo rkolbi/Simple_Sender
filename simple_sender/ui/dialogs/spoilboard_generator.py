@@ -127,11 +127,6 @@ def _load_generated_gcode_into_app(app: Any, gcode_text: str, virtual_name: str)
     lines = [ln.rstrip("\r\n") for ln in gcode_text.splitlines() if ln.strip()]
     if not lines:
         return
-    try:
-        if getattr(app, "notebook", None) is not None and getattr(app, "gcode_tab", None) is not None:
-            app.notebook.select(app.gcode_tab)
-    except Exception as exc:
-        _log_suppressed("Failed switching to G-code tab before loading generated spoilboard program", exc)
     app._apply_loaded_gcode(virtual_name, lines, validated=False)
 
 

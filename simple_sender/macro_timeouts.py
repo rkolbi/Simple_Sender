@@ -36,7 +36,8 @@ def _read_bool(value: object, default: bool = False) -> bool:
 def macro_timeout_override_active(app) -> bool:
     return bool(
         _read_bool(getattr(app, "_tool_change_unlimited_time_active", False))
-        or _read_bool(getattr(app, "_macro_operator_assisted_unlimited_time_active", False))
+        or _read_bool(getattr(app, "_builtin_workflow_unlimited_time_active", False))
+        or _read_bool(getattr(app, "_operator_assisted_workflow_unlimited_time_active", False))
     )
 
 

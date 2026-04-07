@@ -254,7 +254,7 @@ def _append_perf_monitor_summary(lines: list[str], metrics: dict[str, Any]) -> N
     phase_metrics = metrics.get("perf_phase_metrics")
     if isinstance(phase_metrics, dict) and phase_metrics:
         lines.append("- Phase CPU/RSS:")
-        for phase_name in ("idle_gcode_visible", "idle_gcode_hidden", "streaming"):
+        for phase_name in ("idle_connected", "streaming"):
             phase = phase_metrics.get(phase_name)
             if not isinstance(phase, dict):
                 continue

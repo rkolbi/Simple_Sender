@@ -284,8 +284,6 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
         _set_current_value(val[:-1])
 
     def _clear():
-        if not spec.get("allow_empty", True):
-            return
         _set_current_value("")
 
     def _apply_and_close():

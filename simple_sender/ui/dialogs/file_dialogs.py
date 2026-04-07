@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import os
 import sys
 
 from simple_sender.ui.theme_helpers import plain_tk_theme_defaults
@@ -34,6 +35,7 @@ _FILE_DIALOG_MIN_WIDTH = 540
 _FILE_DIALOG_MIN_HEIGHT = 360
 _FILE_DIALOG_RESIZE_POLL_MS = 20
 _FILE_DIALOG_WINDOW_CLASSES = frozenset({"TkFDialog", "TkMotifFDialog", "TkChooseDir"})
+_LINUX_FILE_DIALOG_DEFAULT_PATH = "/root/CNC_Jobs"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -56,6 +58,48 @@ def _resolve_parent(app, kwargs):
     except Exception:
         return None
     return None
+
+
+def _existing_dir(path) -> str:
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    try:
+        normalized = os.path.expanduser(os.path.expandvars(text))
+    except Exception:
+        normalized = text
+    try:
+        return normalized if os.path.isdir(normalized) else ""
+    except Exception as exc:
+        _log_suppressed("Failed checking file-dialog directory existence", exc)
+        return ""
+
+
+def _linux_file_dialog_default_path(app) -> str:
+    configured = ""
+    if app is not None and hasattr(app, "linux_file_dialog_default_path"):
+        try:
+            configured = str(app.linux_file_dialog_default_path.get() or "").strip()
+        except Exception:
+            configured = ""
+    if (not configured) and isinstance(getattr(app, "settings", None), dict):
+        try:
+            configured = str(app.settings.get("linux_file_dialog_default_path", "") or "").strip()
+        except Exception:
+            configured = ""
+    return configured or _LINUX_FILE_DIALOG_DEFAULT_PATH
+
+
+def _resolve_dialog_initialdir(app, initialdir) -> str:
+    explicit_dir = _existing_dir(initialdir)
+    if explicit_dir:
+        return explicit_dir
+    if not sys.platform.startswith("linux"):
+        return ""
+    linux_default = _existing_dir(_linux_file_dialog_default_path(app))
+    if linux_default:
+        return linux_default
+    return _existing_dir(os.path.expanduser("~"))
 
 
 def _coerce_scale(value, default: float = _FILE_DIALOG_MIN_SCALE) -> float:
@@ -391,6 +435,11 @@ def _run_dialog_once(app, func, *args, **kwargs):
     parent = _resolve_parent(app, call_kwargs)
     if parent is not None and call_kwargs.get("parent") is None:
         call_kwargs["parent"] = parent
+    resolved_initialdir = _resolve_dialog_initialdir(app, call_kwargs.get("initialdir"))
+    if resolved_initialdir:
+        call_kwargs["initialdir"] = resolved_initialdir
+    elif "initialdir" in call_kwargs:
+        call_kwargs.pop("initialdir", None)
 
     guard_active = False
     if app is not None:
