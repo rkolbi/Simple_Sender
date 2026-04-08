@@ -253,6 +253,29 @@ class App(tk.Tk):
         # Top + main layout
         self._build_toolbar()
         self._build_main()
+        schedule_app_settings_prewarm = getattr(self, "_schedule_app_settings_prewarm", None)
+        preload_app_settings_var = getattr(self, "app_settings_preload_enabled", None)
+        should_prewarm_app_settings = False
+        try:
+            if preload_app_settings_var is not None:
+                should_prewarm_app_settings = bool(preload_app_settings_var.get())
+        except Exception:
+            should_prewarm_app_settings = False
+        if callable(schedule_app_settings_prewarm) and should_prewarm_app_settings:
+            try:
+                startup_delay_s = float(getattr(self, "_startup_auto_connect_delay_s", 5.0) or 0.0)
+            except Exception:
+                startup_delay_s = 5.0
+            prewarm_delay_ms = 800
+            if startup_delay_s > 0.0:
+                prewarm_delay_ms = min(
+                    prewarm_delay_ms,
+                    max(250, int(max(0.0, startup_delay_s * 1000.0) * 0.25)),
+                )
+            try:
+                schedule_app_settings_prewarm(delay_ms=prewarm_delay_ms)
+            except Exception as exc:
+                _log_suppressed("Failed scheduling App Settings prewarm during startup", exc)
         startup_settings_warning = str(getattr(self, "_settings_load_warning_message", "") or "").strip()
         if startup_settings_warning:
             self.after(

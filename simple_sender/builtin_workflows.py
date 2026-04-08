@@ -46,7 +46,7 @@ BUILTIN_WORKFLOW_ACTIONS: tuple[BuiltinWorkflowAction, ...] = (
     BuiltinWorkflowAction(
         workflow_id="tool_change",
         label="Tool Change",
-        tooltip="Moves to the fixed sensor, lets you swap the tool, then re-applies the stored reference height.",
+        tooltip="Moves to the fixed sensor, lets you swap the tool, reapplies the stored reference height, then parks at safe Z over WCS X0/Y0 for the posted job to reposition.",
         kb_id="builtin_tool_change",
         kind="workflow",
         operator_assisted=True,

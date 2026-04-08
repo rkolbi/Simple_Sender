@@ -5,7 +5,46 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
-- No changes tracked yet.
+### Changed
+- Resume/reconnect safety parity was tightened for the current baseline:
+  - `Resume From...` now uses the same Job Setup validity confirmation model as fresh Run before starting a resumed stream
+  - reconnect-resume now carries forward the same `G92` warning state as manual Resume instead of dropping that signal
+  - resume admission now reruns preflight after a `Start Anyway` Job Setup override so Resume does not become less strict than Run
+- Resume dialog preview/start behavior is now safety-first:
+  - the dialog no longer starts a resume before the background preview has finished when the preview is still needed to determine `G92` risk
+  - disabling modal re-sync no longer creates a path that can bypass preview-backed resume warnings
+- App Settings popup startup is now more responsive on first open:
+  - the popup shell opens immediately
+  - the heavy App Settings body now builds on idle instead of blocking the initial button press
+- App Settings popup preloading is now operator-controlled:
+  - `Preload App Settings popup after startup` was added under `App Settings > Interface`
+  - the preload path is now disabled by default and only runs on startup when the operator enables it
+- Dry Run confirmation dialog styling now uses the shared themed toplevel path, so the warning dialog no longer falls back to a bright white background under the dark UI.
+
+### Fixed
+- Z Plate Job Setup now preserves the existing X/Y work zero instead of overwriting X/Y during a Z-only setup path.
+- Built-in workflow startup snapshot acquisition now retries once before aborting, so first-run Job Setup no longer fails just because the initial `$G` modal/status snapshot lands late.
+- Dry Run wording was corrected to match the actual shipped behavior:
+  - spindle/coolant and `M6`/`S`/`T` sanitization still apply
+  - sender-side `TC:<tool name>` directives still pause and run the built-in Tool Change workflow
+- Manual-command bookkeeping during alarm transitions no longer leaves stale pending/manual-tracker state behind when a command becomes blocked before send.
+- G-code motion-line counting no longer treats non-motion codes as motion just because they contain axis letters or similar substrings.
+- Work-position zero actions now require operator confirmation for `X`, `Y`, `Z`, and `All` before sending the zeroing command.
+- App Settings first-open responsiveness no longer makes the `View Logs...` path feel like it needs a second click while the settings popup is still constructing.
+
+### Documentation
+- Deep docs truthfulness pass:
+  - README no longer points at missing `ref/VCarve-PP/` or `ref/test.py` assets
+  - restored current `ref/release_checklist.md` and `ref/perf_baselines.md` as live reference docs
+  - README appendix wording now matches the current popup-based UI and protected workflow/user-macro layout
+- Changelog/release-facing wording now reflects the current baseline more precisely:
+  - built-in tool change docs state the real current contract: park at safe Z over WCS `X0/Y0`, then rely on the posted job to reposition
+  - Resume docs now describe the current Dry Run, Job Setup, and `G92` safeguard behavior
+  - historical v3.0 changelog wording no longer presents a standing "recent real-machine validation" claim as if it were evergreen release proof
+
+### Validation
+- Current local repository validation snapshot after the cleanup and baseline-alignment work:
+  - `pytest -q`: PASS (`1727 passed, 2 skipped` on `2026-04-08`)
 
 ## [3.0] - 2026-04-05
 
@@ -38,10 +77,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Recent lower-UI/runtime cleanup reduced avoidable hidden/background work without changing machine-control semantics.
 
 ### Validation
-- Recent real-machine probing validation for the current bitsetter/tool-reference workflow completed successfully:
-  - accepted Job Setup and Tool Change measurement rounds
-  - tight clustering observed in the latest validation bundle, including `0.0050 mm` spreads
-  - no Tool Change retry pass was needed in that successful run
+- The v3.0 line is the stable runtime/docs baseline for the current workflow architecture.
+- Machine-specific validation remains operator/machine dependent and should be performed on the target machine before production use.
 
 ### Documentation
 - README, macro docs, deployment docs, About docs, and release-facing notes were refreshed for the stable v3.0 release.
@@ -188,7 +225,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - deferred-completion busy protection now covers macro start, probing, and settings refresh
   - the local release-gate baseline now reflects the latest `run_tests.bat` run (`1433 passed, 3 skipped`)
 - README now documents the stabilization baseline, the direct preflight service boundary, and expanded operator troubleshooting for preflight outcomes.
-- README and `ref/README.md` Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
+- README Auto-Level docs now include the `Test Probe` operator flow and the `Last test probe` status/result line.
 - README testing baseline now reflects the latest full local release-gate run (`run_tests.bat` passed end-to-end on 2026-03-27; coverage test stage reported `1433 passed, 3 skipped`).
 - README and macro docs now describe custom stream directives (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`), including interception-before-send behavior, Kasa vacuum integration, and no-timeout tool-change workflow handling.
 - README performance profiling examples now include `--mode unified-load` for benchmarking the 2.0.0 normalized disk-backed load path.
@@ -203,7 +240,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README Logs/Diagnostics docs now include `Clear Logs`, `Export diagnostics bundle (Save ZIP)`, and `Save final performance report (Save to Logs)`.
 - README Spatial docs now include automatic Spatial-tab hide-when-disabled behavior and the session-only Spatial override.
 - README now documents `SSMETA` header parsing, metadata source tags (`dimensions_source` / `units_source`), and the new scrollable File Info tab.
-- README/`ref/README.md` profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
+- README profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
 - `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
 - Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
 - README and `simple_sender/macros/readme.md` now document the Job Setup Run warning, operator workflow expectations, and setup-state invalidation behavior.

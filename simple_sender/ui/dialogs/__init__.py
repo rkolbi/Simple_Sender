@@ -178,7 +178,7 @@ def show_resume_dialog(app):
             _restore_start_button()
             current_sync_enabled = _sync_enabled()
             resume_preamble = list(preamble) if current_sync_enabled else []
-            app._resume_from_line(int(line_no) - 1, resume_preamble)
+            app._resume_from_line(int(line_no) - 1, resume_preamble, has_g92=bool(has_g92))
             if bool(dlg.winfo_exists()):
                 dlg.destroy()
 
@@ -282,23 +282,25 @@ def show_resume_dialog(app):
             messagebox.showwarning("Resume", "Line number is out of range.")
             return
         preamble = []
-        if _sync_enabled():
-            cached = preview_cache.get(int(line_no))
-            if cached is not None:
+        has_g92 = False
+        cached = preview_cache.get(int(line_no))
+        if cached is not None:
+            if _sync_enabled():
                 preamble = list(cached[0])
-            else:
-                pending_resume_line["value"] = int(line_no)
-                start_btn = start_btn_holder["widget"]
-                if start_btn is not None:
-                    try:
-                        start_btn.config(state="disabled")
-                    except Exception:
-                        pass
-                sample_var.set("Modal re-sync: calculating...")
-                warning_var.set("Resume will start after the preamble preview is ready.")
-                _schedule_preview(int(line_no))
-                return
-        app._resume_from_line(line_no - 1, preamble)
+            has_g92 = bool(cached[1])
+        else:
+            pending_resume_line["value"] = int(line_no)
+            start_btn = start_btn_holder["widget"]
+            if start_btn is not None:
+                try:
+                    start_btn.config(state="disabled")
+                except Exception:
+                    pass
+            sample_var.set("Modal re-sync: calculating...")
+            warning_var.set("Resume will start after the safety checks are ready.")
+            _schedule_preview(int(line_no))
+            return
+        app._resume_from_line(line_no - 1, preamble, has_g92=has_g92)
         dlg.destroy()
 
     def _on_sync_toggle() -> None:

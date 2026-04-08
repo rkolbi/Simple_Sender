@@ -250,7 +250,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(("progress_bytes", 0, int(self._stream_file_size_bytes)))
         self._signal_tx_activity()
         if self._dry_run_sanitize:
-            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
+            self.ui_q.put(
+                (
+                    "log",
+                    "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
+                )
+            )
         self.ui_q.put(("stream_state", "running", None))
         logger.info("Started G-code streaming")
     
@@ -317,7 +322,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             )
         self._signal_tx_activity()
         if self._dry_run_sanitize:
-            self.ui_q.put(("log", "[dry run] Spindle/coolant/tool changes removed while streaming."))
+            self.ui_q.put(
+                (
+                    "log",
+                    "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
+                )
+            )
         self.ui_q.put(("progress", start_index, len(self._gcode)))
         self.ui_q.put(("stream_state", "running", None))
         logger.info(f"Resumed streaming from line {start_index}")
@@ -1156,6 +1166,13 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
 
             allowed_alarm_cmd = self._line_allowed_during_alarm(line)
             if not allowed_alarm_cmd:
+                if self._manual_pending_item is not None:
+                    self._manual_pending_item = None
+                self._resolve_manual_tracker(
+                    tracker,
+                    success=False,
+                    error="Manual command was blocked during alarm state.",
+                )
                 continue
 
             if self._manual_line_too_long(line, line_len):

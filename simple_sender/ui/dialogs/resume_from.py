@@ -33,10 +33,19 @@ from simple_sender.gcode_parser import clean_gcode_line, WORD_PAT
 from simple_sender.services.job_service import DryRunStartDecision
 from simple_sender.types import LineSource
 from simple_sender.ui.dry_run_start_prompt import confirm_dry_run_start_mode
+from simple_sender.ui.job_setup_state import (
+    confirm_job_start_without_setup,
+    has_valid_job_setup_state,
+)
 from simple_sender.ui.preflight_gate import run_preflight_gate
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_RESUME_G92_WARNING_TITLE = "Resume warning"
+_RESUME_G92_WARNING_BODY = (
+    "G92 offsets were detected before the selected resume line. Confirm work zero and "
+    "controller state before resuming.\n\nResume anyway?"
+)
 # Keep only a few recent line sources cached so repeated dialog use stays fast
 # without retaining many full job references.
 _RESUME_CACHE_MAX = 8
@@ -351,7 +360,46 @@ def _confirm_dry_run_resume_start(app) -> DryRunStartDecision:
     return DryRunStartDecision.CANCEL
 
 
-def resume_from_line(app, start_index: int, preamble: list[str]):
+def _confirm_resume_setup_state(app) -> bool:
+    try:
+        setup_valid = bool(has_valid_job_setup_state(app))
+    except Exception as exc:
+        _log_suppressed("Failed checking Job Setup validity before Resume From", exc)
+        _report_resume_failure(app, "Job Setup state could not be validated before Resume From.")
+        return False
+    if setup_valid:
+        return True
+    try:
+        allowed = bool(confirm_job_start_without_setup(app))
+    except Exception as exc:
+        _log_suppressed("Failed confirming Job Setup warning before Resume From", exc)
+        _report_resume_failure(app, "Job Setup confirmation could not be completed before Resume From.")
+        return False
+    if allowed:
+        return True
+    _report_resume_message(app, "Resume canceled because Job Setup is not current.")
+    return False
+
+
+def _confirm_resume_g92_state(app, *, has_g92: bool) -> bool:
+    if not bool(has_g92):
+        return True
+    try:
+        allowed = bool(messagebox.askyesno(_RESUME_G92_WARNING_TITLE, _RESUME_G92_WARNING_BODY))
+    except Exception as exc:
+        _log_suppressed("Failed confirming G92 warning before Resume From", exc)
+        _report_resume_failure(app, "G92 confirmation could not be completed before Resume From.")
+        return False
+    if allowed:
+        return True
+    _report_resume_message(
+        app,
+        "Resume canceled because G92 offsets were detected before the selected line.",
+    )
+    return False
+
+
+def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: bool = False):
     """Restart streaming from a specific line after UI-side safety checks."""
 
     if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
@@ -380,6 +428,12 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
         messagebox.showwarning("Resume", "Line number is out of range.")
         return
     if not run_preflight_gate(app, action_label="Resume", messagebox_module=messagebox):
+        return
+    if not _confirm_resume_setup_state(app):
+        return
+    if not run_preflight_gate(app, action_label="Resume", messagebox_module=messagebox):
+        return
+    if not _confirm_resume_g92_state(app, has_g92=has_g92):
         return
     if _is_dry_run_enabled(app):
         try:
@@ -429,13 +483,9 @@ def resume_from_line(app, start_index: int, preamble: list[str]):
         )
         return
     app._clear_pending_ui_updates()
-    app.gview.clear_highlights()
     app._last_sent_index = start_index - 1
     app._last_acked_index = start_index - 1
     app._last_error_index = -1
-    if start_index > 0:
-        app.gview.mark_acked_upto(start_index - 1)
-    app.gview.highlight_current(start_index)
     if total_lines > 0:
         pct = int(round((start_index / total_lines) * 100))
         app.progress_pct.set(pct)

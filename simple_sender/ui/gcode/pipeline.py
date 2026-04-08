@@ -450,12 +450,6 @@ def clear_gcode(app):
     app._stats_cache.clear()
     app.grbl.load_gcode([])
     app.gview.clear()
-    try:
-        header_var = getattr(app, "gcode_live_header_var", None)
-        if header_var is not None:
-            header_var.set("")
-    except Exception as exc:
-        _log_suppressed("Failed clearing live G-code header while clearing job", exc)
     app._live_gcode_past_count = 0
     app._live_gcode_current_count = 0
     app._live_gcode_next_count = 0

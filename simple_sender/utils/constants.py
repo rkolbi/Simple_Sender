@@ -692,12 +692,6 @@ ALL_STOP_CHOICES = [
     ("Stop Stream + Reset", "stop_reset"),
 ]
 
-CURRENT_LINE_CHOICES = [
-    ("Machine (status/planner)", "machine"),
-    ("Processing (acked)", "acked"),
-    ("Sent (queued)", "sent"),
-]
-
 # ============================================================================
 # COLOR CONSTANTS
 # ============================================================================
@@ -713,22 +707,6 @@ COLOR_ARC = "#2aa876"
 
 COLOR_POSITION_MARKER = "#d64545"
 """Color for current position marker."""
-
-# G-code viewer highlight colors (light/pastel for readability)
-COLOR_GCODE_SENT = "#e5efff"
-"""Background color for sent G-code lines."""
-
-COLOR_GCODE_ACKED = "#e6f7ed"
-"""Background color for acknowledged G-code lines."""
-
-COLOR_GCODE_CURRENT = "#fff4d8"
-"""Background color for current G-code line."""
-
-COLOR_GCODE_TEXT = "#111111"
-"""Text color for G-code viewer."""
-
-COLOR_GCODE_BG = "#ffffff"
-"""Background color for G-code viewer."""
 
 # ============================================================================
 # DEFAULT SPINDLE RPM

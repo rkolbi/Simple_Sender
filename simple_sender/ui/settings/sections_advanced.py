@@ -359,6 +359,8 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
     interface_frame = ttk.LabelFrame(parent, text="Interface", padding=8)
     interface_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     interface_frame.grid_columnconfigure(0, weight=1)
+    if not hasattr(app, "app_settings_preload_enabled"):
+        app.app_settings_preload_enabled = tk.BooleanVar(master=interface_frame, value=False)
     app.fullscreen_startup_check = ttk.Checkbutton(
         interface_frame,
         text="Start in fullscreen",
@@ -369,7 +371,17 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.fullscreen_startup_check,
         "Enable fullscreen on startup (takes effect after restart).",
     )
-    next_row = _build_interface_performance_row(app, interface_frame, 1)
+    app.app_settings_preload_check = ttk.Checkbutton(
+        interface_frame,
+        text="Preload App Settings popup after startup",
+        variable=app.app_settings_preload_enabled,
+    )
+    app.app_settings_preload_check.grid(row=1, column=0, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.app_settings_preload_check,
+        "Build the App Settings popup hidden after startup so the first open is faster. Disabled by default and takes effect on next launch.",
+    )
+    next_row = _build_interface_performance_row(app, interface_frame, 2)
     next_row = _build_interface_logging_row(app, interface_frame, next_row)
     next_row = _build_interface_auxiliary_button_visibility_row(app, interface_frame, next_row)
     next_row = _build_interface_indicators_row(app, interface_frame, next_row)

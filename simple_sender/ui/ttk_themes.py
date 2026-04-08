@@ -42,7 +42,6 @@ SIMPLE_SENDER_GEMINI_PALETTE: dict[str, str] = {
     "accent_hover": "#8B96FF",
     "accent_pressed": "#5968E8",
     "accent_secondary": "#5EC8FF",
-    "warm_accent": "#FF9B5E",
     "fg": "#F5F7FB",
     "text_secondary": "#B8C0D4",
     "muted_fg": "#7D8598",
@@ -54,7 +53,6 @@ SIMPLE_SENDER_GEMINI_PALETTE: dict[str, str] = {
     "text_pane_fg": "#F5F7FB",
     "text_pane_border": "#4B5F82",
     "text_pane_inactive_selection_bg": "#28385F",
-    "text_pane_current_line_bg": "#394A76",
     "toggle_on": "#5EC8FF",
     "toggle_off": "#FF9B5E",
 }

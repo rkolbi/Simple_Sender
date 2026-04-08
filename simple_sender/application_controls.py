@@ -58,10 +58,7 @@ from simple_sender.ui.override_controls import (
 )
 from simple_sender.ui.status.state_display import (
     on_all_stop_mode_change,
-    on_current_line_mode_change,
     sync_all_stop_mode_combo,
-    sync_current_line_mode_combo,
-    update_current_highlight,
 )
 from simple_sender.ui.ui_actions import start_homing
 from simple_sender.ui.ui_actions import toggle_unit_mode
@@ -187,15 +184,6 @@ class ControlsMixin:
 
     def _on_all_stop_mode_change(self, _event: Any | None = None) -> None:
         on_all_stop_mode_change(self, _event)
-
-    def _sync_current_line_mode_combo(self) -> None:
-        sync_current_line_mode_combo(self)
-
-    def _on_current_line_mode_change(self, _event: Any | None = None) -> None:
-        on_current_line_mode_change(self, _event)
-
-    def _update_current_highlight(self) -> None:
-        update_current_highlight(self)
 
     def _all_stop_action(self) -> None:
         all_stop_action(self)

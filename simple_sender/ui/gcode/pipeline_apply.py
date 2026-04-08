@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import re
 import time
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
@@ -90,13 +91,17 @@ _IN_MEMORY_GCODE_SOURCE_DEFAULTS: dict[str, object] = {
 }
 
 
+_MOTION_GCODE_PAT = re.compile(r"(?<![0-9.])G(?:0|1|2|3)(?![0-9.])", re.IGNORECASE)
+_MOTION_AXIS_PAT = re.compile(r"[XYZ][-+]?(?:\d+(?:\.\d*)?|\.\d+)?", re.IGNORECASE)
+
+
 def _is_motion_line(line: str) -> bool:
     text = str(line or "").strip().upper()
     if not text:
         return False
-    if any(token in text for token in ("G0", "G1", "G2", "G3")):
+    if _MOTION_GCODE_PAT.search(text):
         return True
-    return any(axis in text for axis in ("X", "Y", "Z"))
+    return bool(_MOTION_AXIS_PAT.search(text))
 
 
 def _count_motion_lines(lines: list[str]) -> int:
@@ -105,28 +110,6 @@ def _count_motion_lines(lines: list[str]) -> int:
         if _is_motion_line(line):
             motion += 1
     return int(motion)
-
-
-def _live_highlight_enabled(app) -> bool:
-    toggle_var = getattr(app, "current_line_highlight_enabled", None)
-    if toggle_var is not None:
-        getter = getattr(toggle_var, "get", None)
-        if callable(getter):
-            try:
-                return bool(getter())
-            except Exception:
-                pass
-    mode_var = getattr(app, "current_line_mode", None)
-    if mode_var is not None:
-        getter = getattr(mode_var, "get", None)
-        if callable(getter):
-            try:
-                mode = str(getter() or "").strip().lower()
-                if mode in {"none", "off", "disabled"}:
-                    return False
-            except Exception:
-                pass
-    return True
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -899,15 +882,7 @@ def apply_loaded_gcode(
                 None,
                 preview_next,
                 next_buffered_count=int(len(preview_next)),
-                highlight_current=bool(_live_highlight_enabled(app)),
             )
-            header_var = getattr(app, "gcode_live_header_var", None)
-            header_setter = getattr(header_var, "set", None)
-            if callable(header_setter):
-                past_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_PAST_LINES", 500) or 500)
-                header_setter(
-                    f"Live G-code ({int(preview_cap)} look ahead / current / {int(past_cap)} past) - Run: n/a"
-                )
             setattr(app, "_live_gcode_past_count", 0)
             setattr(app, "_live_gcode_current_count", 0)
             setattr(app, "_live_gcode_next_count", int(len(preview_next)))

@@ -20,27 +20,22 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from simple_sender.utils.constants import ALL_STOP_CHOICES
+"""Structured application configuration defaults."""
 
+from .defaults import (
+    AppConfig,
+    DEFAULT_APP_CONFIG,
+    GCodeCacheConfig,
+    PiProfileConfig,
+    RASPBERRY_PI_APP_CONFIG,
+    StatusPollingConfig,
+)
 
-def sync_all_stop_mode_combo(app):
-    mode = app.all_stop_mode.get()
-    label = None
-    for lbl, code in ALL_STOP_CHOICES:
-        if code == mode:
-            label = lbl
-            break
-    if label is None and ALL_STOP_CHOICES:
-        label = ALL_STOP_CHOICES[0][0]
-        app.all_stop_mode.set(ALL_STOP_CHOICES[0][1])
-    if hasattr(app, "all_stop_combo"):
-        app.all_stop_combo.set(label if label else "")
-
-
-def on_all_stop_mode_change(app, _event=None):
-    label = ""
-    if hasattr(app, "all_stop_combo"):
-        label = app.all_stop_combo.get()
-    mode = next((code for lbl, code in ALL_STOP_CHOICES if lbl == label), "stop_reset")
-    app.all_stop_mode.set(mode)
-    app.status.config(text=f"All Stop mode: {label}")
+__all__ = [
+    "AppConfig",
+    "DEFAULT_APP_CONFIG",
+    "GCodeCacheConfig",
+    "PiProfileConfig",
+    "RASPBERRY_PI_APP_CONFIG",
+    "StatusPollingConfig",
+]

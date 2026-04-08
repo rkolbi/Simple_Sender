@@ -530,7 +530,7 @@ def build_toolbar(app):
     app.btn_clear.pack(side="left", padx=(6, 0))
     app._manual_controls.append(app.btn_clear)
     app._offline_controls.add(app.btn_clear)
-    apply_tooltip(app.btn_clear, "Unload the current job and reset the viewer.")
+    apply_tooltip(app.btn_clear, "Unload the current job and reset the live job state.")
     app.btn_run = ttk.Button(
         run_row,
         text=icon_label(ICON_RUN, "Run"),

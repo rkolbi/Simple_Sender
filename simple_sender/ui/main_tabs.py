@@ -183,9 +183,6 @@ def _build_gcode_view_runtime_state(app) -> None:
     keeping an off-screen Text/Scrollbar tree alive.
     """
 
-    app._gcode_view_host = None
-    app.gcode_live_header_label = None
-    app.gcode_stats_label = None
     app.gview = HeadlessGcodeView()
 
 
@@ -199,6 +196,7 @@ def _show_popup_window(
     height: int,
     on_show=None,
     on_hide=None,
+    present: bool = True,
 ) -> tk.Toplevel:
     popup_windows = getattr(app, "_lower_popup_windows", None)
     if not isinstance(popup_windows, dict):
@@ -236,23 +234,30 @@ def _show_popup_window(
 
         popup.protocol("WM_DELETE_WINDOW", _hide_popup)
         center_window(popup, app)
+        if not bool(present):
+            try:
+                popup.withdraw()
+            except Exception:
+                logger.exception("Failed prewarming hidden lower popup %r", key)
     else:
         if popup is None:
             raise RuntimeError(f"Lower popup window {key!r} is missing from the popup cache")
-        try:
-            popup.deiconify()
-        except Exception:
-            logger.exception("Failed restoring lower popup %r", key)
+        if bool(present):
+            try:
+                popup.deiconify()
+            except Exception:
+                logger.exception("Failed restoring lower popup %r", key)
     if popup is None:
         raise RuntimeError(f"Lower popup window {key!r} could not be created")
     apply_toplevel_theme(popup, app)
-    try:
-        popup.lift()
-        popup.focus_force()
-    except Exception:
-        pass
-    if callable(on_show):
-        on_show()
+    if bool(present):
+        try:
+            popup.lift()
+            popup.focus_force()
+        except Exception:
+            pass
+        if callable(on_show):
+            on_show()
     return popup
 
 
@@ -340,29 +345,116 @@ def _show_grbl_settings_popup(app, *, select_raw: bool) -> tk.Toplevel:
     return popup
 
 
-def _show_app_settings_popup(app) -> None:
-    def _on_show() -> None:
-        try:
-            activate_app_settings_surface(app)
-        except Exception:
-            logger.exception("Failed activating App Settings popup surface")
-
+def _show_app_settings_popup(app, *, present: bool = True) -> None:
     def _on_hide() -> None:
         try:
             deactivate_app_settings_surface(app)
         except Exception:
             logger.exception("Failed deactivating App Settings popup surface")
 
-    _show_popup_window(
+    def _activate_if_viewable(popup) -> None:
+        try:
+            if not bool(popup.winfo_exists()) or not bool(popup.winfo_viewable()):
+                return
+            activate_app_settings_surface(app)
+        except Exception:
+            logger.exception("Failed activating App Settings popup surface")
+
+    def _build_placeholder(body, popup) -> None:
+        popup._simple_sender_app_settings_body = body
+        popup._simple_sender_app_settings_built = False
+        popup._simple_sender_app_settings_build_scheduled = False
+        ttk.Label(
+            body,
+            text="Loading App Settings...",
+        ).pack(anchor="w", padx=8, pady=8)
+
+    popup = _show_popup_window(
         app,
         key="app_settings",
         title="App Settings",
         width=_POPUP_GEOMETRY["app_settings"][0],
         height=_POPUP_GEOMETRY["app_settings"][1],
-        build_body=lambda body, _popup: build_app_settings_panel(app, body).pack(fill="both", expand=True),
-        on_show=_on_show,
+        build_body=_build_placeholder,
         on_hide=_on_hide,
+        present=bool(present),
     )
+    if bool(getattr(popup, "_simple_sender_app_settings_built", False)):
+        if bool(present):
+            _activate_if_viewable(popup)
+        return
+
+    def _finish_build() -> None:
+        try:
+            popup._simple_sender_app_settings_build_scheduled = False
+        except Exception:
+            pass
+        try:
+            if not bool(popup.winfo_exists()):
+                return
+        except Exception:
+            return
+        if bool(getattr(popup, "_simple_sender_app_settings_built", False)):
+            _activate_if_viewable(popup)
+            return
+        body = getattr(popup, "_simple_sender_app_settings_body", None)
+        if body is None:
+            return
+        try:
+            for child in tuple(body.winfo_children()):
+                child.destroy()
+        except Exception:
+            logger.exception("Failed clearing App Settings popup placeholder")
+        build_app_settings_panel(app, body).pack(fill="both", expand=True)
+        popup._simple_sender_app_settings_built = True
+        if bool(present):
+            _activate_if_viewable(popup)
+
+    if bool(getattr(popup, "_simple_sender_app_settings_build_scheduled", False)):
+        return
+    try:
+        popup._simple_sender_app_settings_build_scheduled = True
+        popup.after_idle(_finish_build)
+    except Exception:
+        _finish_build()
+
+
+def _prewarm_app_settings_popup(app) -> None:
+    if bool(getattr(app, "_closing", False)):
+        return
+    _show_app_settings_popup(app, present=False)
+
+
+def _schedule_app_settings_prewarm(app, *, delay_ms: int = 800) -> None:
+    pending = getattr(app, "_app_settings_prewarm_after_id", None)
+    if pending is not None and hasattr(app, "after_cancel"):
+        try:
+            app.after_cancel(pending)
+        except Exception:
+            logger.exception("Failed canceling pending App Settings prewarm timer")
+        finally:
+            app._app_settings_prewarm_after_id = None
+    if bool(getattr(app, "_closing", False)):
+        return
+    popup = getattr(app, "_lower_popup_windows", {}).get("app_settings")
+    if popup is not None and bool(getattr(popup, "_simple_sender_app_settings_built", False)):
+        return
+
+    def _run() -> None:
+        try:
+            app._app_settings_prewarm_after_id = None
+        except Exception:
+            pass
+        _prewarm_app_settings_popup(app)
+
+    after = getattr(app, "after", None)
+    if not callable(after):
+        _run()
+        return
+    try:
+        app._app_settings_prewarm_after_id = after(max(0, int(delay_ms)), _run)
+    except Exception:
+        _run()
 
 
 def _build_popup_button(parent, *, text: str, command, kb_id: str, tooltip: str):
@@ -458,3 +550,9 @@ def build_main_tabs(app, parent):
     sync_auxiliary_button_visibility(app)
     app._active_tab_label = "Console"
     app._app_settings_tab_active = False
+    app._app_settings_prewarm_after_id = None
+    app._prewarm_app_settings_popup = lambda: _prewarm_app_settings_popup(app)
+    app._schedule_app_settings_prewarm = lambda delay_ms=800: _schedule_app_settings_prewarm(
+        app,
+        delay_ms=int(delay_ms),
+    )

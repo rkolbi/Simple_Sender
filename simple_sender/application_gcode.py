@@ -86,8 +86,8 @@ class GcodeMixin:
             source = self._gcode_source
         return cast(tuple[list[str], bool], build_resume_preamble(source, stop_index))
 
-    def _resume_from_line(self, start_index: int, preamble: list[str]):
-        resume_from_line(self, start_index, preamble)
+    def _resume_from_line(self, start_index: int, preamble: list[str], *, has_g92: bool = False):
+        resume_from_line(self, start_index, preamble, has_g92=has_g92)
 
     def _reset_gcode_view_for_run(self):
         reset_gcode_view_for_run(self)

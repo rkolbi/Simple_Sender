@@ -833,14 +833,6 @@ def _apply_machine_state(app, state: str, display_state: str) -> bool:
                     width_context="Failed adjusting machine state label width",
                     highlight_context="Failed updating machine-state highlight",
                 )
-            if hasattr(app, "_update_current_highlight"):
-                _schedule_status_ui_callback(
-                    app,
-                    callback_attr="_status_current_highlight_after_id",
-                    callback=lambda: app._update_current_highlight(),
-                    context="Failed updating current-line highlight from status state",
-                    replace_pending=False,
-                )
         _maybe_restore_pending_g90(app)
 
     if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:

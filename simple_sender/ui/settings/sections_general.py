@@ -45,6 +45,7 @@ from simple_sender.ui.widgets_tooltips import apply_tooltip
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_ALIGNED_SETTINGS_LABEL_WIDTH_CHARS = 36
 
 PI_PROFILE_STATUS_POLL_INTERVAL = _PI_PROFILE_STATUS_POLL_INTERVAL
 PI_PROFILE_STREAMING_LINE_THRESHOLD = _PI_PROFILE_STREAMING_LINE_THRESHOLD
@@ -73,6 +74,15 @@ def _replace_var_trace(owner, var, attr_name: str, callback, *, context: str) ->
         setattr(owner, attr_name, var.trace_add("write", callback))
     except Exception as exc:
         _log_suppressed(f"Failed wiring {context} trace", exc)
+
+
+def _aligned_setting_label(frame, *, text: str):
+    return ttk.Label(
+        frame,
+        text=text,
+        width=_ALIGNED_SETTINGS_LABEL_WIDTH_CHARS,
+        anchor="w",
+    )
 
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
@@ -150,7 +160,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.btn_runtime_telemetry = ttk.Button(
         developer_frame,
-        text="Open viewer",
+        text="Open telemetry",
         command=app._open_runtime_telemetry,
     )
     app.btn_runtime_telemetry.grid(row=3, column=1, sticky="w", pady=4)
@@ -408,7 +418,7 @@ def _ensure_theme_section_vars(app, parent: ttk.Frame) -> None:
 
 
 def _build_linux_file_dialog_settings(app, theme_frame: ttk.LabelFrame, row: int) -> int:
-    ttk.Label(theme_frame, text="Linux File Dialog Scale").grid(
+    _aligned_setting_label(theme_frame, text="Linux File Dialog Scale").grid(
         row=row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.linux_file_dialog_scale_combo = ttk.Combobox(
@@ -434,7 +444,7 @@ def _build_linux_file_dialog_settings(app, theme_frame: ttk.LabelFrame, row: int
     )
     row += 1
 
-    ttk.Label(theme_frame, text="Linux File Dialog Default Path").grid(
+    _aligned_setting_label(theme_frame, text="Linux File Dialog Default Path").grid(
         row=row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.linux_file_dialog_default_path_entry = ttk.Entry(
@@ -503,7 +513,7 @@ def _build_tooltip_settings(app, theme_frame: ttk.LabelFrame, row: int) -> int:
     )
     row += 1
 
-    ttk.Label(theme_frame, text="Tooltip display duration (sec)").grid(
+    _aligned_setting_label(theme_frame, text="Tooltip display duration (sec)").grid(
         row=row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     tooltip_timeout_row = ttk.Frame(theme_frame)
@@ -529,7 +539,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     theme_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     theme_frame.grid_columnconfigure(1, weight=1)
     _ensure_theme_section_vars(app, parent)
-    ttk.Label(theme_frame, text="UI theme").grid(
+    _aligned_setting_label(theme_frame, text="UI theme").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.theme_combo = ttk.Combobox(
@@ -546,7 +556,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         app.theme_combo,
         "Pick a ttk theme; some themes require a restart for best results.",
     )
-    ttk.Label(theme_frame, text="UI scale").grid(
+    _aligned_setting_label(theme_frame, text="UI scale").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     ui_scale_row = ttk.Frame(theme_frame)
@@ -583,7 +593,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
     next_row = 2
     if sys.platform.startswith("linux"):
         next_row = _build_linux_file_dialog_settings(app, theme_frame, next_row)
-    ttk.Label(theme_frame, text="Scrollbar width").grid(
+    _aligned_setting_label(theme_frame, text="Scrollbar width").grid(
         row=next_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.scrollbar_width_combo = ttk.Combobox(
@@ -605,7 +615,7 @@ def build_theme_section(app, parent: ttk.Frame, row: int) -> int:
         "Set the width used for all scrollbars (wide matches the current App Settings size).",
     )
     next_row += 1
-    ttk.Label(theme_frame, text="Touch scroll mode").grid(
+    _aligned_setting_label(theme_frame, text="Touch scroll mode").grid(
         row=next_row, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.touch_scroll_mode_combo = ttk.Combobox(
@@ -649,7 +659,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     safety = ttk.LabelFrame(parent, text="Safety", padding=8)
     safety.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     safety.grid_columnconfigure(1, weight=1)
-    ttk.Label(safety, text="All Stop behavior").grid(
+    _aligned_setting_label(safety, text="All Stop behavior").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.all_stop_combo = ttk.Combobox(
@@ -674,7 +684,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     app.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
     app.dry_run_sanitize_check = ttk.Checkbutton(
         safety,
-        text="Dry run: disable spindle/coolant/tool changes while streaming",
+        text="Dry run: strip spindle/coolant/M6/S/T from streamed G-code",
         variable=app.dry_run_sanitize_stream,
     )
     app.dry_run_sanitize_check.grid(
@@ -682,7 +692,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         app.dry_run_sanitize_check,
-        "Strip M3/M4/M5, M7/M8/M9, M6, S, and T words from streamed G-code for safe dry runs.",
+        "Strip M3/M4/M5, M7/M8/M9, M6, S, and T words from streamed G-code for dry runs. Sender-side TC:<tool name> directives still pause and run the built-in Tool Change workflow.",
     )
     app.homing_watchdog_check = ttk.Checkbutton(
         safety,
@@ -697,7 +707,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
         app.homing_watchdog_check,
         "Ignore watchdog timeouts while the homing cycle runs.",
     )
-    ttk.Label(safety, text="Homing watchdog grace (seconds)").grid(
+    _aligned_setting_label(safety, text="Homing watchdog grace (seconds)").grid(
         row=4, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.homing_watchdog_timeout_entry = ttk.Entry(
@@ -721,7 +731,7 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
     estimation = ttk.LabelFrame(parent, text="Estimation", padding=8)
     estimation.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     estimation.grid_columnconfigure(1, weight=1)
-    ttk.Label(estimation, text="Fallback rapid rate (mm/min)").grid(
+    _aligned_setting_label(estimation, text="Fallback rapid rate (mm/min)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.fallback_rapid_entry = ttk.Entry(
@@ -735,7 +745,7 @@ def build_estimation_section(app, parent: ttk.Frame, row: int) -> int:
         app.fallback_rapid_entry,
         "Used for time estimates when GRBL max rates ($110-$112) are not available.",
     )
-    ttk.Label(estimation, text="Estimator adjustment").grid(
+    _aligned_setting_label(estimation, text="Estimator adjustment").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.estimate_factor_scale = tk.Scale(
@@ -825,7 +835,7 @@ def build_status_polling_section(app, parent: ttk.Frame, row: int) -> int:
     status_frame = ttk.LabelFrame(parent, text="Status polling", padding=8)
     status_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     status_frame.grid_columnconfigure(1, weight=1)
-    ttk.Label(status_frame, text="Status report interval (seconds)").grid(
+    _aligned_setting_label(status_frame, text="Status report interval (seconds)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.status_poll_entry = ttk.Entry(
@@ -840,7 +850,7 @@ def build_status_polling_section(app, parent: ttk.Frame, row: int) -> int:
         "Set how often GRBL status reports are requested (seconds).",
     )
     app._on_status_interval_change()
-    ttk.Label(status_frame, text="Disconnect after failures").grid(
+    _aligned_setting_label(status_frame, text="Disconnect after failures").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     status_fail_row = ttk.Frame(status_frame)
@@ -875,7 +885,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
         app.error_dialogs_check,
         "Show modal dialogs for errors (tracebacks still log to console).",
     )
-    ttk.Label(dialog_frame, text="Minimum interval (seconds)").grid(
+    _aligned_setting_label(dialog_frame, text="Minimum interval (seconds)").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     error_interval_row = ttk.Frame(dialog_frame)
@@ -888,7 +898,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(error_interval_row, text="sec").pack(side="left", padx=(6, 0))
     app.error_dialog_interval_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_interval_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
-    ttk.Label(dialog_frame, text="Burst window (seconds)").grid(
+    _aligned_setting_label(dialog_frame, text="Burst window (seconds)").grid(
         row=2, column=0, sticky="w", padx=(0, 10), pady=4
     )
     error_window_row = ttk.Frame(dialog_frame)
@@ -901,7 +911,7 @@ def build_error_dialogs_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(error_window_row, text="sec").pack(side="left", padx=(6, 0))
     app.error_dialog_window_entry.bind("<Return>", app._apply_error_dialog_settings)
     app.error_dialog_window_entry.bind("<FocusOut>", app._apply_error_dialog_settings)
-    ttk.Label(dialog_frame, text="Max dialogs per window").grid(
+    _aligned_setting_label(dialog_frame, text="Max dialogs per window").grid(
         row=3, column=0, sticky="w", padx=(0, 10), pady=4
     )
     error_limit_row = ttk.Frame(dialog_frame)

@@ -37,7 +37,7 @@ def build_session_diagnostics_lines(
     format_kasa_status_line: Callable[[Any], str],
     log_suppressed: Callable[[str, BaseException], None],
     effective_line_cache_cap_lines: Callable[[Any], tuple[int, str]],
-    viewer_window_line_count: Callable[[Any], int],
+    headless_live_state_line_estimate: Callable[[Any], int],
     format_validation_summary: Callable[[Any], list[str]],
     runtime_metrics: Callable[[Any], dict[str, Any]],
     format_runtime_metrics: Callable[..., list[str]],
@@ -225,7 +225,7 @@ def build_session_diagnostics_lines(
             retained_lines = int(len(retained)) if retained is not None else 0
         except Exception:
             retained_lines = 0
-    viewer_lines = viewer_window_line_count(getattr(app, "gview", None))
+    live_state_lines = headless_live_state_line_estimate(getattr(app, "gview", None))
     storage_detail = (
         f"{storage_mode}, load_mode={load_mode}, index_mode={index_mode}, "
         f"line_count_known={line_count_known}"
@@ -246,7 +246,8 @@ def build_session_diagnostics_lines(
         f"{int(cap_lines):,} ({cap_profile}), cap_hit={cap_hit}, sample_cap={sample_cap:,}"
     )
     lines.append(
-        f"G-code retained lines/window: {retained_lines:,}/{viewer_lines:,}"
+        "G-code retained lines/headless state estimate: "
+        f"{retained_lines:,}/{live_state_lines:,}"
     )
     source_offsets = int(getattr(app, "_gcode_source_offset_count", 0) or 0)
     source_offset_type = str(

@@ -180,6 +180,12 @@ def _init_behavior_preferences(
     )
     app.reconnect_on_open = tk.BooleanVar(value=setting("reconnect_on_open", True))
     app.fullscreen_on_startup = tk.BooleanVar(value=setting("fullscreen_on_startup", True))
+    app.app_settings_preload_enabled = tk.BooleanVar(
+        value=setting(
+            "app_settings_preload_enabled",
+            default_settings.get("app_settings_preload_enabled", False),
+        )
+    )
     app.zeroing_persistent = tk.BooleanVar(value=setting("zeroing_persistent", False))
     app.keyboard_bindings_enabled = tk.BooleanVar(
         value=setting("keyboard_bindings_enabled", True)
@@ -539,7 +545,6 @@ def _init_visibility_preferences(app, *, setting, app_version: str, tk) -> None:
     app.show_quick_vac_button = tk.BooleanVar(value=setting("show_quick_vac_button", True))
     app.show_quick_light_button = tk.BooleanVar(value=setting("show_quick_light_button", True))
     app.show_quick_release_button = tk.BooleanVar(value=setting("show_quick_release_button", True))
-    app.current_line_mode = tk.StringVar(value=setting("current_line_mode", "machine"))
 
 
 def init_basic_preferences(app, app_version: str, module):

@@ -186,7 +186,8 @@ def _touchplate_probe_job_setup(executor, *, setup_mode: str, z_max_travel: floa
     _set_state(executor, "XYZ_PLATE_PROBE_DWELL_S", max(0.0, float(xyz_settings.dwell_s)))
     executor._macro_send("G90")
     executor._macro_send("G21")
-    executor._macro_send("G92 X0 Y0")
+    if str(setup_mode) == "xyz":
+        executor._macro_send("G92 X0 Y0")
     _wait_for_fresh_status(executor)
     current_mz = float(_get_var(executor, "mz", 0.0))
     _set_state(executor, "TOUCHPLATE_CURRENT_MZ", current_mz)

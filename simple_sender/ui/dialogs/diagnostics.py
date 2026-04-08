@@ -272,7 +272,7 @@ def _effective_line_cache_cap_lines(app: Any) -> tuple[int, str]:
     return int(GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT), "default"
 
 
-def _viewer_window_line_count(gview: Any) -> int:
+def _headless_live_state_line_estimate(gview: Any) -> int:
     if gview is None:
         return 0
     try:
@@ -469,9 +469,9 @@ def _runtime_metrics(app: Any) -> dict[str, Any]:
     gview = getattr(app, "gview", None)
     if gview is not None:
         try:
-            metrics["viewer_window_line_count"] = _viewer_window_line_count(gview)
+            metrics["headless_live_state_line_estimate"] = _headless_live_state_line_estimate(gview)
         except Exception:
-            metrics["viewer_window_line_count"] = 0
+            metrics["headless_live_state_line_estimate"] = 0
     metrics["live_gcode_past_count"] = int(
         getattr(app, "_live_gcode_past_count", 0) or 0
     )
@@ -1424,7 +1424,7 @@ def _format_runtime_metrics(
     live_last_idx = int(metrics.get("live_gcode_last_acked_index", -1) or -1)
     live_last_offset = int(metrics.get("live_gcode_last_acked_byte_offset", 0) or 0)
     lines.append(
-        "- Live G-code window: "
+        "- Headless live G-code state: "
         f"past={live_past}, current={live_current}, next={live_next}, "
         f"pending_depth={live_pending}, last_acked_index={live_last_idx}, "
         f"last_acked_byte_offset={live_last_offset:,}"
@@ -1542,12 +1542,14 @@ def _format_runtime_metrics(
             detail += f", sample_cap={int(sample_cap):,}"
         lines.append("- G-code line-cache policy: " + detail)
     retained = metrics.get("gcode_retained_line_count")
-    viewer_window = metrics.get("viewer_window_line_count")
+    live_state_estimate = metrics.get("headless_live_state_line_estimate")
     retention_parts: list[str] = []
     if retained is not None:
         retention_parts.append(f"retained_lines={int(retained):,}")
-    if viewer_window is not None:
-        retention_parts.append(f"viewer_window_lines={int(viewer_window):,}")
+    if live_state_estimate is not None:
+        retention_parts.append(
+            f"headless_live_state_lines_est={int(live_state_estimate):,}"
+        )
     if retention_parts:
         lines.append("- G-code retained footprint: " + ", ".join(retention_parts))
     source_offsets = metrics.get("gcode_source_offset_count")
@@ -1880,7 +1882,7 @@ def _build_session_diagnostics_lines(app: Any) -> list[str]:
             format_kasa_status_line=format_kasa_status_line,
             log_suppressed=_log_suppressed,
             effective_line_cache_cap_lines=_effective_line_cache_cap_lines,
-            viewer_window_line_count=_viewer_window_line_count,
+            headless_live_state_line_estimate=_headless_live_state_line_estimate,
             format_validation_summary=_format_validation_summary,
             runtime_metrics=_runtime_metrics,
             format_runtime_metrics=_format_runtime_metrics,

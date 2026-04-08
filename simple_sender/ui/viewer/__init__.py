@@ -20,6 +20,6 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""G-code viewer helpers."""
+"""Headless G-code state helpers."""
 
 __all__: list[str] = []

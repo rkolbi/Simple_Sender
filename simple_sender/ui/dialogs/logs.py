@@ -29,11 +29,29 @@ from simple_sender.ui.log_viewer import LogViewer
 logger = logging.getLogger(__name__)
 
 
+def _resolve_logs_parent(app):
+    popup_windows = getattr(app, "_lower_popup_windows", None)
+    if isinstance(popup_windows, dict):
+        popup = popup_windows.get("app_settings")
+        if popup is not None:
+            try:
+                if bool(popup.winfo_exists()) and bool(popup.winfo_viewable()):
+                    return popup
+            except Exception as exc:
+                logger.debug("Failed checking App Settings popup ownership for logs dialog: %s", exc, exc_info=exc)
+    return app
+
+
 def show_logs_dialog(app) -> None:
+    parent = _resolve_logs_parent(app)
     existing = getattr(app, "_logs_window", None)
     if existing is not None:
         try:
             if existing.winfo_exists():
+                try:
+                    existing.transient(parent)
+                except Exception as exc:
+                    logger.debug("Failed updating logs window transient parent: %s", exc, exc_info=exc)
                 existing.lift()
                 existing.focus_force()
                 return
@@ -45,7 +63,7 @@ def show_logs_dialog(app) -> None:
     app._logs_window = win
     win.title("Application Logs")
     win.minsize(760, 480)
-    win.transient(app)
+    win.transient(parent)
 
     def _on_close():
         app._logs_window = None
@@ -55,4 +73,9 @@ def show_logs_dialog(app) -> None:
     viewer.pack(fill="both", expand=True)
 
     win.protocol("WM_DELETE_WINDOW", _on_close)
-    center_window(win, app)
+    center_window(win, parent)
+    try:
+        win.lift()
+        win.focus_force()
+    except Exception as exc:
+        logger.debug("Failed focusing logs window after creation: %s", exc, exc_info=exc)

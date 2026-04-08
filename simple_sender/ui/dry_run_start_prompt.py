@@ -26,7 +26,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from simple_sender.services.job_service import DryRunStartDecision
-from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ def confirm_dry_run_start_mode(
         dialog.transient(app)
         dialog.resizable(False, False)
         dialog.configure(padx=16, pady=12)
+        apply_toplevel_theme(dialog, app)
     except Exception as exc:
         _log_suppressed("Failed creating Dry Run confirmation dialog; using fallback", exc)
         return _fallback_prompt(

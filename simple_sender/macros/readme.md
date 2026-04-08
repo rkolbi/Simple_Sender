@@ -67,6 +67,6 @@ Rules:
 - Macro blocked: streaming/alarm/disconnected states prevent execution by design.
 - Macro marked `[invalid]`: the file does not match the supported 4-line header plus body format; repair the file structure and try again.
 - Run warns `Job Setup Not Completed`: run the built-in `Job Setup` workflow to repopulate the current-format tool reference for the current session, then retry.
-- Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the current Job Setup reference state is still valid.
+- Streamed `TC:` did not trigger tool-change flow: ensure the line starts with `TC:` and the current Job Setup reference state is still valid. The built-in tool-change flow parks at safe Z over work `X0/Y0` before the posted job repositions.
 - Stale coordinates: insert `%update` before using `wx/wy/wz`.
 - Unexpected units/modal state: add `STATE_RETURN` or explicit restore lines.

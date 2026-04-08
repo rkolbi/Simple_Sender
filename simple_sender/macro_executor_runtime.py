@@ -59,6 +59,32 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
 
+    def _capture_builtin_workflow_snapshot(self, workflow_name: str) -> bool:
+        attempts = (
+            (1.0, 1.0, False),
+            (1.5, 1.5, True),
+        )
+        for modal_timeout_s, status_timeout_s, is_retry in attempts:
+            if is_retry:
+                if self._alarm_event.is_set() or getattr(self.app, "_closing", False):
+                    break
+                if not self.grbl.is_connected():
+                    break
+                self.ui_q.put(
+                    ("log", f"[workflow] {workflow_name} startup snapshot was delayed; retrying once."),
+                )
+                self._workflow_audit("Startup snapshot delayed; retrying once.", force=True)
+            with self._macro_vars_lock:
+                modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
+            self._macro_send("$G")
+            modal_ok = self._macro_wait_for_modal(modal_seq, timeout_s=float(modal_timeout_s))
+            status_ok = self._macro_wait_for_status(timeout_s=float(status_timeout_s))
+            if modal_ok and status_ok:
+                if is_retry:
+                    self._workflow_audit("Startup snapshot recovered on retry.", force=True)
+                return True
+        return False
+
     def is_macro_active(self) -> bool:
         try:
             return bool(getattr(self._macro_lock, "locked", lambda: False)())
@@ -473,12 +499,7 @@ class MacroRunnerMixin(MacroExecutorState):
                 self._reset_prompt_state()
                 self._macro_state_restored = False
                 self._macro_saved_state = None
-                with self._macro_vars_lock:
-                    modal_seq = int(self._macro_vars.get("_modal_seq", 0) or 0)
-                self._macro_send("$G")
-                modal_ok = self._macro_wait_for_modal(modal_seq)
-                status_ok = self._macro_wait_for_status()
-                if not modal_ok or not status_ok:
+                if not self._capture_builtin_workflow_snapshot(workflow_name):
                     aborted = True
                     self.ui_q.put(("log", "[workflow] Snapshot failed; workflow aborted."))
                     self._workflow_audit("Snapshot failed; aborting.", force=True)

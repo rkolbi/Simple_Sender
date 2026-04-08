@@ -44,7 +44,6 @@ from .sections import (
     build_safety_section,
     build_status_polling_section,
     build_theme_section,
-    build_viewer_section,
     build_zeroing_section,
 )
 from simple_sender.utils.task_timing import record_task_timing
@@ -781,7 +780,7 @@ def build_app_settings_panel(app, parent):
         lambda *_args: _on_app_settings_filter_change(app, debounce=True),
     )
 
-    app.app_settings_sticky_var = tk.StringVar(value="Interface & Viewer")
+    app.app_settings_sticky_var = tk.StringVar(value="Interface")
     app.app_settings_sticky_label = ttk.Label(
         sticky_frame,
         textvariable=app.app_settings_sticky_var,
@@ -922,8 +921,8 @@ def build_app_settings_panel(app, parent):
         next_row = int(entry["next_row"])
 
     _start_category(
-        "Interface & Viewer",
-        "Startup, UI theme/scale, and viewer behavior.",
+        "Interface",
+        "Startup and UI theme/scale behavior.",
     )
     _add_section(
         "Interface",
@@ -946,14 +945,6 @@ def build_app_settings_panel(app, parent):
         description="Theme, UI scale, scrollbar width, tooltip behavior, and touch keypad preferences.",
         keywords=("appearance", "touch", "ui scale", "tooltips"),
     )
-    _add_section(
-        "Viewer",
-        build_viewer_section,
-        mode="basic",
-        description="Current-line highlight behavior in the G-code viewer.",
-        keywords=("gcode viewer", "line highlight"),
-    )
-
     _start_category(
         "Controls & Inputs",
         "Jogging, zeroing behavior, probing/setup workflows, keyboard/joystick shortcuts, Kasa, and macros.",

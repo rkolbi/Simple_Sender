@@ -166,7 +166,10 @@ def _clear_loaded_job_after_restore_failure(app) -> None:
         try:
             clear_view()
         except Exception as exc:
-            _log_suppressed("Failed clearing G-code viewer after reconnect restore failure", exc)
+            _log_suppressed(
+                "Failed clearing headless G-code state after reconnect restore failure",
+                exc,
+            )
     refresh_file_info = getattr(app, "_refresh_file_info_tab", None)
     if callable(refresh_file_info):
         try:
@@ -228,7 +231,7 @@ def _schedule_reconnect_resume(app, *, start_index: int) -> None:
         pass
 
     def worker() -> None:
-        preamble, _has_g92 = app._build_resume_preamble(app._last_gcode_lines, int(start_index))
+        preamble, has_g92 = app._build_resume_preamble(app._last_gcode_lines, int(start_index))
 
         def apply_resume() -> None:
             if bool(getattr(app, "_closing", False)):
@@ -238,7 +241,7 @@ def _schedule_reconnect_resume(app, *, start_index: int) -> None:
                     return
             except Exception:
                 return
-            app._resume_from_line(int(start_index), preamble)
+            app._resume_from_line(int(start_index), preamble, has_g92=bool(has_g92))
 
         _post_ui(app, apply_resume)
 

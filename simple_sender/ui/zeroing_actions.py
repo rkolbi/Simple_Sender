@@ -22,6 +22,7 @@
 
 import logging
 import time
+from tkinter import messagebox
 
 from simple_sender.ui.dro import format_dro_value
 from simple_sender.ui.widgets_tooltips import apply_tooltip
@@ -214,6 +215,27 @@ def zeroing_gcode(app, axes: str) -> str:
     return f"G92 {words}".strip()
 
 
+def _confirm_zero_action(app, axes: str, command: str) -> bool:
+    axis_order = [axis for axis in "XYZ" if axis in str(axes or "").upper()]
+    if not axis_order or not str(command or "").strip():
+        return False
+    axis_label = ", ".join(axis_order)
+    if len(axis_order) == 1:
+        body = f"Set work {axis_label} to zero?\n\nThis will send:\n{command}"
+    else:
+        body = f"Set work {axis_label} to zero?\n\nThis will send:\n{command}"
+    try:
+        return bool(
+            messagebox.askyesno(
+                f"Confirm Zero {axis_label}",
+                body,
+                parent=app,
+            )
+        )
+    except TypeError:
+        return bool(messagebox.askyesno(f"Confirm Zero {axis_label}", body))
+
+
 def refresh_zeroing_ui(app):
     if not all(hasattr(app, attr) for attr in ("btn_zero_x", "btn_zero_y", "btn_zero_z", "btn_zero_all")):
         return
@@ -251,6 +273,8 @@ def zero_x(app):
         return
     cmd = zeroing_gcode(app, "X")
     if cmd:
+        if not _confirm_zero_action(app, "X", cmd):
+            return
         if not _send_zero_command(app, cmd):
             return
         _clear_zero_all_pending_latch(app)
@@ -264,6 +288,8 @@ def zero_y(app):
         return
     cmd = zeroing_gcode(app, "Y")
     if cmd:
+        if not _confirm_zero_action(app, "Y", cmd):
+            return
         if not _send_zero_command(app, cmd):
             return
         _clear_zero_all_pending_latch(app)
@@ -277,6 +303,8 @@ def zero_z(app):
         return
     cmd = zeroing_gcode(app, "Z")
     if cmd:
+        if not _confirm_zero_action(app, "Z", cmd):
+            return
         if not _send_zero_command(app, cmd):
             return
         _clear_zero_all_pending_latch(app)
@@ -290,6 +318,8 @@ def zero_all(app):
         return
     cmd = zeroing_gcode(app, "XYZ")
     if cmd:
+        if not _confirm_zero_action(app, "XYZ", cmd):
+            return
         if not _send_zero_command(app, cmd):
             return
         _set_zero_all_pending_latch(app)

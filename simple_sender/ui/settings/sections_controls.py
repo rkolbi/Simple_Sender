@@ -25,7 +25,6 @@ import tkinter as tk
 from tkinter import ttk
 
 from simple_sender.utils.constants import (
-    CURRENT_LINE_CHOICES,
     JOG_DRO_SMOOTHING_ALL_JOG,
     JOG_DRO_SMOOTHING_OFF,
     JOG_DRO_SMOOTHING_UI_JOG_ONLY,
@@ -36,6 +35,20 @@ from simple_sender.ui.widgets_common import set_kb_id
 
 
 _KASA_OUTLET_OPTIONS = ("Outlet 1", "Outlet 2")
+_ALIGNED_SETTINGS_LABEL_WIDTH_CHARS = 36
+_ALIGNED_SETTINGS_ENTRY_WIDTH = 12
+_ALIGNED_SETTINGS_PAIR_GAP_PX = 24
+_ALIGNED_SETTINGS_SECTION_PADDING = 8
+_ALIGNED_SETTINGS_NESTED_CONTENT_OFFSET_PX = 10
+
+
+def _configure_aligned_numeric_columns(frame) -> None:
+    frame.grid_columnconfigure(2, minsize=_ALIGNED_SETTINGS_PAIR_GAP_PX)
+    frame.grid_columnconfigure(5, weight=1)
+
+
+def _aligned_setting_label(frame, *, text: str):
+    return ttk.Label(frame, text=text, width=_ALIGNED_SETTINGS_LABEL_WIDTH_CHARS, anchor="w")
 
 
 def _add_numeric_setting(
@@ -51,17 +64,17 @@ def _add_numeric_setting(
     suffix_text: str | None = None,
 ) -> ttk.Entry:
     base_col = int(pair_index) * 3
-    ttk.Label(frame, text=label_text).grid(
+    _aligned_setting_label(frame, text=label_text).grid(
         row=row_index,
         column=base_col,
         sticky="w",
-        padx=(0, 10 if pair_index == 0 else 0),
+        padx=(0, 8),
         pady=4,
     )
     entry = ttk.Entry(
         frame,
         textvariable=var,
-        width=12,
+        width=_ALIGNED_SETTINGS_ENTRY_WIDTH,
     )
     entry.grid(row=row_index, column=base_col + 1, sticky="w", pady=4)
     setattr(app, attr_name, entry)
@@ -79,8 +92,7 @@ def _add_numeric_setting(
 
 
 def _build_xyz_plate_settings(app, frame: ttk.LabelFrame) -> None:
-    frame.grid_columnconfigure(1, weight=1)
-    frame.grid_columnconfigure(4, weight=1)
+    _configure_aligned_numeric_columns(frame)
     _add_numeric_setting(
         app,
         frame,
@@ -194,8 +206,7 @@ def _build_xyz_plate_settings(app, frame: ttk.LabelFrame) -> None:
 
 
 def _build_bit_setter_settings(app, frame: ttk.LabelFrame) -> None:
-    frame.grid_columnconfigure(1, weight=1)
-    frame.grid_columnconfigure(4, weight=1)
+    _configure_aligned_numeric_columns(frame)
     _add_numeric_setting(
         app,
         frame,
@@ -249,14 +260,20 @@ def _build_bit_setter_settings(app, frame: ttk.LabelFrame) -> None:
 
 
 def build_probing_setup_section(app, parent: ttk.Frame, row: int) -> int:
-    probing_frame = ttk.LabelFrame(parent, text="Probing & Setup", padding=8)
+    probing_frame = ttk.LabelFrame(parent, text="Probing & Setup", padding=_ALIGNED_SETTINGS_SECTION_PADDING)
     probing_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-    probing_frame.grid_columnconfigure(1, weight=1)
-    probing_frame.grid_columnconfigure(4, weight=1)
+    _configure_aligned_numeric_columns(probing_frame)
+
+    probe_start_frame = ttk.Frame(
+        probing_frame,
+        padding=(_ALIGNED_SETTINGS_NESTED_CONTENT_OFFSET_PX, 0, 0, 0),
+    )
+    probe_start_frame.grid(row=0, column=0, columnspan=6, sticky="w")
+    _configure_aligned_numeric_columns(probe_start_frame)
 
     _add_numeric_setting(
         app,
-        probing_frame,
+        probe_start_frame,
         row_index=0,
         pair_index=0,
         label_text="Probe Z start (machine, mm)",
@@ -266,7 +283,7 @@ def build_probing_setup_section(app, parent: ttk.Frame, row: int) -> int:
     )
     _add_numeric_setting(
         app,
-        probing_frame,
+        probe_start_frame,
         row_index=0,
         pair_index=1,
         label_text="Probe safety margin (mm)",
@@ -275,7 +292,11 @@ def build_probing_setup_section(app, parent: ttk.Frame, row: int) -> int:
         tooltip_text="Subtracted from the $132-based probe travel calculation used by Job Setup and Tool Change.",
     )
 
-    app.xyz_plate_frame = ttk.LabelFrame(probing_frame, text="XYZ Plate", padding=6)
+    app.xyz_plate_frame = ttk.LabelFrame(
+        probing_frame,
+        text="XYZ Plate",
+        padding=_ALIGNED_SETTINGS_SECTION_PADDING,
+    )
     app.xyz_plate_frame.grid(
         row=1,
         column=0,
@@ -285,7 +306,11 @@ def build_probing_setup_section(app, parent: ttk.Frame, row: int) -> int:
     )
     _build_xyz_plate_settings(app, app.xyz_plate_frame)
 
-    app.bit_setter_frame = ttk.LabelFrame(probing_frame, text="Bit Setter", padding=6)
+    app.bit_setter_frame = ttk.LabelFrame(
+        probing_frame,
+        text="Bit Setter",
+        padding=_ALIGNED_SETTINGS_SECTION_PADDING,
+    )
     app.bit_setter_frame.grid(
         row=2,
         column=0,
@@ -313,7 +338,9 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
         app.macros_allow_python_check,
         "Disable to allow only plain G-code lines in macros (no scripting or expressions).",
     )
-    ttk.Label(macro_frame, text="Line timeout (sec)").grid(row=1, column=0, sticky="w", pady=4)
+    _aligned_setting_label(macro_frame, text="Line timeout (sec)").grid(
+        row=1, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.macro_line_timeout_entry = ttk.Entry(
         macro_frame,
         textvariable=app.macro_line_timeout_sec,
@@ -321,13 +348,17 @@ def build_macros_section(app, parent: ttk.Frame, row: int) -> int:
     )
     app.macro_line_timeout_entry.grid(row=1, column=1, sticky="w", pady=4)
     attach_numeric_keypad(app.macro_line_timeout_entry, allow_decimal=True)
-    ttk.Label(macro_frame, text="0 disables").grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
+    ttk.Label(macro_frame, text="0 disables").grid(
+        row=1, column=2, sticky="w", padx=(8, 0), pady=4
+    )
     apply_tooltip(
         app.macro_line_timeout_entry,
         "Maximum allowed time per macro line in seconds. Set 0 to disable.",
     )
 
-    ttk.Label(macro_frame, text="Total timeout (sec)").grid(row=2, column=0, sticky="w", pady=4)
+    _aligned_setting_label(macro_frame, text="Total timeout (sec)").grid(
+        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+    )
     app.macro_total_timeout_entry = ttk.Entry(
         macro_frame,
         textvariable=app.macro_total_timeout_sec,
@@ -406,7 +437,7 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     jog_frame = ttk.LabelFrame(parent, text="Jogging", padding=8)
     jog_frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
     jog_frame.grid_columnconfigure(1, weight=1)
-    ttk.Label(jog_frame, text="Default jog feed (X/Y)").grid(
+    _aligned_setting_label(jog_frame, text="Default jog feed (X/Y)").grid(
         row=0, column=0, sticky="w", padx=(0, 10), pady=4
     )
     jog_xy_row = ttk.Frame(jog_frame)
@@ -419,7 +450,7 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
     ttk.Label(jog_xy_row, text="Units: mm/min (in/min when in inches mode)").pack(
         side="left", padx=(8, 0)
     )
-    ttk.Label(jog_frame, text="Default jog feed (Z)").grid(
+    _aligned_setting_label(jog_frame, text="Default jog feed (Z)").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.jog_feed_z_entry = ttk.Entry(jog_frame, textvariable=app.jog_feed_z, width=12)
@@ -457,7 +488,7 @@ def build_jogging_section(app, parent: ttk.Frame, row: int) -> int:
         wraplength=560,
         justify="left",
     ).grid(row=3, column=1, columnspan=2, sticky="w", pady=(4, 0))
-    ttk.Label(jog_frame, text="DRO jog smoothing (interpolation)").grid(
+    _aligned_setting_label(jog_frame, text="DRO jog smoothing (interpolation)").grid(
         row=4, column=0, sticky="w", padx=(0, 10), pady=(8, 4)
     )
     if not hasattr(app, "jog_dro_smoothing_mode"):
@@ -896,37 +927,6 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
 
     app._on_kasa_mapping_change(None)
     app._refresh_kasa_controls_state()
-    return row + 1
-
-
-def build_viewer_section(app, parent: ttk.Frame, row: int) -> int:
-    view_frame = ttk.LabelFrame(parent, text="Viewer", padding=8)
-    view_frame.grid(row=row, column=0, sticky="ew")
-    view_frame.grid_columnconfigure(1, weight=1)
-    ttk.Label(view_frame, text="Current line highlight").grid(
-        row=0, column=0, sticky="w", padx=(0, 10), pady=4
-    )
-    app.current_line_combo = ttk.Combobox(
-        view_frame,
-        state="readonly",
-        values=[label for label, _ in CURRENT_LINE_CHOICES],
-        width=32,
-    )
-    app.current_line_combo.grid(row=0, column=1, sticky="w", pady=4)
-    app.current_line_combo.bind("<<ComboboxSelected>>", app._on_current_line_mode_change)
-    apply_tooltip(app.current_line_combo, "Select which line is highlighted as current.")
-    app._sync_current_line_mode_combo()
-    app.current_line_desc = ttk.Label(
-        view_frame,
-        text=(
-            "Machine uses GRBL status/planner data to approximate the currently "
-            "executing line. Processing highlights the next line after the last ack. "
-            "Sent highlights the most recently queued line."
-        ),
-        wraplength=560,
-        justify="left",
-    )
-    app.current_line_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
     return row + 1
 
 

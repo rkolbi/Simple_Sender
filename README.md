@@ -17,7 +17,7 @@ Simple Sender was built around a clear set of practical goals, and those same go
 - Present a simple, direct, workflow-oriented interface without unnecessary bells and whistles.
 - Support automatic control of Kasa-connected accessories such as a shop vacuum and light.
 - Support reliable multi-tool jobs with tool reference and offset handling that compensates for different tool heights during tool changes.
-- Provide a guided tool-change workflow that helps the operator change tools correctly and then automatically resumes the job.
+- Provide a guided tool-change workflow that helps the operator change tools correctly and, for streamed `TC:` directives, resumes the paused stream after the workflow completes.
 - Recognize custom sender directives such as `VACUUM_ON`, `VACUUM_OFF`, and `TC:<tool name>`, with included VCarve Pro 12.5 post processors in both inch and mm variants.
 - Include support for keyboard shortcuts and joystick bindings for faster machine control.
 - Include Job Setup safeguards to help prevent starting a job before setup is complete.
@@ -275,7 +275,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
    - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. Linux dialogs default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** is set to another valid folder; invalid paths fall back safely. Loaded jobs remain read-only; comments/% lines are stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected). After a job loads, the same button flips to **Auto-Level (Experimental)** for quick access; **Clear Job** returns it to **Read Job**.
-   - Check the Live G-code window plus the job dimensions/estimate block for bounds sanity.
+   - Check the job dimensions/estimate block for bounds sanity before running.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate or a Machine Profile in App Settings and adjust the estimate factor.
    - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
    - Use **Resume From... (Experimental)** to start at a specific line with modal re-sync if you need to continue a job. When Dry Run is enabled, Resume now prompts before any resume-side effects are applied.
@@ -288,7 +288,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Home if required; set work offsets (Zero buttons use G92 by default). Enable persistent zeroing in App Settings > Zeroing to use G10 L20 offsets.
    - Run the built-in **Job Setup** workflow for this machine session and confirm the tool reference label is populated before starting production cuts.
    - Position above stock; verify spindle control if using M3/M5 (or disable spindle in code for dry run).
-   - For dry runs, enable **Dry run: disable spindle/coolant/tool changes while streaming** in **App Settings > Safety**.
+   - For dry runs, enable **Dry run: strip spindle/coolant/M6/S/T from streamed G-code** in **App Settings > Safety**. Sender-side `TC:<tool name>` directives still run the built-in tool-change flow.
    - Use the always-visible right-side controls to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
@@ -350,7 +350,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   ![-](pics/screenshot-08.png)
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Viewer (current-line highlight), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, optional App Settings popup preloading on next launch, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
   
   ![](pics/screenshot-09.png)
   
@@ -390,23 +390,23 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both Run and Resume paths require an explicit operator choice before stream start/resume side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded viewer/state retention. Read-only; Clear unloads. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
+- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads. After a job loads, the same toolbar button becomes **Auto-Level (Experimental)**; **Clear Job** returns it to **Read Job**.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
 - **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in Job Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
-- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. `TC:` lines are marked handled and never sent to GRBL.
+- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
-- **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (viewer window + sampled metadata).
+- **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (live window + sampled metadata).
 - **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
 - **Lean runtime model:** The sender does not render Top View/Spatial geometry during load; UI remains focused on readiness, dimensions, and estimate output.
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit. Auto-level output is post-processed to meet the 80-byte limit before reload.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Resume From... (Experimental):** Resume at a line with modal re-sync (units, distance, plane, arc mode, feed mode, WCS, spindle/coolant, feed). Warns if G92 offsets are seen before the target line. If a stream error occurred, the dialog defaults to that line. Preview generation is debounced and computed on a background worker, and may briefly show `Modal re-sync: calculating...` while updating. If Dry Run is enabled, Resume prompts before any resume-side effects and supports continue-in-dry-run, switch-to-normal-and-resume, or cancel.
-- **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; Live G-code window updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
+- **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; completion clamps to `100%` when stream state reaches `done`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
 
@@ -643,7 +643,7 @@ Use this checklist when creating job-critical macros:
 | Unexpected units/modal behavior after macro | Macro changed units/distance/WCS and did not restore expected state. | Add `STATE_RETURN` (or explicit restore commands) near macro end. |
 
 ## VCarve Pro Post-Processors
-VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root (with a reference copy in `ref/VCarve-PP/`) to produce jobs that plug directly into Simple Sender's semi-automatic workflow.
+VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root to produce jobs that plug directly into Simple Sender's semi-automatic workflow.
 
 ### Included files
 | File | Purpose |
@@ -667,7 +667,7 @@ VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root (with 
 
 ## Estimation
 - Estimates bounds, feed time, and rapid time (uses $110-112 when available, then profile/fallback rates).
-- The G-code panel always shows:
+- The loaded job always reports:
   - `Estimated Job Time: HH:MM [CONFIDENT|ROUGH]`
   - `Job Dimensions: X,Y,Z mm / X,Y,Z in [CONFIDENT|ROUGH]`
 - Confidence is derived from available machine settings and scan coverage.
@@ -703,7 +703,7 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 8) Run the leveled job, or use **Save Leveled** to keep a copy in a new location.
 
 ### Quick checklist
-- Job loaded and dimensions/estimate look correct in the G-code panel.
+- Job loaded and dimensions/estimate look correct.
 - Probe wired and tested; alarms cleared; GRBL status ready.
 - Z0 set on the surface; Safe Z clears clamps/fixtures.
 - Probe depth/feed set conservatively for your material.
@@ -770,7 +770,7 @@ Use the right-side controls' **Spoilboard** button to generate a surfacing progr
 
 ### Post-generate options
 After generation, a blocking modal appears:
-- **Read G-code**: loads generated code directly into the viewer using the normal load pipeline (no file write).
+- **Read G-code**: loads generated code directly as the active job using the normal load pipeline (no file write).
 - **Save G-code**: opens Save dialog with default filename `surfacing-YYYYMMDD-HHMMSS.nc`, default folder set to the app log directory, and writes to disk without auto-loading.
 - **Cancel**: closes the modal and discards the generated program.
 
@@ -889,7 +889,7 @@ If you prefer guided probing, the built-in workflow set includes touch-plate and
 - Configurable (up to 3-key sequences); conflicts flagged; ignored while typing; toggle from App Settings or the status bar. Training Wheels confirmations still apply.
 
 ## Joystick Bindings
-- Pygame (the same pygame used by `ref/test.py`) must be installed before the app can talk to USB sticks; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
+- Pygame must be installed before the app can talk to USB joystick devices; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
 - App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected. The same frame includes a "Stop joystick hold when app loses focus" safety toggle.
 - Optional safety hold: enable **Require safety hold for joystick actions**, then click **Set Safety Button** to capture a hold-to-enable button; **Clear Safety Button** removes it and the status line shows the current binding.
 - Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
@@ -901,7 +901,7 @@ If you prefer guided probing, the built-in workflow set includes touch-plate and
 - Joystick button release for jog-bound actions (`jog_*` bindings) now actively sends jog-cancel + pending-jog purge even if a backend release event is dropped.
 - If USB joystick communication drops during a hold jog (unplug/hot-plug loss, backend failure, or polling exception), the sender automatically issues the same jog stop/cancel path.
 - The app now prevents a single joystick button/axis/hat from being assigned to more than one UI control - binding it again to another action automatically clears the prior assignment so there's no ambiguity in the list.
-- Use `python ref/test.py` when you just want to confirm that pygame detects the controller before using the GUI.
+- If you only want to confirm the dependency before using the GUI, run `python -c "import pygame; print(pygame.version.ver)"`.
 
 ## Kasa Plug (Linux)
 Use this when you want job lifecycle events to control smart outlets, such as a shop vacuum and spindle light, from inside the sender.
@@ -1013,7 +1013,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
 - `simple_sender/application_*.py`: focused app helper modules (actions, controls, lifecycle, layout, gcode, status, UI events/toggles, input bindings, state UI) imported and installed onto `App`.
-- `simple_sender/ui/`: feature-focused UI modules (tabs, settings, input bindings, dialogs).
+- `simple_sender/ui/`: feature-focused UI modules (layout/popup routing, settings, input bindings, dialogs).
 - `simple_sender/ui/main_tabs.py`: lower split-layout construction plus popup routing/reuse for the current lower UI.
 - `simple_sender/ui/file_info_tab.py`: scrollable read-only Job Info renderer (SSMETA + quick-scan metrics).
 - `simple_sender/ui/viewer/gcode_viewer.py`: headless live-window/job-view state holder plus the run-reset helper used by the current runtime.
@@ -1033,8 +1033,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
 
 ## Performance Profiling
-Local-only profiling tools live in `tools/profile_performance.py`, `tools/memory_profile.py`, and `tools/perf_microbench.py`, with baselines recorded in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
-Latest local baseline refresh is documented in `ref/perf_baselines.md` (2026-03-02).
+Local-only profiling tools live in `tools/profile_performance.py`, `tools/memory_profile.py`, and `tools/perf_microbench.py`, with manual baseline notes kept in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
 
 ```powershell
 # Streaming scan timings (large files)
@@ -1085,7 +1084,7 @@ python tools/perf_microbench.py
 ## Performance Notes
 - Python 3.11+ is the supported baseline; the project assumptions, tooling, and current typing gates are aligned to that version.
 - Raspberry Pi and other low-power systems benefit from leaving `Performance mode` enabled, especially while streaming or browsing large files.
-- Large G-code files are supported, but faster storage and more RAM reduce temp-file churn, background scan latency, and viewer refresh pressure.
+- Large G-code files are supported, but faster storage and more RAM reduce temp-file churn, background scan latency, and live-window refresh pressure.
 - Practical RAM guidance: lighter jobs can run on 2 GB-class systems, but 4 GB or more is the safer baseline if you routinely open very large files, keep diagnostics on, or run other services on the same machine.
 - Streaming and fast-load safeguards intentionally trade some immediate detail for responsiveness on ultra-large jobs; use the diagnostics and profiling tools when tuning those thresholds.
 - Runtime profiling hooks and diagnostics exports are the preferred way to confirm whether a machine is CPU-bound, memory-bound, or UI-queue bound before changing settings.
@@ -1150,7 +1149,7 @@ python tools/perf_microbench.py
 - Large-file estimate path now uses lightweight parsing for stats (no retained segment/move arrays), reducing memory pressure and UI contention on Pi-class hardware.
 
 ## v3.0 Release Notes
-1. **Simple Sender v3.0** is the current stable release baseline. It includes recent real-machine validation of Job Setup, Tool Change, and fixed-sensor probing, plus the cleanup and hardening completed across the v3.0 cycle.
+1. **Simple Sender v3.0** is the current stable release baseline. It includes the cleanup and hardening completed across the v3.0 cycle, and the runtime/docs now describe the shipped workflow more precisely.
 2. Settings path resolution now comes from the shared `get_settings_path()` helper in `simple_sender/utils/config.py`; the supported storage location is the per-user `simple-sender-data` app-data directory (or `SIMPLE_SENDER_CONFIG_DIR` when you intentionally override it).
 3. `MacroExecutor.notify_alarm` lives in `simple_sender/macro_executor_runtime.py` and still sets `_alarm_event` while logging the alarm snippet so macros unblock and the log shows which line triggered the alarm.
 4. Auto-reconnect uses `(self.settings.get("last_port") or "").strip()` in `simple_sender/application.py` and `simple_sender/ui/app_commands.py` to guard against blank or non-string-safe saved port values.
@@ -1247,7 +1246,7 @@ Use the console or macros whenever you need a command that is not exposed via bu
 - $120/$121/$122 Max accel, mm/sec^2 (X/Y/Z)
 - $130/$131/$132 Max travel, mm (X/Y/Z)
 
-Use the Settings tab to edit; pending edits highlight in yellow until sent. Numeric validation and broad ranges are enforced; adjust as needed for your machine. 
+Use the GRBL Settings popup to edit; pending edits highlight in yellow until sent. Numeric validation and broad ranges are enforced; adjust as needed for your machine. 
 
 
 
@@ -1257,10 +1256,11 @@ The main panel shows the 5 protected built-in workflow actions first, then only 
 
 | Action | Purpose | When to use | Code notes |
 | --- | --- | --- | --- |
-| Built-in: Park at Work | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Implemented directly in the built-in workflow runner. |
+| Built-in: Home | Runs `$H` from the protected workflow row. | Homing the machine before setup, after alarms, or after controller resets when homing is required. | Implemented directly in code and always available in the protected workflow row. |
 | Built-in: Park at Bit Setter | Moves to configured fixed sensor coordinates for cleaning/inspection/staging. | Parking over the fixed sensor outside active cutting. | Implemented directly in code and uses the App Settings > Probing & Setup bit-setter coordinates. |
 | Built-in: Job Setup | Guided setup chooser that runs the `XYZ Plate`, `Z Plate`, or `Manual` flow, then captures reference tool height. | Operator-friendly setup before job start, and after reconnect/reset/new controller session. | Implemented directly in code, uses the shared XYZ Plate / Bit Setter settings, and runs with built-in unlimited-wait workflow handling. |
-| Built-in: Tool Change | Re-probes after a tool swap and reapplies the stored reference tool height; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Implemented directly in code, uses the shared fixed-sensor settings, and runs with built-in unlimited-wait workflow handling. |
+| Built-in: Tool Change | Re-probes after a tool swap, reapplies the stored reference tool height, then parks at safe Z over WCS `X0/Y0`; this is also the workflow used by streamed `TC:<tool name>` directives. | Tool changes after a reference tool has already been captured by Job Setup in the current valid session. | Implemented directly in code, uses the shared fixed-sensor settings, runs with built-in unlimited-wait workflow handling, and expects the posted job to reposition after the park move. |
+| Built-in: Park at Work | Raises to a configured safe machine Z and returns to WCS X0/Y0 without changing offsets. | Safe return to job origin between operations or before setup steps. | Implemented directly in the built-in workflow runner. |
 | User Macro 1-5 | Editable file-backed user macros managed in Macro Manager. | Custom operator routines outside the protected built-in setup/workflow actions. | Stored as `Macro-1` through `Macro-5` in the discovered macro directories. |
 
 ## Appendix D: UI Field Appendix
@@ -1272,7 +1272,7 @@ Macro UI is included below along with the rest of the interface.
 - Port selector (dropdown): chooses the serial port used by Connect; list comes from Refresh.
 - Refresh: rescans serial ports and repopulates the port list.
 - Connect/Disconnect: opens or closes the selected port; shows `Connecting...` / `Disconnecting...` while workers run, then waits for banner/status before enabling controls.
-- Read Job / Auto-Level (Experimental): opens the shared file dialog for G-code selection, then reads the selected file into the viewer; on Linux the chooser uses the current theme plus the configured file-dialog scaling/min-size safeguards. After a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
+- Read Job / Auto-Level (Experimental): opens the shared file dialog for G-code selection, then loads the selected file as the current job; on Linux the chooser uses the current theme plus the configured file-dialog scaling/min-size safeguards. After a job loads and Auto-Level is enabled, it opens the Auto-Level dialog instead.
 - Clear Job: unloads the current job and resets samples/state.
 - Run: starts streaming the loaded job to GRBL. If Job Setup state is invalid, it shows `Job Setup Not Completed` with `Start Anyway` / `Cancel`.
 - Pause: issues feed hold during a running job.
@@ -1299,13 +1299,14 @@ Macro UI is included below along with the rest of the interface.
 - XY Step adjuster (-/+ with indicator): sets the XY jog step value used by the jog pad.
 - Z Step adjuster (-/+ with indicator): sets the Z jog step value used by the jog pad.
 
-### Macro Panel (Jog Area)
-- Macro buttons (1-8): one button per existing `Macro-<n>` file; buttons appear in a single row and left-click runs the macro.
-- Header color lines: line 3 sets button background color and line 4 sets button text color (either line may be blank).
-- Invalid macros are labeled `[invalid]` in the button text and cannot run.
-- Right-click sample: opens a read-only sample of the selected macro; unsupported or malformed macro files show an error instead of opening the sample dialog.
-- Tooltips: show the second line of each macro file as a hint.
-- Blocking rules: macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
+### Workflow + Macro Panel (Jog Area)
+- Protected workflow buttons: `Home`, `Park at Bit Setter`, `Job Setup`, `Tool Change`, and `Park at Work` are always present first in the row.
+- User macro buttons: populated `Macro-1`..`Macro-5` files appear after the protected workflow buttons; left-click runs the assigned user macro.
+- User-macro header color lines: line 3 sets button background color and line 4 sets button text color (either line may be blank).
+- Invalid user macros are labeled `[invalid]` in the button text and cannot run.
+- User-macro right-click sample: opens a read-only sample of the selected macro; unsupported or malformed macro files show an error instead of opening the sample dialog.
+- User-macro tooltips: show the second line of each macro file as a hint.
+- Blocking rules: user macros are blocked while streaming, during alarms, or while disconnected (warning dialog shown).
 
 ### Console
 - Console log: read-only GRBL traffic log with filters.
@@ -1451,11 +1452,9 @@ Macro UI is included below along with the rest of the interface.
 - Live input state: read-only labels for current joystick/keyboard activity.
 - Recommendation: enable safety hold and stop-on-focus-loss when using a joystick.
 
-### App Settings: Viewer
-- Current line highlight (dropdown): selects `Machine (status/planner)`, `Processing (acked)`, or `Sent (queued)`.
-
 ### App Settings: Interface
 - Start in fullscreen: opens the app in fullscreen on next launch.
+- Preload App Settings popup after startup: builds the App Settings popup hidden after startup so the first manual open is faster. Disabled by default and takes effect on the next launch.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
 - View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
@@ -1522,7 +1521,7 @@ Macro UI is included below along with the rest of the interface.
 - Reboot (Linux only): reboots the system after confirmation.
 - Pi profile (Linux only): applies Raspberry Pi-oriented UI/performance defaults for lower CPU and memory usage.
 
-### Checklists Tab: Checklists
+### Checklists Popup
 - Checklist items: checkbox list loaded from `checklist-*.chk` files.
 - Checklist title toggle: click a checklist title (`[-]` / `[+]`) to collapse or expand that checklist's items.
 - Shown by default; hide it with **App Settings > Interface > Auxiliary panel buttons > Show Checklists Button** if you do not want it in the lower control row.

@@ -554,6 +554,12 @@ def _build_ui_settings(
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
+        "app_settings_preload_enabled": _read_bool_setting_value(
+            app,
+            attr_name="app_settings_preload_enabled",
+            key="app_settings_preload_enabled",
+            fallback=False,
+        ),
         "show_endstop_indicator": bool(app.show_endstop_indicator.get()),
         "show_probe_indicator": bool(app.show_probe_indicator.get()),
         "show_hold_indicator": bool(app.show_hold_indicator.get()),
@@ -637,7 +643,6 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         "joystick_safety_binding": (
             dict(app._joystick_safety_binding) if app._joystick_safety_binding else None
         ),
-        "current_line_mode": app.current_line_mode.get(),
         "key_bindings": dict(app._key_bindings),
     }
 

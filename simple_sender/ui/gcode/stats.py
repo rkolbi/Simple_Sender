@@ -1144,7 +1144,7 @@ def update_gcode_stats(
         else:
             # Lean sender policy: never auto-full-scan file-backed streaming jobs.
             # Use sampled prepare data when available; otherwise fall back to the
-            # bounded sample lines already retained for the viewer.
+            # bounded sample lines already retained in the live window state.
             if has_sample_lines:
                 stats_lines = list(sampled_lines)
             else:

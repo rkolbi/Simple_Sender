@@ -538,7 +538,6 @@ def _init_gcode_and_autolevel_state(
     app._gcode_parse_token = 0
     app.gcode_stats_var = tk.StringVar(value="")
     app._gcode_status_last_text = ""
-    app.gcode_live_header_var = tk.StringVar(value="")
     app.file_info_var = tk.StringVar(value="")
     app._file_info_last_text = ""
     app.gcode_load_var = tk.StringVar(value="")
@@ -602,7 +601,6 @@ def _init_stream_and_override_state(
     app._stream_loaded_reconcile_last_metrics = {}
     app._stream_state_stats_refresh_after_id = None
     app._stream_state_post_apply_after_id = None
-    app._status_current_highlight_after_id = None
     app._status_state_transition_ui_after_id = None
     app._status_manual_controls_after_id = None
     app._status_override_sync_after_id = None
