@@ -65,6 +65,28 @@ def format_runtime_metrics(
     return lines
 
 
+def _resolve_headless_live_ack_summary(metrics: dict[str, Any]) -> tuple[int, int]:
+    """Choose the most truthful ack summary for headless/file-backed diagnostics."""
+    legacy_idx = int(metrics.get("live_gcode_last_acked_index", -1) or -1)
+    legacy_offset = int(metrics.get("live_gcode_last_acked_byte_offset", 0) or 0)
+    current_idx = int(metrics.get("live_gcode_current_acked_index", -1) or -1)
+    acked_offset = int(metrics.get("acked_byte_offset", legacy_offset) or 0)
+    storage_mode = str(metrics.get("gcode_storage_mode", "") or "").strip().lower()
+    stream_file_size_bytes = int(metrics.get("stream_file_size_bytes", 0) or 0)
+
+    resolved_idx = legacy_idx
+    if current_idx >= 0:
+        resolved_idx = current_idx
+
+    resolved_offset = legacy_offset
+    if storage_mode == "file_backed_streaming" and (
+        current_idx >= 0 or acked_offset > 0 or stream_file_size_bytes > 0
+    ):
+        resolved_offset = max(0, acked_offset)
+
+    return int(resolved_idx), int(resolved_offset)
+
+
 def _append_worker_runtime_metrics(
     lines: list[str],
     metrics: dict[str, Any],
@@ -519,8 +541,7 @@ def _append_stream_and_motion_metrics(
     live_current = int(metrics.get("live_gcode_current_count", 0) or 0)
     live_next = int(metrics.get("live_gcode_next_count", 0) or 0)
     live_pending = int(metrics.get("live_gcode_pending_depth", 0) or 0)
-    live_last_idx = int(metrics.get("live_gcode_last_acked_index", -1) or -1)
-    live_last_offset = int(metrics.get("live_gcode_last_acked_byte_offset", 0) or 0)
+    live_last_idx, live_last_offset = _resolve_headless_live_ack_summary(metrics)
     lines.append(
         "- Headless live G-code state: "
         f"past={live_past}, current={live_current}, next={live_next}, "

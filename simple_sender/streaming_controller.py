@@ -621,14 +621,18 @@ class StreamingController:
             if not defer_completion:
                 self.app._maybe_notify_job_completion(done, total)
 
-        display_pct = self._line_progress_display_pct(
-            done_total,
-            force_done_clamp=force_done_clamp,
-        )
+        prefer_line_progress = bool(
+            getattr(self.app, "_gcode_executable_lines_known", False)
+        ) or not has_file_size
+        display_pct = None
         visible = False
-        if display_pct is not None:
-            visible = True
-        elif byte_progress is not None:
+        if prefer_line_progress:
+            display_pct = self._line_progress_display_pct(
+                done_total,
+                force_done_clamp=force_done_clamp,
+            )
+            visible = display_pct is not None
+        if display_pct is None and byte_progress is not None:
             acked_offset, file_size_bytes = byte_progress
             display_pct = self._byte_progress_display_pct(
                 acked_offset,
@@ -636,10 +640,16 @@ class StreamingController:
                 force_done_clamp=force_done_clamp,
             )
             visible = display_pct is not None
-        elif has_file_size:
+        elif display_pct is None and has_file_size:
             display_pct = self._byte_progress_display_pct(
                 int(getattr(self.app, "_stream_acked_byte_offset", 0) or 0),
                 int(getattr(self.app, "_stream_progress_file_size_bytes", 0) or 0),
+                force_done_clamp=force_done_clamp,
+            )
+            visible = display_pct is not None
+        if display_pct is None and not prefer_line_progress:
+            display_pct = self._line_progress_display_pct(
+                done_total,
                 force_done_clamp=force_done_clamp,
             )
             visible = display_pct is not None
@@ -796,6 +806,8 @@ class StreamingController:
 
     def handle_gcode_acked(self, idx: int) -> None:
         """Queue acknowledged-line marker updates."""
+        if idx > getattr(self.app, "_last_acked_index", -1):
+            self.app._last_acked_index = int(idx)
         if self._pending_acked_index is None or idx > self._pending_acked_index:
             self._pending_acked_index = idx
         self._schedule_gcode_mark_flush()

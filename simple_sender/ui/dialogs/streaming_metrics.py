@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
 
-from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -131,6 +131,7 @@ def _show_job_completion_dialog(app, message: str) -> None:
     dialog.transient(app)
     dialog.resizable(False, False)
     dialog.configure(padx=24, pady=16)
+    apply_toplevel_theme(dialog, app)
 
     base_font = tkfont.nametofont("TkDefaultFont")
     title_font = tkfont.Font(

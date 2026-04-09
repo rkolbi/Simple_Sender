@@ -5,7 +5,7 @@
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 
 **Current release target:** **Simple Sender v3.0**. This is the current stable release baseline, built around the stronger workflow, probing, cleanup, and recovery hardening completed across the v3.0 cycle.
-  ![](pics/screenshot-01.png)
+![](D:\simple_sender_refactored\pics\screen-shot.png)
 
 ## Design Objectives and Key Features
 
@@ -325,38 +325,21 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   The lower display is a persistent split view instead of a tab strip. The left column has a popup/access button row above **Console**, and the right column has the always-visible override/control pane. **Job Info**, **Checklists**, **Logs**, **Raw $$**, **GRBL Settings**, and **App Settings** appear on the left in that order when enabled. The popups stay large, dark-themed, and reusable.
   
-  ![](pics/screenshot-02.png)
-  ![](pics/screenshot-03.png)
-
   **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, auto-level prereq snapshot summary, and separate `Toolpaths` / `Tools` lists when the metadata provides them).
   
   **Console:** Persistent log of GRBL traffic, filter buttons, and a manual command entry row with Pos/Status toggles for focused troubleshooting.
   
-  ![-](pics/screenshot-04.png)
-  
   **Logs:** Optional read-only viewer for application/serial/UI/error logs with source + level filters and export. It opens as a large popup, is hidden by default in the lower control row, and is also available through **View Logs...** in App Settings.
-  
-  ![](pics/screenshot-05.png)
   
   **Right-side controls:** Persistent spindle ON/OFF controls, a Spoilboard Generator button, plus touch-sized feed/spindle override sliders (10-200%). The sliders still drive GRBL's 10% override steps internally, but the visible UI is slider/value based.
   
-  ![-](pics/screenshot-06.png)
-  
   **Raw $$:** Optional raw settings-dump capture for quick copy/paste or archival. It opens in the GRBL Settings popup on the Raw $$ page, is hidden by default in the lower control row, and is controlled by **Show Raw $$ Button**.
-  
-  ![-](pics/screenshot-07.png)
   
   **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller. It opens in a large popup.
   
-  ![-](pics/screenshot-08.png)
-  
   **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, optional App Settings popup preloading on next launch, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick toggles), Experimental (Resume/Recover buttons and Auto-Level toggle), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Jogging defaults + Safe mode, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Auto-Level presets, Diagnostics (preflight check tool, session report export, backup bundle import/export, and fast-load thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
   
-  ![](pics/screenshot-09.png)
-  
   **Checklists:** Optional checklist popup loaded from `checklist-*.chk` files, including collapsible checklist titles, the Release/Start Job checklist dialogs, and the status-bar Release quick button. The lower-row Checklists button is shown by default.
-  
-  ![-](pics/screenshot-10.png)
   
   **Status bar:** Progress, buffer fill, TX throughput, status LEDs (Endstops/Probe/Hold), the error-dialog status indicator, and quick buttons for Tips, Keys, Auto-Level Overlay (ALO), Vac, Light, and Release (toggleable in App Settings; logging/error-dialog controls live there too).
 

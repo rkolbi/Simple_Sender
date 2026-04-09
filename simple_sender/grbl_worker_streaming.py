@@ -278,18 +278,49 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             logger.warning("Cannot resume stream - no G-code loaded")
             return
 
-        start_index = max(0, min(start_index, len(self._gcode) - 1))
-        initial_ack_byte_offset = 0
-        if start_index > 0:
+        start_index = max(0, int(start_index))
+        if start_index >= len(self._gcode):
+            msg = (
+                f"[resume failed] Requested start line {start_index + 1} "
+                "exceeds the loaded job length."
+            )
+            logger.warning(msg)
+            self.ui_q.put(("log", msg))
+            return
+        source = self._gcode
+        reader = getattr(source, "read_line_with_offsets", None)
+        if not callable(reader):
             source = getattr(self, "_gcode_source", None)
             reader = getattr(source, "read_line_with_offsets", None)
-            if callable(reader):
+        initial_ack_byte_offset = 0
+        if callable(reader):
+            if start_index > 0:
                 try:
                     _line, _start_offset, end_offset = reader(start_index - 1)
                     if end_offset is not None:
                         initial_ack_byte_offset = max(0, int(end_offset))
+                except IndexError:
+                    msg = (
+                        f"[resume failed] Requested start line {start_index + 1} "
+                        "exceeds the actual file length."
+                    )
+                    logger.warning(msg)
+                    self.ui_q.put(("log", msg))
+                    return
                 except Exception:
                     initial_ack_byte_offset = 0
+            try:
+                reader(start_index)
+            except IndexError:
+                msg = (
+                    f"[resume failed] Requested start line {start_index + 1} "
+                    "exceeds the actual file length."
+                )
+                logger.warning(msg)
+                self.ui_q.put(("log", msg))
+                return
+            except Exception:
+                pass
 
         self._clear_outgoing()
         with self._stream_lock:
@@ -529,6 +560,91 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     def _stream_loop_blocked(self) -> bool:
         return (not self._streaming) or self._paused or self._abort_writes.is_set()
 
+    def _snapshot_file_backed_stream_fetch_locked(
+        self,
+    ) -> tuple[int, object, int, str] | None:
+        if self._pause_after_idx is not None and self._send_index > self._pause_after_idx:
+            return None
+        if self._stream_tool_change_pending is not None:
+            return None
+        if self._stream_pending_item is not None:
+            return None
+        if self._resume_preamble:
+            return None
+        if self._send_index >= len(self._gcode):
+            return None
+        source = self._gcode
+        reader = getattr(source, "read_line_with_offsets", None)
+        if not callable(reader):
+            return None
+        return (
+            int(self._stream_token),
+            source,
+            int(self._send_index),
+            str(getattr(source, "path", "") or "").strip(),
+        )
+
+    def _read_prefetched_stream_item(
+        self,
+        *,
+        source: object,
+        idx: int,
+        source_path: str,
+    ) -> StreamPendingItem | None:
+        reader = getattr(source, "read_line_with_offsets", None)
+        if not callable(reader):
+            return None
+        try:
+            raw_line, _line_start_offset, line_end_offset = reader(idx)
+        except IndexError:
+            setter = getattr(source, "set_line_count", None)
+            if callable(setter) and not isinstance(source, FileGcodeSource):
+                try:
+                    setter(idx, known=True)
+                except Exception:
+                    pass
+            return None
+        except Exception as exc:
+            raise _StreamSourceReadError(
+                idx=int(idx),
+                source_path=source_path,
+                error=exc,
+            ) from exc
+        line = self._normalize_stream_line(raw_line)
+        return StreamPendingItem(
+            line=line,
+            is_gcode=True,
+            idx=int(idx),
+            file_end_offset=line_end_offset,
+        )
+
+    def _revalidate_prefetched_stream_item_locked(
+        self,
+        *,
+        stream_token: int,
+        source: object,
+        idx: int,
+    ) -> bool:
+        if self._stream_loop_blocked():
+            return False
+        if stream_token != self._stream_token:
+            return False
+        if source is not self._gcode:
+            return False
+        if self._pause_after_idx is not None and self._send_index > self._pause_after_idx:
+            return False
+        if self._stream_tool_change_pending is not None:
+            return False
+        if self._stream_pending_item is not None:
+            return False
+        if self._resume_preamble:
+            return False
+        if idx != self._send_index:
+            return False
+        if idx >= len(self._gcode):
+            return False
+        return True
+
     def _next_stream_item_locked(self) -> StreamPendingItem | None:
         if self._pause_after_idx is not None and self._send_index > self._pause_after_idx:
             return None
@@ -554,7 +670,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             # File-backed sources may start with estimated line counts; clamp
             # to exact totals once EOF is discovered.
             setter = getattr(self._gcode, "set_line_count", None)
-            if callable(setter):
+            if callable(setter) and not isinstance(self._gcode, FileGcodeSource):
                 try:
                     setter(self._send_index, known=True)
                 except Exception:
@@ -852,16 +968,32 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             if self._stream_loop_blocked():
                 break
             read_failure: _StreamSourceReadError | None = None
+            prefetched_snapshot: tuple[int, object, int, str] | None = None
+            prefetched_item: StreamPendingItem | None = None
 
             with self._stream_lock:
                 if self._stream_loop_blocked():
                     break
                 stream_token = self._stream_token
+                prefetched_snapshot = self._snapshot_file_backed_stream_fetch_locked()
+                if prefetched_snapshot is None:
+                    try:
+                        item = self._next_stream_item_locked()
+                    except _StreamSourceReadError as exc:
+                        read_failure = exc
+                        item = None
+                else:
+                    item = None
+            if prefetched_snapshot is not None:
+                fetch_token, fetch_source, fetch_idx, fetch_source_path = prefetched_snapshot
                 try:
-                    item = self._next_stream_item_locked()
+                    prefetched_item = self._read_prefetched_stream_item(
+                        source=fetch_source,
+                        idx=fetch_idx,
+                        source_path=fetch_source_path,
+                    )
                 except _StreamSourceReadError as exc:
                     read_failure = exc
-                    item = None
             if read_failure is not None:
                 self._handle_stream_source_read_failure(read_failure)
                 break
@@ -869,40 +1001,53 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             handled_vacuum_on = False
             directive_deferred = False
             tool_change_started = False
+            prefetch_invalidated = False
             with self._stream_lock:
                 if self._stream_loop_blocked():
                     break
                 stream_token = self._stream_token
-                if item is None:
-                    break
-
-                directive = None
-                if item.is_gcode:
-                    directive = self._match_stream_directive(item.line)
-                if directive is not None:
-                    kind, directive_payload = directive
-                    if self._stream_line_queue:
-                        self._stream_pending_item = item
-                        directive_deferred = True
-                    elif kind == "tool_change":
-                        idx, tool_name = self._start_stream_tool_change_locked(
-                            item,
-                            tool_name=str(directive_payload or ""),
-                        )
-                        self.ui_q.put(("stream_state", "paused", None))
-                        self.ui_q.put(("stream_pause_reason", "tool change"))
-                        self.ui_q.put(("stream_tool_change", idx, tool_name))
-                        tool_change_started = True
+                if prefetched_snapshot is not None:
+                    fetch_token, fetch_source, fetch_idx, _fetch_source_path = prefetched_snapshot
+                    if not self._revalidate_prefetched_stream_item_locked(
+                        stream_token=fetch_token,
+                        source=fetch_source,
+                        idx=fetch_idx,
+                    ):
+                        prefetch_invalidated = True
                     else:
-                        self._stream_pending_item = None
-                        handled_item = item
-                        handled_vacuum_on = (kind == "vacuum_on")
-                if not directive_deferred and not tool_change_started and handled_item is None:
-                    validated = self._validate_stream_item_locked(item)
-                    if validated is None:
+                        item = prefetched_item
+                if not prefetch_invalidated:
+                    if item is None:
                         break
-                    item, line_payload, line_len, spindle_state = validated
-                    queue_item = self._reserve_stream_item_locked(item, line_len)
+                    directive = None
+                    if item.is_gcode:
+                        directive = self._match_stream_directive(item.line)
+                    if directive is not None:
+                        kind, directive_payload = directive
+                        if self._stream_line_queue:
+                            self._stream_pending_item = item
+                            directive_deferred = True
+                        elif kind == "tool_change":
+                            idx, tool_name = self._start_stream_tool_change_locked(
+                                item,
+                                tool_name=str(directive_payload or ""),
+                            )
+                            self.ui_q.put(("stream_state", "paused", None))
+                            self.ui_q.put(("stream_pause_reason", "tool change"))
+                            self.ui_q.put(("stream_tool_change", idx, tool_name))
+                            tool_change_started = True
+                        else:
+                            self._stream_pending_item = None
+                            handled_item = item
+                            handled_vacuum_on = (kind == "vacuum_on")
+                    if not directive_deferred and not tool_change_started and handled_item is None:
+                        validated = self._validate_stream_item_locked(item)
+                        if validated is None:
+                            break
+                        item, line_payload, line_len, spindle_state = validated
+                        queue_item = self._reserve_stream_item_locked(item, line_len)
+            if prefetch_invalidated:
+                continue
             if handled_item is not None:
                 # Handle vacuum directives in sender space and never transmit to GRBL.
                 self._ack_handled_stream_line(handled_item)
