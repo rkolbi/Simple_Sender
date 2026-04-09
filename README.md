@@ -5,7 +5,7 @@
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 
 **Current release target:** **Simple Sender v3.0**. This is the current stable release baseline, built around the stronger workflow, probing, cleanup, and recovery hardening completed across the v3.0 cycle.
-![](\pics\screen-shot.png)
+![](pics/screen-shot.png)
 
 ## Design Objectives and Key Features
 
