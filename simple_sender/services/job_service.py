@@ -244,6 +244,19 @@ class JobService:
         app._reset_gcode_view_for_run()
         app._job_started_at = self._now_factory()
         app._job_completion_notified = False
+        streaming_controller = getattr(app, "streaming_controller", None)
+        if streaming_controller is not None:
+            log_job_started = getattr(streaming_controller, "log_job_started", None)
+            if callable(log_job_started):
+                try:
+                    run_type = (
+                        "dry run"
+                        if self._is_dry_run_enabled(app)
+                        else "normal"
+                    )
+                    log_job_started(run_type=run_type, start_index=0)
+                except Exception as exc:
+                    self._log_suppressed("Failed logging job start lifecycle entry", exc)
         try:
             if hasattr(app, "_start_job_accessories"):
                 app._start_job_accessories("job_run")

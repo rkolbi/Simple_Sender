@@ -490,6 +490,14 @@ def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: boo
         pct = int(round((start_index / total_lines) * 100))
         app.progress_pct.set(pct)
     app.status.config(text=f"Resuming at line {start_index + 1}")
+    streaming_controller = getattr(app, "streaming_controller", None)
+    if streaming_controller is not None:
+        log_job_started = getattr(streaming_controller, "log_job_started", None)
+        if callable(log_job_started):
+            try:
+                log_job_started(run_type="resume", start_index=int(start_index))
+            except Exception as exc:
+                _log_suppressed("Failed logging Resume From lifecycle entry", exc)
     try:
         if hasattr(app, "_start_job_accessories"):
             app._start_job_accessories("job_resume")

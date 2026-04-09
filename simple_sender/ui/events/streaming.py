@@ -110,6 +110,21 @@ def _stop_job_accessories_for_state(app, state: str) -> None:
         )
 
 
+def _stop_job_lifecycle_logging(app) -> None:
+    controller = getattr(app, "streaming_controller", None)
+    if controller is None:
+        return
+    stop_logging = getattr(controller, "stop_job_lifecycle_logging", None)
+    if not callable(stop_logging):
+        return
+    try:
+        stop_logging()
+    except Exception as exc:
+        _log_stream_ui_issue(
+            "Failed stopping job lifecycle telemetry on stream-state transition", exc
+        )
+
+
 def _refresh_stream_busy_ui(app) -> None:
     if hasattr(app, "_update_quick_button_visibility"):
         try:
@@ -649,6 +664,7 @@ def handle_stream_state_event(app, evt):
         )
         return
     if st == "loaded":
+        _stop_job_lifecycle_logging(app)
         end_deferred_completion_wait(app, now_ts=now)
         _schedule_loaded_reconcile(
             app,
@@ -787,6 +803,7 @@ def handle_stream_state_event(app, evt):
         app._set_manual_controls_enabled(False)
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
     elif st in ("done", "stopped"):
+        _stop_job_lifecycle_logging(app)
         _stop_job_accessories_for_state(app, st)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
@@ -829,6 +846,7 @@ def handle_stream_state_event(app, evt):
                 set_run_resume_hook=set_run_resume_from,
             )
     elif st == "error":
+        _stop_job_lifecycle_logging(app)
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
         end_deferred_completion_wait(app, now_ts=now)
@@ -846,6 +864,7 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="disabled")
         app.status.config(text=f"Stream error: {evt[2]}")
     elif st == "alarm":
+        _stop_job_lifecycle_logging(app)
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
         end_deferred_completion_wait(app, now_ts=now)
@@ -900,6 +919,7 @@ def handle_stream_interrupted(app, evt):
         return
     if getattr(app, "_user_disconnect", False):
         return
+    _stop_job_lifecycle_logging(app)
     app._resume_after_disconnect = True
     app._resume_from_index = max(0, app._last_acked_index + 1)
     app._resume_job_name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")

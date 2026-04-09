@@ -161,8 +161,10 @@ def _apply_in_memory_source_state(
     *,
     lines: list[str],
     total_lines: int | None,
+    file_size_bytes: int = 0,
 ) -> None:
     _apply_state_defaults(app, _IN_MEMORY_GCODE_SOURCE_DEFAULTS)
+    app._gcode_file_size_bytes = max(0, int(file_size_bytes or 0))
     app._gcode_executable_lines = max(0, int(total_lines or len(lines)))
     app._gcode_executable_lines_known = True
     app._gcode_motion_lines = _count_motion_lines(lines)
@@ -295,7 +297,22 @@ def apply_loaded_gcode(
                 )
     app._gcode_source = streaming_source
     if streaming_source is None:
-        _apply_in_memory_source_state(app, lines=lines, total_lines=total_lines)
+        in_memory_file_size_bytes = 0
+        try:
+            if path and deps.os.path.isfile(path):
+                in_memory_file_size_bytes = max(
+                    0, int(deps.os.path.getsize(path))
+                )
+        except Exception as exc:
+            _log_suppressed(
+                "Failed resolving file size for in-memory loaded G-code", exc
+            )
+        _apply_in_memory_source_state(
+            app,
+            lines=lines,
+            total_lines=total_lines,
+            file_size_bytes=in_memory_file_size_bytes,
+        )
     else:
         app._gcode_storage_mode = "file_backed_streaming"
         app._gcode_load_mode = str(
@@ -547,6 +564,14 @@ def apply_loaded_gcode(
                     )
     else:
         app.grbl.load_gcode(lines, name=deps.os.path.basename(path))
+    streaming_controller = getattr(app, "streaming_controller", None)
+    if streaming_controller is not None:
+        log_job_loaded = getattr(streaming_controller, "log_job_loaded", None)
+        if callable(log_job_loaded):
+            try:
+                log_job_loaded()
+            except Exception as exc:
+                _log_suppressed("Failed logging loaded job lifecycle entry", exc)
     _sync_loaded_job_restore_state(app, failed=False)
     app._last_sent_index = -1
     app._last_acked_index = -1

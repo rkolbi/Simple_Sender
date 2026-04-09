@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import os
 import time
 from typing import Callable
 import tkinter as tk
@@ -30,9 +31,11 @@ from simple_sender.utils.constants import MAX_CONSOLE_LINES
 from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
 from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
 from simple_sender.types import AppProtocol, GcodeViewLike
+from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.stream_completion import should_defer_completion
 
 logger = logging.getLogger(__name__)
+_JOB_TELEMETRY_INTERVAL_MS = 10 * 60 * 1000
 
 AfterId = str | int
 ConsoleEntry = tuple[str, str | None]
@@ -88,6 +91,9 @@ class StreamingController:
             ),
         )
         self._manual_motion_hidden_status_log_last_ts = 0.0
+        self._job_telemetry_after_id: AfterId | None = None
+        self._job_telemetry_token = 0
+        self._job_lifecycle_run_type: str | None = None
 
     def _full_progress_allowed(self) -> bool:
         stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
@@ -784,6 +790,294 @@ class StreamingController:
     def handle_log(self, message: str) -> None:
         """Log an informational message."""
         self.log(message)
+
+    @staticmethod
+    def _bool_var(value) -> bool:
+        getter = getattr(value, "get", None)
+        if callable(getter):
+            try:
+                return bool(getter())
+            except Exception:
+                return False
+        return bool(value)
+
+    @staticmethod
+    def _format_bytes_compact(size_bytes: int) -> str:
+        value = max(0, int(size_bytes or 0))
+        units = ("B", "KB", "MB", "GB")
+        size = float(value)
+        unit = units[0]
+        for candidate in units[1:]:
+            if size < 1024.0:
+                break
+            size /= 1024.0
+            unit = candidate
+        if unit == "B":
+            return f"{int(size)} {unit}"
+        return f"{size:.1f} {unit}"
+
+    @staticmethod
+    def _format_elapsed_compact(total_seconds: float) -> str:
+        seconds = max(0, int(round(float(total_seconds or 0.0))))
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _job_name(self) -> str:
+        path = str(getattr(self.app, "_last_gcode_path", "") or "").strip()
+        if path:
+            return os.path.basename(path)
+        return str(getattr(getattr(self.app, "grbl", None), "_gcode_name", "") or "").strip()
+
+    def _job_metadata_lists(self) -> tuple[list[str], list[str]]:
+        ssmeta = getattr(self.app, "_gcode_ssmeta", None)
+        if not bool(getattr(self.app, "_gcode_ssmeta_present", False)) or not isinstance(ssmeta, dict):
+            return ([], [])
+        ssmeta_map = dict(ssmeta)
+        return (ssmeta_toolpaths(ssmeta_map), ssmeta_tools(ssmeta_map))
+
+    def _runtime_metrics_snapshot(self) -> dict:
+        metrics_getter = getattr(getattr(self.app, "grbl", None), "get_runtime_metrics", None)
+        if not callable(metrics_getter):
+            return {}
+        try:
+            metrics = metrics_getter()
+        except Exception as exc:
+            logger.debug("Failed collecting runtime metrics for job lifecycle logging: %s", exc)
+            return {}
+        return dict(metrics) if isinstance(metrics, dict) else {}
+
+    def _performance_metrics_snapshot(self) -> dict:
+        perf_monitor = getattr(self.app, "_perf_monitor", None)
+        snapshot_getter = getattr(perf_monitor, "runtime_snapshot", None)
+        if not callable(snapshot_getter):
+            return {}
+        try:
+            snapshot = snapshot_getter()
+        except Exception as exc:
+            logger.debug("Failed collecting perf metrics for job telemetry logging: %s", exc)
+            return {}
+        return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+    def _resolved_acked_index(self, metrics: dict) -> int:
+        current = int(metrics.get("live_gcode_current_acked_index", -1) or -1)
+        legacy = int(getattr(self.app, "_last_acked_index", -1) or -1)
+        return max(current, legacy)
+
+    def _cancel_job_telemetry(self) -> None:
+        after_id = self._job_telemetry_after_id
+        self._job_telemetry_after_id = None
+        if after_id is not None:
+            try:
+                self.app.after_cancel(after_id)
+            except Exception as exc:
+                logger.debug("Failed canceling job telemetry timer: %s", exc, exc_info=exc)
+
+    def stop_job_lifecycle_logging(self) -> None:
+        self._cancel_job_telemetry()
+        self._job_lifecycle_run_type = None
+        self._job_telemetry_token += 1
+
+    def _schedule_job_telemetry(self, *, token: int) -> None:
+        self._cancel_job_telemetry()
+
+        def _run() -> None:
+            self._job_telemetry_after_id = None
+            if token != self._job_telemetry_token:
+                return
+            if not self._job_is_active_for_telemetry():
+                return
+            self._log_job_telemetry_line()
+            self._schedule_job_telemetry(token=token)
+
+        try:
+            self._job_telemetry_after_id = self.app.after(_JOB_TELEMETRY_INTERVAL_MS, _run)
+        except Exception as exc:
+            logger.debug("Failed scheduling job telemetry timer: %s", exc, exc_info=exc)
+
+    def _job_is_active_for_telemetry(self) -> bool:
+        stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
+        return stream_state in {"running", "paused"} or bool(
+            getattr(self.app, "_stream_done_pending_idle", False)
+        )
+
+    def _log_job_telemetry_line(self) -> None:
+        metrics = self._runtime_metrics_snapshot()
+        perf_metrics = self._performance_metrics_snapshot()
+        parts: list[str] = []
+        start_time = getattr(self.app, "_job_started_at", None)
+        if start_time is not None:
+            try:
+                elapsed_s = max(0.0, time.time() - float(getattr(start_time, "timestamp", lambda: 0.0)()))
+            except Exception:
+                try:
+                    elapsed_s = max(0.0, time.time() - float(start_time.timestamp()))
+                except Exception:
+                    elapsed_s = 0.0
+            parts.append(f"elapsed={self._format_elapsed_compact(elapsed_s)}")
+        progress_metric = metrics.get("stream_progress_pct", None)
+        try:
+            if progress_metric is not None:
+                progress_pct = float(progress_metric)
+            else:
+                progress_pct = float(getattr(self.app, "_stream_progress_pct", 0.0) or 0.0)
+        except Exception:
+            progress_pct = float(getattr(self.app, "_stream_progress_pct", 0.0) or 0.0)
+        parts.append(f"progress={progress_pct:.1f}%")
+        acked_idx = self._resolved_acked_index(metrics)
+        total = int(getattr(self.app, "_gcode_executable_lines", 0) or getattr(self.app, "_gcode_total_lines", 0) or 0)
+        if total > 0:
+            parts.append(f"acked_line={max(0, acked_idx + 1):,}/{total:,}")
+        elif acked_idx >= 0:
+            parts.append(f"acked_line={acked_idx + 1:,}")
+        acked_bytes_metric = metrics.get("acked_byte_offset", None)
+        try:
+            if acked_bytes_metric is not None:
+                acked_bytes = int(acked_bytes_metric or 0)
+            else:
+                acked_bytes = int(getattr(self.app, "_stream_acked_byte_offset", 0) or 0)
+        except Exception:
+            acked_bytes = int(getattr(self.app, "_stream_acked_byte_offset", 0) or 0)
+        file_size_metric = metrics.get("stream_file_size_bytes", None)
+        try:
+            if file_size_metric is not None:
+                file_size = int(file_size_metric or 0)
+            else:
+                file_size = int(
+                    getattr(self.app, "_stream_progress_file_size_bytes", 0)
+                    or getattr(self.app, "_gcode_file_size_bytes", 0)
+                    or 0
+                )
+        except Exception:
+            file_size = int(
+                getattr(self.app, "_stream_progress_file_size_bytes", 0)
+                or getattr(self.app, "_gcode_file_size_bytes", 0)
+                or 0
+            )
+        if file_size > 0:
+            parts.append(f"bytes={acked_bytes:,}/{file_size:,}")
+        queue_depth = metrics.get("queue_depth_last")
+        if isinstance(queue_depth, dict):
+            try:
+                parts.append(f"queue={int(queue_depth.get('stream', 0) or 0)}")
+            except Exception:
+                pass
+        else:
+            try:
+                parts.append(
+                    f"queue={int(metrics.get('stream_outstanding_queue_depth', 0) or 0)}"
+                )
+            except Exception:
+                pass
+        try:
+            parts.append(f"buf={int(metrics.get('stream_buf_used_bytes', 0) or 0)}B")
+        except Exception:
+            pass
+        ack_avg = metrics.get("ack_latency_ms_avg", metrics.get("ok_latency_ms_avg"))
+        try:
+            if ack_avg is not None:
+                parts.append(f"ack_avg_ms={float(ack_avg):.1f}")
+        except Exception:
+            pass
+        tx_lps = metrics.get("tx_lines_per_sec")
+        try:
+            if tx_lps is not None:
+                parts.append(f"tx_lps={float(tx_lps):.2f}")
+        except Exception:
+            pass
+        cpu_avg = perf_metrics.get("stream_cpu_avg", None)
+        try:
+            if cpu_avg is not None:
+                parts.append(f"cpu={float(cpu_avg):.1f}%")
+        except Exception:
+            pass
+        rss_current = perf_metrics.get("rss_current_bytes", None)
+        try:
+            if rss_current is not None:
+                parts.append(f"rss={self._format_bytes_compact(int(rss_current or 0)).replace(' ', '')}")
+        except Exception:
+            pass
+        self.handle_log(f"[{self._timestamp()}] [job] Telemetry: " + ", ".join(parts))
+
+    def log_job_loaded(self) -> None:
+        self.stop_job_lifecycle_logging()
+        name = self._job_name() or "unavailable"
+        file_size = int(getattr(self.app, "_gcode_file_size_bytes", 0) or 0)
+        storage_mode = str(getattr(self.app, "_gcode_storage_mode", "") or "").strip() or "unavailable"
+        exec_count = int(getattr(self.app, "_gcode_executable_lines", 0) or 0)
+        exec_known = bool(getattr(self.app, "_gcode_executable_lines_known", False))
+        line_state = "known" if exec_known else "estimated"
+        parts = [
+            f"file={name}",
+            f"size={self._format_bytes_compact(file_size)}",
+            f"storage={storage_mode}",
+            f"executable_lines={exec_count:,} ({line_state})" if exec_count > 0 else "executable_lines=unavailable",
+            f"dry_run={self._bool_var(getattr(self.app, 'dry_run_sanitize_stream', False))}",
+        ]
+        self.handle_log(f"[{self._timestamp()}] [job] Loaded: " + ", ".join(parts))
+        toolpaths, tools = self._job_metadata_lists()
+        if tools:
+            self.handle_log(f"[{self._timestamp()}] [job] Tools: " + " | ".join(tools))
+        if toolpaths:
+            self.handle_log(f"[{self._timestamp()}] [job] Toolpaths: " + " | ".join(toolpaths))
+
+    def log_job_started(self, *, run_type: str, start_index: int = 0) -> None:
+        self.stop_job_lifecycle_logging()
+        normalized_run_type = str(run_type or "").strip().lower() or "normal"
+        self._job_lifecycle_run_type = normalized_run_type
+        parts = [f"file={self._job_name() or 'unavailable'}", f"run_type={normalized_run_type}"]
+        if normalized_run_type == "resume" or int(start_index) > 0:
+            parts.append(f"start_line={int(start_index) + 1:,}")
+            parts.append(f"start_index={int(start_index)}")
+        self.handle_log(f"[{self._timestamp()}] [job] Start: " + ", ".join(parts))
+        self._log_job_telemetry_line()
+        self._job_telemetry_token += 1
+        self._schedule_job_telemetry(token=self._job_telemetry_token)
+
+    def log_job_completed(
+        self,
+        *,
+        elapsed_str: str,
+        start_text: str,
+        finish_text: str,
+    ) -> None:
+        prior_run_type = self._job_lifecycle_run_type
+        self.stop_job_lifecycle_logging()
+        metrics = self._runtime_metrics_snapshot()
+        progress_pct = float(getattr(self.app, "_stream_progress_pct", metrics.get("stream_progress_pct", 0.0)) or 0.0)
+        acked_idx = self._resolved_acked_index(metrics)
+        total = int(getattr(self.app, "_gcode_executable_lines", 0) or getattr(self.app, "_gcode_total_lines", 0) or 0)
+        acked_line_text = (
+            f"{max(0, acked_idx + 1):,}/{total:,}"
+            if total > 0
+            else (f"{acked_idx + 1:,}" if acked_idx >= 0 else "unavailable")
+        )
+        acked_bytes = int(
+            getattr(self.app, "_stream_acked_byte_offset", metrics.get("acked_byte_offset", 0)) or 0
+        )
+        file_size = int(
+            getattr(self.app, "_stream_progress_file_size_bytes", 0)
+            or getattr(self.app, "_gcode_file_size_bytes", 0)
+            or metrics.get("stream_file_size_bytes", 0)
+            or 0
+        )
+        run_type = prior_run_type or (
+            "dry run" if self._bool_var(getattr(self.app, "dry_run_sanitize_stream", False)) else "normal"
+        )
+        parts = [
+            f"file={self._job_name() or 'unavailable'}",
+            f"run_type={run_type}",
+            f"started={start_text}",
+            f"finished={finish_text}",
+            f"elapsed={elapsed_str}",
+            f"progress={progress_pct:.1f}%",
+            f"acked_line={acked_line_text}",
+        ]
+        if file_size > 0:
+            parts.append(f"bytes={acked_bytes:,}/{file_size:,}")
+        parts.append(f"dry_run={self._bool_var(getattr(self.app, 'dry_run_sanitize_stream', False))}")
+        self.handle_log(f"[{self._timestamp()}] [job] Completed: " + ", ".join(parts))
 
     def handle_buffer_fill(self, pct: int, used: int, window: int) -> None:
         """Queue buffer utilization updates."""

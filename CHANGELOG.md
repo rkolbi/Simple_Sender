@@ -35,7 +35,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ### Documentation
 - Deep docs truthfulness pass:
   - README no longer points at missing `ref/VCarve-PP/` or `ref/test.py` assets
-  - restored current `ref/release_checklist.md` and `ref/perf_baselines.md` as live reference docs
+  - README and changelog no longer point at missing historical reference files
+  - README changelog links now use normal repo-relative paths instead of machine-local paths
   - README appendix wording now matches the current popup-based UI and protected workflow/user-macro layout
 - Changelog/release-facing wording now reflects the current baseline more precisely:
   - built-in tool change docs state the real current contract: park at safe Z over WCS `X0/Y0`, then rely on the posted job to reposition
@@ -44,7 +45,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ### Validation
 - Current local repository validation snapshot after the cleanup and baseline-alignment work:
-  - `pytest -q`: PASS (`1727 passed, 2 skipped` on `2026-04-08`)
+  - `pytest -q`: PASS (`1746 passed, 1 skipped` on `2026-04-09`)
 
 ## [3.0] - 2026-04-05
 
@@ -241,8 +242,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README Spatial docs now include automatic Spatial-tab hide-when-disabled behavior and the session-only Spatial override.
 - README now documents `SSMETA` header parsing, metadata source tags (`dimensions_source` / `units_source`), and the new scrollable File Info tab.
 - README profiling examples now include `tools/perf_microbench.py` and unified-load timing commands.
-- `ref/perf_baselines.md` now includes a 2026-03-02 runtime hooks + UI/queue microbench baseline block.
-- Release checklist template path was normalized to `ref/release_checklist.md` and updated with the import/compileall release gates.
+- Historical performance baseline documentation was updated with a 2026-03-02 runtime hooks + UI/queue microbench block.
+- Historical release checklist wording was updated to include the import/compileall release gates.
 - README and `simple_sender/macros/readme.md` now document the Job Setup Run warning, operator workflow expectations, and setup-state invalidation behavior.
 
 ### Fixed

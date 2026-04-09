@@ -74,7 +74,15 @@ def maybe_notify_job_completion(app, done: int, total: int) -> None:
         f"(started {start_text}, finished {finish_text})."
     )
     try:
-        app.streaming_controller.handle_log(f"[job] {summary}")
+        log_job_completed = getattr(app.streaming_controller, "log_job_completed", None)
+        if callable(log_job_completed):
+            log_job_completed(
+                elapsed_str=elapsed_str,
+                start_text=start_text,
+                finish_text=finish_text,
+            )
+        else:
+            app.streaming_controller.handle_log(f"[job] {summary}")
     except Exception as exc:
         _log_suppressed("Failed logging job completion summary", exc)
     message = (

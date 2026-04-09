@@ -5,7 +5,7 @@
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 
 **Current release target:** **Simple Sender v3.0**. This is the current stable release baseline, built around the stronger workflow, probing, cleanup, and recovery hardening completed across the v3.0 cycle.
-![](D:\simple_sender_refactored\pics\screen-shot.png)
+![](pics/screen-shot.png)
 
 ## Design Objectives and Key Features
 
@@ -926,7 +926,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. Dated validation snapshots are tracked in [CHANGELOG.md](/d:/simple_sender_refactored/CHANGELOG.md) instead of being hardcoded here so this section does not drift behind the current repo state.
+Use `run_tests.bat` as the authoritative local release gate. Dated validation snapshots are tracked in [CHANGELOG.md](CHANGELOG.md) instead of being hardcoded here so this section does not drift behind the current repo state.
 
 Run a subset:
 ```powershell
@@ -989,8 +989,8 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - v3.0 release notes: `RELEASE_NOTES_v3.0.md`.
 
 ## Release Checklist
-- Release checklist template: `ref/release_checklist.md`.
-- Run the **Hardware jog-release smoke check** section in that file before live CNC use.
+- Use the commands in the **Testing** section plus your machine-specific hardware smoke checklist before live CNC use.
+- Include a hardware jog-release smoke check in your release validation before live CNC use.
 - Pass criteria for jog safety: releasing any jog button/axis input must stop motion immediately.
 
 ## Module Layout
@@ -1016,7 +1016,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - `simple_sender/macro_executor.py`: macro parsing, safety gates, and prompt integration.
 
 ## Performance Profiling
-Local-only profiling tools live in `tools/profile_performance.py`, `tools/memory_profile.py`, and `tools/perf_microbench.py`, with manual baseline notes kept in `ref/perf_baselines.md`. These are meant for manual runs, not CI.
+Local-only profiling tools live in `tools/profile_performance.py`, `tools/memory_profile.py`, and `tools/perf_microbench.py`. These are meant for manual runs, not CI.
 
 ```powershell
 # Streaming scan timings (large files)
