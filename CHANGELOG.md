@@ -29,6 +29,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - sender-side `TC:<tool name>` directives still pause and run the built-in Tool Change workflow
 - Manual-command bookkeeping during alarm transitions no longer leaves stale pending/manual-tracker state behind when a command becomes blocked before send.
 - G-code motion-line counting no longer treats non-motion codes as motion just because they contain axis letters or similar substrings.
+- Deferred-completion finalization now refreshes the top-right progress bar and label through the shared progress UI path, so the visible display reaches the same authoritative `100.0%` completion state reflected by byte EOF and completion logging.
 - Work-position zero actions now require operator confirmation for `X`, `Y`, `Z`, and `All` before sending the zeroing command.
 - App Settings first-open responsiveness no longer makes the `View Logs...` path feel like it needs a second click while the settings popup is still constructing.
 
@@ -45,7 +46,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ### Validation
 - Current local repository validation snapshot after the cleanup and baseline-alignment work:
-  - `pytest -q`: PASS (`1746 passed, 1 skipped` on `2026-04-09`)
+  - `pytest -q`: PASS (`1745 passed, 3 skipped` on `2026-04-09`)
 
 ## [3.0] - 2026-04-05
 

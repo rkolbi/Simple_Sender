@@ -62,6 +62,7 @@ from .status_machine_state import _status_allows_alarm_clear as _status_allows_a
 from .status_machine_state import _stream_latched_banner_state as _stream_latched_banner_state_impl
 from .status_units import _parse_modal_units as _parse_modal_units_impl
 from .status_units import _parse_report_units_setting as _parse_report_units_setting_impl
+from .streaming import _set_stream_progress_ui
 from .stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 from simple_sender.ui.modal_sync import modal_sync_retry_ready, request_modal_state_sync
 
@@ -954,9 +955,22 @@ def _sync_deferred_stream_completion(app, state: str) -> None:
             # lines exceed streamed executable commands.
             notify_total = done
         try:
-            app.progress_pct.set(100)
+            final_file_size = max(
+                int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
+                int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
+            )
+        except Exception:
+            final_file_size = 0
+        try:
+            _set_stream_progress_ui(
+                app,
+                pct=100.0,
+                visible=True,
+                acked_offset=final_file_size,
+                file_size_bytes=final_file_size,
+            )
         except Exception as exc:
-            _log_suppressed("Failed finalizing deferred progress at stream completion", exc)
+            _log_suppressed("Failed finalizing deferred progress display at stream completion", exc)
 
         def _finalize_completion_ui() -> None:
             app._deferred_stream_finalize_pending = False

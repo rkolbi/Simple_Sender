@@ -194,6 +194,11 @@ def _set_stream_progress_ui(
             app._stream_progress_file_size_bytes = 0
     if pct is None or not bool(visible):
         app._stream_progress_pct = 0.0
+        if hasattr(app, "progress_pct"):
+            try:
+                app.progress_pct.set(0)
+            except Exception:
+                pass
         if hasattr(app, "progress_text"):
             try:
                 app.progress_text.set("")
@@ -211,6 +216,11 @@ def _set_stream_progress_ui(
     except Exception:
         pct_f = 0.0
     app._stream_progress_pct = pct_f
+    if hasattr(app, "progress_pct"):
+        try:
+            app.progress_pct.set(int(pct_f))
+        except Exception:
+            pass
     if hasattr(app, "progress_text"):
         try:
             app.progress_text.set(f"{pct_f:.1f}%")
