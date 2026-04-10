@@ -102,9 +102,9 @@ QUEUE_DEPTH_SNAPSHOT_MAX = 64
 # Sample often enough to show short bursts while staying cheap on low-power
 # systems.
 QUEUE_DEPTH_SNAPSHOT_INTERVAL_S = 0.2
-# Retain enough recent serial activity for diagnostics exports while keeping the
-# ring buffer bounded.
-SERIAL_ACTIVITY_HISTORY_MAX = 20000
+# Retain a generous recent serial tail for diagnostics exports while keeping
+# long unattended sessions from accumulating multi-megabyte string history.
+SERIAL_ACTIVITY_HISTORY_MAX = 10000
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:

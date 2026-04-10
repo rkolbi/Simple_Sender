@@ -20,6 +20,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import os
+import platform
+import shutil
+import socket
 import tkinter as tk
 import time
 from tkinter import ttk
@@ -55,12 +59,251 @@ _APP_SETTINGS_STICKY_UPDATE_MS = 180
 _APP_SETTINGS_FILTER_DEBOUNCE_MS = 120
 _APP_SETTINGS_VIEW_SAVE_DEBOUNCE_MS = 250
 _APP_SETTINGS_LAZY_BUILD_SLICE_MS = 8
+_SYSTEM_INFO_UNAVAILABLE = "Unavailable"
 _LAZY_SECTION_TITLES = frozenset(
     {
         "Auto-Level",
         "Diagnostics",
     }
 )
+
+
+def _format_system_info_bytes(value: int | None) -> str:
+    if value is None:
+        return _SYSTEM_INFO_UNAVAILABLE
+    size = max(0, int(value))
+    units = ("B", "KB", "MB", "GB", "TB")
+    scaled = float(size)
+    for unit in units:
+        if scaled < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(scaled)} {unit}"
+            return f"{scaled:.1f} {unit}"
+        scaled /= 1024.0
+    return _SYSTEM_INFO_UNAVAILABLE
+
+
+def _linux_pretty_name() -> str:
+    freedesktop = getattr(platform, "freedesktop_os_release", None)
+    if not callable(freedesktop):
+        return ""
+    try:
+        data = freedesktop()
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("PRETTY_NAME", "") or "").strip()
+
+
+def _cpu_model_name() -> str:
+    try:
+        system_name = str(platform.system() or "").strip().lower()
+    except Exception:
+        system_name = ""
+    if system_name == "linux":
+        try:
+            with open("/proc/cpuinfo", "r", encoding="utf-8") as handle:
+                for raw in handle:
+                    if ":" not in raw:
+                        continue
+                    key, value = raw.split(":", 1)
+                    if str(key).strip().lower() == "model name":
+                        model = str(value).strip()
+                        if model:
+                            return model
+        except Exception:
+            pass
+    processor = str(platform.processor() or "").strip()
+    if processor:
+        return processor
+    for env_name in ("PROCESSOR_IDENTIFIER", "PROCESSOR_ARCHITECTURE"):
+        value = str(os.getenv(env_name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _total_ram_bytes() -> int | None:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if bool(ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))):
+                return int(status.ullTotalPhys)
+        except Exception:
+            return None
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
+        if page_size > 0 and phys_pages > 0:
+            return int(page_size * phys_pages)
+    except Exception:
+        return None
+    return None
+
+
+def _disk_usage_root(app) -> str:
+    root_dir = str(getattr(app, "_script_dir", "") or "").strip()
+    if root_dir:
+        return os.path.abspath(root_dir)
+    return os.getcwd()
+
+
+def _is_local_network_ip(address: str) -> bool:
+    text = str(address or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith("127.") or lowered == "::1":
+        return False
+    if lowered.startswith("fe80:"):
+        return False
+    return True
+
+
+def _collect_local_network_ips() -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    try:
+        import psutil  # type: ignore
+
+        net_if_addrs = getattr(psutil, "net_if_addrs", None)
+        if callable(net_if_addrs):
+            for if_name, addrs in net_if_addrs().items():
+                for addr in addrs:
+                    family = getattr(addr, "family", None)
+                    if family not in (socket.AF_INET, socket.AF_INET6):
+                        continue
+                    address = str(getattr(addr, "address", "") or "").strip()
+                    if not _is_local_network_ip(address):
+                        continue
+                    rendered = f"{if_name}: {address}"
+                    if rendered in seen:
+                        continue
+                    seen.add(rendered)
+                    lines.append(rendered)
+    except Exception:
+        pass
+    if lines:
+        return lines
+    host = str(socket.gethostname() or "").strip()
+    if not host:
+        return []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            infos = socket.getaddrinfo(host, None, family, socket.SOCK_DGRAM)
+        except Exception:
+            continue
+        for info in infos:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            address = str(sockaddr[0] or "").strip()
+            if not _is_local_network_ip(address):
+                continue
+            if address in seen:
+                continue
+            seen.add(address)
+            lines.append(address)
+    return lines
+
+
+def _collect_app_settings_system_info(app) -> dict[str, str]:
+    os_name = _linux_pretty_name()
+    if not os_name:
+        try:
+            os_name = str(platform.system() or "").strip()
+        except Exception:
+            os_name = ""
+    try:
+        release = str(platform.release() or "").strip()
+    except Exception:
+        release = ""
+    try:
+        arch = str(platform.machine() or "").strip()
+    except Exception:
+        arch = ""
+    os_parts = [part for part in (os_name, f"kernel {release}" if release else "", arch) if part]
+    os_text = " | ".join(os_parts) or _SYSTEM_INFO_UNAVAILABLE
+
+    cpu_name = _cpu_model_name() or _SYSTEM_INFO_UNAVAILABLE
+    try:
+        cpu_count = int(os.cpu_count() or 0)
+    except Exception:
+        cpu_count = 0
+    cpu_text = f"{cpu_name} | cores {cpu_count}" if cpu_count > 0 else cpu_name
+
+    total_ram = _format_system_info_bytes(_total_ram_bytes())
+    total_disk = _SYSTEM_INFO_UNAVAILABLE
+    free_disk = _SYSTEM_INFO_UNAVAILABLE
+    try:
+        usage = shutil.disk_usage(_disk_usage_root(app))
+        total_disk = _format_system_info_bytes(int(getattr(usage, "total", 0) or 0))
+        free_disk = _format_system_info_bytes(int(getattr(usage, "free", 0) or 0))
+    except Exception:
+        pass
+    memory_storage_text = f"RAM {total_ram} | Disk {total_disk} total, {free_disk} free"
+
+    ip_lines = _collect_local_network_ips()
+    ip_text = "\n".join(ip_lines) if ip_lines else _SYSTEM_INFO_UNAVAILABLE
+    return {
+        "os": os_text,
+        "cpu": cpu_text,
+        "memory_storage": memory_storage_text,
+        "local_ips": ip_text,
+    }
+
+
+def _build_system_info_block(app, parent: ttk.Frame, row: int) -> int:
+    info = _collect_app_settings_system_info(app)
+    frame = ttk.Frame(parent)
+    frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+    frame.grid_columnconfigure(1, weight=1)
+    app.app_settings_system_info_frame = frame
+    app.app_settings_system_info_values = {}
+
+    header = ttk.Label(frame, text="System Information", font=("TkDefaultFont", 9, "bold"))
+    header.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+    rows = (
+        ("os", "OS Information"),
+        ("cpu", "CPU Information"),
+        ("memory_storage", "Memory and Storage Information"),
+        ("local_ips", "Local Network IPs"),
+    )
+    for idx, (key, label_text) in enumerate(rows, start=1):
+        ttk.Label(frame, text=label_text).grid(
+            row=idx,
+            column=0,
+            sticky="nw",
+            padx=(0, 12),
+            pady=(0, 2),
+        )
+        value_label = ttk.Label(
+            frame,
+            text=str(info.get(key, _SYSTEM_INFO_UNAVAILABLE) or _SYSTEM_INFO_UNAVAILABLE),
+            justify="left",
+            wraplength=760,
+        )
+        value_label.grid(row=idx, column=1, sticky="nw", pady=(0, 2))
+        app.app_settings_system_info_values[key] = value_label
+    return row + 1
 
 
 def _build_category_header(
@@ -850,15 +1093,15 @@ def build_app_settings_panel(app, parent):
         font=("TkDefaultFont", 10, "bold"),
     )
     version_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
+    next_row = _build_system_info_block(app, app._app_settings_inner, 1)
     app.app_settings_empty_label = ttk.Label(
         app._app_settings_inner,
         text=_NO_MATCHING_SETTINGS_TEXT,
         justify="left",
     )
-    app.app_settings_empty_label.grid(row=1, column=0, sticky="w", pady=(0, 8))
+    app.app_settings_empty_label.grid(row=next_row, column=0, sticky="w", pady=(0, 8))
     app.app_settings_empty_label.grid_remove()
-
-    next_row = 2
+    next_row += 1
     app.app_settings_section_headers = []
     app.app_settings_section_entries = []
     app.app_settings_category_entries = []

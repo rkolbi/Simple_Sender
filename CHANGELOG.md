@@ -46,7 +46,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ### Validation
 - Current local repository validation snapshot after the cleanup and baseline-alignment work:
-  - `pytest -q`: PASS (`1745 passed, 3 skipped` on `2026-04-09`)
+  - `pytest -q`: PASS (`1756 passed, 2 skipped` on `2026-04-10`)
 
 ## [3.0] - 2026-04-05
 

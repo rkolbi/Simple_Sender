@@ -110,7 +110,7 @@ RT_SO_MINUS_10 = b"\x9b"
 # UI CONSTANTS
 # ============================================================================
 
-MAX_CONSOLE_LINES = 5000
+MAX_CONSOLE_LINES = 3000
 """Maximum number of lines to keep in console."""
 
 CONSOLE_BATCH_DELAY_MS = 50
@@ -119,7 +119,7 @@ CONSOLE_BATCH_DELAY_MS = 50
 CONSOLE_PENDING_BATCH_MAX = 2000
 """Maximum pending console entries buffered before forcing a full re-render."""
 
-CONSOLE_MAX_BUFFER_BYTES = 1_500_000
+CONSOLE_MAX_BUFFER_BYTES = 1_000_000
 """Maximum estimated bytes retained by in-memory console history."""
 
 LINE_NUMBER_OFFSET = 1

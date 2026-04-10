@@ -45,6 +45,24 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _toolbar_button_padding(style) -> object:
+    try:
+        configured = style.configure("TButton")
+        if isinstance(configured, dict):
+            padding = configured.get("padding")
+            if padding not in ("", None):
+                return padding
+    except Exception as exc:
+        _log_suppressed("Failed reading TButton configured padding", exc)
+    try:
+        padding = style.lookup("TButton", "padding")
+        if padding not in ("", None):
+            return padding
+    except Exception as exc:
+        _log_suppressed("Failed reading TButton lookup padding", exc)
+    return (10, 6)
+
+
 def _init_behavior_preferences(
     app,
     *,
@@ -435,7 +453,7 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
         app.icon_button_style,
         anchor="center",
         justify="center",
-        padding=(8, 4),
+        padding=_toolbar_button_padding(app.style),
         font=app.icon_button_font,
     )
     app.home_button_style = "SimpleSender.HomeButton.TButton"
