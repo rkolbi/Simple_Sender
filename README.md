@@ -292,8 +292,8 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Use the always-visible right-side controls to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
-   - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools` as separate truthful lists. It does not invent one-to-one pairings between them.
-   - After confirmation, streaming starts immediately and keeps run-path checks lean; use preflight, Job Info, and the shared validation summary when you want extra review before cutting.
+   - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools` as separate truthful lists. It does not invent one-to-one pairings between them, and it no longer shows a stale G-code validation line.
+   - After confirmation, streaming starts immediately and keeps run-path checks lean; use Preflight and Job Info when you want extra review before cutting.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
@@ -909,6 +909,7 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
 - The **Logs** popup (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
+  - If you open **View Logs...** from **App Settings**, App Settings stays open underneath. If you then use **Clear Logs**, its confirmation opens above **Logs** without closing or hiding either **Logs** or **App Settings**.
   - The **Logs** popup button is hidden by default. Enable it with **App Settings > Interface > Auxiliary panel buttons > Show Logs Button** if you want it in the lower control row; **View Logs...** remains available either way.
 
 ## Testing
@@ -1440,7 +1441,7 @@ Macro UI is included below along with the rest of the interface.
 - Preload App Settings popup after startup: builds the App Settings popup hidden after startup so the first manual open is faster. Disabled by default and takes effect on the next launch.
 - Performance mode: batches console updates and reduces streaming log chatter.
 - Log GUI button actions: includes GUI actions in the console log.
-- View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions.
+- View Logs...: opens the log viewer with source/level filters plus refresh/clear/export actions. When launched from App Settings, the Logs popup stays above App Settings, and Clear Logs confirmation stays above Logs.
 - Auxiliary panel buttons: `Show Logs Button`, `Show Raw $$ Button`, and `Show Checklists Button` control whether those popup-launch buttons are visible in the lower control row. Defaults are Logs hidden, Raw $$ hidden, Checklists shown.
 - Status indicators (Endstops/Probe/Hold): toggles each LED in the status bar.
 - Status bar quick buttons (Tips, Keys, Auto-Level Overlay, Vac, Light, Release): toggles each status-bar quick button.

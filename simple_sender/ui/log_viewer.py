@@ -73,6 +73,27 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _viewer_dialog_parent(viewer) -> object | None:
+    getter = getattr(viewer, "winfo_toplevel", None)
+    if callable(getter):
+        try:
+            parent = getter()
+            if parent is not None and bool(getattr(parent, "winfo_exists", lambda: True)()):
+                return parent
+        except Exception:
+            pass
+    app = getattr(viewer, "app", None)
+    parent = getattr(app, "_logs_window", None)
+    if parent is None:
+        return None
+    try:
+        if not bool(parent.winfo_exists()):
+            return None
+    except Exception:
+        return None
+    return parent
+
+
 def _resolve_log_files(log_dir: Path | None, source: str) -> list[Path]:
     """Return matching log files for a source, ordered oldest to newest."""
 
@@ -463,7 +484,11 @@ class LogViewer(ttk.Frame):
             return
         record_task_timing(self.app, "log_viewer.export", elapsed_ms, success=(error is None))
         if error is not None:
-            messagebox.showerror("Export Logs", f"Failed to export logs:\n{error}")
+            messagebox.showerror(
+                "Export Logs",
+                f"Failed to export logs:\n{error}",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         level, message = _format_export_outcome(
             out_path,
@@ -472,20 +497,28 @@ class LogViewer(ttk.Frame):
             failed_files=list(failed_files),
         )
         if level == "info":
-            messagebox.showinfo("Export Logs", message)
+            messagebox.showinfo("Export Logs", message, parent=_viewer_dialog_parent(self))
         elif level == "warning":
-            messagebox.showwarning("Export Logs", message)
+            messagebox.showwarning("Export Logs", message, parent=_viewer_dialog_parent(self))
         else:
-            messagebox.showerror("Export Logs", message)
+            messagebox.showerror("Export Logs", message, parent=_viewer_dialog_parent(self))
 
     def export_logs(self) -> None:
         if self._export_inflight or self._clear_inflight:
-            messagebox.showinfo("Export Logs", "Log operation already in progress.")
+            messagebox.showinfo(
+                "Export Logs",
+                "Log operation already in progress.",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         log_dir = get_log_dir()
         log_files = _resolve_log_files(log_dir, "All")
         if not log_files:
-            messagebox.showinfo("Export Logs", "No log files found.")
+            messagebox.showinfo(
+                "Export Logs",
+                "No log files found.",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_name = f"simple_sender_logs_{timestamp}.zip"
@@ -500,6 +533,7 @@ class LogViewer(ttk.Frame):
             initialdir=str(initial_dir),
             initialfile=default_name,
             filetypes=(("Zip files", "*.zip"), ("All files", "*.*")),
+            parent=_viewer_dialog_parent(self),
         )
         if not path:
             return
@@ -562,7 +596,11 @@ class LogViewer(ttk.Frame):
         except Exception as exc:
             self._set_export_inflight(False)
             _log_suppressed("Failed starting log export thread", exc)
-            messagebox.showerror("Export Logs", f"Failed to export logs:\n{exc}")
+            messagebox.showerror(
+                "Export Logs",
+                f"Failed to export logs:\n{exc}",
+                parent=_viewer_dialog_parent(self),
+            )
 
     def _complete_clear(
         self,
@@ -576,26 +614,40 @@ class LogViewer(ttk.Frame):
             return
         record_task_timing(self.app, "log_viewer.clear", elapsed_ms, success=(error is None))
         if error is not None:
-            messagebox.showerror("Clear Logs", f"Failed to clear logs:\n{error}")
+            messagebox.showerror(
+                "Clear Logs",
+                f"Failed to clear logs:\n{error}",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         self.refresh()
         messagebox.showinfo(
             "Clear Logs",
             f"Cleared active logs: {truncated}\nRemoved rotated logs: {deleted}",
+            parent=_viewer_dialog_parent(self),
         )
 
     def clear_logs(self) -> None:
         if self._export_inflight or self._clear_inflight:
-            messagebox.showinfo("Clear Logs", "Log operation already in progress.")
+            messagebox.showinfo(
+                "Clear Logs",
+                "Log operation already in progress.",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         log_dir = get_log_dir()
         log_files = _resolve_log_files(log_dir, "All")
         if not log_files:
-            messagebox.showinfo("Clear Logs", "No log files found.")
+            messagebox.showinfo(
+                "Clear Logs",
+                "No log files found.",
+                parent=_viewer_dialog_parent(self),
+            )
             return
         confirmed = messagebox.askyesno(
             "Clear Logs",
             "Clear all current logs and remove rotated log files?",
+            parent=_viewer_dialog_parent(self),
         )
         if not confirmed:
             return
@@ -624,7 +676,11 @@ class LogViewer(ttk.Frame):
         except Exception as exc:
             self._set_clear_inflight(False)
             _log_suppressed("Failed starting log clear thread", exc)
-            messagebox.showerror("Clear Logs", f"Failed to clear logs:\n{exc}")
+            messagebox.showerror(
+                "Clear Logs",
+                f"Failed to clear logs:\n{exc}",
+                parent=_viewer_dialog_parent(self),
+            )
 
     def _on_destroy(self, event=None) -> None:
         if event is not None and getattr(event, "widget", None) is not self:

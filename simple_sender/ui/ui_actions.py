@@ -32,15 +32,11 @@ from simple_sender.ui.alarm_state import mark_alarm_clear_requested
 from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
-from simple_sender.gcode_validator import format_validation_details, format_validation_report
 from simple_sender.ui.modal_sync import request_modal_state_sync
 from simple_sender.ui.theme_helpers import (
     apply_toggle_indicator_style,
-    bind_scrollbar_theme,
-    bind_text_display_theme,
     notebook_page_style_name,
     refresh_theme_widgets,
-    text_display_theme_options,
 )
 from simple_sender.utils.config import DEFAULT_SETTINGS
 
@@ -957,7 +953,6 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
         ttk.Label(body, text=value, font=value_font, wraplength=520).grid(
             row=idx, column=1, sticky="w", pady=2
         )
-    report = getattr(app, "_gcode_validation_report", None)
     summary_text = _run_job_metadata_summary_text(app)
     next_row = len(rows) + 1
     if summary_text:
@@ -968,65 +963,9 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             justify="left",
         ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(10, 0))
         next_row += 1
-    report_text = format_validation_report(report)
-    report_row = next_row
-    ttk.Label(
-        body,
-        text=report_text,
-        wraplength=520,
-        justify="left",
-    ).grid(row=report_row, column=0, columnspan=2, sticky="w", pady=(10, 0))
-
-    details_window: dict[str, tk.Toplevel | None] = {"win": None}
-
-    def open_details():
-        win = details_window.get("win")
-        if win is not None:
-            try:
-                if win.winfo_exists():
-                    win.lift()
-                    win.focus_force()
-                    return
-            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-                _log_suppressed("Failed focusing existing validation-details window", exc)
-        win = tk.Toplevel(dialog)
-        details_window["win"] = win
-        win.title("G-code validation details")
-        win.transient(dialog)
-        win.minsize(640, 420)
-        apply_toplevel_theme(win, app)
-        container = ttk.Frame(win, padding=12, style=notebook_page_style_name())
-        container.pack(fill="both", expand=True)
-        text = tk.Text(container, wrap="word", height=18)
-        themed_options = text_display_theme_options(app)
-        if themed_options:
-            text.configure(themed_options)
-        vsb = ttk.Scrollbar(container, orient="vertical", command=text.yview)
-        bind_scrollbar_theme(app, vsb)
-        text.configure(yscrollcommand=vsb.set)
-        bind_text_display_theme(app, text)
-        text.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        container.grid_rowconfigure(0, weight=1)
-        container.grid_columnconfigure(0, weight=1)
-        text.insert("end", format_validation_details(report))
-        text.configure(state="disabled")
-
-        def close():
-            details_window["win"] = None
-            try:
-                win.destroy()
-            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
-                _log_suppressed("Failed closing validation-details window", exc)
-
-        btn_row = ttk.Frame(container)
-        btn_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btn_row, text="Close", command=close).pack(side="right")
-        win.protocol("WM_DELETE_WINDOW", close)
-        center_window(win, dialog)
 
     btn_frame = ttk.Frame(body, style=notebook_page_style_name())
-    btn_frame.grid(row=report_row + 1, column=0, columnspan=2, sticky="e", pady=(12, 0))
+    btn_frame.grid(row=next_row, column=0, columnspan=2, sticky="e", pady=(12, 0))
     result = {"ok": False}
 
     def accept():
@@ -1043,11 +982,6 @@ def _confirm_run_job(app, label: str = "Run job") -> bool:
             _log_suppressed("Failed closing run-confirmation dialog on cancel", exc)
 
     confirm_label = "START"
-    if report is not None and getattr(report, "line_issue_count", 0) > 0:
-        ttk.Button(btn_frame, text="Details...", command=open_details).pack(
-            side="left",
-            padx=(0, 6),
-        )
     ttk.Button(btn_frame, text=confirm_label, command=accept).pack(side="right", padx=(6, 0))
     ttk.Button(btn_frame, text="Cancel", command=cancel).pack(side="right")
     dialog.protocol("WM_DELETE_WINDOW", cancel)

@@ -32,6 +32,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Deferred-completion finalization now refreshes the top-right progress bar and label through the shared progress UI path, so the visible display reaches the same authoritative `100.0%` completion state reflected by byte EOF and completion logging.
 - Work-position zero actions now require operator confirmation for `X`, `Y`, `Z`, and `All` before sending the zeroing command.
 - App Settings first-open responsiveness no longer makes the `View Logs...` path feel like it needs a second click while the settings popup is still constructing.
+- Start Job confirmation no longer shows the stale G-code validation line or validation-details affordance now that that review path is no longer offered there.
+- Nested popup ownership is now truthful for `App Settings -> View Logs... -> Clear Logs`:
+  - App Settings stays open underneath Logs
+  - Clear Logs confirmation is parented above Logs without hiding or disturbing either underlying popup
 
 ### Documentation
 - Deep docs truthfulness pass:
@@ -43,6 +47,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - built-in tool change docs state the real current contract: park at safe Z over WCS `X0/Y0`, then rely on the posted job to reposition
   - Resume docs now describe the current Dry Run, Job Setup, and `G92` safeguard behavior
   - historical v3.0 changelog wording no longer presents a standing "recent real-machine validation" claim as if it were evergreen release proof
+- README now reflects the current Start Job confirmation content and the intended App Settings/Logs/Clear Logs popup stacking behavior.
 
 ### Validation
 - Current local repository validation snapshot after the cleanup and baseline-alignment work:

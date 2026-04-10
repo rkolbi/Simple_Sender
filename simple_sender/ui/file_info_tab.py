@@ -331,7 +331,21 @@ def refresh_file_info_tab(app) -> None:
     var = getattr(app, "file_info_var", None)
     text = render_file_info_text(app)
     last = str(getattr(app, "_file_info_last_text", "") or "")
-    if text == last:
+    text_widget = getattr(app, "file_info_text", None)
+    widget_text = None
+    if text_widget is not None:
+        getter = getattr(text_widget, "get", None)
+        if callable(getter):
+            try:
+                widget_text = str(getter("1.0", "end-1c"))
+            except Exception:
+                widget_text = None
+        elif hasattr(text_widget, "contents"):
+            try:
+                widget_text = str(getattr(text_widget, "contents"))
+            except Exception:
+                widget_text = None
+    if text == last and (text_widget is None or widget_text == text):
         return
     app._file_info_last_text = text
     if var is not None:
@@ -339,7 +353,6 @@ def refresh_file_info_tab(app) -> None:
             var.set(text)
         except Exception:
             pass
-    text_widget = getattr(app, "file_info_text", None)
     if text_widget is not None:
         try:
             text_widget.configure(state="normal")
