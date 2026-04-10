@@ -35,7 +35,9 @@ from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.stream_completion import should_defer_completion
 
 logger = logging.getLogger(__name__)
-_JOB_TELEMETRY_INTERVAL_MS = 10 * 60 * 1000
+_JOB_TELEMETRY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000
+_JOB_TELEMETRY_MILESTONE_STEP_PCT = 10
+_JOB_TELEMETRY_MAX_MILESTONE_PCT = 90
 
 AfterId = str | int
 ConsoleEntry = tuple[str, str | None]
@@ -94,6 +96,9 @@ class StreamingController:
         self._job_telemetry_after_id: AfterId | None = None
         self._job_telemetry_token = 0
         self._job_lifecycle_run_type: str | None = None
+        self._job_next_milestone_pct: int | None = None
+        self._job_last_authoritative_progress_pct: float | None = None
+        self._job_telemetry_scheduling = False
 
     def _full_progress_allowed(self) -> bool:
         stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
@@ -661,6 +666,10 @@ class StreamingController:
             visible = display_pct is not None
         setattr(self.app, "_stream_progress_pct", float(display_pct or 0.0))
         self._set_progress_display(display_pct, visible=visible)
+        self._maybe_log_job_progress_milestones(
+            done_total=done_total,
+            byte_progress=byte_progress,
+        )
 
     def _set_progress_display(self, pct_f: float | None, *, visible: bool) -> None:
         set_visible = getattr(self.app, "_set_stream_progress_visible", None)
@@ -865,6 +874,172 @@ class StreamingController:
         legacy = int(getattr(self.app, "_last_acked_index", -1) or -1)
         return max(current, legacy)
 
+    def _job_line_progress_known(self) -> bool:
+        executable_total = int(getattr(self.app, "_gcode_executable_lines", 0) or 0)
+        if executable_total > 0:
+            return bool(getattr(self.app, "_gcode_executable_lines_known", False))
+        total_lines = int(getattr(self.app, "_gcode_total_lines", 0) or 0)
+        if total_lines > 0:
+            return bool(getattr(self.app, "_gcode_total_lines_known", False))
+        return False
+
+    def _job_progress_pct_from_start_index(self, start_index: int) -> float | None:
+        total = int(
+            getattr(self.app, "_gcode_executable_lines", 0)
+            or getattr(self.app, "_gcode_total_lines", 0)
+            or 0
+        )
+        if total <= 0 or int(start_index) <= 0:
+            return None
+        done = max(0, min(total, int(start_index)))
+        return max(0.0, min(100.0, (float(done) / float(total)) * 100.0))
+
+    def _resolve_job_progress_pct(
+        self,
+        *,
+        metrics: dict | None = None,
+        done_total: tuple[int, int] | None = None,
+        byte_progress: tuple[int, int] | None = None,
+        start_index: int | None = None,
+    ) -> float | None:
+        runtime_metrics = metrics or {}
+        line_pct = self._line_progress_display_pct(
+            done_total,
+            force_done_clamp=False,
+        )
+        line_known = self._job_line_progress_known()
+        if byte_progress is not None:
+            acked_offset, file_size_bytes = byte_progress
+            byte_pct = self._byte_progress_display_pct(
+                acked_offset,
+                file_size_bytes,
+                force_done_clamp=False,
+            )
+        else:
+            file_size = int(
+                runtime_metrics.get("stream_file_size_bytes", 0)
+                or getattr(self.app, "_stream_progress_file_size_bytes", 0)
+                or getattr(self.app, "_gcode_file_size_bytes", 0)
+                or 0
+            )
+            acked_bytes = int(
+                runtime_metrics.get(
+                    "acked_byte_offset",
+                    getattr(self.app, "_stream_acked_byte_offset", 0),
+                )
+                or 0
+            )
+            byte_pct = self._byte_progress_display_pct(
+                acked_bytes,
+                file_size,
+                force_done_clamp=False,
+            )
+        progress_pct = None
+        if line_pct is not None and line_known:
+            progress_pct = line_pct
+        elif byte_pct is not None:
+            progress_pct = byte_pct
+        elif line_pct is not None:
+            progress_pct = line_pct
+        else:
+            progress_metric = runtime_metrics.get(
+                "stream_progress_pct",
+                getattr(self.app, "_stream_progress_pct", None),
+            )
+            if progress_metric is not None:
+                try:
+                    progress_pct = float(progress_metric)
+                except Exception:
+                    progress_pct = None
+        resume_pct = (
+            self._job_progress_pct_from_start_index(int(start_index))
+            if start_index is not None
+            else None
+        )
+        if resume_pct is not None and (progress_pct is None or progress_pct < resume_pct):
+            progress_pct = resume_pct
+        if progress_pct is None:
+            return None
+        return max(0.0, min(100.0, float(progress_pct)))
+
+    def _initialize_job_telemetry_tracking(self, *, progress_pct: float | None) -> None:
+        self._job_last_authoritative_progress_pct = (
+            None if progress_pct is None else max(0.0, min(100.0, float(progress_pct)))
+        )
+        if progress_pct is None:
+            next_milestone = _JOB_TELEMETRY_MILESTONE_STEP_PCT
+        else:
+            bounded_pct = max(0.0, min(100.0, float(progress_pct)))
+            next_milestone = (
+                int(bounded_pct // _JOB_TELEMETRY_MILESTONE_STEP_PCT) + 1
+            ) * _JOB_TELEMETRY_MILESTONE_STEP_PCT
+        if next_milestone > _JOB_TELEMETRY_MAX_MILESTONE_PCT:
+            self._job_next_milestone_pct = None
+            return
+        self._job_next_milestone_pct = int(next_milestone)
+
+    def _emit_job_progress_milestones(
+        self,
+        *,
+        progress_pct: float | None,
+        metrics: dict | None = None,
+        perf_metrics: dict | None = None,
+    ) -> int:
+        if progress_pct is None or self._job_next_milestone_pct is None:
+            return 0
+        bounded_pct = max(0.0, min(100.0, float(progress_pct)))
+        logged = 0
+        while (
+            self._job_next_milestone_pct is not None
+            and self._job_next_milestone_pct <= _JOB_TELEMETRY_MAX_MILESTONE_PCT
+            and bounded_pct >= float(self._job_next_milestone_pct)
+        ):
+            milestone_pct = int(self._job_next_milestone_pct)
+            self._log_job_telemetry_line(
+                metrics=metrics,
+                perf_metrics=perf_metrics,
+                progress_pct=bounded_pct,
+                milestone_pct=milestone_pct,
+            )
+            logged += 1
+            next_milestone = milestone_pct + _JOB_TELEMETRY_MILESTONE_STEP_PCT
+            self._job_next_milestone_pct = (
+                next_milestone
+                if next_milestone <= _JOB_TELEMETRY_MAX_MILESTONE_PCT
+                else None
+            )
+        return logged
+
+    def _maybe_log_job_progress_milestones(
+        self,
+        *,
+        done_total: tuple[int, int] | None = None,
+        byte_progress: tuple[int, int] | None = None,
+    ) -> int:
+        if self._job_lifecycle_run_type is None or not self._job_is_active_for_telemetry():
+            return 0
+        progress_pct = self._resolve_job_progress_pct(
+            done_total=done_total,
+            byte_progress=byte_progress,
+        )
+        if progress_pct is None:
+            return 0
+        if (
+            self._job_last_authoritative_progress_pct is None
+            or progress_pct > self._job_last_authoritative_progress_pct
+        ):
+            self._job_last_authoritative_progress_pct = progress_pct
+        metrics = self._runtime_metrics_snapshot()
+        perf_metrics = self._performance_metrics_snapshot()
+        logged = self._emit_job_progress_milestones(
+            progress_pct=progress_pct,
+            metrics=metrics,
+            perf_metrics=perf_metrics,
+        )
+        if logged > 0:
+            self._schedule_job_telemetry(token=self._job_telemetry_token)
+        return logged
+
     def _cancel_job_telemetry(self) -> None:
         after_id = self._job_telemetry_after_id
         self._job_telemetry_after_id = None
@@ -877,24 +1052,55 @@ class StreamingController:
     def stop_job_lifecycle_logging(self) -> None:
         self._cancel_job_telemetry()
         self._job_lifecycle_run_type = None
+        self._job_next_milestone_pct = None
+        self._job_last_authoritative_progress_pct = None
         self._job_telemetry_token += 1
 
     def _schedule_job_telemetry(self, *, token: int) -> None:
         self._cancel_job_telemetry()
 
         def _run() -> None:
+            if self._job_telemetry_scheduling:
+                return
             self._job_telemetry_after_id = None
             if token != self._job_telemetry_token:
                 return
             if not self._job_is_active_for_telemetry():
                 return
-            self._log_job_telemetry_line()
+            metrics = self._runtime_metrics_snapshot()
+            perf_metrics = self._performance_metrics_snapshot()
+            progress_pct = self._resolve_job_progress_pct(metrics=metrics)
+            if self._job_last_authoritative_progress_pct is not None:
+                if progress_pct is None:
+                    progress_pct = self._job_last_authoritative_progress_pct
+                else:
+                    progress_pct = max(progress_pct, self._job_last_authoritative_progress_pct)
+            if progress_pct is not None:
+                self._job_last_authoritative_progress_pct = progress_pct
+            logged = self._emit_job_progress_milestones(
+                progress_pct=progress_pct,
+                metrics=metrics,
+                perf_metrics=perf_metrics,
+            )
+            if logged == 0:
+                self._log_job_telemetry_line(
+                    label="Heartbeat",
+                    metrics=metrics,
+                    perf_metrics=perf_metrics,
+                    progress_pct=progress_pct,
+                )
             self._schedule_job_telemetry(token=token)
 
         try:
-            self._job_telemetry_after_id = self.app.after(_JOB_TELEMETRY_INTERVAL_MS, _run)
+            self._job_telemetry_scheduling = True
+            self._job_telemetry_after_id = self.app.after(
+                _JOB_TELEMETRY_HEARTBEAT_INTERVAL_MS,
+                _run,
+            )
         except Exception as exc:
             logger.debug("Failed scheduling job telemetry timer: %s", exc, exc_info=exc)
+        finally:
+            self._job_telemetry_scheduling = False
 
     def _job_is_active_for_telemetry(self) -> bool:
         stream_state = str(getattr(self.app, "_stream_state", "") or "").strip().lower()
@@ -902,10 +1108,22 @@ class StreamingController:
             getattr(self.app, "_stream_done_pending_idle", False)
         )
 
-    def _log_job_telemetry_line(self) -> None:
-        metrics = self._runtime_metrics_snapshot()
-        perf_metrics = self._performance_metrics_snapshot()
+    def _log_job_telemetry_line(
+        self,
+        *,
+        label: str = "Telemetry",
+        metrics: dict | None = None,
+        perf_metrics: dict | None = None,
+        progress_pct: float | None = None,
+        milestone_pct: int | None = None,
+    ) -> None:
+        metrics = metrics if metrics is not None else self._runtime_metrics_snapshot()
+        perf_metrics = (
+            perf_metrics if perf_metrics is not None else self._performance_metrics_snapshot()
+        )
         parts: list[str] = []
+        if milestone_pct is not None:
+            parts.append(f"milestone={int(milestone_pct)}%")
         start_time = getattr(self.app, "_job_started_at", None)
         if start_time is not None:
             try:
@@ -916,14 +1134,15 @@ class StreamingController:
                 except Exception:
                     elapsed_s = 0.0
             parts.append(f"elapsed={self._format_elapsed_compact(elapsed_s)}")
-        progress_metric = metrics.get("stream_progress_pct", None)
-        try:
-            if progress_metric is not None:
-                progress_pct = float(progress_metric)
-            else:
+        if progress_pct is None:
+            progress_metric = metrics.get("stream_progress_pct", None)
+            try:
+                if progress_metric is not None:
+                    progress_pct = float(progress_metric)
+                else:
+                    progress_pct = float(getattr(self.app, "_stream_progress_pct", 0.0) or 0.0)
+            except Exception:
                 progress_pct = float(getattr(self.app, "_stream_progress_pct", 0.0) or 0.0)
-        except Exception:
-            progress_pct = float(getattr(self.app, "_stream_progress_pct", 0.0) or 0.0)
         parts.append(f"progress={progress_pct:.1f}%")
         acked_idx = self._resolved_acked_index(metrics)
         total = int(getattr(self.app, "_gcode_executable_lines", 0) or getattr(self.app, "_gcode_total_lines", 0) or 0)
@@ -998,7 +1217,7 @@ class StreamingController:
                 parts.append(f"rss={self._format_bytes_compact(int(rss_current or 0)).replace(' ', '')}")
         except Exception:
             pass
-        self.handle_log(f"[{self._timestamp()}] [job] Telemetry: " + ", ".join(parts))
+        self.handle_log(f"[{self._timestamp()}] [job] {label}: " + ", ".join(parts))
 
     def log_job_loaded(self) -> None:
         self.stop_job_lifecycle_logging()
@@ -1031,7 +1250,16 @@ class StreamingController:
             parts.append(f"start_line={int(start_index) + 1:,}")
             parts.append(f"start_index={int(start_index)}")
         self.handle_log(f"[{self._timestamp()}] [job] Start: " + ", ".join(parts))
-        self._log_job_telemetry_line()
+        metrics = self._runtime_metrics_snapshot()
+        if normalized_run_type == "resume" or int(start_index) > 0:
+            initial_progress_pct = self._resolve_job_progress_pct(
+                metrics=metrics,
+                start_index=int(start_index),
+            )
+        else:
+            initial_progress_pct = 0.0
+        self._initialize_job_telemetry_tracking(progress_pct=initial_progress_pct)
+        self._log_job_telemetry_line(metrics=metrics)
         self._job_telemetry_token += 1
         self._schedule_job_telemetry(token=self._job_telemetry_token)
 
