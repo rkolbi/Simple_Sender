@@ -287,11 +287,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             logger.warning(msg)
             self.ui_q.put(("log", msg))
             return
-        source = self._gcode
-        reader = getattr(source, "read_line_with_offsets", None)
+        source_obj: object | None = self._gcode
+        reader = getattr(source_obj, "read_line_with_offsets", None)
         if not callable(reader):
-            source = getattr(self, "_gcode_source", None)
-            reader = getattr(source, "read_line_with_offsets", None)
+            source_obj = getattr(self, "_gcode_source", None)
+            reader = getattr(source_obj, "read_line_with_offsets", None)
         initial_ack_byte_offset = 0
         if callable(reader):
             if start_index > 0:

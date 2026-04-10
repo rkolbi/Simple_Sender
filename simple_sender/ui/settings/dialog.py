@@ -149,10 +149,12 @@ def _total_ram_bytes() -> int | None:
         except Exception:
             return None
     try:
-        page_size = int(os.sysconf("SC_PAGE_SIZE"))
-        phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
-        if page_size > 0 and phys_pages > 0:
-            return int(page_size * phys_pages)
+        sysconf = getattr(os, "sysconf", None)
+        if callable(sysconf):
+            page_size = int(sysconf("SC_PAGE_SIZE"))
+            phys_pages = int(sysconf("SC_PHYS_PAGES"))
+            if page_size > 0 and phys_pages > 0:
+                return int(page_size * phys_pages)
     except Exception:
         return None
     return None

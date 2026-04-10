@@ -100,9 +100,35 @@ def maybe_notify_job_completion(app, done: int, total: int) -> None:
             _log_suppressed("Failed playing job completion bell", exc)
 
 
+def _set_completion_progress_display(app) -> None:
+    try:
+        setattr(app, "_stream_progress_pct", 100.0)
+    except Exception:
+        pass
+    try:
+        progress_pct = getattr(app, "progress_pct", None)
+        if progress_pct is not None:
+            progress_pct.set(100)
+    except Exception as exc:
+        _log_suppressed("Failed setting completion progress bar to 100%", exc)
+    try:
+        progress_text = getattr(app, "progress_text", None)
+        if progress_text is not None:
+            progress_text.set("100.0%")
+    except Exception as exc:
+        _log_suppressed("Failed setting completion progress label to 100.0%", exc)
+    set_visible = getattr(app, "_set_stream_progress_visible", None)
+    if callable(set_visible):
+        try:
+            set_visible(True)
+        except Exception as exc:
+            _log_suppressed("Failed ensuring completion progress display is visible", exc)
+
+
 def _start_completion_flash(app) -> None:
     if getattr(app, "_completion_flash_active", False):
         return
+    _set_completion_progress_display(app)
     app._completion_flash_active = True
     app._completion_flash_on = False
 
@@ -126,7 +152,7 @@ def _stop_completion_flash(app) -> None:
             _log_suppressed("Failed canceling completion flash timer", exc)
     app._completion_flash_id = None
     app._completion_flash_on = False
-    app.progress_pct.set(0)
+    _set_completion_progress_display(app)
 
 
 def _show_job_completion_dialog(app, message: str) -> None:

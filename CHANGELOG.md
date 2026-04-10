@@ -51,7 +51,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ### Validation
 - Current local repository validation snapshot after the cleanup and baseline-alignment work:
-  - `pytest -q`: PASS (`1756 passed, 2 skipped` on `2026-04-10`)
+  - `run_tests.bat`: PASS end-to-end on `2026-04-10`
+  - full suite stage: `1766 passed, 3 skipped`
+  - critical coverage gate: PASS (`grbl_worker_connection.py` `100.0%`, minimum `95.0%`)
+  - `mypy`: PASS (`141` source files)
 
 ## [3.0] - 2026-04-05
 

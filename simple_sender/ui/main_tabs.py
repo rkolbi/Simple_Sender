@@ -386,7 +386,7 @@ def _show_app_settings_popup(app, *, present: bool = True) -> None:
 
     def _finish_build() -> None:
         try:
-            popup._simple_sender_app_settings_build_scheduled = False
+            setattr(popup, "_simple_sender_app_settings_build_scheduled", False)
         except Exception:
             pass
         try:
@@ -406,14 +406,14 @@ def _show_app_settings_popup(app, *, present: bool = True) -> None:
         except Exception:
             logger.exception("Failed clearing App Settings popup placeholder")
         build_app_settings_panel(app, body).pack(fill="both", expand=True)
-        popup._simple_sender_app_settings_built = True
+        setattr(popup, "_simple_sender_app_settings_built", True)
         if bool(present):
             _activate_if_viewable(popup)
 
     if bool(getattr(popup, "_simple_sender_app_settings_build_scheduled", False)):
         return
     try:
-        popup._simple_sender_app_settings_build_scheduled = True
+        setattr(popup, "_simple_sender_app_settings_build_scheduled", True)
         popup.after_idle(_finish_build)
     except Exception:
         _finish_build()

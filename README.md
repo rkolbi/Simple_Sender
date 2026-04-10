@@ -426,7 +426,6 @@ This is a practical end-to-end flow, with rationale for the key options.
 - Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ popup button opens the raw text capture.
 
 ## Macros
-![](pics\screenshot-Macro.png)
 
 Simple Sender now has two distinct macro/workflow layers:
 
@@ -445,9 +444,7 @@ User macro launches are blocked while the controller is streaming, during alarms
 `App Settings > Macros` now covers only user-macro scripting, timeout controls, and **Open Macro Manager** for in-app editing/duplication/reordering of the 5 file-backed user macro slots. `App Settings > Probing & Setup` now owns `Probe Z start (machine, mm)`, `Probe safety margin (mm)`, the full `XYZ Plate` section, and the `Bit Setter` location/probe-cycle settings used by the protected setup workflows.
 Macro execution now uses stricter startup/result truthfulness: startup modal capture waits on the real `$G` completion signal, `LOAD` waits for actual load completion/failure, `OPEN`/`CLOSE` fail fast when the underlying connect/disconnect transition never started, and local-command helpers such as `SENDHEX` / `SAFE` fail the macro if their local action fails.
 
-In the image below, the first 5 buttons are always the protected built-in workflows. Populated user macros appear after them when a `Macro-1` through `Macro-5` file is present.
-
-![-](pics/macros.jpg)
+In the current layout, the first 5 buttons are always the protected built-in workflows. Populated user macros appear after them when a `Macro-1` through `Macro-5` file is present.
 
 ### Execution & safety
 Execution happens on a background worker that holds `_macro_lock`, so only one macro runs at a time. `_macro_send` waits for GRBL to finish each command (`wait_for_manual_completion`) and then polls for Idle before continuing. `%wait` uses a 30 s timeout (see `simple_sender/utils/constants.py`) while polling every 0.1 s, keeping commands synchronized. The runner aborts and releases the lock if GRBL raises an alarm, logging the offending line so you can recover.
@@ -720,7 +717,6 @@ Auto-leveling probes the job bounds and builds a height map to compensate for su
 - Always test in the air first and confirm probe wiring before running a full grid.
 
 ## Spoilboard Generator
-![](pics\screenshot-SpoilBoard.png)
 
 Use the right-side controls' **Spoilboard** button to generate a surfacing program without opening a CAM tool.
 
