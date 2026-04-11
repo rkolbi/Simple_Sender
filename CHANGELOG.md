@@ -36,6 +36,13 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Nested popup ownership is now truthful for `App Settings -> View Logs... -> Clear Logs`:
   - App Settings stays open underneath Logs
   - Clear Logs confirmation is parented above Logs without hiding or disturbing either underlying popup
+- `App Settings -> Macros -> Open Macro Manager` now follows the same child-popup ownership pattern as the working App Settings child dialogs:
+  - the first click now opens the Macro Manager immediately instead of creating a hidden-behind-parent window that only becomes reachable on the second click
+  - App Settings stays open and visible underneath while Macro Manager is open
+  - Macro Manager is parented/transient to the visible App Settings popup when present, then lifted and focused on first show and reuse
+  - closing Macro Manager only closes that child window and leaves App Settings open
+  - root cause was the Macro Manager launch path in `simple_sender/ui/dialogs/macro_manager.py` parenting to the root app and not forcing first-show lift/focus, unlike the already-correct App Settings child-popup paths
+  - focused regression coverage was added in `tests/ui/test_macro_manager_dialog.py`
 
 ### Documentation
 - Deep docs truthfulness pass:
@@ -55,6 +62,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - full suite stage: `1766 passed, 3 skipped`
   - critical coverage gate: PASS (`grbl_worker_connection.py` `100.0%`, minimum `95.0%`)
   - `mypy`: PASS (`141` source files)
+- Focused Macro Manager/App Settings popup validation after the ownership/focus fix:
+  - `python -m pytest tests\ui\test_macro_manager_dialog.py tests\ui\test_logs_dialog.py tests\unit\test_macro_manager.py`
+  - result: `10 passed`
+  - `python -m py_compile simple_sender\ui\dialogs\macro_manager.py tests\ui\test_macro_manager_dialog.py`
 
 ## [3.0] - 2026-04-05
 

@@ -51,12 +51,39 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
+def _resolve_macro_manager_parent(app: Any) -> object | None:
+    popup_windows = getattr(app, "_lower_popup_windows", None)
+    if isinstance(popup_windows, dict):
+        popup = popup_windows.get("app_settings")
+        if popup is not None:
+            try:
+                if bool(popup.winfo_exists()) and bool(popup.winfo_viewable()):
+                    return popup
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed checking App Settings popup ownership for Macro Manager",
+                    exc,
+                )
+    if app is not None:
+        try:
+            if bool(app.winfo_exists()):
+                return app
+        except Exception:
+            pass
+    return None
+
+
 class _MacroManagerDialog:
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, *, parent: object | None = None) -> None:
         self.app = app
+        self.parent = parent if parent is not None else _resolve_macro_manager_parent(app)
         self.window = tk.Toplevel(app)
         self.window.title("Macro Manager")
-        self.window.transient(app)
+        if self.parent is not None:
+            try:
+                self.window.transient(self.parent)
+            except Exception as exc:
+                _log_suppressed("Failed assigning Macro Manager transient parent", exc)
         self.window.resizable(True, True)
         self.window.minsize(900, 520)
         self._macro_dir = get_writable_macro_dir(app)
@@ -170,7 +197,7 @@ class _MacroManagerDialog:
         ttk.Button(actions, text="Close", command=self.close).grid(row=0, column=9, padx=(10, 0))
 
         self.window.protocol("WM_DELETE_WINDOW", self.close)
-        center_window(self.window, app)
+        center_window(self.window, self.parent)
         self.refresh()
         self.slot_list.selection_set(0)
         self.slot_list.event_generate("<<ListboxSelect>>")
@@ -503,17 +530,31 @@ class _MacroManagerDialog:
 
 
 def show_macro_manager(app: Any) -> None:
+    parent = _resolve_macro_manager_parent(app)
     existing = getattr(app, "_macro_manager_window", None)
     if existing is not None:
         try:
             if existing.winfo_exists():
+                if parent is not None:
+                    try:
+                        existing.transient(parent)
+                    except Exception as exc:
+                        _log_suppressed(
+                            "Failed updating Macro Manager transient parent",
+                            exc,
+                        )
                 existing.lift()
                 existing.focus_force()
                 return
         except Exception as exc:
             _log_suppressed("Failed restoring existing Macro Manager window", exc)
-    dialog = _MacroManagerDialog(app)
+    dialog = _MacroManagerDialog(app, parent=parent)
     try:
         app._macro_manager_window = dialog.window
     except Exception as exc:
         _log_suppressed("Failed storing macro manager window reference on app", exc)
+    try:
+        dialog.window.lift()
+        dialog.window.focus_force()
+    except Exception as exc:
+        _log_suppressed("Failed focusing Macro Manager after creation", exc)
