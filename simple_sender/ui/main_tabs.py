@@ -28,6 +28,7 @@ from simple_sender.ui.checklists_tab import build_checklists_panel
 from simple_sender.ui.console import build_console_panel
 from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 from simple_sender.ui.file_info_tab import build_file_info_panel
+from simple_sender.ui.help_dialog import build_help_about_panel
 from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
 from simple_sender.ui.settings import (
@@ -50,6 +51,7 @@ _POPUP_GEOMETRY = {
     "logs": (1280, 900),
     "checklists": (1100, 860),
     "app_settings": (1380, 940),
+    "help": (1380, 940),
 }
 
 
@@ -89,6 +91,11 @@ def _lower_popup_button_entries(app) -> list[dict]:
         {
             "button": getattr(app, "btn_app_settings_popup", None),
             "label": "App Settings",
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_help_popup", None),
+            "label": "About",
             "pack_kwargs": {"side": "left"},
         },
     ]
@@ -419,6 +426,30 @@ def _show_app_settings_popup(app, *, present: bool = True) -> None:
         _finish_build()
 
 
+def _show_help_popup(app) -> tk.Toplevel:
+    def _build(body, popup) -> None:
+        popup.tooltip_enabled = tk.BooleanVar(master=popup, value=False)
+        build_help_about_panel(app, body).pack(fill="both", expand=True)
+
+    def _focus_search() -> None:
+        panel = getattr(app, "help_about_panel", None)
+        if panel is None:
+            return
+        focus = getattr(panel, "focus_search", None)
+        if callable(focus):
+            focus()
+
+    return _show_popup_window(
+        app,
+        key="help",
+        title="About",
+        width=_POPUP_GEOMETRY["help"][0],
+        height=_POPUP_GEOMETRY["help"][1],
+        build_body=_build,
+        on_show=_focus_search,
+    )
+
+
 def _prewarm_app_settings_popup(app) -> None:
     if bool(getattr(app, "_closing", False)):
         return
@@ -533,6 +564,13 @@ def build_main_tabs(app, parent):
         command=lambda: _show_app_settings_popup(app),
         kb_id="show_app_settings_popup",
         tooltip="Open App Settings in a large popup.",
+    )
+    app.btn_help_popup = _build_popup_button(
+        left_buttons,
+        text="About",
+        command=lambda: _show_help_popup(app),
+        kb_id="show_help_popup",
+        tooltip="Open the About popup.",
     )
 
     console_pane = ttk.Labelframe(shell, text="Console", padding=0)
