@@ -1,0 +1,29 @@
+<!--
+SimpleSender-Gemini Openbox theme snippet
+
+Merge this into ~/.config/openbox/rc.xml inside the existing <theme> block,
+or use the values here to update your current theme section.
+
+The larger ActiveWindow/InactiveWindow font sizes are what increase the
+titlebar button box size so the supplied 16x16 XBM button glyphs are not
+clipped.
+-->
+<theme>
+  <name>SimpleSender-Gemini</name>
+
+  <titleLayout>NLIMC</titleLayout>
+
+  <font place="ActiveWindow">
+    <name>Sans</name>
+    <size>18</size>
+    <weight>bold</weight>
+    <slant>normal</slant>
+  </font>
+
+  <font place="InactiveWindow">
+    <name>Sans</name>
+    <size>18</size>
+    <weight>bold</weight>
+    <slant>normal</slant>
+  </font>
+</theme>

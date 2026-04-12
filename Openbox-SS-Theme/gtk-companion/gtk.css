@@ -1,0 +1,71 @@
+/* SimpleSender-Gemini GTK companion snippet
+   Use with GTK-based file managers if you want their content area to better
+   match the Openbox SimpleSender-Gemini theme. */
+
+@define-color ss_bg #11131A;
+@define-color ss_panel #1A1F2B;
+@define-color ss_panel_raised #202736;
+@define-color ss_border #465675;
+@define-color ss_fg #F5F7FB;
+@define-color ss_muted #B8C0D4;
+@define-color ss_accent #6E7CFF;
+@define-color ss_selection #33477B;
+
+window,
+dialog,
+.background,
+scrolledwindow,
+viewport,
+treeview.view,
+list,
+listview,
+textview,
+text,
+entry,
+searchbar,
+placessidebar,
+placessidebar row,
+sidebar,
+sidebar row,
+navigation-sidebar {
+  background-color: @ss_panel;
+  color: @ss_fg;
+}
+
+treeview.view:selected,
+list row:selected,
+listview row:selected,
+iconview:selected,
+flowboxchild:selected {
+  background-color: @ss_selection;
+  color: @ss_fg;
+}
+
+headerbar,
+toolbar,
+menubar,
+menu,
+menuitem {
+  background-color: @ss_panel_raised;
+  color: @ss_fg;
+}
+
+entry,
+searchbar entry,
+treeview.view,
+textview,
+text {
+  border: 1px solid @ss_border;
+}
+
+menuitem:hover,
+modelbutton:hover,
+button:hover {
+  background-color: mix(@ss_accent, @ss_panel_raised, 0.18);
+}
+
+button {
+  background-color: @ss_panel_raised;
+  color: @ss_fg;
+  border: 1px solid @ss_border;
+}
