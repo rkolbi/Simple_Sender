@@ -788,7 +788,8 @@ def _bind_theme_managed_widget(app, widget, *, apply_callback_name: str, apply_f
         return
     callback = getattr(widget, apply_callback_name, None)
     if not callable(callback):
-        callback = lambda widget=widget: apply_func(app, widget)
+        def callback(widget=widget) -> None:
+            apply_func(app, widget)
         try:
             setattr(widget, apply_callback_name, callback)
         except Exception:

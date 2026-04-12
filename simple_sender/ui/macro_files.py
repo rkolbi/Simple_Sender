@@ -253,8 +253,8 @@ def remove_macro_slot(macro_dir: str, index: int) -> bool:
         if removed_any:
             failed_paths = ", ".join(path for path, _exc in failures)
             raise OSError(f"Partially removed macro slot; failed deleting: {failed_paths}")
-        path, exc = failures[0]
-        raise OSError(f"Failed deleting macro slot file {path}: {exc}") from exc
+        failed_path, failure_exc = failures[0]
+        raise OSError(f"Failed deleting macro slot file {failed_path}: {failure_exc}") from failure_exc
     return removed_any
 
 

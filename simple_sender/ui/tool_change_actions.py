@@ -26,6 +26,8 @@ import logging
 import threading
 import time
 
+from simple_sender.ui.threading_utils import UI_CALL_DISPATCHED, UI_CALL_HANDOFF_FAILED
+
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -67,7 +69,7 @@ def _apply_macro_timeout_state(
 def _disable_macro_timeouts_for_tool_change(
     app,
 ) -> bool:
-    saved_raw = app._call_on_ui_thread(_snapshot_macro_timeout_state, app, timeout=None)
+    saved_raw = app._call_on_ui_thread(_snapshot_macro_timeout_state, app)
     saved = bool(saved_raw) if isinstance(saved_raw, bool) else bool(
         getattr(app, "_tool_change_unlimited_time_active", False)
     )
@@ -86,7 +88,6 @@ def _restore_macro_timeouts_for_tool_change(
         _apply_macro_timeout_state,
         app,
         no_timeout_override=bool(saved),
-        timeout=None,
     )
 
 
@@ -147,6 +148,7 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
     started = False
     succeeded = False
     timed_out = False
+    handoff_failed = False
     try:
         try:
             with app.macro_executor.macro_vars() as macro_vars:
@@ -160,14 +162,18 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
         except Exception as exc:
             _log_suppressed("Failed storing required tool name in macro vars", exc)
 
-        started = bool(
-            app._call_on_ui_thread(
-                app.macro_executor.run_builtin_workflow,
-                "tool_change",
-                True,
-                timeout=None,
-            )
+        started_result = app._call_on_ui_thread(
+            app.macro_executor.run_builtin_workflow,
+            "tool_change",
+            True,
+            timeout=None,
+            return_on_handoff=True,
         )
+        if started_result is UI_CALL_HANDOFF_FAILED:
+            started = False
+            handoff_failed = True
+        else:
+            started = started_result is UI_CALL_DISPATCHED or bool(started_result)
         if started:
             workflow_timeout_s = _tool_change_workflow_timeout_s(app)
             wait_status = _wait_for_workflow_finish(app, timeout_s=workflow_timeout_s)
@@ -188,6 +194,8 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
     reason = "Tool-change workflow failed."
     if _all_stop_cancel_requested(app):
         reason = "Canceled by ALL STOP."
+    elif handoff_failed:
+        reason = "Tool-change workflow failed: UI handoff timed out."
     elif timed_out:
         cancel_macro = getattr(app.macro_executor, "cancel_macro", None)
         if callable(cancel_macro):

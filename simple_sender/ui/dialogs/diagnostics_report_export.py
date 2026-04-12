@@ -34,12 +34,13 @@ def _post_ui_callback(
     callback,
     *,
     log_suppressed: Callable[[str, BaseException], None],
-) -> None:
+    on_drop: Callable[[], None] | None = None,
+) -> bool:
     poster = getattr(app, "_post_ui_thread", None)
     if callable(poster):
         try:
             poster(callback)
-            return
+            return True
         except Exception as exc:
             log_suppressed(
                 "Failed posting diagnostics report callback via _post_ui_thread",
@@ -49,20 +50,29 @@ def _post_ui_callback(
     if callable(after):
         try:
             after(0, callback)
-            return
+            return True
         except Exception as exc:
             log_suppressed("Failed posting diagnostics report callback to UI thread", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:
             ui_q.put(("ui_post", callback, (), {}))
-            return
+            return True
         except Exception as exc:
             log_suppressed("Failed posting diagnostics report callback via ui_q", exc)
     log_suppressed(
         "Dropping diagnostics report callback because no safe UI post path is available",
         RuntimeError("ui thread unavailable"),
     )
+    if callable(on_drop):
+        try:
+            on_drop()
+        except Exception as exc:
+            log_suppressed(
+                "Failed running diagnostics report drop-path cleanup",
+                exc,
+            )
+    return False
 
 
 def export_session_diagnostics(
@@ -137,6 +147,9 @@ def export_session_diagnostics(
                 app,
                 lambda: _complete_export(error),
                 log_suppressed=log_suppressed,
+                on_drop=lambda: setattr(
+                    app, "_diagnostics_report_export_inflight", False
+                ),
             )
 
         try:

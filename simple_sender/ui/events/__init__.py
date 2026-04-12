@@ -35,7 +35,7 @@ def handle_event(app, evt):
     return _router.handle_event(app, evt)
 
 
-def handle_ui_call(app, func, args, kwargs, result_q, cancel_token=None):
+def handle_ui_call(app, func, args, kwargs, result_q, cancel_token=None, start_q=None):
     return _router.handle_ui_call(
         app,
         func,
@@ -43,6 +43,7 @@ def handle_ui_call(app, func, args, kwargs, result_q, cancel_token=None):
         kwargs,
         result_q,
         cancel_token=cancel_token,
+        start_q=start_q,
     )
 
 

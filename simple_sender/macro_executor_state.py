@@ -26,6 +26,7 @@
 # Standard library imports
 import threading
 import time
+from typing import Any, Callable, TypedDict
 
 from simple_sender.macro_state import (
     macro_fast_poll_scope,
@@ -42,6 +43,17 @@ from simple_sender.types import MacroExecutorState
 
 _TOOL_CHANGE_RETRY_TRIGGER_SPREAD_MM = 0.05
 _TOOL_CHANGE_RETRY_FINE_PROBE_FEED_MM_MIN = 100.0
+
+
+class _ToolProbeMeasurementKwargs(TypedDict):
+    macro_send: Callable[[str], Any]
+    probe_controller: Any
+    cancel_event: Any
+    probe_distance_mm: float
+    rapid_feed_mm_min: float
+    dwell_s: float
+    spread_tolerance_mm: float
+    log: Callable[[str], Any] | None
 
 
 class MacroStateMixin(MacroExecutorState):
@@ -162,7 +174,7 @@ class MacroStateMixin(MacroExecutorState):
         retry_enabled = bool(allow_tool_change_retry)
         cycle_settings = tool_measurement.tool_probe_cycle_settings(self.app)
         active_log = log if callable(log) else self._macro_log
-        common_kwargs = {
+        common_kwargs: _ToolProbeMeasurementKwargs = {
             "macro_send": self._macro_send,
             "probe_controller": getattr(self.app, "probe_controller", None),
             "cancel_event": getattr(self, "_alarm_event", None),

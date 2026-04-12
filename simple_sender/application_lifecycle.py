@@ -31,7 +31,6 @@ from simple_sender.types import AppProtocol
 from simple_sender.ui.app_lifecycle import (
     close_application,
     log_exception,
-    on_close,
     tk_report_callback_exception,
 )
 from simple_sender.ui.dialogs.error_dialogs_ui import (
@@ -62,8 +61,22 @@ class LifecycleMixin:
     def _close_application(self) -> bool:
         return bool(close_application(self))
 
-    def _call_on_ui_thread(self, func, *args, timeout: float | None = 5.0, **kwargs):
-        return call_on_ui_thread(self, func, *args, timeout=timeout, **kwargs)
+    def _call_on_ui_thread(
+        self,
+        func,
+        *args,
+        timeout: float | None = 5.0,
+        return_on_handoff: bool = False,
+        **kwargs,
+    ):
+        return call_on_ui_thread(
+            self,
+            func,
+            *args,
+            timeout=timeout,
+            return_on_handoff=return_on_handoff,
+            **kwargs,
+        )
 
     def _post_ui_thread(self, func, *args, **kwargs):
         post_ui_thread(self, func, *args, **kwargs)

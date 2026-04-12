@@ -25,6 +25,7 @@ from __future__ import annotations
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
+from typing import Any, Literal, cast
 
 from simple_sender.ui.help_content import HELP_ABOUT_SECTIONS, HELP_ABOUT_TITLE
 from simple_sender.ui.theme_helpers import (
@@ -44,7 +45,7 @@ class HelpAboutPanel(ttk.Frame):
         self.app = app
         self.search_var = tk.StringVar(master=self, value="")
         self.match_count_var = tk.StringVar(master=self, value="Search the help")
-        self._search_after_id = None
+        self._search_after_id: str | None = None
         self._search_matches: list[tuple[str, str]] = []
         self._search_match_index = -1
         self._fonts: list[tkfont.Font] = []
@@ -104,7 +105,7 @@ class HelpAboutPanel(ttk.Frame):
         content.grid_columnconfigure(0, weight=1)
         content.grid_rowconfigure(0, weight=1)
 
-        themed_options = text_display_theme_options(self.app)
+        themed_options = cast(dict[str, Any], text_display_theme_options(self.app))
         self.text = tk.Text(
             content,
             wrap="word",
@@ -136,12 +137,12 @@ class HelpAboutPanel(ttk.Frame):
         self._fonts = [title_font, heading_font, subheading_font, note_font, code_font]
 
         colors = plain_tk_theme_defaults(self.app)
-        match_bg = colors.get("selection_bg") or "#f5d96b"
-        match_fg = colors.get("selection_fg") or colors.get("fg") or "#000000"
-        current_bg = colors.get("accent") or match_bg
-        current_fg = colors.get("selection_fg") or match_fg
-        note_fg = colors.get("muted") or colors.get("fg") or "#000000"
-        code_bg = colors.get("frame_bg") or colors.get("background") or "#f0f0f0"
+        match_bg = str(colors.get("selection_bg") or "#f5d96b")
+        match_fg = str(colors.get("selection_fg") or colors.get("fg") or "#000000")
+        current_bg = str(colors.get("accent") or match_bg)
+        current_fg = str(colors.get("selection_fg") or match_fg)
+        note_fg = str(colors.get("muted") or colors.get("fg") or "#000000")
+        code_bg = str(colors.get("frame_bg") or colors.get("background") or "#f0f0f0")
 
         self.text.tag_configure("title", font=title_font, spacing1=4, spacing3=12)
         self.text.tag_configure("heading", font=heading_font, spacing1=10, spacing3=6)
@@ -162,7 +163,7 @@ class HelpAboutPanel(ttk.Frame):
         self.text.tag_configure("search_match", background=match_bg, foreground=match_fg)
         self.text.tag_configure("search_current", background=current_bg, foreground=current_fg)
 
-    def _set_text_state(self, state: str) -> None:
+    def _set_text_state(self, state: Literal["normal", "disabled"]) -> None:
         self.text.configure(state=state)
 
     def render_help_document(self) -> None:

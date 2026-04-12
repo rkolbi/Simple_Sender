@@ -785,6 +785,17 @@ def handle_event(app: Any, evt: UiEvent):
                 cancel_token=cancel_token,
             )
             return
+        case ("ui_call", func, args, kwargs, result_q, cancel_token, start_q):
+            handle_ui_call(
+                app,
+                func,
+                args,
+                kwargs,
+                result_q,
+                cancel_token=cancel_token,
+                start_q=start_q,
+            )
+            return
         case ("ui_post", func, args, kwargs):
             handle_ui_post(app, func, args, kwargs)
             return
@@ -951,9 +962,14 @@ def handle_stream_interrupted(app, evt):
     return _event_router_streaming.handle_stream_interrupted(app, evt)
 
 
-def handle_ui_call(app, func, args, kwargs, result_q, *, cancel_token=None):
+def handle_ui_call(app, func, args, kwargs, result_q, *, cancel_token=None, start_q=None):
     if cancel_token is not None and cancel_token.is_set():
         return
+    if start_q is not None:
+        try:
+            start_q.put_nowait(True)
+        except queue.Full as exc:
+            _log_suppressed("UI call start queue full while reporting handoff", exc)
     try:
         value = func(*args, **kwargs)
     except Exception as exc:

@@ -32,8 +32,7 @@ import time
 import zipfile
 from collections import deque
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Any, cast
 
@@ -58,8 +57,6 @@ from .diagnostics_bundle import (
 from .diagnostics_bundle_exporter import (
     build_recent_serial_window_from_log as _build_recent_serial_window_from_log_impl,
     collect_streaming_bundle_artifacts as _collect_streaming_bundle_artifacts_impl,
-    find_named_log as _find_named_log,
-    parse_serial_log_timestamp as _parse_serial_log_timestamp,
     write_bounded_log_tail_chunked as _write_bounded_log_tail_chunked_impl,
 )
 from .diagnostics_runtime_reporting import (
@@ -1852,13 +1849,21 @@ def _build_performance_report_text(app: Any) -> str:
     )
 
 
+def _messagebox_info(title: str, message: str) -> None:
+    messagebox.showinfo(title, message)
+
+
+def _messagebox_error(title: str, message: str) -> None:
+    messagebox.showerror(title, message)
+
+
 def apply_performance_test_preset(app) -> None:
     _apply_performance_test_preset_impl(
         app,
         set_var_value=_set_var_value,
         log_suppressed=_log_suppressed,
-        showinfo=messagebox.showinfo,
-        showerror=messagebox.showerror,
+        showinfo=_messagebox_info,
+        showerror=_messagebox_error,
         perf_test_status_poll_interval=PERF_TEST_STATUS_POLL_INTERVAL,
     )
 
@@ -1869,8 +1874,8 @@ def save_performance_report_to_logs(app) -> None:
         get_log_dir=get_log_dir,
         build_performance_report_text=_build_performance_report_text,
         log_suppressed=_log_suppressed,
-        showinfo=messagebox.showinfo,
-        showerror=messagebox.showerror,
+        showinfo=_messagebox_info,
+        showerror=_messagebox_error,
     )
 
 
@@ -1981,8 +1986,8 @@ def export_diagnostics_bundle(app) -> None:
         collect_diagnostics_bundle_payload=_collect_diagnostics_bundle_payload,
         write_diagnostics_bundle_archive=_write_diagnostics_bundle_archive,
         log_suppressed=_log_suppressed,
-        showinfo=messagebox.showinfo,
-        showerror=messagebox.showerror,
+        showinfo=_messagebox_info,
+        showerror=_messagebox_error,
         thread_cls=threading.Thread,
     )
 
@@ -1994,8 +1999,8 @@ def export_session_diagnostics(app) -> None:
         asksaveasfilename=filedialog.asksaveasfilename,
         build_session_diagnostics_lines=_build_session_diagnostics_lines,
         log_suppressed=_log_suppressed,
-        showinfo=messagebox.showinfo,
-        showerror=messagebox.showerror,
+        showinfo=_messagebox_info,
+        showerror=_messagebox_error,
         thread_cls=threading.Thread,
     )
 

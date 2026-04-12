@@ -29,7 +29,35 @@ from simple_sender.utils.constants import (
 )
 
 
-def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_DEFAULT_TIMEOUT, **kwargs):
+class _UiCallMarker:
+    __slots__ = ("name",)
+
+    def __init__(self, name: str) -> None:
+        self.name = str(name)
+
+    def __repr__(self) -> str:
+        return self.name
+
+
+UI_CALL_DISPATCHED = _UiCallMarker("UI_CALL_DISPATCHED")
+UI_CALL_HANDOFF_FAILED = _UiCallMarker("UI_CALL_HANDOFF_FAILED")
+
+
+def _emit_ui_log(app, message: str) -> None:
+    try:
+        app.ui_q.put(("log", str(message)))
+    except Exception:
+        return
+
+
+def call_on_ui_thread(
+    app,
+    func,
+    *args,
+    timeout: float | None = UI_THREAD_CALL_DEFAULT_TIMEOUT,
+    return_on_handoff: bool = False,
+    **kwargs,
+):
     if threading.current_thread() is threading.main_thread():
         try:
             return func(*args, **kwargs)
@@ -38,7 +66,33 @@ def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_D
             return None
     result_q: queue.Queue = queue.Queue(maxsize=1)
     cancel_token = threading.Event()
-    app.ui_q.put(("ui_call", func, args, kwargs, result_q, cancel_token))
+    start_q: queue.Queue[bool] | None = None
+    if timeout is None or bool(return_on_handoff):
+        start_q = queue.Queue(maxsize=1)
+    try:
+        if start_q is None:
+            app.ui_q.put(("ui_call", func, args, kwargs, result_q, cancel_token))
+        else:
+            app.ui_q.put(("ui_call", func, args, kwargs, result_q, cancel_token, start_q))
+    except Exception:
+        _emit_ui_log(app, "[ui] Action handoff failed.")
+        return UI_CALL_HANDOFF_FAILED if start_q is not None else None
+    if start_q is not None:
+        try:
+            start_q.get(timeout=UI_THREAD_CALL_DEFAULT_TIMEOUT)
+        except queue.Empty:
+            cancel_token.set()
+            _emit_ui_log(app, "[ui] Action handoff timed out.")
+            return UI_CALL_HANDOFF_FAILED
+        if return_on_handoff:
+            try:
+                ok, value = result_q.get_nowait()
+            except queue.Empty:
+                return UI_CALL_DISPATCHED
+            if ok:
+                return value
+            _emit_ui_log(app, f"[ui] Action failed: {value}")
+            return None
     try:
         if timeout is None:
             while True:
@@ -48,17 +102,17 @@ def call_on_ui_thread(app, func, *args, timeout: float | None = UI_THREAD_CALL_D
                 except queue.Empty:
                     if app._closing:
                         cancel_token.set()
-                        app.ui_q.put(("log", "[ui] Action canceled (closing)."))
+                        _emit_ui_log(app, "[ui] Action canceled (closing).")
                         return None
         else:
             ok, value = result_q.get(timeout=timeout)
     except queue.Empty:
         cancel_token.set()
-        app.ui_q.put(("log", "[ui] Action timed out."))
+        _emit_ui_log(app, "[ui] Action timed out.")
         return None
     if ok:
         return value
-    app.ui_q.put(("log", f"[ui] Action failed: {value}"))
+    _emit_ui_log(app, f"[ui] Action failed: {value}")
     return None
 
 

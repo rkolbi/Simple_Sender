@@ -106,6 +106,13 @@ QUEUE_DEPTH_SNAPSHOT_INTERVAL_S = 0.2
 # long unattended sessions from accumulating multi-megabyte string history.
 SERIAL_ACTIVITY_HISTORY_MAX = 10000
 
+__all__ = [
+    "RT_JOG_CANCEL",
+    "RT_RESUME",
+    "annotate_grbl_alarm",
+    "annotate_grbl_error",
+]
+
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)

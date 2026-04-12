@@ -32,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from typing import Any, cast
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.theme_helpers import (
@@ -73,13 +74,13 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _viewer_dialog_parent(viewer) -> object | None:
+def _viewer_dialog_parent(viewer) -> tk.Misc | None:
     getter = getattr(viewer, "winfo_toplevel", None)
     if callable(getter):
         try:
             parent = getter()
             if parent is not None and bool(getattr(parent, "winfo_exists", lambda: True)()):
-                return parent
+                return cast(tk.Misc, parent)
         except Exception:
             pass
     app = getattr(viewer, "app", None)
@@ -91,7 +92,31 @@ def _viewer_dialog_parent(viewer) -> object | None:
             return None
     except Exception:
         return None
-    return parent
+    return cast(tk.Misc, parent)
+
+
+def _showinfo(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
+    if parent is None:
+        return messagebox.showinfo(title, message)
+    return messagebox.showinfo(title, message, parent=parent)
+
+
+def _showwarning(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
+    if parent is None:
+        return messagebox.showwarning(title, message)
+    return messagebox.showwarning(title, message, parent=parent)
+
+
+def _showerror(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
+    if parent is None:
+        return messagebox.showerror(title, message)
+    return messagebox.showerror(title, message, parent=parent)
+
+
+def _askyesno(title: str, message: str, *, parent: tk.Misc | None = None) -> bool:
+    if parent is None:
+        return bool(messagebox.askyesno(title, message))
+    return bool(messagebox.askyesno(title, message, parent=parent))
 
 
 def _resolve_log_files(log_dir: Path | None, source: str) -> list[Path]:
@@ -323,9 +348,9 @@ class LogViewer(ttk.Frame):
             self.text = tk.Text(self, wrap=tk.NONE, height=28, font=font)
         else:
             self.text = tk.Text(self, wrap=tk.NONE, height=28)
-        themed_options = text_display_theme_options(self.app)
+        themed_options = cast(dict[str, Any], text_display_theme_options(self.app))
         if themed_options:
-            self.text.configure(themed_options)
+            self.text.configure(cnf=themed_options)
         self.text.pack(fill="both", expand=True, side="left")
         bind_text_display_theme(self.app, self.text)
 
@@ -359,30 +384,41 @@ class LogViewer(ttk.Frame):
             self.text.insert("end", "No log entries found.")
         self.text.configure(state="disabled")
 
-    def _post_ui(self, callback) -> None:
+    def _post_ui(self, callback, *, on_drop=None) -> bool:
         if self._closing:
-            return
+            if callable(on_drop):
+                try:
+                    on_drop()
+                except Exception as exc:
+                    _log_suppressed("Failed running Log Viewer drop-path cleanup", exc)
+            return False
         if threading.current_thread() is threading.main_thread():
             try:
                 callback()
             except Exception as exc:
                 _log_suppressed("Failed running Log Viewer callback on UI thread", exc)
-            return
+            return True
         post_ui = getattr(self.app, "_post_ui_thread", None)
         if callable(post_ui):
             try:
                 post_ui(callback)
-                return
+                return True
             except Exception as exc:
                 _log_suppressed("Failed posting Log Viewer callback via _post_ui_thread", exc)
         ui_q = getattr(self.app, "ui_q", None)
         if ui_q is not None:
             try:
                 ui_q.put(("ui_post", callback, (), {}))
-                return
+                return True
             except Exception as exc:
                 _log_suppressed("Failed posting Log Viewer callback via ui_q", exc)
         _log_suppressed("Dropped Log Viewer callback: no safe UI-post path", RuntimeError("no ui_post path"))
+        if callable(on_drop):
+            try:
+                on_drop()
+            except Exception as exc:
+                _log_suppressed("Failed running Log Viewer drop-path cleanup", exc)
+        return False
 
     def _start_refresh_worker(self) -> None:
         request = self._refresh_pending
@@ -405,7 +441,10 @@ class LogViewer(ttk.Frame):
             except Exception as exc:
                 error = exc
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-            self._post_ui(lambda: self._complete_refresh(request, lines, error, elapsed_ms))
+            self._post_ui(
+                lambda: self._complete_refresh(request, lines, error, elapsed_ms),
+                on_drop=lambda: setattr(self, "_refresh_inflight", False),
+            )
 
         try:
             worker = threading.Thread(
@@ -484,7 +523,7 @@ class LogViewer(ttk.Frame):
             return
         record_task_timing(self.app, "log_viewer.export", elapsed_ms, success=(error is None))
         if error is not None:
-            messagebox.showerror(
+            _showerror(
                 "Export Logs",
                 f"Failed to export logs:\n{error}",
                 parent=_viewer_dialog_parent(self),
@@ -497,15 +536,15 @@ class LogViewer(ttk.Frame):
             failed_files=list(failed_files),
         )
         if level == "info":
-            messagebox.showinfo("Export Logs", message, parent=_viewer_dialog_parent(self))
+            _showinfo("Export Logs", message, parent=_viewer_dialog_parent(self))
         elif level == "warning":
-            messagebox.showwarning("Export Logs", message, parent=_viewer_dialog_parent(self))
+            _showwarning("Export Logs", message, parent=_viewer_dialog_parent(self))
         else:
-            messagebox.showerror("Export Logs", message, parent=_viewer_dialog_parent(self))
+            _showerror("Export Logs", message, parent=_viewer_dialog_parent(self))
 
     def export_logs(self) -> None:
         if self._export_inflight or self._clear_inflight:
-            messagebox.showinfo(
+            _showinfo(
                 "Export Logs",
                 "Log operation already in progress.",
                 parent=_viewer_dialog_parent(self),
@@ -514,7 +553,7 @@ class LogViewer(ttk.Frame):
         log_dir = get_log_dir()
         log_files = _resolve_log_files(log_dir, "All")
         if not log_files:
-            messagebox.showinfo(
+            _showinfo(
                 "Export Logs",
                 "No log files found.",
                 parent=_viewer_dialog_parent(self),
@@ -583,7 +622,8 @@ class LogViewer(ttk.Frame):
                     failed_files=failed_files,
                     error=error,
                     elapsed_ms=elapsed_ms,
-                )
+                ),
+                on_drop=lambda: self._set_export_inflight(False),
             )
 
         try:
@@ -596,7 +636,7 @@ class LogViewer(ttk.Frame):
         except Exception as exc:
             self._set_export_inflight(False)
             _log_suppressed("Failed starting log export thread", exc)
-            messagebox.showerror(
+            _showerror(
                 "Export Logs",
                 f"Failed to export logs:\n{exc}",
                 parent=_viewer_dialog_parent(self),
@@ -614,14 +654,14 @@ class LogViewer(ttk.Frame):
             return
         record_task_timing(self.app, "log_viewer.clear", elapsed_ms, success=(error is None))
         if error is not None:
-            messagebox.showerror(
+            _showerror(
                 "Clear Logs",
                 f"Failed to clear logs:\n{error}",
                 parent=_viewer_dialog_parent(self),
             )
             return
         self.refresh()
-        messagebox.showinfo(
+        _showinfo(
             "Clear Logs",
             f"Cleared active logs: {truncated}\nRemoved rotated logs: {deleted}",
             parent=_viewer_dialog_parent(self),
@@ -629,7 +669,7 @@ class LogViewer(ttk.Frame):
 
     def clear_logs(self) -> None:
         if self._export_inflight or self._clear_inflight:
-            messagebox.showinfo(
+            _showinfo(
                 "Clear Logs",
                 "Log operation already in progress.",
                 parent=_viewer_dialog_parent(self),
@@ -638,13 +678,13 @@ class LogViewer(ttk.Frame):
         log_dir = get_log_dir()
         log_files = _resolve_log_files(log_dir, "All")
         if not log_files:
-            messagebox.showinfo(
+            _showinfo(
                 "Clear Logs",
                 "No log files found.",
                 parent=_viewer_dialog_parent(self),
             )
             return
-        confirmed = messagebox.askyesno(
+        confirmed = _askyesno(
             "Clear Logs",
             "Clear all current logs and remove rotated log files?",
             parent=_viewer_dialog_parent(self),
@@ -664,7 +704,10 @@ class LogViewer(ttk.Frame):
             except Exception as exc:
                 error = exc
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
-            self._post_ui(lambda: self._complete_clear(truncated, deleted, error, elapsed_ms))
+            self._post_ui(
+                lambda: self._complete_clear(truncated, deleted, error, elapsed_ms),
+                on_drop=lambda: self._set_clear_inflight(False),
+            )
 
         try:
             worker = threading.Thread(
@@ -676,7 +719,7 @@ class LogViewer(ttk.Frame):
         except Exception as exc:
             self._set_clear_inflight(False)
             _log_suppressed("Failed starting log clear thread", exc)
-            messagebox.showerror(
+            _showerror(
                 "Clear Logs",
                 f"Failed to clear logs:\n{exc}",
                 parent=_viewer_dialog_parent(self),

@@ -415,6 +415,7 @@ class MacroExecutorState:
 
 UiCallResultQueue: TypeAlias = queue.Queue[tuple[bool, Any]]
 UiCallCancelToken: TypeAlias = threading.Event
+UiCallStartQueue: TypeAlias = queue.Queue[bool]
 UiPromptResultQueue: TypeAlias = queue.Queue[str]
 
 UiEvent = (
@@ -427,6 +428,15 @@ UiEvent = (
         dict[str, Any],
         UiCallResultQueue,
         UiCallCancelToken,
+    ]
+    | tuple[
+        Literal["ui_call"],
+        Callable[..., Any],
+        tuple[Any, ...],
+        dict[str, Any],
+        UiCallResultQueue,
+        UiCallCancelToken,
+        UiCallStartQueue,
     ]
     | tuple[Literal["ui_post"], Callable[..., Any], tuple[Any, ...], dict[str, Any]]
     | tuple[Literal["macro_prompt"], str, str, list[str], str, UiPromptResultQueue]

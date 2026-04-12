@@ -1,9 +1,18 @@
 ﻿# Simple Sender - Full Manual
-![Release: 3.0](https://img.shields.io/badge/release-3.0-blue)
+![Release: 3.0.11](https://img.shields.io/badge/release-3.0.11-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
+
+Current stable release: `3.0.11`. This is the current release-ready baseline.
+
+Current local validation snapshot for `3.0.11`:
+- `pytest -q`: `1800 passed, 3 skipped`
+- `ruff check .`: clean
+- `mypy main.py simple_sender`: clean
+- `Success: no issues found in 201 source files`
+- `run_tests.bat`: clean (`7/7` gates passed)
 
 ## Design Objectives and Key Features
 
@@ -843,7 +852,9 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. Dated validation snapshots are tracked in [CHANGELOG.md](CHANGELOG.md) instead of being hardcoded here so this section does not drift behind the current repo state.
+Use `run_tests.bat` as the authoritative local release gate. The current stable `3.0.11` release baseline validates clean locally (`pytest -q`: `1800 passed, 3 skipped`; `ruff check .`: clean; `mypy main.py simple_sender`: clean; `Success: no issues found in 201 source files`; `run_tests.bat`: clean with `7/7` gates passed). Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+
+The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 201 source files`.
 
 Run a subset:
 ```powershell
@@ -870,20 +881,15 @@ python tools/check_core_coverage.py coverage.xml
 
 Type checking (mypy):
 ```powershell
-python -m mypy
+python -m mypy main.py simple_sender
 ```
 
-Ruff syntax/pyflakes gate:
+Ruff gate:
 ```powershell
-python -m ruff check --select E9,F63,F7,F82 simple_sender tests tools
+python -m ruff check .
 ```
-If `python -m ruff` fails on Windows due a broken global launcher, run `.\.venv\Scripts\ruff.exe check --select E9,F63,F7,F82 simple_sender tests tools` instead.
-You can also use the resilient launcher helper: `python tools/run_ruff.py check --select E9,F63,F7,F82 simple_sender tests tools`.
-
-Validate mypy target manifest and README count note:
-```powershell
-python tools/check_mypy_targets.py --expected-count 141
-```
+If `python -m ruff` fails on Windows due a broken global launcher, run `.\.venv\Scripts\ruff.exe check .` instead.
+You can also use the resilient launcher helper: `python tools/run_ruff.py check .`.
 
 One-command local gate:
 ```powershell

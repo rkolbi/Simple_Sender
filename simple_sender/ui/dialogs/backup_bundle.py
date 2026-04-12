@@ -28,12 +28,13 @@ import os
 import threading
 import time
 import tempfile
+import tkinter as tk
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from typing import Any
+from typing import Any, cast
 
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.macro_files import (
@@ -57,14 +58,14 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _resolve_backup_bundle_parent(app: Any) -> object | None:
+def _resolve_backup_bundle_parent(app: Any) -> tk.Misc | None:
     popup_windows = getattr(app, "_lower_popup_windows", None)
     if isinstance(popup_windows, dict):
         popup = popup_windows.get("app_settings")
         if popup is not None:
             try:
                 if bool(popup.winfo_exists()) and bool(popup.winfo_viewable()):
-                    return popup
+                    return cast(tk.Misc, popup)
             except Exception as exc:
                 _log_suppressed(
                     "Failed checking App Settings popup ownership for backup-bundle dialogs",
@@ -73,16 +74,34 @@ def _resolve_backup_bundle_parent(app: Any) -> object | None:
     if app is not None:
         try:
             if bool(app.winfo_exists()):
-                return app
+                return cast(tk.Misc, app)
         except Exception:
             pass
     return None
 
 
-def _messagebox_parent_kwargs(parent: object | None) -> dict[str, object]:
+def _showinfo(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
     if parent is None:
-        return {}
-    return {"parent": parent}
+        return messagebox.showinfo(title, message)
+    return messagebox.showinfo(title, message, parent=parent)
+
+
+def _showwarning(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
+    if parent is None:
+        return messagebox.showwarning(title, message)
+    return messagebox.showwarning(title, message, parent=parent)
+
+
+def _showerror(title: str, message: str, *, parent: tk.Misc | None = None) -> str:
+    if parent is None:
+        return messagebox.showerror(title, message)
+    return messagebox.showerror(title, message, parent=parent)
+
+
+def _askyesno(title: str, message: str, *, parent: tk.Misc | None = None) -> bool:
+    if parent is None:
+        return bool(messagebox.askyesno(title, message))
+    return bool(messagebox.askyesno(title, message, parent=parent))
 
 
 def _bundle_default_dir() -> Path:
@@ -334,10 +353,10 @@ def export_backup_bundle(app: Any) -> None:
     use_background_io = bool(getattr(app, "_backup_bundle_async_io", True))
     dialog_parent = _resolve_backup_bundle_parent(app)
     if use_background_io and bool(getattr(app, "_backup_bundle_export_inflight", False)):
-        messagebox.showinfo(
+        _showinfo(
             "Backup bundle",
             "A backup-bundle export is already running.",
-            **_messagebox_parent_kwargs(dialog_parent),
+            parent=dialog_parent,
         )
         return
     settings_save_error = ""
@@ -376,10 +395,10 @@ def export_backup_bundle(app: Any) -> None:
             record_task_timing(app, "backup_bundle.export", elapsed_ms, success=(error is None))
             messagebox_parent = _resolve_backup_bundle_parent(app)
             if error is not None:
-                messagebox.showerror(
+                _showerror(
                     "Backup bundle",
                     f"Failed to export bundle:\n{error}",
-                    **_messagebox_parent_kwargs(messagebox_parent),
+                    parent=messagebox_parent,
                 )
                 return
             try:
@@ -395,18 +414,18 @@ def export_backup_bundle(app: Any) -> None:
             except Exception as exc:
                 _log_suppressed("Failed updating status after backup-bundle export", exc)
             if settings_save_error:
-                messagebox.showwarning(
+                _showwarning(
                     "Backup bundle",
                     "Bundle saved with last-saved on-disk settings only.\n\n"
                     f"Latest settings could not be saved before export:\n{settings_save_error}\n\n"
                     f"Bundle saved:\n{path}",
-                    **_messagebox_parent_kwargs(messagebox_parent),
+                    parent=messagebox_parent,
                 )
             else:
-                messagebox.showinfo(
+                _showinfo(
                     "Backup bundle",
                     f"Bundle saved:\n{path}",
-                    **_messagebox_parent_kwargs(messagebox_parent),
+                    parent=messagebox_parent,
                 )
 
         def _worker() -> None:
@@ -451,10 +470,10 @@ def export_backup_bundle(app: Any) -> None:
     except Exception as exc:
         elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
         record_task_timing(app, "backup_bundle.export", elapsed_ms, success=False)
-        messagebox.showerror(
+        _showerror(
             "Backup bundle",
             f"Failed to export bundle:\n{exc}",
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
         return
     elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
@@ -469,18 +488,18 @@ def export_backup_bundle(app: Any) -> None:
     except Exception as exc:
         _log_suppressed("Failed updating status after backup-bundle export", exc)
     if settings_save_error:
-        messagebox.showwarning(
+        _showwarning(
             "Backup bundle",
             "Bundle saved with last-saved on-disk settings only.\n\n"
             f"Latest settings could not be saved before export:\n{settings_save_error}\n\n"
             f"Bundle saved:\n{path}",
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
     else:
-        messagebox.showinfo(
+        _showinfo(
             "Backup bundle",
             f"Bundle saved:\n{path}",
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
 
 
@@ -488,10 +507,10 @@ def import_backup_bundle(app: Any) -> None:
     use_background_io = bool(getattr(app, "_backup_bundle_async_io", True))
     dialog_parent = _resolve_backup_bundle_parent(app)
     if use_background_io and bool(getattr(app, "_backup_bundle_import_inflight", False)):
-        messagebox.showinfo(
+        _showinfo(
             "Backup bundle",
             "A backup-bundle import is already running.",
-            **_messagebox_parent_kwargs(dialog_parent),
+            parent=dialog_parent,
         )
         return
     path = run_file_dialog(
@@ -510,10 +529,10 @@ def import_backup_bundle(app: Any) -> None:
     try:
         inspection = _inspect_backup_bundle(path, macro_dir=macro_dir)
     except Exception as exc:
-        messagebox.showerror(
+        _showerror(
             "Backup bundle",
             f"Failed to inspect bundle:\n{exc}",
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
         return
     prompt = [
@@ -534,10 +553,10 @@ def import_backup_bundle(app: Any) -> None:
                 "Continue?",
             ]
         )
-    if not messagebox.askyesno(
+    if not _askyesno(
         "Import backup bundle",
         "\n".join(prompt),
-        **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+        parent=_resolve_backup_bundle_parent(app),
     ):
         return
     started_at = time.perf_counter()
@@ -579,10 +598,10 @@ def import_backup_bundle(app: Any) -> None:
             app.status.config(text=f"Backup bundle imported: {os.path.basename(path)}")
         except Exception as exc:
             _log_suppressed("Failed updating status after backup-bundle import", exc)
-        messagebox.showinfo(
+        _showinfo(
             "Backup bundle",
             "\n".join(notes),
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
 
     if use_background_io and callable(getattr(app, "after", None)):
@@ -600,10 +619,10 @@ def import_backup_bundle(app: Any) -> None:
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             record_task_timing(app, "backup_bundle.import", elapsed_ms, success=(error is None))
             if error is not None or result is None:
-                messagebox.showerror(
+                _showerror(
                     "Backup bundle",
                     f"Failed to import bundle:\n{error}",
-                    **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+                    parent=_resolve_backup_bundle_parent(app),
                 )
                 return
             _apply_import_result(result)
@@ -648,10 +667,10 @@ def import_backup_bundle(app: Any) -> None:
     except Exception as exc:
         elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
         record_task_timing(app, "backup_bundle.import", elapsed_ms, success=False)
-        messagebox.showerror(
+        _showerror(
             "Backup bundle",
             f"Failed to import bundle:\n{exc}",
-            **_messagebox_parent_kwargs(_resolve_backup_bundle_parent(app)),
+            parent=_resolve_backup_bundle_parent(app),
         )
         return
     elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)

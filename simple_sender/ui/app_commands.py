@@ -75,21 +75,42 @@ def _append_connection_timeline_event(app, event: str, details: str = "") -> Non
         _log_suppressed("Failed appending connection timeline event", exc)
 
 
-def _post_ui(app, func, *args, **kwargs) -> None:
+def _post_ui(app, func, *args, on_drop: Callable[[], None] | None = None, **kwargs) -> bool:
+    if threading.current_thread() is threading.main_thread():
+        try:
+            func(*args, **kwargs)
+            return True
+        except Exception as exc:
+            _log_suppressed("Failed running UI callback on main thread", exc)
+            return False
     poster = getattr(app, "_post_ui_thread", None)
     if callable(poster):
         try:
             poster(func, *args, **kwargs)
-            return
+            return True
         except Exception as exc:
             _log_suppressed("Failed posting UI callback via _post_ui_thread", exc)
+    after = getattr(app, "after", None)
+    if callable(after):
+        try:
+            after(0, lambda: func(*args, **kwargs))
+            return True
+        except Exception as exc:
+            _log_suppressed("Failed posting UI callback via after", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:
             ui_q.put(("ui_post", func, args, kwargs))
-            return
+            return True
         except Exception as exc:
             _log_suppressed("Failed posting UI callback via ui_q", exc)
+    _log_suppressed("Dropped UI callback: no safe UI-post path", RuntimeError("no ui_post path"))
+    if callable(on_drop):
+        try:
+            on_drop()
+        except Exception as exc:
+            _log_suppressed("Failed running dropped UI callback cleanup", exc)
+    return False
 
 
 def _job_service() -> JobService:
@@ -297,6 +318,19 @@ def _sync_connection_controls(app) -> None:
         _log_suppressed("Failed syncing port combobox state", exc)
 
 
+def _note_connection_ui_sync_drop(app, phase: str) -> None:
+    try:
+        setattr(app, "_connection_ui_sync_failed", True)
+        setattr(app, "_connection_ui_sync_failure_phase", str(phase or "").strip() or "unknown")
+    except Exception:
+        pass
+    _append_connection_timeline_event(
+        app,
+        "connection_ui_sync_dropped",
+        f"phase={phase}",
+    )
+
+
 def toggle_connect(app):
     if not app._ensure_serial_available():
         return False
@@ -394,15 +428,30 @@ def start_connect_worker(
             _append_connection_timeline_event(app, "connect_worker_success", f"port={port}")
         except Exception as exc:
             _append_connection_timeline_event(app, "connect_worker_failed", f"port={port} error={exc}")
-            if show_error:
-                _post_ui(app, messagebox.showerror, "Connect failed", str(exc))
             callback = on_failure
-            if callback is not None:
-                _post_ui(app, callback, exc)
+            connect_error = exc
+
+            if show_error or callback is not None:
+                def _handle_connect_failure() -> None:
+                    if show_error:
+                        messagebox.showerror("Connect failed", str(connect_error))
+                    if callback is not None:
+                        callback(connect_error)
+
+                _post_ui(
+                    app,
+                    _handle_connect_failure,
+                    on_drop=lambda: _note_connection_ui_sync_drop(app, "connect_failure"),
+                )
         finally:
             app._connecting = False
             if not connected_ok:
-                _post_ui(app, _sync_connection_controls, app)
+                _post_ui(
+                    app,
+                    _sync_connection_controls,
+                    app,
+                    on_drop=lambda: _note_connection_ui_sync_drop(app, "connect_failure_sync"),
+                )
 
     app._connecting = True
     _set_connection_controls_pending(app, "Connecting...")
@@ -425,11 +474,19 @@ def start_disconnect_worker(app):
                 disconnect_fn()
             disconnected_ok = True
         except Exception as exc:
-            app.ui_q.put(("log", f"[disconnect] {exc}"))
+            try:
+                app.ui_q.put(("log", f"[disconnect] {exc}"))
+            except Exception as log_exc:
+                _log_suppressed("Failed queueing disconnect failure log message", log_exc)
         finally:
             app._disconnecting = False
             if not disconnected_ok:
-                _post_ui(app, _sync_connection_controls, app)
+                _post_ui(
+                    app,
+                    _sync_connection_controls,
+                    app,
+                    on_drop=lambda: _note_connection_ui_sync_drop(app, "disconnect_failure_sync"),
+                )
 
     app._disconnecting = True
     _set_connection_controls_pending(app, "Disconnecting...")

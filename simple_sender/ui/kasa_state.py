@@ -60,7 +60,7 @@ def read_var_value(app, attr_name: str, default: Any) -> Any:
 
 def _normalized_outlet_id(value: object, default: int) -> int:
     try:
-        outlet_id = int(value)
+        outlet_id = int(cast(Any, value))
     except Exception:
         outlet_id = default
     return 1 if outlet_id == 1 else 2
@@ -68,7 +68,7 @@ def _normalized_outlet_id(value: object, default: int) -> int:
 
 def _normalized_outlet_count(value: object, default: int = 2) -> int:
     try:
-        outlet_count = int(value)
+        outlet_count = int(cast(Any, value))
     except Exception:
         outlet_count = default
     return max(1, outlet_count)
@@ -76,7 +76,7 @@ def _normalized_outlet_count(value: object, default: int = 2) -> int:
 
 def _read_delay_seconds(value: object) -> float:
     try:
-        delay = float(value)
+        delay = float(cast(Any, value))
     except Exception:
         delay = 0.0
     return max(0.0, delay)

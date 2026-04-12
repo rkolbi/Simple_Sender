@@ -34,12 +34,13 @@ def _post_ui_callback(
     callback,
     *,
     log_suppressed: Callable[[str, BaseException], None],
-) -> None:
+    on_drop: Callable[[], None] | None = None,
+) -> bool:
     poster = getattr(app, "_post_ui_thread", None)
     if callable(poster):
         try:
             poster(callback)
-            return
+            return True
         except Exception as exc:
             log_suppressed(
                 "Failed posting diagnostics bundle callback via _post_ui_thread",
@@ -49,20 +50,29 @@ def _post_ui_callback(
     if callable(after):
         try:
             after(0, callback)
-            return
+            return True
         except Exception as exc:
             log_suppressed("Failed posting diagnostics bundle callback to UI thread", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:
             ui_q.put(("ui_post", callback, (), {}))
-            return
+            return True
         except Exception as exc:
             log_suppressed("Failed posting diagnostics bundle callback via ui_q", exc)
     log_suppressed(
         "Dropping diagnostics bundle callback because no safe UI post path is available",
         RuntimeError("ui thread unavailable"),
     )
+    if callable(on_drop):
+        try:
+            on_drop()
+        except Exception as exc:
+            log_suppressed(
+                "Failed running diagnostics bundle drop-path cleanup",
+                exc,
+            )
+    return False
 
 
 def export_diagnostics_bundle(
@@ -113,8 +123,6 @@ def export_diagnostics_bundle(
                 "Export diagnostics bundle", f"Failed to create bundle:\n{error}"
             )
 
-        after = getattr(app, "after")
-
         def _export_worker() -> None:
             error: Exception | None = None
             try:
@@ -131,6 +139,9 @@ def export_diagnostics_bundle(
                 app,
                 lambda: _complete_export(error),
                 log_suppressed=log_suppressed,
+                on_drop=lambda: setattr(
+                    app, "_diagnostics_bundle_export_inflight", False
+                ),
             )
 
         try:

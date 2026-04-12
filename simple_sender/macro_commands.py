@@ -30,6 +30,7 @@ import types
 from typing import Any, Callable
 from tkinter import messagebox
 
+from simple_sender.ui.threading_utils import UI_CALL_DISPATCHED, UI_CALL_HANDOFF_FAILED
 from simple_sender.macro_timeouts import macro_timeouts_disabled
 from simple_sender.utils.constants import MACRO_GPAT, MACRO_PROMPT_TIMEOUT, RT_STATUS
 
@@ -155,7 +156,15 @@ def _handle_named_macro_command(
         macro_send("G91")
         return True
     if cmd == "HOME":
-        started = bool(app._call_on_ui_thread(app._start_homing, timeout=None))
+        started_result = app._call_on_ui_thread(
+            app._start_homing,
+            timeout=None,
+            return_on_handoff=True,
+        )
+        if started_result is UI_CALL_HANDOFF_FAILED:
+            ui_q.put(("log", "[macro] HOME failed: UI handoff timed out."))
+            return False
+        started = started_result is UI_CALL_DISPATCHED or bool(started_result)
         if not started:
             ui_q.put(("log", "[macro] HOME blocked or rejected; homing did not start."))
             return False
@@ -188,15 +197,39 @@ def _handle_named_macro_command(
                 return False
         return True
     if cmd == "HELP":
-        app._call_on_ui_thread(
+        help_result = app._call_on_ui_thread(
             messagebox.showinfo,
             "Macro",
             "Help is not available in this sender.",
             timeout=None,
+            return_on_handoff=True,
         )
+        if help_result is UI_CALL_HANDOFF_FAILED:
+            ui_q.put(("log", "[macro] HELP failed: UI handoff timed out."))
+            return False
         return True
     if cmd in ("QUIT", "EXIT"):
-        closed = app._call_on_ui_thread(app._on_close)
+        closed = app._call_on_ui_thread(
+            app._on_close,
+            timeout=None,
+            return_on_handoff=True,
+        )
+        if closed is UI_CALL_HANDOFF_FAILED:
+            ui_q.put(
+                (
+                    "log",
+                    f"[macro] {cmd} failed: close handoff timed out; application state is unknown.",
+                )
+            )
+            return False
+        if closed is UI_CALL_DISPATCHED:
+            ui_q.put(
+                (
+                    "log",
+                    f"[macro] {cmd} handed off to the UI; final close result is pending.",
+                )
+            )
+            return True
         if closed is False:
             ui_q.put(("log", f"[macro] {cmd} canceled; application remained open."))
             return False
@@ -206,7 +239,6 @@ def _handle_named_macro_command(
         token = app._call_on_ui_thread(
             app._load_gcode_from_path,
             path,
-            timeout=None,
         )
         if not token:
             ui_q.put(("log", f"[macro] LOAD blocked or failed to start for: {path}"))
@@ -263,7 +295,7 @@ def _handle_named_macro_command(
             return False
         return True
     if cmd == "RUN":
-        app._call_on_ui_thread(app.run_job, timeout=None)
+        app._call_on_ui_thread(app.run_job)
         try:
             started = bool(grbl.is_streaming())
         except Exception:

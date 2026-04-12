@@ -23,6 +23,7 @@
 import logging
 import os
 import threading
+import time
 import traceback
 from tkinter import messagebox
 
@@ -30,6 +31,8 @@ from simple_sender.ui.dialogs.error_dialogs_ui import close_grbl_code_popup
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_SHUTDOWN_POLL_INTERVAL_MS = 25
+_SHUTDOWN_TIMEOUT_S = 10.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -182,6 +185,9 @@ def tk_report_callback_exception(app, exc, val, tb):
 
 
 def on_close(app):
+    if bool(getattr(app, "_shutdown_in_progress", False)):
+        return True
+
     save_context = "Failed saving settings during shutdown"
     while True:
         try:
@@ -207,7 +213,25 @@ def on_close(app):
                 break
             if choice is None:
                 return False
+    def _set_shutdown_status(text: str) -> None:
+        try:
+            status = getattr(app, "status", None)
+            if status is not None and hasattr(status, "config"):
+                status.config(text=text)
+        except Exception as exc:
+            _log_suppressed("Failed updating shutdown status text", exc)
+
+    def _log_shutdown(message: str, *, context: str) -> None:
+        try:
+            app.streaming_controller.handle_log(message)
+        except Exception as exc:
+            _log_suppressed(context, exc)
+
+    app._shutdown_in_progress = True
     app._closing = True
+    app._shutdown_timed_out = False
+    _set_shutdown_status("Shutting down...")
+    _log_shutdown("[shutdown] Shutting down...", context="Failed logging shutdown start message")
     for event_name in ("_connection_state_event", "_status_update_event", "_modal_update_event"):
         evt = getattr(app, event_name, None)
         try:
@@ -219,44 +243,6 @@ def on_close(app):
         close_grbl_code_popup(app)
     except Exception as exc:
         _log_suppressed("Failed closing GRBL code popup during shutdown", exc)
-    accessory_router = getattr(app, "accessory_router", None)
-    if accessory_router is not None:
-        try:
-            if hasattr(app, "_stop_job_accessories"):
-                app._stop_job_accessories("app_exit")
-        except Exception as exc:
-            _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
-        try:
-            wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
-            if callable(wait_for_idle):
-                wait_for_idle(timeout=1.0)
-        except Exception as exc:
-            _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
-        try:
-            accessory_router.shutdown(timeout=1.0)
-        except Exception as exc:
-            _log_suppressed("Failed shutting down accessory router during app close", exc)
-    try:
-        disconnect_fn = getattr(app.grbl, "disconnect")
-        try:
-            disconnect_fn(requested_by="shutdown", reason="Application close")
-        except TypeError:
-            disconnect_fn()
-    except Exception as exc:
-        _report_shutdown_failure(app, "Failed disconnecting GRBL during shutdown", exc)
-    source = getattr(app, "_gcode_source", None)
-    if source is not None:
-        cleanup_path = getattr(source, "_cleanup_path", None)
-        try:
-            source.close()
-        except Exception as exc:
-            _log_suppressed("Failed closing streaming G-code source during shutdown", exc)
-        if cleanup_path:
-            try:
-                os.remove(cleanup_path)
-            except OSError as exc:
-                _log_suppressed("Failed deleting temporary G-code cleanup file during shutdown", exc)
-        app._gcode_source = None
     try:
         app._stop_joystick_hold()
     except Exception as exc:
@@ -265,41 +251,161 @@ def on_close(app):
         app._stop_joystick_polling()
     except Exception as exc:
         _log_suppressed("Failed stopping joystick polling during shutdown", exc)
-    py = app._get_pygame_module()
-    if py is not None:
+    shutdown_complete = getattr(app, "_shutdown_complete_event", None)
+    if shutdown_complete is None or not hasattr(shutdown_complete, "is_set"):
+        shutdown_complete = threading.Event()
+        app._shutdown_complete_event = shutdown_complete
+    else:
         try:
-            py.quit()
-        except Exception as exc:
-            _log_suppressed("Failed quitting pygame during shutdown", exc)
-    perf_monitor = getattr(app, "_perf_monitor", None)
-    if perf_monitor is not None:
-        try:
-            perf_monitor.emit_exit_report()
-        except Exception as exc:
-            _log_suppressed("Failed emitting performance report during shutdown", exc)
+            shutdown_complete.clear()
+        except Exception:
+            shutdown_complete = threading.Event()
+            app._shutdown_complete_event = shutdown_complete
     try:
-        app.destroy()
-    except Exception as exc:
-        _report_shutdown_failure(app, "Failed destroying application root during shutdown", exc)
+        shutdown_timeout_s = float(
+            getattr(app, "_shutdown_timeout_s", _SHUTDOWN_TIMEOUT_S)
+        )
+    except (TypeError, ValueError):
+        shutdown_timeout_s = _SHUTDOWN_TIMEOUT_S
+    if shutdown_timeout_s <= 0:
+        shutdown_timeout_s = _SHUTDOWN_TIMEOUT_S
+    shutdown_started_at = time.monotonic()
+
+    def _shutdown_worker() -> None:
         try:
-            messagebox.showerror(
-                "Close failed",
-                (
-                    "Simple Sender could not close cleanly.\n\n"
-                    f"{exc}\n\n"
-                    "The application is still running."
-                ),
-            )
-        except Exception as dialog_exc:
-            _log_suppressed("Failed showing close-failed dialog", dialog_exc)
-        app._closing = False
-        return False
-    clear_runtime_marker = getattr(app, "_clear_runtime_marker", None)
-    if callable(clear_runtime_marker):
-        try:
-            clear_runtime_marker()
+            accessory_router = getattr(app, "accessory_router", None)
+            if accessory_router is not None:
+                try:
+                    if hasattr(app, "_stop_job_accessories"):
+                        app._stop_job_accessories("app_exit")
+                except Exception as exc:
+                    _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
+                try:
+                    wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
+                    if callable(wait_for_idle):
+                        wait_for_idle(timeout=1.0)
+                except Exception as exc:
+                    _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
+                try:
+                    accessory_router.shutdown(timeout=1.0)
+                except Exception as exc:
+                    _log_suppressed("Failed shutting down accessory router during app close", exc)
+            try:
+                disconnect_fn = getattr(app.grbl, "disconnect")
+                try:
+                    disconnect_fn(requested_by="shutdown", reason="Application close")
+                except TypeError:
+                    disconnect_fn()
+            except Exception as exc:
+                _report_shutdown_failure(app, "Failed disconnecting GRBL during shutdown", exc)
+            source = getattr(app, "_gcode_source", None)
+            if source is not None:
+                cleanup_path = getattr(source, "_cleanup_path", None)
+                try:
+                    source.close()
+                except Exception as exc:
+                    _log_suppressed("Failed closing streaming G-code source during shutdown", exc)
+                if cleanup_path:
+                    try:
+                        os.remove(cleanup_path)
+                    except OSError as exc:
+                        _log_suppressed("Failed deleting temporary G-code cleanup file during shutdown", exc)
+                app._gcode_source = None
+            py = app._get_pygame_module()
+            if py is not None:
+                try:
+                    py.quit()
+                except Exception as exc:
+                    _log_suppressed("Failed quitting pygame during shutdown", exc)
+            perf_monitor = getattr(app, "_perf_monitor", None)
+            if perf_monitor is not None:
+                try:
+                    perf_monitor.emit_exit_report()
+                except Exception as exc:
+                    _log_suppressed("Failed emitting performance report during shutdown", exc)
         except Exception as exc:
-            _log_suppressed("Failed clearing runtime integrity marker during shutdown", exc)
+            try:
+                _report_shutdown_failure(app, "Unexpected shutdown worker failure", exc)
+            except Exception as log_exc:
+                _log_suppressed("Failed logging unexpected shutdown worker failure", log_exc)
+        finally:
+            shutdown_complete.set()
+
+    def _finalize_shutdown() -> bool:
+        try:
+            app.destroy()
+        except Exception as exc:
+            _report_shutdown_failure(app, "Failed destroying application root during shutdown", exc)
+            try:
+                messagebox.showerror(
+                    "Close failed",
+                    (
+                        "Simple Sender could not close cleanly.\n\n"
+                        f"{exc}\n\n"
+                        "The application is still running."
+                    ),
+                )
+            except Exception as dialog_exc:
+                _log_suppressed("Failed showing close-failed dialog", dialog_exc)
+            app._closing = False
+            app._shutdown_in_progress = False
+            return False
+        clear_runtime_marker = getattr(app, "_clear_runtime_marker", None)
+        if callable(clear_runtime_marker):
+            try:
+                clear_runtime_marker()
+            except Exception as exc:
+                _log_suppressed("Failed clearing runtime integrity marker during shutdown", exc)
+        return True
+
+    def _escalate_shutdown(*, status_text: str, log_message: str, context: str) -> None:
+        app._shutdown_in_progress = False
+        _set_shutdown_status(status_text)
+        _log_shutdown(log_message, context=context)
+        _finalize_shutdown()
+
+    def _poll_shutdown_completion() -> None:
+        if shutdown_complete.is_set():
+            app._shutdown_in_progress = False
+            _finalize_shutdown()
+            return
+        elapsed_s = max(0.0, time.monotonic() - shutdown_started_at)
+        if elapsed_s >= shutdown_timeout_s:
+            app._shutdown_timed_out = True
+            _escalate_shutdown(
+                status_text="Shutdown timed out; forcing close...",
+                log_message=f"[shutdown] Shutdown timed out after {shutdown_timeout_s:.1f}s; forcing close.",
+                context="Failed logging shutdown-timeout message",
+            )
+            return
+        if not shutdown_complete.is_set():
+            try:
+                app.after(_SHUTDOWN_POLL_INTERVAL_MS, _poll_shutdown_completion)
+            except Exception as exc:
+                _log_suppressed("Failed scheduling shutdown completion poll", exc)
+                _escalate_shutdown(
+                    status_text="Shutdown polling failed; forcing close...",
+                    log_message="[shutdown] Shutdown polling failed; forcing close.",
+                    context="Failed logging shutdown-poll failure message",
+                )
+            return
+
+    shutdown_thread = threading.Thread(
+        target=_shutdown_worker,
+        name="AppShutdown",
+        daemon=True,
+    )
+    app._shutdown_thread = shutdown_thread
+    shutdown_thread.start()
+    try:
+        app.after(_SHUTDOWN_POLL_INTERVAL_MS, _poll_shutdown_completion)
+    except Exception as exc:
+        _log_suppressed("Failed scheduling shutdown completion poll", exc)
+        _escalate_shutdown(
+            status_text="Shutdown polling failed; forcing close...",
+            log_message="[shutdown] Shutdown polling failed; forcing close.",
+            context="Failed logging shutdown-poll failure message",
+        )
     return True
 
 

@@ -76,6 +76,7 @@ _UI_DRAIN_SPECIAL_TASK_PREFIXES = (
     "log_viewer.",
     "ui.maintenance.",
 )
+_UI_QUEUE_RESCHEDULE_FAILED_STATUS = "UI updates paused; restart recommended."
 _TOOL_REFERENCE_UNREAD = object()
 
 
@@ -85,6 +86,43 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
         return
     _logged_suppressed.add(key)
     logger.debug("%s: %s", context, exc, exc_info=exc)
+
+
+def _report_ui_queue_reschedule_failure(
+    app: AppProtocol,
+    exc: BaseException,
+    *,
+    recovered: bool,
+) -> None:
+    try:
+        app._log_exception("UI queue reschedule error", exc)
+    except Exception as log_exc:
+        _log_suppressed("Failed logging UI queue reschedule error", log_exc)
+    if recovered:
+        try:
+            setattr(app, "_ui_queue_reschedule_failed", False)
+        except Exception:
+            pass
+        return
+    try:
+        setattr(app, "_ui_queue_reschedule_failed", True)
+        setattr(app, "_ui_queue_reschedule_error", str(exc))
+    except Exception:
+        pass
+    status = getattr(app, "status", None)
+    if status is not None and hasattr(status, "config"):
+        try:
+            status.config(text=_UI_QUEUE_RESCHEDULE_FAILED_STATUS)
+        except Exception as status_exc:
+            _log_suppressed("Failed updating UI queue reschedule failure status text", status_exc)
+    streaming_controller = getattr(app, "streaming_controller", None)
+    if streaming_controller is not None and hasattr(streaming_controller, "handle_log"):
+        try:
+            streaming_controller.handle_log(
+                "[ui] UI queue scheduling failed; queued UI work may pause until restart."
+            )
+        except Exception as controller_exc:
+            _log_suppressed("Failed logging UI queue reschedule failure to console", controller_exc)
 
 
 def _stream_ui_busy(app: AppProtocol) -> bool:
@@ -1105,6 +1143,18 @@ def drain_ui_queue(app: AppProtocol) -> None:
                 app.after(next_delay_ms, app._drain_ui_queue)
             except Exception as exc:
                 try:
-                    app._log_exception("UI queue reschedule error", exc)
-                except Exception as log_exc:
-                    _log_suppressed("Failed logging UI queue reschedule error", log_exc)
+                    after_idle = getattr(app, "after_idle", None)
+                except Exception:
+                    after_idle = None
+                recovered = False
+                if callable(after_idle):
+                    try:
+                        after_idle(app._drain_ui_queue)
+                        recovered = True
+                    except Exception as idle_exc:
+                        _log_suppressed("Failed scheduling UI queue via after_idle fallback", idle_exc)
+                _report_ui_queue_reschedule_failure(
+                    app,
+                    exc,
+                    recovered=recovered,
+                )

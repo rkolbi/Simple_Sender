@@ -26,7 +26,7 @@ import logging
 import os
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
-from typing import Any
+from typing import Any, cast
 
 from simple_sender.utils.macro_headers import parse_macro_color_line
 from simple_sender.ui.dialogs.popup_utils import center_window
@@ -51,14 +51,14 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
     logger.debug("%s: %s", context, exc, exc_info=exc)
 
 
-def _resolve_macro_manager_parent(app: Any) -> object | None:
+def _resolve_macro_manager_parent(app: Any) -> tk.Wm | None:
     popup_windows = getattr(app, "_lower_popup_windows", None)
     if isinstance(popup_windows, dict):
         popup = popup_windows.get("app_settings")
         if popup is not None:
             try:
                 if bool(popup.winfo_exists()) and bool(popup.winfo_viewable()):
-                    return popup
+                    return cast(tk.Wm, popup)
             except Exception as exc:
                 _log_suppressed(
                     "Failed checking App Settings popup ownership for Macro Manager",
@@ -67,14 +67,14 @@ def _resolve_macro_manager_parent(app: Any) -> object | None:
     if app is not None:
         try:
             if bool(app.winfo_exists()):
-                return app
+                return cast(tk.Wm, app)
         except Exception:
             pass
     return None
 
 
 class _MacroManagerDialog:
-    def __init__(self, app: Any, *, parent: object | None = None) -> None:
+    def __init__(self, app: Any, *, parent: tk.Wm | None = None) -> None:
         self.app = app
         self.parent = parent if parent is not None else _resolve_macro_manager_parent(app)
         self.window = tk.Toplevel(app)
@@ -157,9 +157,9 @@ class _MacroManagerDialog:
 
         ttk.Label(right, text="Body").grid(row=4, column=0, sticky="nw", padx=(0, 8), pady=4)
         self.body_text = tk.Text(right, wrap="word", height=16)
-        themed_options = text_display_theme_options(self.app)
+        themed_options = cast(dict[str, Any], text_display_theme_options(self.app))
         if themed_options:
-            self.body_text.configure(themed_options)
+            self.body_text.configure(cnf=themed_options)
         self.body_text.grid(row=4, column=1, sticky="nsew", pady=4)
         bind_text_display_theme(self.app, self.body_text)
         body_scroll = ttk.Scrollbar(right, orient="vertical", command=self.body_text.yview)

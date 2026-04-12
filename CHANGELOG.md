@@ -5,6 +5,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+- No unreleased changes are currently staged beyond the `3.0.11` release baseline.
+
+## [3.0.11] - 2026-04-12
+
 ### Changed
 - Resume/reconnect safety parity was tightened for the current baseline:
   - `Resume From...` now uses the same Job Setup validity confirmation model as fresh Run before starting a resumed stream
@@ -57,15 +61,13 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README now reflects the current Start Job confirmation content and the intended App Settings/Logs/Clear Logs popup stacking behavior.
 
 ### Validation
-- Current local repository validation snapshot after the cleanup and baseline-alignment work:
-  - `run_tests.bat`: PASS end-to-end on `2026-04-10`
-  - full suite stage: `1766 passed, 3 skipped`
-  - critical coverage gate: PASS (`grbl_worker_connection.py` `100.0%`, minimum `95.0%`)
-  - `mypy`: PASS (`141` source files)
-- Focused Macro Manager/App Settings popup validation after the ownership/focus fix:
-  - `python -m pytest tests\ui\test_macro_manager_dialog.py tests\ui\test_logs_dialog.py tests\unit\test_macro_manager.py`
-  - result: `10 passed`
-  - `python -m py_compile simple_sender\ui\dialogs\macro_manager.py tests\ui\test_macro_manager_dialog.py`
+- `3.0.11` is the current stable, release-ready baseline for the present workflow architecture.
+- Current local repository validation snapshot for `3.0.11`:
+  - `pytest -q`: `1800 passed, 3 skipped`
+  - `ruff check .`: clean
+  - `mypy main.py simple_sender`: clean
+  - `Success: no issues found in 201 source files`
+  - `run_tests.bat`: clean (`7/7` gates passed)
 
 ## [3.0] - 2026-04-05
 
