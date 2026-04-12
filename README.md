@@ -298,7 +298,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
    - When enabled, non-blocking GRBL popups show timestamp, code number, and definition for known `ALARM:x` / `error:x` responses. Duplicate popups are deduped by code for the configured interval.
 9) **Settings and tuning**
-   - Use the GRBL Settings popup to refresh $$ (idle, not alarmed), edit values with numeric validation/ranges; pending edits highlight yellow until saved.
+   - Use the GRBL Settings popup to view the last captured `$$` snapshot or refresh `$$` (idle, not alarmed); pending edits highlight yellow until saved.
    - If enabled, the optional Raw $$ popup button opens the raw settings capture.
 10) **Macros**
        - Left-click to run; right-click to sample contents. Macros blocked during streaming/alarms; directives such as `%wait`, `%msg`, `%update`, `%if running`, `%if paused`, and `%if not running` guard how the macro executes.
@@ -322,7 +322,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   The lower display is a persistent split view instead of a tab strip. The left column has a popup/access button row above **Console**, and the right column has the always-visible override/control pane. **Job Info**, **Checklists**, **Logs**, **Raw $$**, **GRBL Settings**, **App Settings**, and **About** appear on the left in that order when available. The popups stay large, dark-themed, and reusable.
   
-  **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and separate `Toolpaths` / `Tools` lists when the metadata provides them).
+  **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and separate `Toolpaths` / `Tools` lists when the metadata provides them). If metadata is already available from the load pipeline, the first popup open renders it immediately without requiring a reload or reopen.
   
   **Console:** Persistent log of GRBL traffic, filter buttons, and a manual command entry row with a Pos/Status view toggle for focused troubleshooting.
   
@@ -332,7 +332,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   **Raw $$:** Optional raw settings-dump capture for quick copy/paste or archival. It opens in the GRBL Settings popup on the Raw $$ page, is hidden by default in the lower control row, and is controlled by **Show Raw $$ Button**.
   
-  **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller. It opens in a large popup.
+  **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller. It opens in a large popup, and if the post-connect `$$` snapshot has already been captured, the first popup open renders that cached data immediately.
   
   **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, optional App Settings popup preloading on next launch, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick actions), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Jogging defaults + Safe mode + jog DRO smoothing, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Diagnostics (bundle export for everyone plus a Developer Options toggle that reveals preflight, runtime telemetry, session report export, backup bundles, perf-test preset, and large-file thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
 
@@ -386,6 +386,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Lean runtime model:** The sender does not render Top View/Spatial geometry during load; UI remains focused on readiness, dimensions, and estimate output.
 - **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
+- **Lifecycle console logging:** Job lifecycle logging stays intentionally sparse and truthful: load, start, immediate early telemetry, `10%` progress milestones, sparse heartbeat while running, and completion are logged without reverting to noisy per-line progress chatter.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; during deferred completion the top-right progress bar/label stay in sync and finalize at `100.0%` when GRBL reaches the final `Idle`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
@@ -421,7 +422,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - Console Save pre-fills a timestamped filename (`simple_sender_console_YYYYMMDD_HHMMSS.txt`) for touch-friendly export.
 
 ## GRBL Settings UI
-- Refresh $$ (idle, not alarmed, after handshake). The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ popup button opens the raw text capture.
+- If the post-connect `$$` snapshot has already been captured, the first popup open uses that cached data immediately. Refresh $$ (idle, not alarmed, after handshake) requests a newer dump. The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ popup button opens the raw text capture.
 
 ## Macros
 
@@ -1196,6 +1197,7 @@ Macro UI is included below along with the rest of the interface.
 ### Job Info Popup
 - Read-only, scrollable job/metadata summary.
 - Shows `SSMETA` header fields (when present), quick-scan metrics, and separate `Toolpaths` / `Tools` lists when metadata provides them.
+- If metadata is already available from the load pipeline, the first popup open shows it immediately; no extra refresh, reopen, or reload is required.
 
 ### Logs Popup
 - Log viewer: read-only view of application/serial/UI/error logs.
@@ -1233,7 +1235,8 @@ Macro UI is included below along with the rest of the interface.
 - Hidden by default; enable it with **App Settings > Interface > Auxiliary panel buttons > Show Raw $$ Button**.
 
 ### GRBL Settings Popup
-- Refresh $$: requests a fresh $$ dump and populates the table.
+- First-open data source: if the post-connect `$$` snapshot was already captured, the popup renders that cached snapshot immediately instead of opening blank.
+- Refresh $$: requests a fresh `$$` dump and repopulates the table when you want a newer controller snapshot.
 - Save Changes: sends edited settings back to GRBL in sequence, then verifies the write using a follow-up `$$` capture before confirming success.
 - Settings table: scrollable columns for Setting/Name/Value/Units/Description; double-click Value to edit with validation.
 - Edited highlight: rows with pending edits are highlighted until saved or reverted.

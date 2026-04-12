@@ -229,8 +229,14 @@ class GRBLSettingsController:
         settings_view = (
             self._build_settings_view(settings_parent) if settings_parent is not None else None
         )
+        self._render_cached_views()
         return raw_view, settings_view
 
+    def _render_cached_views(self) -> None:
+        if self.settings_raw_text is not None and self._settings_raw_lines:
+            self._render_settings_raw()
+        if self.settings_tree is not None and self._settings_data:
+            self._render_settings()
 
     def start_capture(self, header: str = "Requesting $$...") -> None:
         self._settings_capture = True
