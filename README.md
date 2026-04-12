@@ -7,13 +7,6 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.0.11`. This is the current release-ready baseline.
 
-Current local validation snapshot for `3.0.11`:
-- `pytest -q`: `1800 passed, 3 skipped`
-- `ruff check .`: clean
-- `mypy main.py simple_sender`: clean
-- `Success: no issues found in 201 source files`
-- `run_tests.bat`: clean (`7/7` gates passed)
-
 ## Design Objectives and Key Features
 
 Simple Sender was built to make everyday CNC work easier, clearer, and more dependable. Its core features are designed to help the operator spend less time fighting software and more time getting work done:
