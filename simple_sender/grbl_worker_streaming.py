@@ -31,11 +31,18 @@ from functools import lru_cache
 from typing import Sequence, cast
 
 from simple_sender.types import (
+    GcodeAckedEvent,
+    GcodeSentEvent,
     GrblWorkerState,
     ManualCommandResultTracker,
     ManualPendingItem,
+    ProgressBytesEvent,
+    ProgressEvent,
+    StreamErrorEvent,
     StreamPendingItem,
+    StreamPauseReasonEvent,
     StreamQueueItem,
+    StreamStateEvent,
 )
 from simple_sender.kasa_accessory import SpindleCommandDetector
 
@@ -224,7 +231,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._ack_byte_offset = 0
         self._stream_file_size_bytes = self._resolve_stream_file_size_bytes(lines)
         self._reset_stream_buffer()
-        self.ui_q.put(("stream_state", "loaded", len(lines)))
+        self.ui_q.put(StreamStateEvent("loaded", len(lines)))
         logger.info(f"Loaded {len(lines)} lines of G-code")
     
     def start_stream(self) -> None:
@@ -247,7 +254,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._ack_byte_offset = 0
         self._emit_buffer_fill()
         if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
-            self.ui_q.put(("progress_bytes", 0, int(self._stream_file_size_bytes)))
+            self.ui_q.put(ProgressBytesEvent(0, int(self._stream_file_size_bytes)))
         self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(
@@ -256,7 +263,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
                 )
             )
-        self.ui_q.put(("stream_state", "running", None))
+        self.ui_q.put(StreamStateEvent("running", None))
         logger.info("Started G-code streaming")
     
     def start_stream_from(
@@ -342,8 +349,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._emit_buffer_fill()
         if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
             self.ui_q.put(
-                (
-                    "progress_bytes",
+                ProgressBytesEvent(
                     min(
                         int(getattr(self, "_ack_byte_offset", 0) or 0),
                         int(self._stream_file_size_bytes),
@@ -359,8 +365,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
                 )
             )
-        self.ui_q.put(("progress", start_index, len(self._gcode)))
-        self.ui_q.put(("stream_state", "running", None))
+        self.ui_q.put(ProgressEvent(int(start_index), len(self._gcode)))
+        self.ui_q.put(StreamStateEvent("running", None))
         logger.info(f"Resumed streaming from line {start_index}")
     
     def pause_stream(self) -> bool | None:
@@ -382,7 +388,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return False
         self._paused = False
         self._signal_tx_activity()
-        self.ui_q.put(("stream_state", "running", None))
+        self.ui_q.put(StreamStateEvent("running", None))
         logger.info("Stream resumed")
         return True
 
@@ -401,9 +407,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 return False
         self._paused = True
         self._signal_tx_activity()
-        self.ui_q.put(("stream_state", "paused", None))
+        self.ui_q.put(StreamStateEvent("paused", None))
         if reason:
-            self.ui_q.put(("stream_pause_reason", reason))
+            self.ui_q.put(StreamPauseReasonEvent(str(reason)))
             logger.info(f"Stream paused ({reason})")
         else:
             logger.info("Stream paused")
@@ -417,7 +423,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if accepted is False:
             self.ui_q.put(("log", "[stop failed] Ctrl-X was not sent; stream state is unchanged."))
             return False
-        self.ui_q.put(("stream_state", "stopped", None))
+        self.ui_q.put(StreamStateEvent("stopped", None))
         logger.info("Stream stopped")
         return True
     
@@ -741,13 +747,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if ack_idx is None:
             return
         if emit_sent:
-            self.ui_q.put(("gcode_sent", ack_idx, ack_line))
-        self.ui_q.put(("gcode_acked", ack_idx))
-        self.ui_q.put(("progress", ack_idx + 1, len(self._gcode)))
+            self.ui_q.put(GcodeSentEvent(int(ack_idx), ack_line))
+        self.ui_q.put(GcodeAckedEvent(int(ack_idx)))
+        self.ui_q.put(ProgressEvent(int(ack_idx) + 1, len(self._gcode)))
         if ack_byte_offset is not None and stream_file_size_bytes > 0:
             self.ui_q.put(
-                (
-                    "progress_bytes",
+                ProgressBytesEvent(
                     min(int(ack_byte_offset), int(stream_file_size_bytes)),
                     int(stream_file_size_bytes),
                 )
@@ -787,7 +792,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return
         if success:
             self._ack_handled_stream_line(pending_item)
-            self.ui_q.put(("stream_state", "running", None))
+            self.ui_q.put(StreamStateEvent("running", None))
             self._signal_tx_activity()
             return
         detail = str(reason or "").strip() or "Tool change workflow canceled."
@@ -797,16 +802,16 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._streaming = False
                 self._paused = False
             self.ui_q.put(("log", f"[stream] Tool change canceled: {detail}"))
-            self.ui_q.put(("stream_state", "stopped", None))
+            self.ui_q.put(StreamStateEvent("stopped", None))
             return
         idx = pending_item.idx
         line_text = pending_item.line
         msg = self._format_stream_error(f"Tool change failed: {detail}", idx, line_text)
         with self._stream_lock:
             self._streaming = False
-        self.ui_q.put(("stream_error", msg, idx, line_text, self._gcode_name))
+        self.ui_q.put(StreamErrorEvent(msg, idx, line_text, self._gcode_name))
         self.ui_q.put(("log", f"[stream error] {msg}"))
-        self.ui_q.put(("stream_state", "error", detail))
+        self.ui_q.put(StreamStateEvent("error", detail))
 
     def _handle_stream_source_read_failure(self, failure: _StreamSourceReadError) -> None:
         source_name = ""
@@ -827,9 +832,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._stream_pending_item = None
             self._resume_preamble.clear()
         self._emit_buffer_fill()
-        self.ui_q.put(("stream_error", message, failure.idx, None, self._gcode_name))
+        self.ui_q.put(StreamErrorEvent(message, failure.idx, None, self._gcode_name))
         self.ui_q.put(("log", f"[stream error] {message}"))
-        self.ui_q.put(("stream_state", "error", "File read failed"))
+        self.ui_q.put(StreamStateEvent("error", "File read failed"))
 
     def _validate_stream_item_locked(
         self,
@@ -867,7 +872,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line,
             )
             self._pause_stream(reason="invalid system command")
-            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
             self.ui_q.put(("log", f"[stream error] {msg}"))
             return None
         item = StreamPendingItem(
@@ -888,7 +893,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if payload is None:
             msg = self._format_stream_error("Non-ASCII characters in line", item.idx, line)
             self._pause_stream(reason="invalid characters")
-            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
             self.ui_q.put(("log", f"[stream error] {msg}"))
             return None
 
@@ -900,7 +905,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line,
             )
             self._pause_stream(reason="line too long")
-            self.ui_q.put(("stream_error", msg, item.idx, line, self._gcode_name))
+            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
             self.ui_q.put(("log", f"[stream error] {msg}"))
             return None
 
@@ -1032,8 +1037,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                                 item,
                                 tool_name=str(directive_payload or ""),
                             )
-                            self.ui_q.put(("stream_state", "paused", None))
-                            self.ui_q.put(("stream_pause_reason", "tool change"))
+                            self.ui_q.put(StreamStateEvent("paused", None))
+                            self.ui_q.put(StreamPauseReasonEvent("tool change"))
                             self.ui_q.put(("stream_tool_change", idx, tool_name))
                             tool_change_started = True
                         else:
@@ -1079,7 +1084,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 if not (self._abort_writes.is_set() or stream_token != self._stream_token):
                     self._streaming = False
                     self._paused = False
-                    self.ui_q.put(("stream_state", "error", "Write failed"))
+                    self.ui_q.put(StreamStateEvent("error", "Write failed"))
                 break
 
             if not queue_item.is_gcode and self._resume_preamble:
@@ -1089,8 +1094,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._emit_buffer_fill()
             if spindle_state is not None:
                 self.ui_q.put(("spindle_state", bool(spindle_state), queue_item.idx))
-            if queue_item.is_gcode:
-                self.ui_q.put(("gcode_sent", queue_item.idx, queue_item.line))
+            if queue_item.is_gcode and queue_item.idx is not None:
+                self.ui_q.put(GcodeSentEvent(int(queue_item.idx), queue_item.line))
 
         with self._stream_lock:
             send_index = self._send_index
@@ -1113,10 +1118,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 with self._stream_lock:
                     self._ack_byte_offset = int(stream_file_size)
                 self.ui_q.put(
-                    ("progress_bytes", int(stream_file_size), int(stream_file_size))
+                    ProgressBytesEvent(int(stream_file_size), int(stream_file_size))
                 )
             self._streaming = False
-            self.ui_q.put(("stream_state", "done", None))
+            self.ui_q.put(StreamStateEvent("done", None))
             logger.info("Streaming complete")
 
     def _purge_pending_jogs(self) -> None:

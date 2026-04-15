@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 
@@ -29,11 +30,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _resolve_widget_bg(widget):
@@ -91,3 +88,4 @@ def set_kb_id(widget, kb_id: str):
     except AttributeError as exc:
         _log_suppressed("Failed attaching keyboard-id metadata to widget", exc)
     return widget
+

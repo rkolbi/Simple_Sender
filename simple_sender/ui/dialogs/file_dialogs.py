@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import sys
 
@@ -39,11 +40,7 @@ _LINUX_FILE_DIALOG_DEFAULT_PATH = "/root/CNC_Jobs"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _resolve_parent(app, kwargs):
@@ -462,3 +459,4 @@ def _run_dialog_once(app, func, *args, **kwargs):
 
 def run_file_dialog(app, func, *args, **kwargs):
     return _run_dialog_once(app, func, *args, **kwargs)
+

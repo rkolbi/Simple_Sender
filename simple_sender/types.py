@@ -418,8 +418,175 @@ UiCallCancelToken: TypeAlias = threading.Event
 UiCallStartQueue: TypeAlias = queue.Queue[bool]
 UiPromptResultQueue: TypeAlias = queue.Queue[str]
 
+
+class _TupleCompatibleUiEvent(Sequence[Any]):
+    def as_tuple(self) -> tuple[Any, ...]:
+        raise NotImplementedError
+
+    def __getitem__(self, index: int | slice) -> Any:
+        return self.as_tuple()[index]
+
+    def __len__(self) -> int:
+        return len(self.as_tuple())
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.as_tuple())
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _TupleCompatibleUiEvent):
+            return self.as_tuple() == other.as_tuple()
+        if isinstance(other, tuple):
+            return self.as_tuple() == other
+        return False
+
+    def __hash__(self) -> int:
+        return hash(self.as_tuple())
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionEvent(_TupleCompatibleUiEvent):
+    connected: bool
+    port: str | None
+
+    def as_tuple(self) -> tuple[str, bool, str | None]:
+        return ("conn", self.connected, self.port)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyEvent(_TupleCompatibleUiEvent):
+    is_ready: bool
+
+    def as_tuple(self) -> tuple[str, bool]:
+        return ("ready", self.is_ready)
+
+
+@dataclass(frozen=True, slots=True)
+class AlarmEvent(_TupleCompatibleUiEvent):
+    message: str
+
+    def as_tuple(self) -> tuple[str, str]:
+        return ("alarm", self.message)
+
+
+@dataclass(frozen=True, slots=True)
+class StatusEvent(_TupleCompatibleUiEvent):
+    line: str
+
+    def as_tuple(self) -> tuple[str, str]:
+        return ("status", self.line)
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsDumpDoneEvent(_TupleCompatibleUiEvent):
+    def as_tuple(self) -> tuple[str]:
+        return ("settings_dump_done",)
+
+
+@dataclass(frozen=True, slots=True)
+class GcodeSentEvent(_TupleCompatibleUiEvent):
+    idx: int
+    line: str
+
+    def as_tuple(self) -> tuple[str, int, str]:
+        return ("gcode_sent", self.idx, self.line)
+
+
+@dataclass(frozen=True, slots=True)
+class GcodeAckedEvent(_TupleCompatibleUiEvent):
+    idx: int
+
+    def as_tuple(self) -> tuple[str, int]:
+        return ("gcode_acked", self.idx)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressEvent(_TupleCompatibleUiEvent):
+    done: int
+    total: int
+
+    def as_tuple(self) -> tuple[str, int, int]:
+        return ("progress", self.done, self.total)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressBytesEvent(_TupleCompatibleUiEvent):
+    acked_offset: int
+    file_size_bytes: int
+
+    def as_tuple(self) -> tuple[str, int, int]:
+        return ("progress_bytes", self.acked_offset, self.file_size_bytes)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class StreamStateEvent(_TupleCompatibleUiEvent):
+    state: str
+    detail: Any | None
+
+    def as_tuple(self) -> tuple[str, str, Any | None]:
+        return ("stream_state", self.state, self.detail)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class StreamInterruptedEvent(_TupleCompatibleUiEvent):
+    was_streaming: bool
+    reason: str | None = None
+
+    def as_tuple(self) -> tuple[str, bool, str | None]:
+        return ("stream_interrupted", self.was_streaming, self.reason)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class StreamErrorEvent(_TupleCompatibleUiEvent):
+    message: str
+    err_idx: int | None
+    err_line: str | None
+    gcode_name: str | None
+
+    def as_tuple(self) -> tuple[str, str, int | None, str | None, str | None]:
+        return (
+            "stream_error",
+            self.message,
+            self.err_idx,
+            self.err_line,
+            self.gcode_name,
+        )
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class StreamPauseReasonEvent(_TupleCompatibleUiEvent):
+    reason: str
+
+    def as_tuple(self) -> tuple[str, str]:
+        return ("stream_pause_reason", self.reason)
+
+
+UiLifecycleEvent: TypeAlias = (
+    ConnectionEvent
+    | ReadyEvent
+    | AlarmEvent
+    | StatusEvent
+    | SettingsDumpDoneEvent
+)
+
+UiStreamingProgressEvent: TypeAlias = (
+    GcodeSentEvent
+    | GcodeAckedEvent
+    | ProgressEvent
+    | ProgressBytesEvent
+)
+
+UiStreamingControlEvent: TypeAlias = (
+    StreamStateEvent
+    | StreamInterruptedEvent
+    | StreamErrorEvent
+    | StreamPauseReasonEvent
+)
+
 UiEvent = (
-    tuple[Literal["conn"], bool, str | None]
+    UiLifecycleEvent
+    | UiStreamingProgressEvent
+    | UiStreamingControlEvent
+    | tuple[Literal["conn"], bool, str | None]
     | tuple[Literal["ui_call"], Callable[..., Any], tuple[Any, ...], dict[str, Any], UiCallResultQueue]
     | tuple[
         Literal["ui_call"],

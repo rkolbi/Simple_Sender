@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 import tkinter as tk
 from typing import Any, Callable, cast
@@ -39,11 +40,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _clamp_tooltip_position(
@@ -878,3 +875,4 @@ def ensure_tooltips(app, *, apply_tooltip_func: Callable[[Any, str], Any] | None
         text = _default_tooltip_text(widget)
         if text:
             apply_fn(widget, text)
+

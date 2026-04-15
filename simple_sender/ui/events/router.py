@@ -23,6 +23,7 @@
 import os
 import queue
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 from typing import Any, cast
 from tkinter import messagebox, TclError
@@ -40,7 +41,22 @@ from simple_sender.ui.dialogs.error_dialogs_ui import show_grbl_code_popup
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
-from simple_sender.types import UiEvent
+from simple_sender.types import (
+    AlarmEvent,
+    ConnectionEvent,
+    GcodeAckedEvent,
+    GcodeSentEvent,
+    ProgressBytesEvent,
+    ProgressEvent,
+    ReadyEvent,
+    SettingsDumpDoneEvent,
+    StatusEvent,
+    StreamErrorEvent,
+    StreamInterruptedEvent,
+    StreamPauseReasonEvent,
+    StreamStateEvent,
+    UiEvent,
+)
 
 logger = logging.getLogger(__name__)
 _GCODE_LOADED_STREAM_APPLY_BUDGET_MS = 15.0
@@ -61,7 +77,7 @@ _JOG_LIMIT_ERROR_HINT = (
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc)
 
 
 def _cleanup_streaming_source(source: Any, *, context: str) -> None:
@@ -769,6 +785,59 @@ def set_streaming_lock(app: Any, locked: bool, *, defer_toolbar_refresh: bool = 
 
 def handle_event(app: Any, evt: UiEvent):
     match evt:
+        case ConnectionEvent(connected=connected, port=port):
+            handle_connection_event(app, bool(connected), cast(str | None, port))
+            return
+        case ReadyEvent(is_ready=is_ready):
+            handle_ready_event(app, bool(is_ready))
+            return
+        case AlarmEvent(message=msg):
+            _handle_alarm_event(app, cast(str, msg))
+            return
+        case StatusEvent(line=line):
+            handle_status_event(app, cast(str, line))
+            return
+        case SettingsDumpDoneEvent():
+            try:
+                app.settings_controller.handle_line("ok")
+            except (AttributeError, RuntimeError, TclError) as exc:
+                _log_suppressed("Failed to process settings dump completion", exc)
+            return
+        case GcodeSentEvent(idx=idx, line=_line):
+            app.streaming_controller.handle_gcode_sent(int(cast(int, idx)))
+            return
+        case GcodeAckedEvent(idx=idx):
+            app.streaming_controller.handle_gcode_acked(int(cast(int, idx)))
+            return
+        case ProgressEvent(done=done, total=total):
+            app.streaming_controller.handle_progress(
+                int(cast(int, done)),
+                int(cast(int, total)),
+            )
+            return
+        case ProgressBytesEvent(acked_offset=acked_offset, file_size_bytes=file_size_bytes):
+            app.streaming_controller.handle_progress_bytes(
+                int(cast(int, acked_offset)),
+                int(cast(int, file_size_bytes)),
+            )
+            return
+        case StreamStateEvent():
+            handle_stream_state_event(app, evt)
+            return
+        case StreamInterruptedEvent():
+            handle_stream_interrupted(app, evt)
+            return
+        case StreamErrorEvent(
+            message=msg,
+            err_idx=err_idx,
+            err_line=err_line,
+            gcode_name=name,
+        ):
+            _handle_stream_error_event(app, msg, err_idx, err_line, name)
+            return
+        case StreamPauseReasonEvent(reason=reason):
+            _handle_stream_pause_reason_event(app, reason)
+            return
         case ("conn", connected, port):
             handle_connection_event(app, cast(bool, connected), cast(str | None, port))
             return
@@ -1171,3 +1240,4 @@ def _clear_autolevel_restore(app) -> None:
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
+

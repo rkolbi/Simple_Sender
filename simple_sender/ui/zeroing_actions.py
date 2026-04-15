@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 from tkinter import messagebox
 
@@ -34,11 +35,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 _WCS_TO_P = {
@@ -334,3 +331,4 @@ def goto_zero(app):
     if not _send_zero_command(app, "G90 G0 X0 Y0"):
         return
     _send_zero_command(app, "G0 Z0")
+

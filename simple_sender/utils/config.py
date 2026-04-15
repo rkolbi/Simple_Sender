@@ -87,6 +87,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "job_completion_beep": False,
     "job_completion_popup": True,
     "joystick_safety_binding": None,
+    "joystick_safety_normal_binding": None,
+    "joystick_safety_slow_binding": None,
     "joystick_safety_enabled": False,
     "joystick_bindings_enabled": False,
     "joystick_bindings": {},

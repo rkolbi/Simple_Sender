@@ -28,6 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from simple_sender.ui.diagnostics_export_runtime_state import (
+    get_diagnostics_export_runtime_state,
+    set_diagnostics_bundle_export_inflight,
+)
+
 
 def _post_ui_callback(
     app: Any,
@@ -100,22 +105,23 @@ def export_diagnostics_bundle(
     if not path:
         return
     out_path = Path(path)
-    use_background_export = bool(getattr(app, "_diagnostics_bundle_async_export", True))
+    export_state = get_diagnostics_export_runtime_state(app)
+    use_background_export = bool(export_state.diagnostics_bundle_async_export)
     if use_background_export and callable(getattr(app, "after", None)):
-        if bool(getattr(app, "_diagnostics_bundle_export_inflight", False)):
+        if bool(export_state.diagnostics_bundle_export_inflight):
             showinfo(
                 "Export diagnostics bundle",
                 "A diagnostics bundle export is already running.",
             )
             return
-        app._diagnostics_bundle_export_inflight = True
+        set_diagnostics_bundle_export_inflight(app, True)
         try:
             app.ui_q.put(("log", "[diagnostics] Exporting diagnostics bundle..."))
         except Exception:
             pass
 
         def _complete_export(error: Exception | None = None) -> None:
-            app._diagnostics_bundle_export_inflight = False
+            set_diagnostics_bundle_export_inflight(app, False)
             if error is None:
                 showinfo("Export diagnostics bundle", f"Saved to:\n{out_path}")
                 return
@@ -139,9 +145,7 @@ def export_diagnostics_bundle(
                 app,
                 lambda: _complete_export(error),
                 log_suppressed=log_suppressed,
-                on_drop=lambda: setattr(
-                    app, "_diagnostics_bundle_export_inflight", False
-                ),
+                on_drop=lambda: set_diagnostics_bundle_export_inflight(app, False),
             )
 
         try:
@@ -153,7 +157,7 @@ def export_diagnostics_bundle(
             worker.start()
             return
         except Exception as exc:
-            app._diagnostics_bundle_export_inflight = False
+            set_diagnostics_bundle_export_inflight(app, False)
             log_suppressed("Failed starting diagnostics bundle export thread", exc)
 
     try:

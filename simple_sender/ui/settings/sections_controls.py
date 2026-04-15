@@ -635,22 +635,62 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         justify="left",
     )
     app.joystick_safety_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
+    app.joystick_safety_normal_label = ttk.Label(
+        joystick_test_frame,
+        textvariable=app.joystick_safety_normal_status,
+        wraplength=520,
+        justify="left",
+    )
+    app.joystick_safety_normal_label.grid(row=6, column=0, sticky="w", pady=(2, 0))
+    app.joystick_safety_slow_label = ttk.Label(
+        joystick_test_frame,
+        textvariable=app.joystick_safety_slow_status,
+        wraplength=520,
+        justify="left",
+    )
+    app.joystick_safety_slow_label.grid(row=7, column=0, sticky="w", pady=(2, 0))
     joystick_safety_btn_row = ttk.Frame(joystick_test_frame)
-    joystick_safety_btn_row.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    joystick_safety_btn_row.grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 0))
     app.btn_set_joystick_safety = ttk.Button(
         joystick_safety_btn_row,
-        text="Set Safety Button",
-        command=app._start_joystick_safety_capture,
+        text="Set Safety Button / Normal Jog Speed",
+        command=lambda: app._start_joystick_safety_capture("normal"),
     )
     app.btn_set_joystick_safety.pack(side="left")
     app.btn_clear_joystick_safety = ttk.Button(
         joystick_safety_btn_row,
-        text="Clear Safety Button",
-        command=app._clear_joystick_safety_binding,
+        text="Clear Normal",
+        command=lambda: app._clear_joystick_safety_binding("normal"),
     )
     app.btn_clear_joystick_safety.pack(side="left", padx=(8, 0))
-    apply_tooltip(app.btn_set_joystick_safety, "Capture a joystick button to use as a safety hold.")
-    apply_tooltip(app.btn_clear_joystick_safety, "Clear the safety button binding.")
+    app.btn_set_joystick_safety_slow = ttk.Button(
+        joystick_safety_btn_row,
+        text="Set Safety Button / Slow Jog Speed",
+        command=lambda: app._start_joystick_safety_capture("slow"),
+    )
+    app.btn_set_joystick_safety_slow.pack(side="left", padx=(12, 0))
+    app.btn_clear_joystick_safety_slow = ttk.Button(
+        joystick_safety_btn_row,
+        text="Clear Slow",
+        command=lambda: app._clear_joystick_safety_binding("slow"),
+    )
+    app.btn_clear_joystick_safety_slow.pack(side="left", padx=(8, 0))
+    apply_tooltip(
+        app.btn_set_joystick_safety,
+        "Capture a joystick button to use as the normal jog-speed safety hold.",
+    )
+    apply_tooltip(
+        app.btn_clear_joystick_safety,
+        "Clear the normal jog-speed safety button binding.",
+    )
+    apply_tooltip(
+        app.btn_set_joystick_safety_slow,
+        "Capture a joystick button to use as the slow jog-speed safety hold.",
+    )
+    apply_tooltip(
+        app.btn_clear_joystick_safety_slow,
+        "Clear the slow jog-speed safety button binding.",
+    )
     app._refresh_joystick_safety_display()
 
     app.stop_hold_focus_check = ttk.Checkbutton(
@@ -658,7 +698,7 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         text="Stop joystick hold when app loses focus",
         variable=app.stop_hold_on_focus_loss,
     )
-    app.stop_hold_focus_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    app.stop_hold_focus_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
     apply_tooltip(
         app.stop_hold_focus_check,
         "Stop held jog actions if focus leaves the app window.",
@@ -666,7 +706,7 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
     if not hasattr(app, "joystick_hold_miss_limit"):
         app.joystick_hold_miss_limit = tk.IntVar(value=2)
     ttk.Label(joystick_test_frame, text="Hold release sensitivity").grid(
-        row=8, column=0, sticky="w", pady=(8, 0)
+        row=10, column=0, sticky="w", pady=(8, 0)
     )
     app.joystick_hold_miss_limit_entry = ttk.Entry(
         joystick_test_frame,
@@ -674,7 +714,7 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         width=6,
     )
     app.joystick_hold_miss_limit_entry.grid(
-        row=8, column=1, sticky="w", pady=(8, 0), padx=(8, 0)
+        row=10, column=1, sticky="w", pady=(8, 0), padx=(8, 0)
     )
     attach_numeric_keypad(app.joystick_hold_miss_limit_entry, allow_decimal=False)
     apply_tooltip(
@@ -687,7 +727,7 @@ def build_keyboard_shortcuts_section(app, parent: ttk.Frame, row: int) -> int:
         text="Higher values can reduce accidental early stop on noisy controllers.",
         wraplength=520,
         justify="left",
-    ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
     input_state_frame = ttk.LabelFrame(kb_frame, text="Live input state", padding=8)
     input_state_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=6, pady=(0, 6))

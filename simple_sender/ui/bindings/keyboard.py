@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -35,11 +36,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def update_keyboard_live_status(app, label: str | None = None) -> None:
@@ -314,14 +311,14 @@ def start_joystick_capture(app, row):
 def cancel_joystick_capture(app):
     joystick_bindings.cancel_joystick_capture(app)
 
-def start_joystick_safety_capture(app):
-    return joystick_bindings.start_joystick_safety_capture(app)
+def start_joystick_safety_capture(app, mode: str = "normal"):
+    return joystick_bindings.start_joystick_safety_capture(app, mode=mode)
 
 def cancel_joystick_safety_capture(app):
     joystick_bindings.cancel_joystick_safety_capture(app)
 
-def clear_joystick_safety_binding(app):
-    joystick_bindings.clear_joystick_safety_binding(app)
+def clear_joystick_safety_binding(app, mode: str = "normal"):
+    joystick_bindings.clear_joystick_safety_binding(app, mode=mode)
 
 def on_joystick_safety_toggle(app):
     joystick_bindings.on_joystick_safety_toggle(app)
@@ -396,4 +393,5 @@ def commit_kb_edit(app, row, entry, label_override: str | None = None):
     binding_id = app._button_binding_id(btn)
     app._key_bindings[binding_id] = label
     app._apply_keyboard_bindings()
+
 

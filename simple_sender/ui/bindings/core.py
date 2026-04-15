@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -112,11 +113,7 @@ _REEXPORTED_BINDING_API = (
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 PYGAME_IMPORT_ERROR = ""
 pygame: ModuleType | None = None
@@ -259,6 +256,7 @@ def update_joystick_polling_state(app):
         app._stop_joystick_polling()
         app._stop_joystick_hold()
         app._joystick_safety_active = False
+        app._joystick_safety_speed_mode = None
         if hasattr(app, "joystick_live_status"):
             text = "Joystick state: disabled."
             app.joystick_live_status.set(text)
@@ -268,6 +266,7 @@ def update_joystick_polling_state(app):
         app._stop_joystick_polling()
         app._stop_joystick_hold()
         app._joystick_safety_active = False
+        app._joystick_safety_speed_mode = None
         if hasattr(app, "joystick_live_status"):
             text = "Joystick state: paused while streaming."
             app.joystick_live_status.set(text)
@@ -453,15 +452,28 @@ def refresh_joystick_test_info(app):
     update_joystick_device_status(app, count, reason="Refresh")
 
 def refresh_joystick_safety_display(app):
-    if not hasattr(app, "joystick_safety_status"):
-        return
-    binding = getattr(app, "_joystick_safety_binding", None)
-    label = "None"
-    if binding:
-        display = app._joystick_binding_display(binding)
-        if display:
-            label = display
-    app.joystick_safety_status.set(f"Safety button: {label}")
+    normal_binding = getattr(app, "_joystick_safety_normal_binding", None)
+    if not isinstance(normal_binding, dict):
+        normal_binding = getattr(app, "_joystick_safety_binding", None)
+    slow_binding = getattr(app, "_joystick_safety_slow_binding", None)
+
+    def _label(binding: object) -> str:
+        if isinstance(binding, dict):
+            display = app._joystick_binding_display(binding)
+            if isinstance(display, str) and display:
+                return display
+        return "None"
+
+    normal_label = _label(normal_binding)
+    slow_label = _label(slow_binding)
+    if hasattr(app, "joystick_safety_normal_status"):
+        app.joystick_safety_normal_status.set(f"Normal jog safety button: {normal_label}")
+    if hasattr(app, "joystick_safety_slow_status"):
+        app.joystick_safety_slow_status.set(f"Slow jog safety button: {slow_label}")
+    if hasattr(app, "joystick_safety_status"):
+        app.joystick_safety_status.set(
+            f"Safety buttons: Normal = {normal_label} | Slow = {slow_label}"
+        )
 
 def _joystick_safety_ready(app) -> bool:
     return joystick_bindings.joystick_safety_ready(app)
@@ -747,3 +759,4 @@ def log_button_action(app, btn):
         app.streaming_controller.log(f"[{ts}] Button: {label} | GCode: {gcode}")
     else:
         app.streaming_controller.log(f"[{ts}] Button: {label}")
+

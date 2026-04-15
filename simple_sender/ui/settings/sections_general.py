@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 import subprocess
 import sys
@@ -56,11 +57,7 @@ PI_PROFILE_UI_QUEUE_IDLE_INTERVAL_DEFAULT_MS = (
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _replace_var_trace(owner, var, attr_name: str, callback, *, context: str) -> None:
@@ -1142,3 +1139,4 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         ),
     )
     return row + 1
+

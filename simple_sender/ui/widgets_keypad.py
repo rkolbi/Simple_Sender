@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -32,11 +33,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def attach_numeric_keypad(
@@ -401,3 +398,4 @@ def _show_numeric_keypad(entry, spec: dict[str, Any]):
             dlg.after(0, _retry_grab)
         except tk.TclError as schedule_exc:
             _log_suppressed("Failed scheduling keypad dialog grab retry", schedule_exc)
+

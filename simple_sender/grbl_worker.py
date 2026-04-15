@@ -27,6 +27,7 @@ including connection management, G-code streaming, and status polling.
 """
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import queue
 import re
@@ -115,11 +116,7 @@ __all__ = [
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _format_realtime_for_log(command: bytes) -> str:
@@ -1274,3 +1271,4 @@ class GrblWorker(
         finally:
             logger.debug("RX thread stopped")
     
+

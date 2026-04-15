@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 import threading
 import time
@@ -39,11 +40,28 @@ from simple_sender.utils.constants import (
     UI_QUEUE_MAINTENANCE_INTERVAL_S,
     UI_QUEUE_RECONNECT_CHECK_INTERVAL_S,
 )
-from simple_sender.types import AppProtocol, UiEvent
+from simple_sender.types import (
+    AlarmEvent,
+    AppProtocol,
+    ConnectionEvent,
+    GcodeAckedEvent,
+    GcodeSentEvent,
+    ProgressBytesEvent,
+    ProgressEvent,
+    ReadyEvent,
+    SettingsDumpDoneEvent,
+    StatusEvent,
+    StreamErrorEvent,
+    StreamInterruptedEvent,
+    StreamPauseReasonEvent,
+    StreamStateEvent,
+    UiEvent,
+)
 
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_warned_unexpected: set[tuple[str, str]] = set()
 _LOW_IMPACT_UI_EVENT_KINDS = frozenset(
     {
         "buffer_fill",
@@ -81,11 +99,15 @@ _TOOL_REFERENCE_UNREAD = object()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
+
+
+def _log_unexpected_ui_queue_warning(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
+    if key in _warned_unexpected:
         return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    _warned_unexpected.add(key)
+    logger.warning("%s: %s", context, exc, exc_info=exc)
 
 
 def _report_ui_queue_reschedule_failure(
@@ -101,14 +123,14 @@ def _report_ui_queue_reschedule_failure(
     if recovered:
         try:
             setattr(app, "_ui_queue_reschedule_failed", False)
-        except Exception:
-            pass
+        except Exception as state_exc:
+            _log_suppressed("Failed clearing UI queue reschedule failure state", state_exc)
         return
     try:
         setattr(app, "_ui_queue_reschedule_failed", True)
         setattr(app, "_ui_queue_reschedule_error", str(exc))
-    except Exception:
-        pass
+    except Exception as state_exc:
+        _log_suppressed("Failed storing UI queue reschedule failure state", state_exc)
     status = getattr(app, "status", None)
     if status is not None and hasattr(status, "config"):
         try:
@@ -123,6 +145,163 @@ def _report_ui_queue_reschedule_failure(
             )
         except Exception as controller_exc:
             _log_suppressed("Failed logging UI queue reschedule failure to console", controller_exc)
+
+
+def _best_effort_log_ui_queue_wake_failure(context: str, exc: BaseException) -> None:
+    _log_suppressed(context, exc)
+
+
+def _run_scheduled_ui_queue_drain(app: AppProtocol, token: int) -> None:
+    try:
+        active_token = int(getattr(app, "_ui_queue_drain_schedule_token", 0) or 0)
+    except Exception:
+        active_token = 0
+    if token != active_token:
+        return
+    try:
+        setattr(app, "_ui_queue_drain_after_id", None)
+        setattr(app, "_ui_queue_drain_due_ts", 0.0)
+        setattr(app, "_ui_queue_drain_running", True)
+    except Exception:
+        pass
+    try:
+        app._drain_ui_queue()
+    finally:
+        try:
+            setattr(app, "_ui_queue_drain_running", False)
+        except Exception:
+            pass
+
+
+def schedule_ui_queue_drain(
+    app: AppProtocol,
+    delay_ms: int,
+    *,
+    fatal: bool = True,
+) -> bool:
+    if bool(getattr(app, "_closing", False)):
+        return False
+    try:
+        normalized_delay_ms = max(0, int(delay_ms))
+    except Exception:
+        normalized_delay_ms = 0
+    now = time.monotonic()
+    due_ts = now + (float(normalized_delay_ms) / 1000.0)
+    try:
+        current_after_id = getattr(app, "_ui_queue_drain_after_id", None)
+        current_due_ts = float(getattr(app, "_ui_queue_drain_due_ts", 0.0) or 0.0)
+        current_token = int(getattr(app, "_ui_queue_drain_schedule_token", 0) or 0)
+    except Exception:
+        current_after_id = None
+        current_due_ts = 0.0
+        current_token = 0
+    if (
+        current_after_id is not None
+        and current_due_ts > 0.0
+        and current_due_ts <= due_ts
+    ):
+        return False
+    next_token = current_token + 1
+
+    def _scheduled_drain(token: int = next_token) -> None:
+        _run_scheduled_ui_queue_drain(app, token)
+
+    after_id = None
+    used_after_idle = False
+    after_exc: BaseException | None = None
+    try:
+        after_id = app.after(normalized_delay_ms, _scheduled_drain)
+    except Exception as exc:
+        after_exc = exc
+        try:
+            after_idle = getattr(app, "after_idle", None)
+        except Exception:
+            after_idle = None
+        if callable(after_idle):
+            try:
+                after_id = after_idle(_scheduled_drain)
+                used_after_idle = True
+                if fatal:
+                    _report_ui_queue_reschedule_failure(
+                        app,
+                        after_exc if after_exc is not None else exc,
+                        recovered=True,
+                    )
+            except Exception as idle_exc:
+                if fatal:
+                    _report_ui_queue_reschedule_failure(
+                        app,
+                        after_exc if after_exc is not None else idle_exc,
+                        recovered=False,
+                    )
+                else:
+                    _best_effort_log_ui_queue_wake_failure(
+                        "Failed scheduling UI queue wake via after_idle fallback",
+                        idle_exc,
+                    )
+                return False
+        else:
+            if fatal:
+                _report_ui_queue_reschedule_failure(
+                    app,
+                    after_exc if after_exc is not None else RuntimeError("after unavailable"),
+                    recovered=False,
+                )
+            else:
+                _best_effort_log_ui_queue_wake_failure(
+                    "Failed scheduling UI queue wake via after",
+                    after_exc if after_exc is not None else RuntimeError("after unavailable"),
+                )
+            return False
+    try:
+        setattr(app, "_ui_queue_drain_after_id", after_id)
+        setattr(app, "_ui_queue_drain_due_ts", now if used_after_idle else due_ts)
+        setattr(app, "_ui_queue_drain_schedule_token", next_token)
+    except Exception:
+        pass
+    if current_after_id is not None:
+        try:
+            after_cancel = getattr(app, "after_cancel", None)
+        except Exception:
+            after_cancel = None
+        if callable(after_cancel):
+            try:
+                after_cancel(current_after_id)
+            except Exception:
+                pass
+    if fatal:
+        try:
+            setattr(app, "_ui_queue_reschedule_failed", False)
+            setattr(app, "_ui_queue_reschedule_error", "")
+        except Exception:
+            pass
+    return True
+
+
+def request_ui_queue_wake(app: AppProtocol) -> bool:
+    if bool(getattr(app, "_closing", False)):
+        return False
+    if bool(getattr(app, "_ui_queue_drain_running", False)):
+        return False
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None and hasattr(ui_q, "qsize"):
+        try:
+            if int(ui_q.qsize()) <= 0:
+                return False
+        except Exception:
+            pass
+    return bool(schedule_ui_queue_drain(app, 0, fatal=False))
+
+
+def bind_ui_queue_wake_callback(app: AppProtocol) -> None:
+    ui_q = getattr(app, "ui_q", None)
+    setter = getattr(ui_q, "set_wake_callback", None)
+    if not callable(setter):
+        return
+    try:
+        setter(lambda: request_ui_queue_wake(app))
+    except Exception as exc:
+        _log_suppressed("Failed binding UI queue wake callback", exc)
 
 
 def _stream_ui_busy(app: AppProtocol) -> bool:
@@ -162,6 +341,38 @@ def _connected_quiet_idle(app: AppProtocol) -> bool:
         return True
     except Exception:
         return False
+
+
+def _ui_event_kind(item: UiEvent | object) -> str:
+    if isinstance(item, tuple) and item:
+        return str(item[0] or "")
+    if isinstance(item, ConnectionEvent):
+        return "conn"
+    if isinstance(item, ReadyEvent):
+        return "ready"
+    if isinstance(item, AlarmEvent):
+        return "alarm"
+    if isinstance(item, StatusEvent):
+        return "status"
+    if isinstance(item, SettingsDumpDoneEvent):
+        return "settings_dump_done"
+    if isinstance(item, GcodeSentEvent):
+        return "gcode_sent"
+    if isinstance(item, GcodeAckedEvent):
+        return "gcode_acked"
+    if isinstance(item, ProgressEvent):
+        return "progress"
+    if isinstance(item, ProgressBytesEvent):
+        return "progress_bytes"
+    if isinstance(item, StreamStateEvent):
+        return "stream_state"
+    if isinstance(item, StreamInterruptedEvent):
+        return "stream_interrupted"
+    if isinstance(item, StreamErrorEvent):
+        return "stream_error"
+    if isinstance(item, StreamPauseReasonEvent):
+        return "stream_pause_reason"
+    return ""
 
 
 def _manual_motion_ui_active(app: AppProtocol) -> bool:
@@ -542,10 +753,13 @@ class UiEventQueue:
         self._not_low_full = threading.Condition(self._lock)
         self._drop_counts: dict[str, int] = {}
         self._last_drop_notice = 0.0
+        self._wake_callback = None
 
     def put(self, item: UiEvent, block: bool = False, timeout: float | None = None) -> None:
-        kind = item[0]
+        kind = _ui_event_kind(item)
+        should_wake = False
         with self._lock:
+            was_empty = not (self._high or self._coalesced or self._low)
             if self._is_high_priority(item, kind):
                 if not self._make_room_for_high_priority_locked(kind):
                     self._record_drop(kind)
@@ -559,30 +773,49 @@ class UiEventQueue:
                 self._high.append(item)
                 if kind in self._HIGH_PRIORITY_LOG_KINDS:
                     self._high_priority_log_count += 1
-                return
-            if kind in self._COALESCE_KINDS:
+                should_wake = was_empty
+            elif kind in self._COALESCE_KINDS:
                 if kind in self._coalesced:
                     self._coalesced.move_to_end(kind)
                 self._coalesced[kind] = item
-                return
-            if len(self._low) >= self._maxsize:
-                if not block:
-                    self._record_drop(kind)
-                    return
-                deadline = None
-                if timeout is not None:
-                    timeout = max(0.0, float(timeout))
-                    deadline = time.monotonic() + timeout
-                while len(self._low) >= self._maxsize:
-                    if deadline is not None:
-                        remaining = max(0.0, deadline - time.monotonic())
-                        if remaining <= 0:
-                            self._record_drop(kind)
-                            return
-                        self._not_low_full.wait(timeout=remaining)
-                    else:
-                        self._not_low_full.wait()
-            self._low.append(item)
+                should_wake = was_empty
+            else:
+                if len(self._low) >= self._maxsize:
+                    if not block:
+                        self._record_drop(kind)
+                        return
+                    deadline = None
+                    if timeout is not None:
+                        timeout = max(0.0, float(timeout))
+                        deadline = time.monotonic() + timeout
+                    while len(self._low) >= self._maxsize:
+                        if deadline is not None:
+                            remaining = max(0.0, deadline - time.monotonic())
+                            if remaining <= 0:
+                                self._record_drop(kind)
+                                return
+                            self._not_low_full.wait(timeout=remaining)
+                        else:
+                            self._not_low_full.wait()
+                self._low.append(item)
+                should_wake = was_empty
+        if should_wake:
+            self._notify_wake_callback()
+
+    def set_wake_callback(self, callback) -> None:
+        with self._lock:
+            self._wake_callback = callback
+
+    def _notify_wake_callback(self) -> None:
+        callback = None
+        with self._lock:
+            callback = self._wake_callback
+        if not callable(callback):
+            return
+        try:
+            callback()
+        except Exception as exc:
+            _log_suppressed("Failed notifying UI queue wake callback", exc)
 
     def put_nowait(self, item: UiEvent) -> None:
         self.put(item, block=False)
@@ -591,7 +824,7 @@ class UiEventQueue:
         with self._lock:
             if self._high:
                 item = self._high.popleft()
-                if item[0] in self._HIGH_PRIORITY_LOG_KINDS and self._high_priority_log_count > 0:
+                if _ui_event_kind(item) in self._HIGH_PRIORITY_LOG_KINDS and self._high_priority_log_count > 0:
                     self._high_priority_log_count -= 1
                 return item
             if self._coalesced:
@@ -629,7 +862,7 @@ class UiEventQueue:
 
     def _drop_oldest_high_priority_log(self) -> str | None:
         for idx, item in enumerate(self._high):
-            kind = item[0]
+            kind = _ui_event_kind(item)
             if kind not in self._HIGH_PRIORITY_LOG_KINDS:
                 continue
             del self._high[idx]
@@ -642,14 +875,14 @@ class UiEventQueue:
         if not self._high:
             return None
         item = self._high.popleft()
-        kind = item[0]
+        kind = _ui_event_kind(item)
         if kind in self._HIGH_PRIORITY_LOG_KINDS and self._high_priority_log_count > 0:
             self._high_priority_log_count -= 1
         return kind
 
     def _drop_oldest_non_lossless_high_priority(self) -> str | None:
         for idx, item in enumerate(self._high):
-            kind = item[0]
+            kind = _ui_event_kind(item)
             if kind in self._LOSSLESS_HIGH_PRIORITY_KINDS:
                 continue
             del self._high[idx]
@@ -663,7 +896,7 @@ class UiEventQueue:
             return None
         item = self._low.popleft()
         self._not_low_full.notify()
-        return item[0]
+        return _ui_event_kind(item)
 
     def _drop_oldest_coalesced(self) -> str | None:
         if not self._coalesced:
@@ -718,8 +951,11 @@ class UiEventQueue:
             return False
         if kind not in self._LOW_PRIORITY_KINDS:
             return True
-        if item[0] == "log_rx":
-            return self._is_critical_log_rx(item[1])
+        if kind == "log_rx" and isinstance(item, tuple) and len(item) > 1:
+            line = item[1]
+            if isinstance(line, str):
+                return self._is_critical_log_rx(line)
+            return False
         return False
 
     @staticmethod
@@ -741,6 +977,12 @@ class UiEventQueue:
 
 
 def drain_ui_queue(app: AppProtocol) -> None:
+    try:
+        setattr(app, "_ui_queue_drain_after_id", None)
+        setattr(app, "_ui_queue_drain_due_ts", 0.0)
+        setattr(app, "_ui_queue_drain_running", True)
+    except Exception:
+        pass
     processed = 0
     pending = 0
     quiet_idle = False
@@ -771,9 +1013,7 @@ def drain_ui_queue(app: AppProtocol) -> None:
             except queue.Empty:
                 break
             processed += 1
-            evt_kind = ""
-            if isinstance(evt, tuple) and evt:
-                evt_kind = str(evt[0] or "")
+            evt_kind = _ui_event_kind(evt)
             if (not evt_kind) or (evt_kind not in _LOW_IMPACT_UI_EVENT_KINDS):
                 processed_low_impact_only = False
             kind_key = evt_kind or "unknown"
@@ -1071,8 +1311,11 @@ def drain_ui_queue(app: AppProtocol) -> None:
                         outlier_payload,
                         severe=(elapsed_ms >= outlier_log_ms),
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            if bool(getattr(app, "_closing", False)):
+                _log_suppressed("Failed finalizing UI queue drain metrics during shutdown", exc)
+            else:
+                _log_unexpected_ui_queue_warning("UI queue drain metric finalization failed", exc)
         if not app._closing:
             next_delay_ms = UI_QUEUE_DRAIN_INTERVAL_MS
             stream_busy = _stream_ui_busy(app)
@@ -1139,22 +1382,9 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     setattr(app, "_ui_queue_idle_streak", 0)
                 except Exception:
                     pass
-            try:
-                app.after(next_delay_ms, app._drain_ui_queue)
-            except Exception as exc:
-                try:
-                    after_idle = getattr(app, "after_idle", None)
-                except Exception:
-                    after_idle = None
-                recovered = False
-                if callable(after_idle):
-                    try:
-                        after_idle(app._drain_ui_queue)
-                        recovered = True
-                    except Exception as idle_exc:
-                        _log_suppressed("Failed scheduling UI queue via after_idle fallback", idle_exc)
-                _report_ui_queue_reschedule_failure(
-                    app,
-                    exc,
-                    recovered=recovered,
-                )
+            schedule_ui_queue_drain(app, next_delay_ms, fatal=True)
+        try:
+            setattr(app, "_ui_queue_drain_running", False)
+        except Exception:
+            pass
+

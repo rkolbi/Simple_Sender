@@ -26,11 +26,12 @@
 # Standard library imports
 import atexit
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import sys
 import time
 from functools import partial
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 # GUI imports
 import tkinter as tk
@@ -48,11 +49,13 @@ from simple_sender.application_status import StatusMixin
 from simple_sender.application_state_ui import StateUiMixin
 from simple_sender.application_ui_events import UiEventsMixin
 from simple_sender.application_ui_toggles import UiTogglesMixin
+from simple_sender.types import AppProtocol
 from simple_sender.ui.app_init import (
     init_basic_preferences,
     init_runtime_state,
     init_settings_store,
 )
+from simple_sender.ui.ui_queue import schedule_ui_queue_drain
 from simple_sender.ui.dialogs.popup_utils import (
     patch_messagebox,
     set_default_parent,
@@ -71,6 +74,9 @@ from simple_sender.utils.runtime_integrity import (
 if TYPE_CHECKING:
     from simple_sender.macro_executor import MacroExecutor
     from simple_sender.gcode_source import FileGcodeSource
+    from simple_sender.ui.connection_runtime_state import ConnectionRuntimeState
+    from simple_sender.ui.diagnostics_export_runtime_state import DiagnosticsExportRuntimeState
+    from simple_sender.ui.loaded_job_metadata_state import LoadedJobMetadataState
 
 SERIAL_IMPORT_ERROR = ""
 UI_QUEUE_DRAIN_INTERVAL_MS = 50
@@ -154,11 +160,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _install_app_mixin_methods(target_cls: type, mixins: tuple[type, ...]) -> None:
@@ -199,6 +201,9 @@ class App(tk.Tk):
     _resume_from_index: int | None
     _resume_job_name: str | None
     _manual_queue_drop_total: int
+    _connection_runtime_state: "ConnectionRuntimeState"
+    _diagnostics_export_runtime_state: "DiagnosticsExportRuntimeState"
+    _loaded_job_metadata_state: "LoadedJobMetadataState"
     _script_dir: str
     _script_file: str
     _serial_available: bool
@@ -225,6 +230,11 @@ class App(tk.Tk):
 
     def __init__(self, *, startup_started_at: float | None = None):
         super().__init__()
+        self._closing = False
+        self._ui_queue_drain_after_id = None
+        self._ui_queue_drain_due_ts = 0.0
+        self._ui_queue_drain_schedule_token = 0
+        self._ui_queue_drain_running = False
         self._script_dir = _SCRIPT_DIR
         self._script_file = _SCRIPT_FILE
         self._serial_available = SERIAL_AVAILABLE
@@ -290,7 +300,11 @@ class App(tk.Tk):
         self._init_screen_lock_guard()
         self._set_manual_controls_enabled(False)
 
-        self.after(UI_QUEUE_DRAIN_INTERVAL_MS, self._drain_ui_queue)
+        _initial_ui_queue_drain = self._drain_ui_queue
+        schedule_ui_queue_drain(
+            cast(AppProtocol, self),
+            UI_QUEUE_DRAIN_INTERVAL_MS,
+        )
         self.after(JOYSTICK_RESTORE_DELAY_MS, self._restore_joystick_bindings_on_start)
         self.bind_all("<FocusOut>", self._on_app_focus_out)
         self.protocol("WM_DELETE_WINDOW", self._close_application)
@@ -381,3 +395,5 @@ class App(tk.Tk):
 
 
 _install_app_mixin_methods(App, _APP_MIXINS)
+
+

@@ -101,14 +101,14 @@ class InputBindingsMixin:
     def _stop_joystick_hold(self, binding_id: str | None = None):
         input_bindings.stop_joystick_hold(self, binding_id)
 
-    def _start_joystick_safety_capture(self):
-        input_bindings.start_joystick_safety_capture(self)
+    def _start_joystick_safety_capture(self, mode: str = "normal"):
+        input_bindings.start_joystick_safety_capture(self, mode=mode)
 
     def _cancel_joystick_safety_capture(self):
         input_bindings.cancel_joystick_safety_capture(self)
 
-    def _clear_joystick_safety_binding(self):
-        input_bindings.clear_joystick_safety_binding(self)
+    def _clear_joystick_safety_binding(self, mode: str = "normal"):
+        input_bindings.clear_joystick_safety_binding(self, mode=mode)
 
     def _on_joystick_safety_toggle(self):
         input_bindings.on_joystick_safety_toggle(self)

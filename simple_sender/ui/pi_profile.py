@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 from tkinter import messagebox
 
@@ -79,11 +80,7 @@ PI_PROFILE_PROMPT_SHOWN_KEY = DEFAULT_APP_CONFIG.pi_profile.prompt_shown_key
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) -> bool:
@@ -287,3 +284,4 @@ def offer_pi_profile_if_recommended(app) -> bool:
     if accepted and not persisted:
         _log_status(app, "[settings] Pi profile enabled in memory only; settings save failed")
     return accepted
+

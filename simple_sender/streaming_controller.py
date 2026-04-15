@@ -32,6 +32,7 @@ from simple_sender.utils.constants import CONSOLE_PENDING_BATCH_MAX
 from simple_sender.utils.constants import CONSOLE_MAX_BUFFER_BYTES
 from simple_sender.types import AppProtocol, GcodeViewLike
 from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
+from simple_sender.ui.loaded_job_metadata_state import get_loaded_job_metadata_state
 from simple_sender.ui.stream_completion import should_defer_completion
 
 logger = logging.getLogger(__name__)
@@ -834,14 +835,16 @@ class StreamingController:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
     def _job_name(self) -> str:
-        path = str(getattr(self.app, "_last_gcode_path", "") or "").strip()
+        state = get_loaded_job_metadata_state(self.app)
+        path = str(state.last_gcode_path or "").strip()
         if path:
             return os.path.basename(path)
         return str(getattr(getattr(self.app, "grbl", None), "_gcode_name", "") or "").strip()
 
     def _job_metadata_lists(self) -> tuple[list[str], list[str]]:
-        ssmeta = getattr(self.app, "_gcode_ssmeta", None)
-        if not bool(getattr(self.app, "_gcode_ssmeta_present", False)) or not isinstance(ssmeta, dict):
+        state = get_loaded_job_metadata_state(self.app)
+        ssmeta = state.ssmeta
+        if not bool(state.ssmeta_present) or not isinstance(ssmeta, dict):
             return ([], [])
         ssmeta_map = dict(ssmeta)
         return (ssmeta_toolpaths(ssmeta_map), ssmeta_tools(ssmeta_map))
@@ -875,18 +878,20 @@ class StreamingController:
         return max(current, legacy)
 
     def _job_line_progress_known(self) -> bool:
-        executable_total = int(getattr(self.app, "_gcode_executable_lines", 0) or 0)
+        state = get_loaded_job_metadata_state(self.app)
+        executable_total = int(state.executable_lines or 0)
         if executable_total > 0:
-            return bool(getattr(self.app, "_gcode_executable_lines_known", False))
-        total_lines = int(getattr(self.app, "_gcode_total_lines", 0) or 0)
+            return bool(state.executable_lines_known)
+        total_lines = int(state.total_lines or 0)
         if total_lines > 0:
-            return bool(getattr(self.app, "_gcode_total_lines_known", False))
+            return bool(state.total_lines_known)
         return False
 
     def _job_progress_pct_from_start_index(self, start_index: int) -> float | None:
+        state = get_loaded_job_metadata_state(self.app)
         total = int(
-            getattr(self.app, "_gcode_executable_lines", 0)
-            or getattr(self.app, "_gcode_total_lines", 0)
+            state.executable_lines
+            or state.total_lines
             or 0
         )
         if total <= 0 or int(start_index) <= 0:
@@ -916,10 +921,11 @@ class StreamingController:
                 force_done_clamp=False,
             )
         else:
+            metadata = get_loaded_job_metadata_state(self.app)
             file_size = int(
                 runtime_metrics.get("stream_file_size_bytes", 0)
                 or getattr(self.app, "_stream_progress_file_size_bytes", 0)
-                or getattr(self.app, "_gcode_file_size_bytes", 0)
+                or metadata.file_size_bytes
                 or 0
             )
             acked_bytes = int(
@@ -1221,11 +1227,12 @@ class StreamingController:
 
     def log_job_loaded(self) -> None:
         self.stop_job_lifecycle_logging()
+        metadata = get_loaded_job_metadata_state(self.app)
         name = self._job_name() or "unavailable"
-        file_size = int(getattr(self.app, "_gcode_file_size_bytes", 0) or 0)
-        storage_mode = str(getattr(self.app, "_gcode_storage_mode", "") or "").strip() or "unavailable"
-        exec_count = int(getattr(self.app, "_gcode_executable_lines", 0) or 0)
-        exec_known = bool(getattr(self.app, "_gcode_executable_lines_known", False))
+        file_size = int(metadata.file_size_bytes or 0)
+        storage_mode = str(metadata.storage_mode or "").strip() or "unavailable"
+        exec_count = int(metadata.executable_lines or 0)
+        exec_known = bool(metadata.executable_lines_known)
         line_state = "known" if exec_known else "estimated"
         parts = [
             f"file={name}",
@@ -1272,10 +1279,11 @@ class StreamingController:
     ) -> None:
         prior_run_type = self._job_lifecycle_run_type
         self.stop_job_lifecycle_logging()
+        metadata = get_loaded_job_metadata_state(self.app)
         metrics = self._runtime_metrics_snapshot()
         progress_pct = float(getattr(self.app, "_stream_progress_pct", metrics.get("stream_progress_pct", 0.0)) or 0.0)
         acked_idx = self._resolved_acked_index(metrics)
-        total = int(getattr(self.app, "_gcode_executable_lines", 0) or getattr(self.app, "_gcode_total_lines", 0) or 0)
+        total = int(metadata.executable_lines or metadata.total_lines or 0)
         acked_line_text = (
             f"{max(0, acked_idx + 1):,}/{total:,}"
             if total > 0
@@ -1286,7 +1294,7 @@ class StreamingController:
         )
         file_size = int(
             getattr(self.app, "_stream_progress_file_size_bytes", 0)
-            or getattr(self.app, "_gcode_file_size_bytes", 0)
+            or metadata.file_size_bytes
             or metrics.get("stream_file_size_bytes", 0)
             or 0
         )

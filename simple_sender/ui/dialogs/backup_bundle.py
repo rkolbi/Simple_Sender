@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import json
 import os
 import threading
@@ -36,6 +37,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import Any, cast
 
+from simple_sender.ui.diagnostics_export_runtime_state import (
+    get_diagnostics_export_runtime_state,
+    set_backup_bundle_export_inflight,
+    set_backup_bundle_import_inflight,
+)
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
 from simple_sender.ui.macro_files import (
     discover_macro_assets,
@@ -51,11 +57,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _resolve_backup_bundle_parent(app: Any) -> tk.Misc | None:
@@ -350,9 +352,10 @@ def _import_backup_bundle_archive(
 
 
 def export_backup_bundle(app: Any) -> None:
-    use_background_io = bool(getattr(app, "_backup_bundle_async_io", True))
+    export_state = get_diagnostics_export_runtime_state(app)
+    use_background_io = bool(export_state.backup_bundle_async_io)
     dialog_parent = _resolve_backup_bundle_parent(app)
-    if use_background_io and bool(getattr(app, "_backup_bundle_export_inflight", False)):
+    if use_background_io and bool(export_state.backup_bundle_export_inflight):
         _showinfo(
             "Backup bundle",
             "A backup-bundle export is already running.",
@@ -383,14 +386,14 @@ def export_backup_bundle(app: Any) -> None:
     app_version = str(getattr(getattr(app, "version_var", None), "get", lambda: "")() or "")
     started_at = time.perf_counter()
     if use_background_io and callable(getattr(app, "after", None)):
-        app._backup_bundle_export_inflight = True
+        set_backup_bundle_export_inflight(app, True)
         try:
             app.ui_q.put(("log", "[diagnostics] Exporting backup bundle..."))
         except Exception:
             pass
 
         def _complete_export(error: Exception | None = None) -> None:
-            app._backup_bundle_export_inflight = False
+            set_backup_bundle_export_inflight(app, False)
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             record_task_timing(app, "backup_bundle.export", elapsed_ms, success=(error is None))
             messagebox_parent = _resolve_backup_bundle_parent(app)
@@ -444,7 +447,7 @@ def export_backup_bundle(app: Any) -> None:
             _post_ui_callback(
                 app,
                 lambda: _complete_export(error),
-                on_drop=lambda: setattr(app, "_backup_bundle_export_inflight", False),
+                on_drop=lambda: set_backup_bundle_export_inflight(app, False),
             )
 
         try:
@@ -456,7 +459,7 @@ def export_backup_bundle(app: Any) -> None:
             worker.start()
             return
         except Exception as exc:
-            app._backup_bundle_export_inflight = False
+            set_backup_bundle_export_inflight(app, False)
             _log_suppressed("Failed starting backup-bundle export thread", exc)
     try:
         assets = discover_macro_assets(app)
@@ -504,9 +507,10 @@ def export_backup_bundle(app: Any) -> None:
 
 
 def import_backup_bundle(app: Any) -> None:
-    use_background_io = bool(getattr(app, "_backup_bundle_async_io", True))
+    export_state = get_diagnostics_export_runtime_state(app)
+    use_background_io = bool(export_state.backup_bundle_async_io)
     dialog_parent = _resolve_backup_bundle_parent(app)
-    if use_background_io and bool(getattr(app, "_backup_bundle_import_inflight", False)):
+    if use_background_io and bool(export_state.backup_bundle_import_inflight):
         _showinfo(
             "Backup bundle",
             "A backup-bundle import is already running.",
@@ -605,7 +609,7 @@ def import_backup_bundle(app: Any) -> None:
         )
 
     if use_background_io and callable(getattr(app, "after", None)):
-        app._backup_bundle_import_inflight = True
+        set_backup_bundle_import_inflight(app, True)
         try:
             app.ui_q.put(("log", "[diagnostics] Importing backup bundle..."))
         except Exception:
@@ -615,7 +619,7 @@ def import_backup_bundle(app: Any) -> None:
             result: _BundleImportResult | None,
             error: Exception | None = None,
         ) -> None:
-            app._backup_bundle_import_inflight = False
+            set_backup_bundle_import_inflight(app, False)
             elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
             record_task_timing(app, "backup_bundle.import", elapsed_ms, success=(error is None))
             if error is not None or result is None:
@@ -642,7 +646,7 @@ def import_backup_bundle(app: Any) -> None:
             _post_ui_callback(
                 app,
                 lambda: _complete_import(result, error),
-                on_drop=lambda: setattr(app, "_backup_bundle_import_inflight", False),
+                on_drop=lambda: set_backup_bundle_import_inflight(app, False),
             )
 
         try:
@@ -654,7 +658,7 @@ def import_backup_bundle(app: Any) -> None:
             worker.start()
             return
         except Exception as exc:
-            app._backup_bundle_import_inflight = False
+            set_backup_bundle_import_inflight(app, False)
             _log_suppressed("Failed starting backup-bundle import thread", exc)
 
     try:
@@ -676,3 +680,4 @@ def import_backup_bundle(app: Any) -> None:
     elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
     record_task_timing(app, "backup_bundle.import", elapsed_ms, success=True)
     _apply_import_result(result)
+

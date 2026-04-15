@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import json
 import os
 from tkinter import filedialog, messagebox
@@ -35,11 +36,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def save_leveled(app, status_var) -> None:
@@ -184,3 +181,4 @@ def load_height_map(
         app.settings["last_gcode_dir"] = os.path.dirname(load_path)
     except Exception as exc:
         _log_suppressed("Failed saving last G-code directory after Load Height Map", exc)
+

@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 import time
 import types
@@ -40,11 +41,7 @@ _MACRO_LOAD_TIMEOUT_S = 120.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 def _maybe_set_unit_mode(app, unit_mode: str | None) -> None:
     if not unit_mode:
@@ -470,3 +467,4 @@ def execute_macro_command(
     macro_send(s)
     _maybe_set_unit_mode(app, unit_mode)
     return True
+

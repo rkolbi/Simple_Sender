@@ -27,6 +27,19 @@ from collections import deque
 from typing import Any, cast
 
 from simple_sender.constants.messages import MachineStateMessages
+from simple_sender.ui.connection_runtime_state import (
+    ConnectionRuntimeState,
+    sync_connection_runtime_state_to_app,
+)
+from simple_sender.ui.loaded_job_metadata_state import (
+    LoadedJobMetadataState,
+    sync_loaded_job_metadata_state_to_app,
+)
+from simple_sender.ui.diagnostics_export_runtime_state import (
+    DiagnosticsExportRuntimeState,
+    sync_diagnostics_export_runtime_state_to_app,
+)
+from simple_sender.ui.ui_queue import bind_ui_queue_wake_callback
 
 logger = logging.getLogger(__name__)
 
@@ -154,12 +167,32 @@ def _init_joystick_runtime_state(
     if hold_miss_limit > 8:
         hold_miss_limit = 8
     app._joystick_hold_miss_limit = int(hold_miss_limit)
-    raw_safety = app.settings.get("joystick_safety_binding")
+    raw_normal_safety = app.settings.get("joystick_safety_normal_binding")
+    if not isinstance(raw_normal_safety, dict):
+        raw_normal_safety = app.settings.get("joystick_safety_binding")
+    raw_slow_safety = app.settings.get("joystick_safety_slow_binding")
+    app._joystick_safety_normal_binding = (
+        dict(raw_normal_safety) if isinstance(raw_normal_safety, dict) else None
+    )
     app._joystick_safety_binding = (
-        dict(raw_safety) if isinstance(raw_safety, dict) else None
+        dict(app._joystick_safety_normal_binding)
+        if isinstance(app._joystick_safety_normal_binding, dict)
+        else None
+    )
+    app._joystick_safety_slow_binding = (
+        dict(raw_slow_safety) if isinstance(raw_slow_safety, dict) else None
     )
     app._joystick_safety_active = False
-    app.joystick_safety_status = tk.StringVar(value="Safety button: None")
+    app._joystick_safety_speed_mode = None
+    app.joystick_safety_status = tk.StringVar(
+        value="Safety buttons: Normal = None | Slow = None"
+    )
+    app.joystick_safety_normal_status = tk.StringVar(
+        value="Normal jog safety button: None"
+    )
+    app.joystick_safety_slow_status = tk.StringVar(
+        value="Slow jog safety button: None"
+    )
     app.joystick_device_status = tk.StringVar(value="Hot-plug status: unknown")
     app.joystick_test_status = tk.StringVar(
         value="Press 'Refresh joystick list' to discover controllers."
@@ -173,13 +206,16 @@ def _init_joystick_runtime_state(
 
 def _init_connection_runtime_state(app) -> None:
     app._closing = False
-    app._connecting = False
-    app._disconnecting = False
     app._connect_thread = None
     app._disconnect_thread = None
     app._connection_state_event = threading.Event()
     app._status_update_event = threading.Event()
     app._modal_update_event = threading.Event()
+    sync_connection_runtime_state_to_app(app, ConnectionRuntimeState())
+
+
+def _init_diagnostics_export_runtime_state(app) -> None:
+    sync_diagnostics_export_runtime_state_to_app(app, DiagnosticsExportRuntimeState())
 
 
 def _init_kasa_runtime_state(app, tk) -> None:
@@ -309,6 +345,7 @@ def _init_worker_and_runtime_controllers(
         app.ui_q = ui_event_queue_cls(maxsize=ui_event_queue_maxsize)
     else:
         app.ui_q = queue_module.Queue(maxsize=ui_event_queue_maxsize)
+    bind_ui_queue_wake_callback(app)
 
     app.status_poll_interval = tk.DoubleVar(
         value=app.settings.get(
@@ -410,7 +447,6 @@ def _init_units_and_estimation_state(
 
 
 def _init_machine_position_state(app, *, tk, default_settings: dict) -> None:
-    app.connected = False
     app.current_port = tk.StringVar(
         value=app.settings.get("last_port", default_settings.get("last_port", ""))
     )
@@ -544,6 +580,7 @@ def _init_gcode_and_autolevel_state(
     app._gcode_load_popup = None
     app._gcode_load_popup_label = None
     app._gcode_load_popup_bar = None
+    sync_loaded_job_metadata_state_to_app(app, LoadedJobMetadataState())
 
 
 def _init_stream_and_override_state(
@@ -619,7 +656,6 @@ def _init_stream_and_override_state(
     app._status_settling_last_state = ""
     app._status_settling_last_apply_ts = 0.0
     app._status_settling_drop_count = 0
-    app._status_connect_settling_until_ts = 0.0
     app._status_connect_settling_window_s = 1.5
     app._status_connect_settling_ready_tail_s = 1.0
     app._ui_maintenance_interval_s = ui_maintenance_interval_s
@@ -658,14 +694,10 @@ def _init_stream_and_override_state(
     app._job_started_at = None
     app._job_completion_notified = False
 
-    app._grbl_ready = False
-    app._alarm_locked = False
     app._alarm_latched = False
     app._alarm_clear_requested = False
     app._alarm_message = ""
     app._pending_settings_refresh = False
-    app._connected_port = None
-    app._status_seen = False
     app._status_history = deque(maxlen=200)
     app._jog_dro_trace = deque(maxlen=1200)
     app._jog_dro_interp_stats = {
@@ -681,8 +713,6 @@ def _init_stream_and_override_state(
         "predict_horizon_avg_s": 0.0,
         "predict_horizon_max_s": 0.0,
     }
-    app._connection_timeline = deque(maxlen=200)
-
     app.progress_pct = tk.IntVar(value=0)
     app.progress_text = tk.StringVar(value="")
     app.buffer_fill = tk.StringVar(value="Buffer: 0%")
@@ -774,6 +804,10 @@ def _init_reconnect_and_ui_state(app, *, default_settings: dict) -> None:
     app._ui_queue_quiet_idle_max_interval_ms = 1400
     app._ui_queue_quiet_idle_backoff_step_ms = 120
     app._ui_queue_idle_streak = 0
+    app._ui_queue_drain_after_id = None
+    app._ui_queue_drain_due_ts = 0.0
+    app._ui_queue_drain_schedule_token = 0
+    app._ui_queue_drain_running = False
     app._ui_queue_drain_event_limit = 100
     app._ui_queue_drain_time_budget_ms = 8.0
     app._ui_queue_drain_stall_budget_ms = 16.0
@@ -893,6 +927,7 @@ def init_runtime_state(
         joystick_poll_idle_backoff_step_ms=joystick_poll_idle_backoff_step_ms,
     )
     _init_connection_runtime_state(app)
+    _init_diagnostics_export_runtime_state(app)
     _init_kasa_runtime_state(app, tk)
     _init_error_dialog_runtime_state(app, setting, tk)
     _init_worker_and_runtime_controllers(

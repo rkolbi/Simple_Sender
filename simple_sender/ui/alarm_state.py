@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 
 from simple_sender.ui.job_controls import (
     disable_job_controls,
@@ -33,11 +34,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def format_alarm_message(message: str | None) -> str:
@@ -244,3 +241,4 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
     app.machine_state.set(app._machine_state_text)
     app._update_state_highlight(app._machine_state_text)
     app._apply_status_poll_profile()
+

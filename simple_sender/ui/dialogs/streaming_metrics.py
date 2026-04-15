@@ -22,6 +22,7 @@
 
 from datetime import datetime
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
@@ -33,11 +34,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def format_throughput(bps: float) -> str:
@@ -204,3 +201,4 @@ def _show_job_completion_dialog(app, message: str) -> None:
     except Exception as exc:
         _log_suppressed("Failed setting job completion dialog grab", exc)
     center_window(dialog, app)
+

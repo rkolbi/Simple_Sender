@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import sys
 from typing import cast
@@ -36,11 +37,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def load_settings(app) -> dict:
@@ -621,6 +618,10 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         hold_miss_limit = 1
     if hold_miss_limit > 8:
         hold_miss_limit = 8
+    normal_safety_binding = getattr(app, "_joystick_safety_normal_binding", None)
+    if not isinstance(normal_safety_binding, dict):
+        normal_safety_binding = getattr(app, "_joystick_safety_binding", None)
+    slow_safety_binding = getattr(app, "_joystick_safety_slow_binding", None)
     return {
         "fallback_rapid_rate": app.fallback_rapid_rate.get().strip(),
         "estimate_factor": _safe_float(
@@ -640,8 +641,12 @@ def _build_estimation_and_bindings_settings(app) -> dict[str, object]:
         "joystick_hold_miss_limit": int(hold_miss_limit),
         "dry_run_sanitize_stream": bool(app.dry_run_sanitize_stream.get()),
         "joystick_bindings": dict(app._joystick_bindings),
-        "joystick_safety_binding": (
-            dict(app._joystick_safety_binding) if app._joystick_safety_binding else None
+        "joystick_safety_binding": None,
+        "joystick_safety_normal_binding": (
+            dict(normal_safety_binding) if isinstance(normal_safety_binding, dict) else None
+        ),
+        "joystick_safety_slow_binding": (
+            dict(slow_safety_binding) if isinstance(slow_safety_binding, dict) else None
         ),
         "key_bindings": dict(app._key_bindings),
     }
@@ -1212,3 +1217,4 @@ def save_settings(app):
                 log_exc,
             )
         raise wrapped_exc from exc
+

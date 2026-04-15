@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 from typing import Any
 
@@ -40,11 +41,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 JOYSTICK_HOLD_MAP = {binding_id: (axis, direction) for _, binding_id, axis, direction in JOYSTICK_HOLD_DEFINITIONS}
 JOYSTICK_HOLD_POLL_INTERVAL_MS = _JOYSTICK_HOLD_POLL_INTERVAL_MS
@@ -365,6 +362,15 @@ def send_hold_jog(app):
         return
     axis, direction = hold_axis
     feed = jog_feed_for_axis(app, axis)
+    try:
+        from . import joystick as joystick_bindings
+
+        feed *= float(joystick_bindings.joystick_jog_speed_scale(app))
+    except Exception as exc:
+        _log_suppressed("Failed resolving joystick safety-speed scale for hold jog", exc)
+    if feed <= 0.0:
+        stop_hold(app, binding_id)
+        return
     distance = max_hold_distance(app, axis, direction)
     if distance <= 0:
         stop_hold(app)
@@ -512,3 +518,4 @@ def _resolve_hold_miss_limit(app) -> int:
         value = JOYSTICK_HOLD_MISS_LIMIT_MAX
     app._joystick_hold_miss_limit = int(value)
     return int(value)
+

@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 
@@ -38,11 +39,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def build_safety_aids_section(app, parent: ttk.Frame, row: int) -> int:
@@ -627,5 +624,6 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     for combo in (small_interp_combo, large_interp_combo, custom_interp_combo):
         combo.bind("<<ComboboxSelected>>", _save_autolevel_job_prefs)
     return row + 1
+
 
 

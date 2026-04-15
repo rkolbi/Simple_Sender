@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from collections.abc import Mapping
 
+from simple_sender.ui.loaded_job_metadata_state import get_loaded_job_metadata_state
 from simple_sender.ui.theme_helpers import (
     bind_scrollbar_theme,
     bind_text_display_theme,
@@ -34,14 +36,15 @@ from simple_sender.ui.theme_helpers import (
 
 
 def _job_loaded_for_file_info(app) -> bool:
-    storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip().lower()
+    state = get_loaded_job_metadata_state(app)
+    storage_mode = str(state.storage_mode or "").strip().lower()
     if storage_mode and storage_mode != "none":
         return True
-    if getattr(app, "_gcode_source", None) is not None:
+    if state.source is not None:
         return True
-    if int(getattr(app, "_gcode_file_line_count", 0) or 0) > 0:
+    if int(state.file_line_count or 0) > 0:
         return True
-    if int(getattr(app, "_gcode_total_lines", 0) or 0) > 0:
+    if int(state.total_lines or 0) > 0:
         return True
     return False
 
@@ -50,7 +53,7 @@ def _fmt_confidence(raw: str | None) -> str:
     return "CONFIDENT" if str(raw or "").strip().lower() == "confident" else "ROUGH"
 
 
-def _fmt_duration(seconds: int | None) -> str:
+def _fmt_duration(seconds: float | int | None) -> str:
     if seconds is None or int(seconds) <= 0:
         return "n/a"
     total_minutes = int(round(float(seconds) / 60.0))
@@ -76,17 +79,30 @@ def _line_count_text(count: int, known: bool) -> str:
     return f"{int(max(0, count)):,} ({state})"
 
 
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    candidate = default if value in (None, "") else value
+    if isinstance(candidate, (int, float, str)):
+        try:
+            return float(candidate)
+        except Exception:
+            return float(default)
+    try:
+        return float(str(candidate))
+    except Exception:
+        return float(default)
+
+
 def _bounds_dims_mm(app) -> tuple[float | None, float | None, float | None]:
-    bounds = getattr(app, "_gcode_bounds_box", None)
-    if not isinstance(bounds, dict):
+    bounds = get_loaded_job_metadata_state(app).bounds_box
+    if not isinstance(bounds, Mapping):
         return (None, None, None)
     try:
-        min_x = float(bounds.get("min_x", 0.0) or 0.0)
-        max_x = float(bounds.get("max_x", 0.0) or 0.0)
-        min_y = float(bounds.get("min_y", 0.0) or 0.0)
-        max_y = float(bounds.get("max_y", 0.0) or 0.0)
-        min_z = float(bounds.get("min_z", 0.0) or 0.0)
-        max_z = float(bounds.get("max_z", 0.0) or 0.0)
+        min_x = _coerce_float(bounds.get("min_x", 0.0))
+        max_x = _coerce_float(bounds.get("max_x", 0.0))
+        min_y = _coerce_float(bounds.get("min_y", 0.0))
+        max_y = _coerce_float(bounds.get("max_y", 0.0))
+        min_z = _coerce_float(bounds.get("min_z", 0.0))
+        max_z = _coerce_float(bounds.get("max_z", 0.0))
     except Exception:
         return (None, None, None)
     return (
@@ -96,7 +112,7 @@ def _bounds_dims_mm(app) -> tuple[float | None, float | None, float | None]:
     )
 
 
-def _format_ssmeta_extents(ssmeta: dict[str, str]) -> list[str]:
+def _format_ssmeta_extents(ssmeta: Mapping[str, object]) -> list[str]:
     rows: list[str] = []
     pairs = (
         ("xmin", "xmax", "X"),
@@ -126,7 +142,7 @@ def _format_ssmeta_extents(ssmeta: dict[str, str]) -> list[str]:
     return rows
 
 
-def _first(ssmeta: dict[str, str], *keys: str) -> str:
+def _first(ssmeta: Mapping[str, object], *keys: str) -> str:
     for key in keys:
         value = str(ssmeta.get(key, "") or "").strip()
         if value:
@@ -134,7 +150,7 @@ def _first(ssmeta: dict[str, str], *keys: str) -> str:
     return ""
 
 
-def _material_size_text(ssmeta: dict[str, str]) -> str:
+def _material_size_text(ssmeta: Mapping[str, object]) -> str:
     direct_mm = _first(ssmeta, "material_size_mm")
     direct_in = _first(ssmeta, "material_size_in")
     if direct_mm or direct_in:
@@ -158,7 +174,7 @@ def _material_size_text(ssmeta: dict[str, str]) -> str:
     return ""
 
 
-def _origin_text(ssmeta: dict[str, str]) -> str:
+def _origin_text(ssmeta: Mapping[str, object]) -> str:
     return ", ".join(
         part
         for part in (
@@ -172,7 +188,7 @@ def _origin_text(ssmeta: dict[str, str]) -> str:
     )
 
 
-def _home_text(ssmeta: dict[str, str]) -> str:
+def _home_text(ssmeta: Mapping[str, object]) -> str:
     parts: list[str] = []
     for axis in ("x", "y", "z"):
         value = _first(ssmeta, f"home_{axis}")
@@ -185,7 +201,7 @@ def _home_text(ssmeta: dict[str, str]) -> str:
 
 
 def _ordered_ssmeta_values(
-    ssmeta: dict[str, str], *, list_key: str, fallback_keys: tuple[str, ...]
+    ssmeta: Mapping[str, object], *, list_key: str, fallback_keys: tuple[str, ...]
 ) -> list[str]:
     raw_list = _first(ssmeta, list_key)
     if raw_list:
@@ -196,7 +212,7 @@ def _ordered_ssmeta_values(
     return [fallback] if fallback else []
 
 
-def ssmeta_toolpaths(ssmeta: dict[str, str]) -> list[str]:
+def ssmeta_toolpaths(ssmeta: Mapping[str, object]) -> list[str]:
     return _ordered_ssmeta_values(
         ssmeta,
         list_key="__ssmeta_toolpaths_list",
@@ -204,7 +220,7 @@ def ssmeta_toolpaths(ssmeta: dict[str, str]) -> list[str]:
     )
 
 
-def ssmeta_tools(ssmeta: dict[str, str]) -> list[str]:
+def ssmeta_tools(ssmeta: Mapping[str, object]) -> list[str]:
     return _ordered_ssmeta_values(
         ssmeta,
         list_key="__ssmeta_tools_list",
@@ -221,10 +237,11 @@ def _append_ssmeta_list_section(lines: list[str], title: str, values: list[str])
 
 
 def render_file_info_text(app) -> str:
+    state = get_loaded_job_metadata_state(app)
     job_loaded = _job_loaded_for_file_info(app)
-    ssmeta = getattr(app, "_gcode_ssmeta", None)
+    ssmeta = state.ssmeta
     ssmeta_map = dict(ssmeta) if isinstance(ssmeta, dict) else {}
-    ssmeta_present = bool(getattr(app, "_gcode_ssmeta_present", False) and ssmeta_map)
+    ssmeta_present = bool(state.ssmeta_present and ssmeta_map)
     if not job_loaded and not ssmeta_present:
         return ""
 
@@ -281,20 +298,16 @@ def render_file_info_text(app) -> str:
 
     lines.append("")
     lines.append("File / Scan Metrics")
-    file_size = int(getattr(app, "_gcode_file_size_bytes", 0) or 0)
-    total_lines = int(getattr(app, "_gcode_file_line_count", 0) or 0)
-    total_known = bool(getattr(app, "_gcode_file_line_count_known", False))
-    exec_lines = int(getattr(app, "_gcode_executable_lines", 0) or 0)
-    exec_known = bool(getattr(app, "_gcode_executable_lines_known", False))
-    motion_lines = int(getattr(app, "_gcode_motion_lines", 0) or 0)
-    motion_known = bool(getattr(app, "_gcode_motion_lines_known", False))
-    estimate_sec = getattr(app, "_gcode_estimated_job_time_sec", None)
-    estimate_conf = _fmt_confidence(
-        getattr(app, "_estimate_confidence", _fmt_confidence("rough"))
-    )
-    dim_conf = _fmt_confidence(
-        getattr(app, "_gcode_dimensions_confidence", "rough")
-    )
+    file_size = int(state.file_size_bytes or 0)
+    total_lines = int(state.file_line_count or 0)
+    total_known = bool(state.file_line_count_known)
+    exec_lines = int(state.executable_lines or 0)
+    exec_known = bool(state.executable_lines_known)
+    motion_lines = int(state.motion_lines or 0)
+    motion_known = bool(state.motion_lines_known)
+    estimate_sec = state.estimated_job_time_sec
+    estimate_conf = _fmt_confidence(state.estimate_confidence)
+    dim_conf = _fmt_confidence(state.dimensions_confidence)
     mm_x, mm_y, mm_z = _bounds_dims_mm(app)
     lines.append(f"- File size: {file_size:,} bytes")
     lines.append(f"- Total lines: {_line_count_text(total_lines, total_known)}")
@@ -311,11 +324,11 @@ def render_file_info_text(app) -> str:
     )
     lines.append(
         "- Dimensions source: "
-        f"{str(getattr(app, '_gcode_dimensions_source', 'scan') or 'scan')}"
+        f"{str(state.dimensions_source or 'scan')}"
     )
     lines.append(
         "- Units source: "
-        f"{str(getattr(app, '_gcode_units_source', 'scan') or 'scan')}"
+        f"{str(state.units_source or 'scan')}"
     )
     autolevel_snapshot = getattr(app, "_auto_level_prereq_snapshot", None)
     if isinstance(autolevel_snapshot, dict):

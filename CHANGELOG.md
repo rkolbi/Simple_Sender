@@ -5,11 +5,35 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
-- No unreleased changes are currently staged beyond the `3.0.11` release baseline.
+- No unreleased changes are currently staged beyond the `3.1` release baseline.
+
+## [3.1] - 2026-04-14
+
+### Documentation
+- Current release-facing docs now present `3.1` as the stable, release-ready baseline instead of `3.0.11`.
+- Current wrapper-gate validation wording was corrected so the pytest + coverage stage inside `run_tests.bat` now truthfully reports `1831 passed, 3 skipped`.
+
+### Validation
+- `3.1` is the current stable, release-ready baseline for the present workflow architecture.
+- Current local repository validation snapshot for `3.1`:
+  - direct `pytest -q`: `1831 passed, 3 skipped`
+  - direct `ruff check .`: clean
+  - direct `mypy main.py simple_sender`: clean (`215` source files)
+  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1831 passed, 3 skipped`
+  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## [3.0.11] - 2026-04-12
 
 ### Changed
+- Joystick/controller safety behavior now matches the final two-button safety-speed model:
+  - `Set Safety Button / Normal Jog Speed` and `Set Safety Button / Slow Jog Speed` are the two current safety bindings
+  - with no safety held, no joypad/joystick bindings are acknowledged
+  - with Normal held, all joypad/joystick bindings are active and joystick jogging uses configured speed
+  - with Slow held, all joypad/joystick bindings are active and joystick jogging uses exactly `50%` speed
+  - if both are held, Slow wins
+  - keyboard and on-screen controls remain unchanged
+  - legacy single safety-button settings migrate to the Normal binding
 - Resume/reconnect safety parity was tightened for the current baseline:
   - `Resume From...` now uses the same Job Setup validity confirmation model as fresh Run before starting a resumed stream
   - reconnect-resume now carries forward the same `G92` warning state as manual Resume instead of dropping that signal
@@ -24,6 +48,9 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - `Preload App Settings popup after startup` was added under `App Settings > Interface`
   - the preload path is now disabled by default and only runs on startup when the operator enables it
 - Dry Run confirmation dialog styling now uses the shared themed toplevel path, so the warning dialog no longer falls back to a bright white background under the dark UI.
+- UI queue wake-up latency was tightened modestly for the current baseline:
+  - when the UI queue is idle and new work is posted, the drain loop is now scheduled promptly instead of waiting for the next normal timer tick
+  - the existing bounded drain/coalescing/backoff model remains in place once the loop is active
 
 ### Fixed
 - Z Plate Job Setup now preserves the existing X/Y work zero instead of overwriting X/Y during a Z-only setup path.
@@ -61,16 +88,20 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - Resume docs now describe the current Dry Run, Job Setup, and `G92` safeguard behavior
   - historical v3.0 changelog wording no longer presents a standing "recent real-machine validation" claim as if it were evergreen release proof
 - README now reflects the current Start Job confirmation content and the intended App Settings/Logs/Clear Logs popup stacking behavior.
-- README popup/operator wording now reflects the current first-open truthfulness of Job Info and GRBL Settings and the current sparse lifecycle console logging cadence (load, start, immediate telemetry, `10%` milestones, sparse heartbeat, completion).
+- README popup/operator wording now reflects the current first-open truthfulness of Job Info and GRBL Settings, the current sparse lifecycle console logging cadence (load, start, immediate telemetry, `10%` milestones, sparse heartbeat, completion), the current controller-wide joystick safety behavior, and the current modest UI-queue wake-up improvement.
 
 ### Validation
-- `3.0.11` is the current stable, release-ready baseline for the present workflow architecture.
-- Current local repository validation snapshot for `3.0.11`:
-  - `pytest -q`: `1800 passed, 3 skipped`
-  - `ruff check .`: clean
-  - `mypy main.py simple_sender`: clean
-  - `Success: no issues found in 201 source files`
-  - `run_tests.bat`: clean (`7/7` gates passed)
+- `3.0.11` was the stable, release-ready baseline for the present workflow architecture at that point.
+- Local repository validation snapshot recorded for `3.0.11`:
+  - direct `pytest -q`: `1831 passed, 3 skipped`
+  - direct `ruff check .`: clean
+  - direct `mypy main.py simple_sender`: clean (`215` source files)
+  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1831 passed, 3 skipped`
+  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+- Local release-gate truthfulness was tightened:
+  - `run_tests.bat` now runs the same full Ruff scope as direct `ruff check .`
+  - the wrapper no longer reports green on a narrower syntax/pyflakes-only Ruff subset while direct Ruff is red
 
 ## [3.0] - 2026-04-05
 

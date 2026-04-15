@@ -25,6 +25,7 @@
 
 # Standard library imports
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import queue
 import threading
@@ -50,11 +51,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
@@ -870,3 +867,4 @@ class MacroRunnerMixin(MacroExecutorState):
             if tracker is None and self._manual_error_event.is_set():
                 detail = self._manual_error_message or "GRBL command rejected."
                 raise RuntimeError(f"Macro command failed: {detail}")
+

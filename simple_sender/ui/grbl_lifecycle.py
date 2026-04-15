@@ -25,10 +25,15 @@ import queue
 import threading
 import time
 import logging
-from collections import deque
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 from tkinter import messagebox
 
 from simple_sender.constants.messages import MachineStateMessages, StatusMessages
+from simple_sender.ui.connection_runtime_state import (
+    append_connection_timeline_event,
+    get_connection_runtime_state,
+    sync_connection_runtime_state_to_app,
+)
 from simple_sender.ui.icons import ICON_CONNECT, icon_label
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import disable_job_controls
@@ -57,15 +62,10 @@ _STATUS_POLL_MACRO_CRITICAL = 0.05
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
 _STATUS_CONNECT_SETTLING_WINDOW_S = 1.5
 _STATUS_CONNECT_SETTLING_READY_TAIL_S = 1.0
-_CONNECTION_TIMELINE_LIMIT = 200
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _signal_thread_event(obj, attr_name: str) -> None:
@@ -249,18 +249,8 @@ def _schedule_reconnect_resume(app, *, start_index: int) -> None:
 
 
 def _record_connection_timeline(app, event: str, details: str = "") -> None:
-    history = getattr(app, "_connection_timeline", None)
-    if history is None:
-        history = deque(maxlen=_CONNECTION_TIMELINE_LIMIT)
-        setattr(app, "_connection_timeline", history)
-    stamp = time.time()
-    payload = {
-        "ts": float(stamp),
-        "event": str(event or "").strip() or "unknown",
-        "details": str(details or "").strip(),
-    }
     try:
-        history.append(payload)
+        append_connection_timeline_event(app, event, details, now_ts=time.time())
     except Exception as exc:
         _log_suppressed("Failed appending connection timeline event", exc)
 
@@ -277,13 +267,12 @@ def _arm_status_connect_settling(app, *, duration_s: float) -> None:
         now_mono = time.monotonic()
     except Exception:
         return
-    try:
-        current_until = float(getattr(app, "_status_connect_settling_until_ts", 0.0) or 0.0)
-    except Exception:
-        current_until = 0.0
+    runtime = get_connection_runtime_state(app)
+    current_until = float(runtime.status_connect_settling_until_ts)
     new_until = now_mono + duration
     if new_until > current_until:
-        setattr(app, "_status_connect_settling_until_ts", float(new_until))
+        runtime.status_connect_settling_until_ts = float(new_until)
+        sync_connection_runtime_state_to_app(app, runtime)
 
 
 def _normalize_status_state(app) -> str:
@@ -610,15 +599,17 @@ def _worker_reports_connected(app) -> bool:
 
 
 def handle_connection_event(app, is_on: bool, port):
-    app.connected = bool(is_on)
-    app._connecting = False
-    app._disconnecting = False
+    runtime = get_connection_runtime_state(app)
+    runtime.connected = bool(is_on)
+    runtime.connecting = False
+    runtime.disconnecting = False
+    sync_connection_runtime_state_to_app(app, runtime)
     app._homing_in_progress = False
     app._homing_state_seen = False
     invalidate_job_setup_state(app)
     alarm_latched = bool(getattr(app, "_alarm_latched", False))
     alarm_message = str(getattr(app, "_alarm_message", "") or "")
-    if app.connected:
+    if runtime.connected:
         _record_connection_timeline(app, "connected", f"port={port or ''}")
         app._auto_reconnect_last_port = port or app._auto_reconnect_last_port
         app._auto_reconnect_pending = False
@@ -648,19 +639,20 @@ def handle_connection_event(app, is_on: bool, port):
             app.port_combo.config(state="readonly")
         except Exception as exc:
             _log_suppressed("Failed setting port combobox readonly after connect", exc)
-        app._connected_port = port
-        app._grbl_ready = False
+        runtime.connected_port = str(port or "").strip() or None
+        runtime.ready = False
         if alarm_latched:
-            app._alarm_locked = True
+            runtime.alarm_locked = True
         else:
-            app._alarm_locked = False
+            runtime.alarm_locked = False
             app._alarm_message = ""
         app._pending_settings_refresh = True
         app._pending_modal_sync = True
         app._modal_sync_inflight = False
         app._modal_sync_inflight_started_ts = 0.0
         app._modal_sync_retry_after_ts = 0.0
-        app._status_seen = False
+        runtime.status_seen = False
+        sync_connection_runtime_state_to_app(app, runtime)
         _clear_status_frame_cache(app)
         try:
             connect_settling_s = float(
@@ -709,9 +701,9 @@ def handle_connection_event(app, is_on: bool, port):
             app.port_combo.config(state="readonly")
         except Exception as exc:
             _log_suppressed("Failed setting port combobox readonly after disconnect", exc)
-        app._connected_port = None
-        app._grbl_ready = False
-        app._alarm_locked = False
+        runtime.connected_port = None
+        runtime.ready = False
+        runtime.alarm_locked = False
         preserve_latched_alarm = bool(alarm_latched) and not bool(getattr(app, "_user_disconnect", False))
         if preserve_latched_alarm:
             app._alarm_message = alarm_message
@@ -723,9 +715,10 @@ def handle_connection_event(app, is_on: bool, port):
         app._pending_settings_refresh = False
         clear_modal_sync_state(app)
         setattr(app, "_pending_unit_mode", None)
-        app._status_seen = False
+        runtime.status_seen = False
         _clear_status_frame_cache(app)
-        app._status_connect_settling_until_ts = 0.0
+        runtime.status_connect_settling_until_ts = 0.0
+        sync_connection_runtime_state_to_app(app, runtime)
         app._report_units = None
         app._zero_all_pending_active = False
         app._zero_all_pending_expected_wco_raw = None
@@ -774,33 +767,36 @@ def handle_connection_event(app, is_on: bool, port):
 
 
 def handle_ready_event(app, ready):
-    app._grbl_ready = bool(ready)
-    if not app._grbl_ready:
+    runtime = get_connection_runtime_state(app)
+    runtime.ready = bool(ready)
+    sync_connection_runtime_state_to_app(app, runtime)
+    if not runtime.ready:
         invalidate_job_setup_state(app)
         _record_connection_timeline(app, "ready_false")
-        app._status_seen = False
+        runtime.status_seen = False
         _clear_status_frame_cache(app)
-        app._alarm_locked = False
+        runtime.alarm_locked = False
+        sync_connection_runtime_state_to_app(app, runtime)
         if not bool(getattr(app, "_alarm_latched", False)):
             app._alarm_message = ""
-        if app.connected:
+        if runtime.connected:
             disable_job_controls(app)
             app._set_manual_controls_enabled(False)
-            if app._connected_port:
+            if runtime.connected_port:
                 app.status.config(
-                    text=StatusMessages.connected_waiting_for_grbl(app._connected_port)
+                    text=StatusMessages.connected_waiting_for_grbl(runtime.connected_port)
                 )
         apply_status_poll_profile(app)
         return
-    if app._alarm_locked:
+    if runtime.alarm_locked:
         return
-    if app.connected and app._connected_port:
-        _record_connection_timeline(app, "ready_true", f"port={app._connected_port}")
+    if runtime.connected and runtime.connected_port:
+        _record_connection_timeline(app, "ready_true", f"port={runtime.connected_port}")
         restore_failure_message = str(
             getattr(app, "_gcode_restore_failure_message", "") or ""
         ).strip()
         app.status.config(
-            text=restore_failure_message or StatusMessages.connected(app._connected_port)
+            text=restore_failure_message or StatusMessages.connected(runtime.connected_port)
         )
         try:
             ready_tail_s = float(
@@ -827,7 +823,7 @@ def handle_ready_event(app, ready):
             app._resume_job_name = None
             apply_status_poll_profile(app)
             return
-        if getattr(app, "_resume_after_disconnect", False) and not app._alarm_locked:
+        if getattr(app, "_resume_after_disconnect", False) and not runtime.alarm_locked:
             app._resume_after_disconnect = False
             total_lines = (
                 app._gcode_total_lines
@@ -1008,3 +1004,4 @@ def effective_status_poll_interval(app) -> float:
 def apply_status_poll_profile(app):
     interval = effective_status_poll_interval(app)
     app.grbl.set_status_poll_interval(interval)
+

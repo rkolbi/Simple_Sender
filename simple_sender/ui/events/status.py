@@ -22,6 +22,7 @@
 
 import time
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -60,6 +61,31 @@ from .status_machine_state import _run_progress_pct_from_lines as _run_progress_
 from .status_machine_state import _run_progress_text as _run_progress_text_impl
 from .status_machine_state import _status_allows_alarm_clear as _status_allows_alarm_clear_impl
 from .status_machine_state import _stream_latched_banner_state as _stream_latched_banner_state_impl
+from .status_completion import deferred_completion_bytes_done as _deferred_completion_bytes_done_impl
+from .status_completion import deferred_completion_target_total as _deferred_completion_target_total_impl
+from .status_completion import sync_deferred_stream_completion as _sync_deferred_stream_completion_impl
+from .status_coalescing import clear_coalesced_status_positions_state as _clear_coalesced_status_positions_state_impl
+from .status_coalescing import flush_coalesced_status_positions as _flush_coalesced_status_positions_impl
+from .status_coalescing import mark_status_positions_pressure as _mark_status_positions_pressure_impl
+from .status_coalescing import queue_coalesced_status_positions_update as _queue_coalesced_status_positions_update_impl
+from .status_coalescing import status_positions_coalesce_interval_s as _status_positions_coalesce_interval_s_impl
+from .status_coalescing import status_positions_pressure_active as _status_positions_pressure_active_impl
+from .status_coalescing import status_positions_should_force_defer as _status_positions_should_force_defer_impl
+from .status_coalescing import status_ui_queue_pending_depth as _status_ui_queue_pending_depth_impl
+from .status_coalescing import stream_status_positions_coalesce_active as _stream_status_positions_coalesce_active_impl
+from .status_motion import flash_wpos_labels as _flash_wpos_labels_impl
+from .status_motion import run_manual_jog_prediction_tick as _run_manual_jog_prediction_tick_impl
+from .status_motion import start_manual_jog_prediction as _start_manual_jog_prediction_impl
+from .status_motion import stop_manual_jog_prediction as _stop_manual_jog_prediction_impl
+from .status_motion import sync_manual_jog_prediction_with_status as _sync_manual_jog_prediction_with_status_impl
+from .status_motion import update_positions_and_macro_state as _update_positions_and_macro_state_impl
+from .status_motion import xyz_tuple_changed as _xyz_tuple_changed_impl
+from .status_orchestration import apply_machine_state as _apply_machine_state_impl
+from .status_orchestration import apply_machine_state_minimal as _apply_machine_state_minimal_impl
+from .status_orchestration import handle_status_event as _handle_status_event_impl
+from .status_reactions import maybe_restore_pending_g90 as _maybe_restore_pending_g90_impl
+from .status_reactions import schedule_request_modal_state_sync as _schedule_request_modal_state_sync_impl
+from .status_reactions import schedule_request_settings_dump as _schedule_request_settings_dump_impl
 from .status_units import _parse_modal_units as _parse_modal_units_impl
 from .status_units import _parse_report_units_setting as _parse_report_units_setting_impl
 from .streaming import _set_stream_progress_ui
@@ -68,6 +94,7 @@ from simple_sender.ui.modal_sync import modal_sync_retry_ready, request_modal_st
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_warned_unexpected: set[tuple[str, str]] = set()
 _WPOS_FLASH_MIN_INTERVAL_S = 0.25
 _DRO_DISPLAY_STEP = 0.001
 _STATUS_SETTLING_MIN_INTERVAL_S = 0.2
@@ -92,11 +119,15 @@ _JOG_DRO_INTERP_UNSYNCED_MAX_DT_S = 0.2
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
+
+
+def _log_unexpected_status_warning(context: str, exc: BaseException) -> None:
     key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
+    if key in _warned_unexpected:
         return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    _warned_unexpected.add(key)
+    logger.warning("%s: %s", context, exc, exc_info=exc)
 
 
 def _schedule_status_ui_callback(
@@ -134,10 +165,14 @@ def _schedule_status_ui_callback(
             setattr(app, callback_attr, after_fn(0, _run))
             return
         except Exception as exc:
-            _log_suppressed(
-                f"Failed scheduling deferred status callback: {callback_attr}",
-                exc,
-            )
+            context_text = f"Failed scheduling deferred status callback: {callback_attr}"
+            if bool(getattr(app, "_closing", False)):
+                _log_suppressed(context_text, exc)
+            else:
+                _log_unexpected_status_warning(
+                    f"{context_text}; running inline fallback",
+                    exc,
+                )
     _run()
 
 
@@ -298,33 +333,15 @@ def _status_allows_alarm_clear(app) -> bool:
 
 
 def _apply_machine_state_minimal(app, state: str, display_state: str) -> None:
-    state_lower = str(state or "").strip().lower()
-    app._machine_state_text = state
-    if state_lower.startswith("alarm"):
-        app._set_alarm_lock(True, state)
-    else:
-        if _status_allows_alarm_clear(app):
-            app._set_alarm_lock(False)
-        if (not bool(getattr(app, "_alarm_locked", False))) and not getattr(
-            app, "_macro_status_active", False
-        ):
-            banner_state = _stream_latched_banner_state(app, state, display_state)
-            rendered_state = _render_machine_state_text(app, state, banner_state)
-            _apply_machine_state_visuals_deferred_highlight(
-                app,
-                rendered_state=rendered_state,
-                banner_state=banner_state,
-                width_context="Failed adjusting machine-state width during settling",
-                highlight_context="Failed updating machine-state highlight during settling",
-            )
-    def _update_macro_state(macro_vars: dict) -> None:
-        macro_vars["state"] = state
-        macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
-
-    _with_macro_vars_nonblocking(
+    _apply_machine_state_minimal_impl(
         app,
-        _update_macro_state,
-        context="Failed updating macro state during settling status handling",
+        state,
+        display_state,
+        status_allows_alarm_clear=_status_allows_alarm_clear,
+        stream_latched_banner_state=_stream_latched_banner_state,
+        render_machine_state_text=_render_machine_state_text,
+        apply_machine_state_visuals_deferred_highlight=_apply_machine_state_visuals_deferred_highlight,
+        with_macro_vars_nonblocking=_with_macro_vars_nonblocking,
     )
 
 
@@ -379,53 +396,15 @@ def _performance_mode_enabled(app) -> bool:
 
 
 def _schedule_request_settings_dump(app) -> None:
-    if bool(getattr(app, "_settings_dump_deferred_pending", False)):
-        return
-
-    def _run() -> None:
-        app._settings_dump_deferred_pending = False
-        try:
-            app._request_settings_dump()
-        except Exception as exc:
-            _log_suppressed("Failed requesting deferred settings dump", exc)
-
-    after = getattr(app, "after", None)
-    if callable(after):
-        try:
-            app._settings_dump_deferred_pending = True
-            after(0, _run)
-            return
-        except Exception as exc:
-            app._settings_dump_deferred_pending = False
-            _log_suppressed("Failed scheduling deferred settings dump request", exc)
-    _run()
+    _schedule_request_settings_dump_impl(app, log_suppressed=_log_suppressed)
 
 
 def _schedule_request_modal_state_sync(app) -> None:
-    if bool(getattr(app, "_modal_sync_deferred_pending", False)):
-        return
-
-    def _run() -> None:
-        app._modal_sync_deferred_pending = False
-        request_modal_state_sync(
-            app,
-            source="status",
-            failure_status="Modal-state sync is pending retry.",
-            failure_log="[status] $G modal sync was rejected; retry pending.",
-            timeout_status="Modal-state sync timed out; retrying.",
-            timeout_log="[status] $G modal sync timed out; retry pending.",
-        )
-
-    after = getattr(app, "after", None)
-    if callable(after):
-        try:
-            app._modal_sync_deferred_pending = True
-            after(0, _run)
-            return
-        except Exception as exc:
-            app._modal_sync_deferred_pending = False
-            _log_suppressed("Failed scheduling deferred modal-state sync", exc)
-    _run()
+    _schedule_request_modal_state_sync_impl(
+        app,
+        log_suppressed=_log_suppressed,
+        request_modal_state_sync=request_modal_state_sync,
+    )
 
 
 def _homing_idle_grace_seconds(app) -> float:
@@ -445,26 +424,11 @@ def _homing_idle_grace_seconds(app) -> float:
 
 
 def _maybe_restore_pending_g90(app) -> None:
-    if not getattr(app, "_pending_force_g90", False):
-        return
-    if not app.grbl.is_connected():
-        return
-    if getattr(app, "_alarm_locked", False):
-        return
-    if app.grbl.is_streaming() or _stream_active_or_finishing(app):
-        return
-    try:
-        accepted = app.grbl.send_immediate("G90", source="autolevel")
-    except Exception as exc:
-        _log_suppressed("Failed to restore pending G90", exc)
-        return
-    if accepted is False:
-        return
-    app._pending_force_g90 = False
-    try:
-        app.ui_q.put(("log", "[autolevel] Requested pending G90 restore after alarm clear."))
-    except Exception as exc:
-        _log_suppressed("Failed to queue G90 restore log message", exc)
+    _maybe_restore_pending_g90_impl(
+        app,
+        log_suppressed=_log_suppressed,
+        stream_active_or_finishing=_stream_active_or_finishing,
+    )
 
 
 def _parse_modal_units(app, raw: str) -> None:
@@ -485,47 +449,30 @@ def _clone_status_fields(fields: _StatusFields) -> _StatusFields:
 
 
 def _stream_status_positions_coalesce_active(app) -> bool:
-    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    if stream_state not in {"running", "paused"}:
-        return False
-    if bool(getattr(app, "_stream_done_pending_idle", False)):
-        return False
-    return True
+    return bool(_stream_status_positions_coalesce_active_impl(app))
 
 
 def _status_positions_pressure_active(app, *, now_mono: float | None = None) -> bool:
-    if now_mono is None:
-        now_mono = float(time.monotonic())
-    pressure_until_ts = float(
-        getattr(app, "_status_positions_pressure_until_ts", 0.0) or 0.0
+    return bool(
+        _status_positions_pressure_active_impl(
+            app,
+            time_module=time,
+            now_mono=now_mono,
+        )
     )
-    return pressure_until_ts > 0.0 and now_mono < pressure_until_ts
 
 
 def _mark_status_positions_pressure(app, *, now_mono: float | None = None) -> None:
-    if now_mono is None:
-        now_mono = float(time.monotonic())
-    raw_recovery_s = getattr(
+    _mark_status_positions_pressure_impl(
         app,
-        "_status_positions_pressure_recovery_s",
-        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S,
+        time_module=time,
+        default_recovery_s=_STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S,
+        now_mono=now_mono,
     )
-    try:
-        recovery_s = float(raw_recovery_s)
-    except Exception:
-        recovery_s = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_RECOVERY_S
-    recovery_s = max(0.2, min(10.0, recovery_s))
-    setattr(app, "_status_positions_pressure_until_ts", float(now_mono + recovery_s))
 
 
 def _status_ui_queue_pending_depth(app) -> int:
-    ui_q = getattr(app, "ui_q", None)
-    if ui_q is None or not hasattr(ui_q, "qsize"):
-        return 0
-    try:
-        return max(0, int(ui_q.qsize()))
-    except Exception:
-        return 0
+    return int(_status_ui_queue_pending_depth_impl(app))
 
 
 def _status_positions_should_force_defer(
@@ -534,107 +481,52 @@ def _status_positions_should_force_defer(
     event_started_perf: float | None,
     noncritical_budget_ms: float,
 ) -> bool:
-    if not _stream_status_positions_coalesce_active(app):
-        return False
-    now_mono = float(time.monotonic())
-    raw_pending_threshold = getattr(
-        app,
-        "_status_positions_pressure_pending_threshold",
-        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD,
+    return bool(
+        _status_positions_should_force_defer_impl(
+            app,
+            event_started_perf=event_started_perf,
+            noncritical_budget_ms=noncritical_budget_ms,
+            time_module=time,
+            stream_status_positions_coalesce_active=_stream_status_positions_coalesce_active,
+            status_ui_queue_pending_depth=_status_ui_queue_pending_depth,
+            mark_status_positions_pressure=_mark_status_positions_pressure,
+            status_positions_pressure_active=_status_positions_pressure_active,
+            record_status_perf_metric=_record_status_perf_metric,
+            default_pending_threshold=_STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD,
+        )
     )
-    try:
-        pending_threshold = int(raw_pending_threshold)
-    except Exception:
-        pending_threshold = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_PENDING_THRESHOLD
-    pending_threshold = max(1, pending_threshold)
-    pending_depth = _status_ui_queue_pending_depth(app)
-    if pending_depth >= pending_threshold:
-        _mark_status_positions_pressure(app, now_mono=now_mono)
-        _record_status_perf_metric(app, "positions_pressure_queue", 0.0)
-        return True
-    if event_started_perf is not None:
-        elapsed_ms = max(0.0, (time.perf_counter() - float(event_started_perf)) * 1000.0)
-        if elapsed_ms >= max(1.0, float(noncritical_budget_ms)):
-            _mark_status_positions_pressure(app, now_mono=now_mono)
-            _record_status_perf_metric(app, "positions_pressure_budget", 0.0)
-            return True
-    return _status_positions_pressure_active(app, now_mono=now_mono)
 
 
 def _status_positions_coalesce_interval_s(app) -> float:
-    raw_base = getattr(
-        app,
-        "_status_stream_position_coalesce_ms",
-        _STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS,
+    return float(
+        _status_positions_coalesce_interval_s_impl(
+            app,
+            status_positions_pressure_active=_status_positions_pressure_active,
+            default_ms=_STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS,
+            min_ms=_STATUS_STREAM_POSITION_COALESCE_MIN_MS,
+            max_ms=_STATUS_STREAM_POSITION_COALESCE_MAX_MS,
+            pressure_ms_default=_STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS,
+        )
     )
-    raw_pressure = getattr(
-        app,
-        "_status_stream_position_pressure_coalesce_ms",
-        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS,
-    )
-    try:
-        base_ms = float(raw_base)
-    except Exception:
-        base_ms = _STATUS_STREAM_POSITION_COALESCE_DEFAULT_MS
-    try:
-        pressure_ms = float(raw_pressure)
-    except Exception:
-        pressure_ms = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MS
-    base_ms = max(
-        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
-        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, base_ms),
-    )
-    pressure_ms = max(
-        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
-        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, pressure_ms),
-    )
-    interval_ms = (
-        max(base_ms, pressure_ms)
-        if _status_positions_pressure_active(app)
-        else base_ms
-    )
-    interval_ms = max(
-        _STATUS_STREAM_POSITION_COALESCE_MIN_MS,
-        min(_STATUS_STREAM_POSITION_COALESCE_MAX_MS, interval_ms),
-    )
-    return interval_ms / 1000.0
 
 
 def _clear_coalesced_status_positions_state(app) -> None:
-    after_id = getattr(app, "_status_positions_coalesce_after_id", None)
-    if after_id is not None:
-        after_cancel = getattr(app, "after_cancel", None)
-        if callable(after_cancel):
-            try:
-                after_cancel(after_id)
-            except Exception as exc:
-                _log_suppressed("Failed canceling coalesced status-positions callback", exc)
-    setattr(app, "_status_positions_coalesce_after_id", None)
-    setattr(app, "_status_positions_coalesce_pending_fields", None)
+    _clear_coalesced_status_positions_state_impl(
+        app,
+        log_suppressed=_log_suppressed,
+    )
 
 
 def _flush_coalesced_status_positions(app) -> None:
-    setattr(app, "_status_positions_coalesce_after_id", None)
-    fields = getattr(app, "_status_positions_coalesce_pending_fields", None)
-    setattr(app, "_status_positions_coalesce_pending_fields", None)
-    if not isinstance(fields, _StatusFields):
-        return
-    started = time.perf_counter()
-    try:
-        _update_positions_and_macro_state(
-            app,
-            fields,
-            event_started_perf=None,
-            noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
-        )
-        sync_manual_jog_prediction_with_status(app)
-    finally:
-        setattr(app, "_status_positions_last_apply_ts", float(time.monotonic()))
-        _record_status_perf_metric(
-            app,
-            "positions_coalesced_apply",
-            (time.perf_counter() - started) * 1000.0,
-        )
+    _flush_coalesced_status_positions_impl(
+        app,
+        time_module=time,
+        status_fields_type=_StatusFields,
+        update_positions_and_macro_state=_update_positions_and_macro_state,
+        sync_manual_jog_prediction_with_status=sync_manual_jog_prediction_with_status,
+        record_status_perf_metric=_record_status_perf_metric,
+        noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+    )
 
 
 def _queue_coalesced_status_positions_update(
@@ -643,62 +535,21 @@ def _queue_coalesced_status_positions_update(
     *,
     force_defer: bool = False,
 ) -> bool:
-    if not _stream_status_positions_coalesce_active(app):
-        return False
-    now_mono = float(time.monotonic())
-    interval_s = _status_positions_coalesce_interval_s(app)
-    last_apply_ts = float(getattr(app, "_status_positions_last_apply_ts", 0.0) or 0.0)
-    pending_after_id = getattr(app, "_status_positions_coalesce_after_id", None)
-    ready_for_deferred_apply = (
-        pending_after_id is None
-        and (last_apply_ts <= 0.0 or (now_mono - last_apply_ts) >= interval_s)
-    )
-
-    setattr(app, "_status_positions_coalesce_pending_fields", _clone_status_fields(fields))
-    if pending_after_id is not None:
-        return True
-
-    remaining_s = (
-        0.0
-        if ready_for_deferred_apply
-        else max(0.0, interval_s - max(0.0, now_mono - last_apply_ts))
-    )
-    raw_pressure_min_delay_ms = getattr(
-        app,
-        "_status_positions_pressure_min_defer_ms",
-        _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS,
-    )
-    try:
-        pressure_min_delay_ms = int(raw_pressure_min_delay_ms)
-    except Exception:
-        pressure_min_delay_ms = _STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS
-    pressure_min_delay_ms = max(1, min(100, pressure_min_delay_ms))
-    # Keep the status event itself light by pushing even ready-to-apply position
-    # updates to the next UI turn while streaming. The cadence stays the same,
-    # but the status handler no longer absorbs the full DRO/macro apply cost.
-    delay_ms = max(
-        pressure_min_delay_ms if force_defer else 1,
-        int(round(remaining_s * 1000.0)),
-    )
-    after_fn = getattr(app, "after", None)
-    if not callable(after_fn):
-        setattr(app, "_status_positions_coalesce_pending_fields", None)
-        return False
-
-    try:
-        callback_id = after_fn(
-            delay_ms,
-            lambda: _flush_coalesced_status_positions(app),
+    return bool(
+        _queue_coalesced_status_positions_update_impl(
+            app,
+            fields,
+            force_defer=force_defer,
+            time_module=time,
+            clone_status_fields=_clone_status_fields,
+            stream_status_positions_coalesce_active=_stream_status_positions_coalesce_active,
+            status_positions_coalesce_interval_s=_status_positions_coalesce_interval_s,
+            flush_coalesced_status_positions=_flush_coalesced_status_positions,
+            log_suppressed=_log_suppressed,
+            record_status_perf_metric=_record_status_perf_metric,
+            default_pressure_min_defer_ms=_STATUS_STREAM_POSITION_COALESCE_PRESSURE_MIN_DEFER_MS,
         )
-    except Exception as exc:
-        setattr(app, "_status_positions_coalesce_pending_fields", None)
-        _log_suppressed("Failed scheduling coalesced status-positions callback", exc)
-        return False
-    setattr(app, "_status_positions_coalesce_after_id", callback_id)
-    _record_status_perf_metric(app, "positions_coalesced_defer", 0.0)
-    if force_defer:
-        _record_status_perf_metric(app, "positions_coalesced_pressure_defer", 0.0)
-    return True
+    )
 
 
 def _parse_status_fields(raw: str) -> _StatusFields:
@@ -800,230 +651,55 @@ def _apply_machine_state_visuals_deferred_highlight(
 
 
 def _apply_machine_state(app, state: str, display_state: str) -> bool:
-    prev_state = str(getattr(app, "_machine_state_text", "") or "")
-    prev_state_token = prev_state.strip().lower()
-    if "|" in prev_state_token:
-        prev_state_token = prev_state_token.split("|", 1)[0]
-    next_state_token = str(state or "").strip().lower()
-    if "|" in next_state_token:
-        next_state_token = next_state_token.split("|", 1)[0]
-    state_lower = state.lower()
-    app._machine_state_text = state
-    if state_lower.startswith("alarm"):
-        app._set_alarm_lock(True, state)
-    else:
-        if bool(getattr(app, "_alarm_locked", False)):
-            if _status_allows_alarm_clear(app):
-                app._set_alarm_lock(False)
-        elif not getattr(app, "_macro_status_active", False):
-            banner_state = _stream_latched_banner_state(app, state, display_state)
-            rendered_state = _render_machine_state_text(app, state, banner_state)
-            if _status_connect_settling_active(app):
-                _apply_machine_state_visuals_deferred_highlight(
-                    app,
-                    rendered_state=rendered_state,
-                    banner_state=banner_state,
-                    width_context="Failed adjusting machine state label width",
-                    highlight_context="Failed updating machine-state highlight during connect settling",
-                )
-            else:
-                _apply_machine_state_visuals(
-                    app,
-                    rendered_state=rendered_state,
-                    banner_state=banner_state,
-                    width_context="Failed adjusting machine state label width",
-                    highlight_context="Failed updating machine-state highlight",
-                )
-        _maybe_restore_pending_g90(app)
-
-    if app._grbl_ready and app._pending_settings_refresh and not app._alarm_locked:
-        if _stream_active_or_finishing(app) or app.grbl.is_streaming():
-            return False
-        app._pending_settings_refresh = False
-        _schedule_request_settings_dump(app)
-    if (
-        modal_sync_retry_ready(
+    return bool(
+        _apply_machine_state_impl(
             app,
-            timeout_status="Modal-state sync timed out; retrying.",
-            timeout_log="[status] $G modal sync timed out; retry pending.",
+            state,
+            display_state,
+            status_connect_settling_active=_status_connect_settling_active,
+            status_allows_alarm_clear=_status_allows_alarm_clear,
+            stream_latched_banner_state=_stream_latched_banner_state,
+            render_machine_state_text=_render_machine_state_text,
+            apply_machine_state_visuals_deferred_highlight=_apply_machine_state_visuals_deferred_highlight,
+            apply_machine_state_visuals=_apply_machine_state_visuals,
+            maybe_restore_pending_g90=_maybe_restore_pending_g90,
+            modal_sync_retry_ready=modal_sync_retry_ready,
+            stream_active_or_finishing=_stream_active_or_finishing,
+            schedule_request_settings_dump=_schedule_request_settings_dump,
+            schedule_request_modal_state_sync=_schedule_request_modal_state_sync,
+            job_controls_ready=job_controls_ready,
+            set_run_resume_from=set_run_resume_from,
+            schedule_status_ui_callback=_schedule_status_ui_callback,
+            with_macro_vars_nonblocking=_with_macro_vars_nonblocking,
+            signal_thread_event=_signal_thread_event,
         )
-        and app._grbl_ready
-        and not app._alarm_locked
-    ):
-        if not (_stream_active_or_finishing(app) or app.grbl.is_streaming()):
-            _schedule_request_modal_state_sync(app)
-    controls_allowed = bool(
-        app.connected
-        and app._grbl_ready
-        and app._status_seen
-        and not app._alarm_locked
-        and not _stream_active_or_finishing(app)
     )
-    ready_now = job_controls_ready(app) if controls_allowed else False
-    if ready_now != bool(getattr(app, "_job_controls_last_ready", False)):
-        set_run_resume_from(app, ready_now)
-        app._job_controls_last_ready = bool(ready_now)
-    manual_last = bool(getattr(app, "_manual_controls_last_enabled", False))
-    if bool(controls_allowed) != manual_last:
-        new_manual_enabled = bool(controls_allowed)
-        if _status_connect_settling_active(app):
-            def _apply_manual_controls_deferred() -> None:
-                app._set_manual_controls_enabled(new_manual_enabled)
-
-            _schedule_status_ui_callback(
-                app,
-                callback_attr="_status_manual_controls_after_id",
-                callback=_apply_manual_controls_deferred,
-                context="Failed applying deferred manual-control state during connect settling",
-            )
-        else:
-            app._set_manual_controls_enabled(new_manual_enabled)
-    def _update_macro_state(macro_vars: dict) -> None:
-        macro_vars["state"] = state
-        macro_vars["_status_seq"] = int(macro_vars.get("_status_seq", 0) or 0) + 1
-
-    _with_macro_vars_nonblocking(
-        app,
-        _update_macro_state,
-        context="Failed updating macro state from status event",
-    )
-    _signal_thread_event(app, "_status_update_event")
-    if next_state_token != prev_state_token:
-        def _apply_transition_ui_updates() -> None:
-            if hasattr(app, "_refresh_toolbar_action_focus"):
-                app._refresh_toolbar_action_focus()
-            if hasattr(app, "_update_quick_button_visibility"):
-                app._update_quick_button_visibility()
-
-        _schedule_status_ui_callback(
-            app,
-            callback_attr="_status_state_transition_ui_after_id",
-            callback=_apply_transition_ui_updates,
-            context="Failed applying state-transition toolbar/quick-button refresh",
-        )
-    return True
 
 
 def _deferred_completion_target_total(app) -> int:
-    try:
-        executable_total = int(getattr(app, "_gcode_executable_lines", 0) or 0)
-    except Exception:
-        executable_total = 0
-    if executable_total > 0:
-        return executable_total
-    try:
-        return int(getattr(app, "_gcode_total_lines", 0) or 0)
-    except Exception:
-        return 0
+    return int(_deferred_completion_target_total_impl(app))
 
 
 def _deferred_completion_bytes_done(app) -> bool:
-    try:
-        file_size = max(
-            int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
-            int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
-        )
-    except Exception:
-        file_size = 0
-    if file_size <= 0:
-        return False
-    try:
-        acked = int(getattr(app, "_stream_acked_byte_offset", 0) or 0)
-    except Exception:
-        acked = 0
-    return max(0, acked) >= file_size
+    return bool(_deferred_completion_bytes_done_impl(app))
 
 
 def _sync_deferred_stream_completion(app, state: str) -> None:
-    if not bool(getattr(app, "_stream_done_pending_idle", False)):
-        return
-    now_ts = time.time()
-    total = _deferred_completion_target_total(app)
-    done = max(0, int(getattr(app, "_last_acked_index", -1)) + 1)
-    complete_by_lines = total > 0 and done >= total
-    complete_by_bytes = _deferred_completion_bytes_done(app)
-    if not complete_by_lines and not complete_by_bytes:
-        begin_deferred_completion_wait(app, now_ts=now_ts)
-        return
-    if str(state or "").lower().startswith("idle"):
-        end_deferred_completion_wait(app, now_ts=now_ts)
-        app._stream_done_pending_idle = False
-        app._stream_state = "done"
-        notify_total = total if total > 0 else done
-        if complete_by_bytes and done > 0 and done < notify_total:
-            # Keep completion signaling consistent when non-executable file
-            # lines exceed streamed executable commands.
-            notify_total = done
-        try:
-            final_file_size = max(
-                int(getattr(app, "_gcode_file_size_bytes", 0) or 0),
-                int(getattr(app, "_stream_progress_file_size_bytes", 0) or 0),
-            )
-        except Exception:
-            final_file_size = 0
-        try:
-            _set_stream_progress_ui(
-                app,
-                pct=100.0,
-                visible=True,
-                acked_offset=final_file_size,
-                file_size_bytes=final_file_size,
-            )
-        except Exception as exc:
-            _log_suppressed("Failed finalizing deferred progress display at stream completion", exc)
-
-        def _finalize_completion_ui() -> None:
-            app._deferred_stream_finalize_pending = False
-            try:
-                app._maybe_notify_job_completion(done, notify_total)
-            except Exception as exc:
-                _log_suppressed("Failed notifying deferred stream completion", exc)
-            try:
-                app.btn_pause.config(state="disabled")
-                app.btn_resume.config(state="disabled")
-            except Exception as exc:
-                _log_suppressed("Failed finalizing pause/resume controls after deferred completion", exc)
-            try:
-                restore_controls_after_stream(
-                    app,
-                    job_ready_hook=job_controls_ready,
-                    set_run_resume_hook=set_run_resume_from,
-                )
-            except Exception as exc:
-                _log_suppressed("Failed finalizing manual controls after deferred completion", exc)
-            apply_stream_busy_state(app, False, log_hook=_log_suppressed)
-            try:
-                if hasattr(app, "_update_joystick_polling_state"):
-                    app._update_joystick_polling_state()
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed refreshing joystick polling after deferred completion",
-                    exc,
-                )
-            try:
-                app._apply_status_poll_profile()
-            except Exception as exc:
-                _log_suppressed("Failed applying status poll profile after deferred completion", exc)
-
-        if bool(getattr(app, "_deferred_stream_finalize_pending", False)):
-            return
-        after = getattr(app, "after", None)
-        if callable(after):
-            try:
-                app._deferred_stream_finalize_pending = True
-                after(0, _finalize_completion_ui)
-                return
-            except Exception as exc:
-                app._deferred_stream_finalize_pending = False
-                _log_suppressed("Failed scheduling deferred stream-completion finalize callback", exc)
-        _finalize_completion_ui()
-        return
-    begin_deferred_completion_wait(app, now_ts=now_ts)
-    try:
-        if int(app.progress_pct.get()) >= 100:
-            app.progress_pct.set(99)
-    except (AttributeError, TypeError, ValueError) as exc:
-        _log_suppressed("Failed clamping deferred completion progress", exc)
+    _sync_deferred_stream_completion_impl(
+        app,
+        state,
+        time_module=time,
+        deferred_completion_target_total=_deferred_completion_target_total,
+        deferred_completion_bytes_done=_deferred_completion_bytes_done,
+        begin_deferred_completion_wait=begin_deferred_completion_wait,
+        end_deferred_completion_wait=end_deferred_completion_wait,
+        set_stream_progress_ui=_set_stream_progress_ui,
+        log_suppressed=_log_suppressed,
+        restore_controls_after_stream=restore_controls_after_stream,
+        apply_stream_busy_state=apply_stream_busy_state,
+        job_controls_ready=job_controls_ready,
+        set_run_resume_from=set_run_resume_from,
+    )
 
 
 def _parse_xyz_triplet(text: str) -> list[float] | None:
@@ -1330,171 +1006,19 @@ def _schedule_manual_jog_prediction_tick(app) -> None:
 
 
 def _run_manual_jog_prediction_tick(app) -> None:
-    """Advance the UI-side jog prediction until the next real status sync."""
-
-    app._manual_jog_predict_after_id = None
-    # Snapshot and validate the last prediction state before doing any
-    # interpolation work.
-    state = getattr(app, "_manual_jog_predict_state", None)
-    if not isinstance(state, dict):
-        return
-    if not _jog_prediction_should_run(app):
-        _clear_manual_jog_prediction(app)
-        return
-    try:
-        started_ts = float(state.get("start_ts", 0.0) or 0.0)
-        anchor_ts = float(state.get("anchor_ts", started_ts) or started_ts)
-        max_distance = max(0.0, float(state.get("max_distance_report", 0.0) or 0.0))
-        base_mpos = state.get("base_mpos_report")
-        velocity_report_s = state.get("velocity_report_s")
-        unit_vec = state.get("unit_vec")
-        speed_report_s = max(0.0, float(state.get("speed_report_s", 0.0) or 0.0))
-        report_units = str(state.get("report_units", "mm") or "mm")
-        freeze_interp = bool(state.get("freeze", False))
-    except Exception as exc:
-        _log_suppressed("Failed reading manual jog prediction state", exc)
-        _clear_manual_jog_prediction(app)
-        return
-    try:
-        modal_units = str(app.unit_mode.get())
-    except Exception:
-        modal_units = "mm"
-    if (
-        started_ts <= 0.0
-        or max_distance <= 0.0
-        or not isinstance(base_mpos, (list, tuple))
-        or len(base_mpos) < 3
-    ):
-        _clear_manual_jog_prediction(app)
-        return
-    # Derive a velocity vector from either the last observed status delta or
-    # the normalized jog direction plus reported speed.
-    if isinstance(velocity_report_s, (list, tuple)) and len(velocity_report_s) >= 3:
-        try:
-            velocity_vec = (
-                float(velocity_report_s[0]),
-                float(velocity_report_s[1]),
-                float(velocity_report_s[2]),
-            )
-        except Exception:
-            velocity_vec = (0.0, 0.0, 0.0)
-    elif isinstance(unit_vec, (list, tuple)) and len(unit_vec) >= 3 and speed_report_s > 0.0:
-        velocity_vec = (
-            float(unit_vec[0]) * float(speed_report_s),
-            float(unit_vec[1]) * float(speed_report_s),
-            float(unit_vec[2]) * float(speed_report_s),
-        )
-    else:
-        velocity_vec = (0.0, 0.0, 0.0)
-    # Clamp interpolation to a short horizon so the UI prediction stays bounded
-    # and naturally yields back to real GRBL status data.
-    prediction_horizon_s = _manual_jog_prediction_horizon_s(state)
-    elapsed_s = max(0.0, time.monotonic() - anchor_ts)
-    status_sync_interval_s = max(0.0, float(state.get("status_sync_interval_s", 0.0) or 0.0))
-    if status_sync_interval_s > 0.0:
-        elapsed_cap_s = min(float(prediction_horizon_s), status_sync_interval_s)
-    else:
-        elapsed_cap_s = min(float(prediction_horizon_s), float(_JOG_DRO_INTERP_UNSYNCED_MAX_DT_S))
-    elapsed_s = min(elapsed_s, max(0.0, float(elapsed_cap_s)))
-    feed_mm_min = abs(float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0))
-    feed_report_s = max(0.0, feed_mm_min / 60.0)
-    if freeze_interp:
-        traveled = 0.0
-        est_mpos = (
-            float(base_mpos[0]),
-            float(base_mpos[1]),
-            float(base_mpos[2]),
-        )
-    else:
-        est_mpos = (
-            float(base_mpos[0]) + float(velocity_vec[0]) * elapsed_s,
-            float(base_mpos[1]) + float(velocity_vec[1]) * elapsed_s,
-            float(base_mpos[2]) + float(velocity_vec[2]) * elapsed_s,
-        )
-        dx = float(est_mpos[0]) - float(base_mpos[0])
-        dy = float(est_mpos[1]) - float(base_mpos[1])
-        dz = float(est_mpos[2]) - float(base_mpos[2])
-        traveled = (dx * dx + dy * dy + dz * dz) ** 0.5
-        velocity_mag = (
-            (float(velocity_vec[0]) * float(velocity_vec[0]))
-            + (float(velocity_vec[1]) * float(velocity_vec[1]))
-            + (float(velocity_vec[2]) * float(velocity_vec[2]))
-        ) ** 0.5
-        speed_cap = max(float(feed_report_s), float(velocity_mag))
-        if speed_cap > 0.0:
-            max_by_speed = max(0.0, (speed_cap * float(elapsed_s)) * 1.1)
-        else:
-            max_by_speed = 0.0
-        if max_by_speed > 0.0 and traveled > max_by_speed and traveled > 1e-9:
-            scale = max_by_speed / traveled
-            est_mpos = (
-                float(base_mpos[0]) + (dx * scale),
-                float(base_mpos[1]) + (dy * scale),
-                float(base_mpos[2]) + (dz * scale),
-            )
-            dx = float(est_mpos[0]) - float(base_mpos[0])
-            dy = float(est_mpos[1]) - float(base_mpos[1])
-            dz = float(est_mpos[2]) - float(base_mpos[2])
-            traveled = (dx * dx + dy * dy + dz * dz) ** 0.5
-        if traveled > max_distance and traveled > 1e-9:
-            scale = max_distance / traveled
-            est_mpos = (
-                float(base_mpos[0]) + (dx * scale),
-                float(base_mpos[1]) + (dy * scale),
-                float(base_mpos[2]) + (dz * scale),
-            )
-            traveled = max_distance
-    if traveled <= 0.0 and freeze_interp:
-        _schedule_manual_jog_prediction_tick(app)
-        return
-    try:
-        est_wpos: tuple[float, float, float] | None = None
-        mpos_x = format_dro_value(est_mpos[0], report_units, modal_units)
-        mpos_y = format_dro_value(est_mpos[1], report_units, modal_units)
-        mpos_z = format_dro_value(est_mpos[2], report_units, modal_units)
-        _set_var_if_changed(app.mpos_x, mpos_x)
-        _set_var_if_changed(app.mpos_y, mpos_y)
-        _set_var_if_changed(app.mpos_z, mpos_z)
-        wco_raw = getattr(app, "_wco_raw", None)
-        if isinstance(wco_raw, (list, tuple)) and len(wco_raw) >= 3:
-            est_wpos = (
-                float(est_mpos[0]) - float(wco_raw[0]),
-                float(est_mpos[1]) - float(wco_raw[1]),
-                float(est_mpos[2]) - float(wco_raw[2]),
-            )
-            wpos_x = format_dro_value(est_wpos[0], report_units, modal_units)
-            wpos_y = format_dro_value(est_wpos[1], report_units, modal_units)
-            wpos_z = format_dro_value(est_wpos[2], report_units, modal_units)
-            _set_var_if_changed(app.wpos_x, wpos_x)
-            _set_var_if_changed(app.wpos_y, wpos_y)
-            _set_var_if_changed(app.wpos_z, wpos_z)
-        app._manual_jog_predict_last_est_mpos = (
-            float(est_mpos[0]),
-            float(est_mpos[1]),
-            float(est_mpos[2]),
-        )
-        app._manual_jog_predict_last_est_wpos = (
-            (float(est_wpos[0]), float(est_wpos[1]), float(est_wpos[2]))
-            if est_wpos is not None
-            else None
-        )
-        _record_jog_dro_trace(
-            app,
-            "interp",
-            elapsed_s=float(elapsed_s),
-            horizon_s=float(prediction_horizon_s),
-            traveled=float(traveled),
-            velocity_report_s=velocity_vec,
-            feed_report_s=float(feed_report_s),
-            freeze=bool(freeze_interp),
-            est_mpos=app._manual_jog_predict_last_est_mpos,
-            est_wpos=app._manual_jog_predict_last_est_wpos,
-        )
-    except Exception as exc:
-        _log_suppressed("Failed applying manual jog DRO interpolation", exc)
-        _clear_manual_jog_prediction(app)
-        return
-    _schedule_manual_jog_prediction_tick(app)
+    _run_manual_jog_prediction_tick_impl(
+        app,
+        time_module=time,
+        log_suppressed=_log_suppressed,
+        jog_prediction_should_run=_jog_prediction_should_run,
+        clear_manual_jog_prediction=_clear_manual_jog_prediction,
+        manual_jog_prediction_horizon_s=_manual_jog_prediction_horizon_s,
+        interp_unsynced_max_dt_s=_JOG_DRO_INTERP_UNSYNCED_MAX_DT_S,
+        format_dro_value_hook=format_dro_value,
+        set_var_if_changed=_set_var_if_changed,
+        record_jog_dro_trace=_record_jog_dro_trace,
+        schedule_manual_jog_prediction_tick=_schedule_manual_jog_prediction_tick,
+    )
 
 
 def start_manual_jog_prediction(
@@ -1507,248 +1031,51 @@ def start_manual_jog_prediction(
     unit_mode: str,
     source: str | None = None,
 ) -> None:
-    normalized_source = _normalized_jog_prediction_source(source)
-    if not _jog_prediction_enabled_for_source(app, normalized_source):
-        _clear_manual_jog_prediction(app)
-        return
-    try:
-        dx_val = float(dx)
-        dy_val = float(dy)
-        dz_val = float(dz)
-        feed_val = max(0.0, float(feed))
-    except Exception:
-        return
-    vector_len = (dx_val * dx_val + dy_val * dy_val + dz_val * dz_val) ** 0.5
-    if vector_len <= 0.0 or feed_val <= 0.0:
-        _clear_manual_jog_prediction(app)
-        return
-    report_units = str(getattr(app, "_report_units", None) or unit_mode or "mm")
-    ratio = _units_ratio(str(unit_mode or "mm"), report_units)
-    dx_report = dx_val * ratio
-    dy_report = dy_val * ratio
-    dz_report = dz_val * ratio
-    max_distance_report = (dx_report * dx_report + dy_report * dy_report + dz_report * dz_report) ** 0.5
-    if max_distance_report <= 0.0:
-        _clear_manual_jog_prediction(app)
-        return
-    speed_report_s = (feed_val * ratio) / 60.0
-    if speed_report_s <= 0.0:
-        _clear_manual_jog_prediction(app)
-        return
-    mpos_raw = getattr(app, "_mpos_raw", None)
-    if not (isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3):
-        return
-    app._manual_jog_predict_state = {
-        "start_ts": float(time.monotonic()),
-        "anchor_ts": float(time.monotonic()),
-        "source": normalized_source,
-        "base_mpos_report": (
-            float(mpos_raw[0]),
-            float(mpos_raw[1]),
-            float(mpos_raw[2]),
-        ),
-        "unit_vec": (
-            float(dx_report / max_distance_report),
-            float(dy_report / max_distance_report),
-            float(dz_report / max_distance_report),
-        ),
-        "speed_report_s": float(speed_report_s),
-        "velocity_report_s": (
-            float((dx_report / max_distance_report) * speed_report_s),
-            float((dy_report / max_distance_report) * speed_report_s),
-            float((dz_report / max_distance_report) * speed_report_s),
-        ),
-        "max_distance_report": float(max_distance_report),
-        "report_units": report_units,
-        "status_sync_interval_s": 0.0,
-        "status_sync_last_ts": 0.0,
-        "last_status_mpos_report": (
-            float(mpos_raw[0]),
-            float(mpos_raw[1]),
-            float(mpos_raw[2]),
-        ),
-        "freeze": False,
-    }
-    app._manual_jog_predict_last_est_mpos = (
-        float(mpos_raw[0]),
-        float(mpos_raw[1]),
-        float(mpos_raw[2]),
-    )
-    app._manual_jog_predict_last_est_wpos = None
-    _record_jog_dro_trace(
+    _start_manual_jog_prediction_impl(
         app,
-        "start",
-        dx=float(dx_val),
-        dy=float(dy_val),
-        dz=float(dz_val),
-        feed=float(feed_val),
-        unit_mode=str(unit_mode or ""),
-        source=normalized_source,
-        report_units=report_units,
-        base_mpos=app._manual_jog_predict_last_est_mpos,
-        max_distance_report=float(max_distance_report),
-        horizon_s=float(_manual_jog_prediction_horizon_s(app._manual_jog_predict_state)),
+        dx=dx,
+        dy=dy,
+        dz=dz,
+        feed=feed,
+        unit_mode=unit_mode,
+        source=source,
+        time_module=time,
+        normalized_jog_prediction_source=_normalized_jog_prediction_source,
+        jog_prediction_enabled_for_source=_jog_prediction_enabled_for_source,
+        clear_manual_jog_prediction=_clear_manual_jog_prediction,
+        units_ratio=_units_ratio,
+        record_jog_dro_trace=_record_jog_dro_trace,
+        manual_jog_prediction_horizon_s=_manual_jog_prediction_horizon_s,
+        schedule_manual_jog_prediction_tick=_schedule_manual_jog_prediction_tick,
     )
-    _schedule_manual_jog_prediction_tick(app)
 
 
 def sync_manual_jog_prediction_with_status(app) -> None:
-    state = getattr(app, "_manual_jog_predict_state", None)
-    if not isinstance(state, dict):
-        return
-    if not _jog_prediction_should_run(app):
-        _clear_manual_jog_prediction(app)
-        return
-    mpos_raw = getattr(app, "_mpos_raw", None)
-    if isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3:
-        try:
-            now_mono = float(time.monotonic())
-            sync_interval_s: float | None = None
-            last_sync_ts = float(state.get("status_sync_last_ts", 0.0) or 0.0)
-            prev_status_mpos = state.get("last_status_mpos_report")
-            if last_sync_ts > 0.0 and now_mono > last_sync_ts:
-                observed_interval_s = now_mono - last_sync_ts
-                prev_interval_s = float(state.get("status_sync_interval_s", 0.0) or 0.0)
-                if prev_interval_s > 0.0:
-                    sync_interval_s = (prev_interval_s * 0.7) + (observed_interval_s * 0.3)
-                else:
-                    sync_interval_s = observed_interval_s
-                state["status_sync_interval_s"] = float(sync_interval_s)
-            state["status_sync_last_ts"] = now_mono
-            prediction_horizon_s = _manual_jog_prediction_horizon_s(state)
-            actual_mpos = (
-                float(mpos_raw[0]),
-                float(mpos_raw[1]),
-                float(mpos_raw[2]),
-            )
-            est_mpos = getattr(app, "_manual_jog_predict_last_est_mpos", None)
-            if isinstance(est_mpos, tuple) and len(est_mpos) >= 3:
-                dx = float(actual_mpos[0]) - float(est_mpos[0])
-                dy = float(actual_mpos[1]) - float(est_mpos[1])
-                dz = float(actual_mpos[2]) - float(est_mpos[2])
-                _record_jog_dro_delta_stats(
-                    app,
-                    dx=dx,
-                    dy=dy,
-                    dz=dz,
-                    sync_interval_s=sync_interval_s,
-                    predict_horizon_s=prediction_horizon_s,
-                )
-                _record_jog_dro_trace(
-                    app,
-                    "status_sync",
-                    actual_mpos=actual_mpos,
-                    est_mpos=(
-                        float(est_mpos[0]),
-                        float(est_mpos[1]),
-                        float(est_mpos[2]),
-                    ),
-                    delta=(dx, dy, dz),
-                    sync_interval_s=sync_interval_s,
-                    horizon_s=float(prediction_horizon_s),
-                )
-            observed_velocity = None
-            observed_speed = 0.0
-            if (
-                isinstance(prev_status_mpos, (list, tuple))
-                and len(prev_status_mpos) >= 3
-                and last_sync_ts > 0.0
-                and now_mono > last_sync_ts
-            ):
-                dt_s = max(1e-6, float(now_mono - last_sync_ts))
-                observed_velocity = (
-                    (float(actual_mpos[0]) - float(prev_status_mpos[0])) / dt_s,
-                    (float(actual_mpos[1]) - float(prev_status_mpos[1])) / dt_s,
-                    (float(actual_mpos[2]) - float(prev_status_mpos[2])) / dt_s,
-                )
-                observed_speed = (
-                    (observed_velocity[0] * observed_velocity[0])
-                    + (observed_velocity[1] * observed_velocity[1])
-                    + (observed_velocity[2] * observed_velocity[2])
-                ) ** 0.5
-                last_feed = abs(float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0))
-                freeze_interp = bool(
-                    last_feed <= float(_JOG_DRO_ZERO_FEED_EPS)
-                    or observed_speed <= float(_JOG_DRO_STATIONARY_DISTANCE_EPS)
-                )
-                prev_velocity = state.get("velocity_report_s")
-                if freeze_interp:
-                    next_velocity = (0.0, 0.0, 0.0)
-                elif isinstance(prev_velocity, (list, tuple)) and len(prev_velocity) >= 3:
-                    alpha = float(_JOG_DRO_OBSERVED_VELOCITY_ALPHA)
-                    next_velocity = (
-                        (float(prev_velocity[0]) * (1.0 - alpha)) + (float(observed_velocity[0]) * alpha),
-                        (float(prev_velocity[1]) * (1.0 - alpha)) + (float(observed_velocity[1]) * alpha),
-                        (float(prev_velocity[2]) * (1.0 - alpha)) + (float(observed_velocity[2]) * alpha),
-                    )
-                else:
-                    next_velocity = (
-                        float(observed_velocity[0]),
-                        float(observed_velocity[1]),
-                        float(observed_velocity[2]),
-                    )
-                state["velocity_report_s"] = next_velocity
-                state["freeze"] = bool(freeze_interp)
-                _record_jog_dro_trace(
-                    app,
-                    "velocity_sync",
-                    observed_velocity=observed_velocity,
-                    filtered_velocity=next_velocity,
-                    observed_speed=float(observed_speed),
-                    feed=float(getattr(app, "_last_status_feed_raw", 0.0) or 0.0),
-                    freeze=bool(freeze_interp),
-                )
-            state["base_mpos_report"] = (
-                float(actual_mpos[0]),
-                float(actual_mpos[1]),
-                float(actual_mpos[2]),
-            )
-            state["last_status_mpos_report"] = (
-                float(actual_mpos[0]),
-                float(actual_mpos[1]),
-                float(actual_mpos[2]),
-            )
-            state["start_ts"] = float(time.monotonic())
-            state["anchor_ts"] = float(time.monotonic())
-        except Exception as exc:
-            _log_suppressed("Failed syncing manual jog prediction anchor to status", exc)
-    _schedule_manual_jog_prediction_tick(app)
+    _sync_manual_jog_prediction_with_status_impl(
+        app,
+        time_module=time,
+        log_suppressed=_log_suppressed,
+        jog_prediction_should_run=_jog_prediction_should_run,
+        clear_manual_jog_prediction=_clear_manual_jog_prediction,
+        manual_jog_prediction_horizon_s=_manual_jog_prediction_horizon_s,
+        record_jog_dro_delta_stats=_record_jog_dro_delta_stats,
+        record_jog_dro_trace=_record_jog_dro_trace,
+        schedule_manual_jog_prediction_tick=_schedule_manual_jog_prediction_tick,
+        observed_velocity_alpha=_JOG_DRO_OBSERVED_VELOCITY_ALPHA,
+        zero_feed_eps=_JOG_DRO_ZERO_FEED_EPS,
+        stationary_distance_eps=_JOG_DRO_STATIONARY_DISTANCE_EPS,
+    )
 
 
 def stop_manual_jog_prediction(app, *, reason: str = "stop") -> None:
-    est_mpos = getattr(app, "_manual_jog_predict_last_est_mpos", None)
-    actual_mpos = None
-    mpos_raw = getattr(app, "_mpos_raw", None)
-    if isinstance(mpos_raw, (list, tuple)) and len(mpos_raw) >= 3:
-        try:
-            actual_mpos = (
-                float(mpos_raw[0]),
-                float(mpos_raw[1]),
-                float(mpos_raw[2]),
-            )
-        except Exception:
-            actual_mpos = None
-    delta = None
-    if isinstance(est_mpos, tuple) and len(est_mpos) >= 3 and isinstance(actual_mpos, tuple):
-        try:
-            delta = (
-                float(actual_mpos[0]) - float(est_mpos[0]),
-                float(actual_mpos[1]) - float(est_mpos[1]),
-                float(actual_mpos[2]) - float(est_mpos[2]),
-            )
-        except Exception:
-            delta = None
-    _record_jog_dro_trace(
+    _stop_manual_jog_prediction_impl(
         app,
-        "stop",
-        reason=str(reason or "stop"),
-        est_mpos=est_mpos if isinstance(est_mpos, tuple) and len(est_mpos) >= 3 else None,
-        actual_mpos=actual_mpos,
-        delta=delta,
+        reason=reason,
+        record_jog_dro_trace=_record_jog_dro_trace,
+        clear_manual_jog_prediction=_clear_manual_jog_prediction,
+        snap_dro_to_last_status_raw=_snap_dro_to_last_status_raw,
+        request_stop_status_refresh=_request_stop_status_refresh,
     )
-    _clear_manual_jog_prediction(app)
-    _snap_dro_to_last_status_raw(app)
-    _request_stop_status_refresh(app)
 
 
 def _xyz_tuple_changed(
@@ -1757,66 +1084,22 @@ def _xyz_tuple_changed(
     *,
     deadband: float = 1e-9,
 ) -> bool:
-    if not previous or len(previous) < 3:
-        return True
-    threshold = max(0.0, float(deadband))
-    return (
-        abs(previous[0] - current[0]) > threshold
-        or abs(previous[1] - current[1]) > threshold
-        or abs(previous[2] - current[2]) > threshold
+    return bool(
+        _xyz_tuple_changed_impl(
+            previous,
+            current,
+            deadband=deadband,
+        )
     )
 
 
 def _flash_wpos_labels(app) -> None:
-    now = time.monotonic()
-    last_flash = float(getattr(app, "_wpos_flash_last_ts", 0.0) or 0.0)
-    if (now - last_flash) < _WPOS_FLASH_MIN_INTERVAL_S:
-        return
-    app._wpos_flash_last_ts = now
-    labels = getattr(app, "_wpos_value_labels", None)
-    if not labels:
-        return
-    for axis, label in labels.items():
-        default_fg = ""
-        try:
-            default_fg = app._wpos_label_default_fg.get(axis, "")
-        except Exception as exc:
-            _log_suppressed("Failed reading default WPos label color", exc)
-            default_fg = ""
-        after_id = None
-        try:
-            after_id = app._wpos_flash_after_ids.get(axis)
-        except Exception as exc:
-            _log_suppressed("Failed reading pending WPos flash id", exc)
-            after_id = None
-        if after_id:
-            try:
-                app.after_cancel(after_id)
-            except Exception as exc:
-                _log_suppressed("Failed cancelling previous WPos flash timer", exc)
-        try:
-            label.configure(foreground="#2196f3")
-        except Exception as exc:
-            _log_suppressed("Failed applying WPos flash color", exc)
-            continue
-
-        def restore(target=label, axis_key=axis, fg=default_fg):
-            try:
-                if fg:
-                    target.configure(foreground=fg)
-                else:
-                    target.configure(foreground="")
-            except Exception as exc:
-                _log_suppressed("Failed restoring WPos label color", exc)
-            try:
-                app._wpos_flash_after_ids[axis_key] = None
-            except Exception as exc:
-                _log_suppressed("Failed clearing WPos flash timer id", exc)
-
-        try:
-            app._wpos_flash_after_ids[axis] = app.after(150, restore)
-        except Exception as exc:
-            _log_suppressed("Failed scheduling WPos flash restore timer", exc)
+    _flash_wpos_labels_impl(
+        app,
+        time_module=time,
+        flash_min_interval_s=_WPOS_FLASH_MIN_INTERVAL_S,
+        log_suppressed=_log_suppressed,
+    )
 
 
 def _update_positions_and_macro_state(
@@ -1826,573 +1109,60 @@ def _update_positions_and_macro_state(
     event_started_perf: float | None = None,
     noncritical_budget_ms: float = _STATUS_NONCRITICAL_BUDGET_MS,
 ) -> None:
-    """Update DROs, derived coordinates, and macro-visible status fields."""
-
-    stream_busy_for_noncritical = _stream_active_or_finishing(app)
-    reported_wco_vals = _parse_xyz_triplet(fields.wco) if fields.wco else None
-    mpos_vals = _parse_xyz_triplet(fields.mpos) if fields.mpos else None
-    reported_wpos_vals = _parse_xyz_triplet(fields.wpos) if fields.wpos else None
-    wco_vals = list(reported_wco_vals) if reported_wco_vals else None
-    wpos_vals = list(reported_wpos_vals) if reported_wpos_vals else None
-    if wco_vals:
-        app._wco_raw = tuple(wco_vals)
-    else:
-        # GRBL can omit WCO on some status frames; reuse the last confirmed WCO
-        # so fresh MPos reports can still drive WPos/macro updates.
-        cached_wco = getattr(app, "_wco_raw", None)
-        if cached_wco and len(cached_wco) >= 3:
-            wco_vals = [cached_wco[0], cached_wco[1], cached_wco[2]]
-
-    report_units = getattr(app, "_report_units", None) or app.unit_mode.get()
-    modal_units = app.unit_mode.get()
-    report_scale = _unit_scale_cached(report_units)
-    modal_scale = _unit_scale_cached(modal_units)
-    to_mm_factor = report_scale
-    to_modal_factor = report_scale / modal_scale
-    pos_deadband = _position_deadband_report_units(report_units, modal_units)
-
-    def _clear_zero_all_pending_latch() -> None:
-        app._zero_all_pending_active = False
-        app._zero_all_pending_expected_wco_raw = None
-        app._zero_all_pending_until_ts = 0.0
-        app._zero_all_pending_hard_until_ts = 0.0
-        app._zero_all_pending_post_timeout_wco_seen = False
-
-    zero_all_pending_active = bool(getattr(app, "_zero_all_pending_active", False))
-    expected_wco = getattr(app, "_zero_all_pending_expected_wco_raw", None)
-    expected_wco_tuple: tuple[float, float, float] | None = None
-    if zero_all_pending_active:
-        # Zero-all can briefly race with stale or missing WCO frames. Keep the
-        # expected WCO latched until status reports confirm the new zero or the
-        # guard window expires.
-        expected_wco_raw = (
-            expected_wco
-            if isinstance(expected_wco, (list, tuple)) and len(expected_wco) >= 3
-            else None
-        )
-        valid_expected = expected_wco_raw is not None
-        if expected_wco_raw is not None:
-            try:
-                expected_wco_tuple = (
-                    float(expected_wco_raw[0]),
-                    float(expected_wco_raw[1]),
-                    float(expected_wco_raw[2]),
-                )
-            except Exception:
-                valid_expected = False
-        if not valid_expected or expected_wco_tuple is None:
-            _clear_zero_all_pending_latch()
-            zero_all_pending_active = False
-        else:
-            expected_wco_live = expected_wco_tuple
-            now_mono = time.monotonic()
-            soft_until = float(getattr(app, "_zero_all_pending_until_ts", 0.0) or 0.0)
-            hard_until = float(getattr(app, "_zero_all_pending_hard_until_ts", 0.0) or 0.0)
-            soft_expired = soft_until > 0.0 and now_mono >= soft_until
-            hard_expired = hard_until > 0.0 and now_mono >= hard_until
-            zero_confirmed = False
-            if reported_wpos_vals and len(reported_wpos_vals) >= 3:
-                zero_confirmed = all(abs(float(val)) <= pos_deadband for val in reported_wpos_vals[:3])
-            if not zero_confirmed and mpos_vals and reported_wco_vals:
-                zero_confirmed = all(
-                    abs(float(mpos_vals[idx]) - float(reported_wco_vals[idx])) <= pos_deadband
-                    for idx in range(3)
-                )
-            if not zero_confirmed and reported_wco_vals:
-                zero_confirmed = all(
-                    abs(float(reported_wco_vals[idx]) - float(expected_wco_live[idx])) <= pos_deadband
-                    for idx in range(3)
-                )
-            if hard_expired or zero_confirmed:
-                _clear_zero_all_pending_latch()
-                zero_all_pending_active = False
-            else:
-                # Keep WPos stable during zero-all settling even when WCO is
-                # temporarily missing or stale in status reports.
-                wco_vals = [
-                    float(expected_wco_live[0]),
-                    float(expected_wco_live[1]),
-                    float(expected_wco_live[2]),
-                ]
-                app._wco_raw = (
-                    float(expected_wco_live[0]),
-                    float(expected_wco_live[1]),
-                    float(expected_wco_live[2]),
-                )
-                if mpos_vals is not None:
-                    wpos_vals = None
-                else:
-                    wpos_vals = [0.0, 0.0, 0.0]
-                if soft_expired and reported_wco_vals:
-                    if bool(getattr(app, "_zero_all_pending_post_timeout_wco_seen", False)):
-                        _clear_zero_all_pending_latch()
-                        zero_all_pending_active = False
-                        wco_vals = list(reported_wco_vals)
-                        wpos_vals = list(reported_wpos_vals) if reported_wpos_vals else None
-                    else:
-                        app._zero_all_pending_post_timeout_wco_seen = True
-
-    def to_mm(value: float) -> float:
-        return value * to_mm_factor
-
-    def to_modal(value: float) -> float:
-        return value * to_modal_factor
-
-    def _status_event_elapsed_ms() -> float:
-        if event_started_perf is None:
-            return 0.0
-        return max(0.0, (time.perf_counter() - float(event_started_perf)) * 1000.0)
-
-    def _should_defer_noncritical_updates() -> bool:
-        if stream_busy_for_noncritical or _performance_mode_enabled(app):
-            return True
-        return _status_event_elapsed_ms() >= max(1.0, float(noncritical_budget_ms))
-
-    # Derive whichever position space GRBL omitted so both DROs and macro state
-    # remain internally consistent from mixed MPos/WPos/WCO reports.
-    macro_updates: dict[str, object] = {}
-    wpos_calc = None
-    mpos_calc = None
-    if mpos_vals and wpos_vals is None and wco_vals:
-        wpos_calc = [
-            mpos_vals[0] - wco_vals[0],
-            mpos_vals[1] - wco_vals[1],
-            mpos_vals[2] - wco_vals[2],
-        ]
-    elif wpos_vals and mpos_vals is None and wco_vals:
-        mpos_calc = [
-            wpos_vals[0] + wco_vals[0],
-            wpos_vals[1] + wco_vals[1],
-            wpos_vals[2] + wco_vals[2],
-        ]
-
-    if mpos_vals:
-        mpos_tuple = (mpos_vals[0], mpos_vals[1], mpos_vals[2])
-        mpos_changed = _xyz_tuple_changed(
-            getattr(app, "_mpos_raw", None),
-            mpos_tuple,
-            deadband=pos_deadband,
-        )
-        app._mpos_raw = mpos_tuple
-        if mpos_changed:
-            try:
-                mpos_x = format_dro_value(mpos_vals[0], report_units, modal_units)
-                mpos_y = format_dro_value(mpos_vals[1], report_units, modal_units)
-                mpos_z = format_dro_value(mpos_vals[2], report_units, modal_units)
-                _set_var_if_changed(app.mpos_x, mpos_x)
-                _set_var_if_changed(app.mpos_y, mpos_y)
-                _set_var_if_changed(app.mpos_z, mpos_z)
-            except Exception as exc:
-                _log_suppressed("Failed updating machine-position DRO values", exc)
-        macro_updates["mx"] = to_modal(mpos_vals[0])
-        macro_updates["my"] = to_modal(mpos_vals[1])
-        macro_updates["mz"] = to_modal(mpos_vals[2])
-    elif mpos_calc:
-        mpos_calc_tuple = (mpos_calc[0], mpos_calc[1], mpos_calc[2])
-        mpos_changed = _xyz_tuple_changed(
-            getattr(app, "_mpos_raw", None),
-            mpos_calc_tuple,
-            deadband=pos_deadband,
-        )
-        app._mpos_raw = mpos_calc_tuple
-        if mpos_changed:
-            try:
-                mpos_x = format_dro_value(mpos_calc[0], report_units, modal_units)
-                mpos_y = format_dro_value(mpos_calc[1], report_units, modal_units)
-                mpos_z = format_dro_value(mpos_calc[2], report_units, modal_units)
-                _set_var_if_changed(app.mpos_x, mpos_x)
-                _set_var_if_changed(app.mpos_y, mpos_y)
-                _set_var_if_changed(app.mpos_z, mpos_z)
-            except Exception as exc:
-                _log_suppressed("Failed updating computed machine-position DRO values", exc)
-        macro_updates["mx"] = to_modal(mpos_calc[0])
-        macro_updates["my"] = to_modal(mpos_calc[1])
-        macro_updates["mz"] = to_modal(mpos_calc[2])
-
-    if wpos_vals:
-        wpos_tuple = (wpos_vals[0], wpos_vals[1], wpos_vals[2])
-        wpos_changed = _xyz_tuple_changed(
-            getattr(app, "_wpos_raw", None),
-            wpos_tuple,
-            deadband=pos_deadband,
-        )
-        app._wpos_raw = wpos_tuple
-        if wpos_changed:
-            try:
-                wpos_x = format_dro_value(wpos_vals[0], report_units, modal_units)
-                wpos_y = format_dro_value(wpos_vals[1], report_units, modal_units)
-                wpos_z = format_dro_value(wpos_vals[2], report_units, modal_units)
-                _set_var_if_changed(app.wpos_x, wpos_x)
-                _set_var_if_changed(app.wpos_y, wpos_y)
-                _set_var_if_changed(app.wpos_z, wpos_z)
-            except Exception as exc:
-                _log_suppressed("Failed updating WPos DRO values", exc)
-        macro_updates["wx"] = to_modal(wpos_vals[0])
-        macro_updates["wy"] = to_modal(wpos_vals[1])
-        macro_updates["wz"] = to_modal(wpos_vals[2])
-        if wpos_changed and not stream_busy_for_noncritical:
-            _flash_wpos_labels(app)
-    elif wpos_calc:
-        wpos_calc_tuple = (wpos_calc[0], wpos_calc[1], wpos_calc[2])
-        wpos_changed = _xyz_tuple_changed(
-            getattr(app, "_wpos_raw", None),
-            wpos_calc_tuple,
-            deadband=pos_deadband,
-        )
-        app._wpos_raw = wpos_calc_tuple
-        if wpos_changed:
-            try:
-                wpos_x = format_dro_value(wpos_calc[0], report_units, modal_units)
-                wpos_y = format_dro_value(wpos_calc[1], report_units, modal_units)
-                wpos_z = format_dro_value(wpos_calc[2], report_units, modal_units)
-                _set_var_if_changed(app.wpos_x, wpos_x)
-                _set_var_if_changed(app.wpos_y, wpos_y)
-                _set_var_if_changed(app.wpos_z, wpos_z)
-            except Exception as exc:
-                _log_suppressed("Failed updating computed WPos DRO values", exc)
-        macro_updates["wx"] = to_modal(wpos_calc[0])
-        macro_updates["wy"] = to_modal(wpos_calc[1])
-        macro_updates["wz"] = to_modal(wpos_calc[2])
-
-    if fields.feed is not None:
-        macro_updates["curfeed"] = fields.feed
-    if fields.spindle is not None:
-        macro_updates["curspindle"] = fields.spindle
-        try:
-            rpm_text = str(int(round(float(fields.spindle))))
-        except Exception as exc:
-            _log_suppressed("Failed parsing spindle RPM from status line", exc)
-            rpm_text = None
-        if rpm_text is not None:
-            mpos_rpm_var = getattr(app, "mpos_rpm", None)
-            spindle_rpm_var = getattr(app, "spindle_current_rpm_var", None)
-
-            def _apply_spindle_rpm_ui_sync() -> None:
-                if mpos_rpm_var is not None:
-                    _set_var_if_changed(mpos_rpm_var, rpm_text)
-                if spindle_rpm_var is not None:
-                    _set_var_if_changed(spindle_rpm_var, rpm_text)
-
-            if _should_defer_noncritical_updates():
-                _schedule_status_ui_callback(
-                    app,
-                    callback_attr="_status_spindle_rpm_after_id",
-                    callback=_apply_spindle_rpm_ui_sync,
-                    context="Failed applying deferred spindle-RPM UI sync from status",
-                )
-            else:
-                try:
-                    _apply_spindle_rpm_ui_sync()
-                except Exception as exc:
-                    _log_suppressed(
-                        "Failed applying spindle-RPM UI sync from status",
-                        exc,
-                    )
-    if fields.planner is not None:
-        macro_updates["planner"] = fields.planner
-        try:
-            planner_available = int(fields.planner)
-            if planner_available < 0:
-                planner_available = 0
-            planner_capacity = int(getattr(app, "_planner_blocks_capacity", 15) or 15)
-            if planner_capacity <= 0:
-                planner_capacity = 15
-            if planner_available > planner_capacity:
-                planner_capacity = planner_available
-                app._planner_blocks_capacity = planner_capacity
-            app._planner_blocks_available = min(planner_available, planner_capacity)
-        except Exception as exc:
-            _log_suppressed("Failed tracking planner availability from status line", exc)
-    if fields.rxbytes is not None:
-        macro_updates["rxbytes"] = fields.rxbytes
-    if wco_vals:
-        macro_updates["wcox"] = to_modal(wco_vals[0])
-        macro_updates["wcoy"] = to_modal(wco_vals[1])
-        macro_updates["wcoz"] = to_modal(wco_vals[2])
-    if fields.pins is not None:
-        macro_updates["pins"] = fields.pins
-    # Override widgets are relatively expensive UI work, so they follow the
-    # same noncritical deferral path used for other streaming-time sync.
-    ov_values: tuple[int, int, int] | None = None
-    if fields.ov:
-        feed_val = spindle_val = None
-        try:
-            ov_parts = [int(float(v)) for v in fields.ov.split(",")]
-            if len(ov_parts) >= 3:
-                feed_val, spindle_val = ov_parts[0], ov_parts[2]
-                ov_values = (ov_parts[0], ov_parts[1], ov_parts[2])
-        except Exception as exc:
-            _log_suppressed("Failed parsing override values from status line", exc)
-        else:
-            ov_changed = bool(ov_values is not None and ov_values != getattr(app, "_last_status_ov", None))
-            if ov_values is not None:
-                app._last_status_ov = ov_values
-            if ov_changed:
-                def _apply_override_ui_sync() -> None:
-                    if feed_val is not None:
-                        app._set_feed_override_slider_value(feed_val)
-                    if spindle_val is not None:
-                        app._set_spindle_override_slider_value(spindle_val)
-                    app._refresh_override_info()
-
-                if _should_defer_noncritical_updates():
-                    _schedule_status_ui_callback(
-                        app,
-                        callback_attr="_status_override_sync_after_id",
-                        callback=_apply_override_ui_sync,
-                        context="Failed applying deferred override UI sync from status",
-                    )
-                else:
-                    try:
-                        _apply_override_ui_sync()
-                    except Exception as exc:
-                        _log_suppressed(
-                            "Failed applying override UI sync from status",
-                            exc,
-                        )
-    pin_state = {char for char in (fields.pins or "").upper() if char.isalpha()}
-    endstop_active = bool(pin_state & {"X", "Y", "Z"})
-
-    def _apply_macro_status_updates(macro_vars: dict) -> None:
-        if ov_values is not None:
-            changed = (
-                macro_vars.get("OvFeed") != ov_values[0]
-                or macro_vars.get("OvRapid") != ov_values[1]
-                or macro_vars.get("OvSpindle") != ov_values[2]
-            )
-            macro_updates["OvFeed"] = ov_values[0]
-            macro_updates["OvRapid"] = ov_values[1]
-            macro_updates["OvSpindle"] = ov_values[2]
-            macro_updates["_OvChanged"] = bool(changed)
-        if macro_updates:
-            macro_vars.update(macro_updates)
-
-    _with_macro_vars_nonblocking(
+    _update_positions_and_macro_state_impl(
         app,
-        _apply_macro_status_updates,
-        context="Failed updating macro status values",
+        fields,
+        event_started_perf=event_started_perf,
+        noncritical_budget_ms=noncritical_budget_ms,
+        time_module=time,
+        log_suppressed=_log_suppressed,
+        stream_active_or_finishing=_stream_active_or_finishing,
+        parse_xyz_triplet=_parse_xyz_triplet,
+        unit_scale_cached=_unit_scale_cached,
+        position_deadband_report_units=_position_deadband_report_units,
+        xyz_tuple_changed=_xyz_tuple_changed,
+        format_dro_value_hook=format_dro_value,
+        set_var_if_changed=_set_var_if_changed,
+        performance_mode_enabled=_performance_mode_enabled,
+        schedule_status_ui_callback=_schedule_status_ui_callback,
+        with_macro_vars_nonblocking=_with_macro_vars_nonblocking,
+        mark_status_coordinates_fresh=_mark_status_coordinates_fresh,
+        flash_wpos_labels=_flash_wpos_labels,
     )
-    _mark_status_coordinates_fresh(
-        app,
-        context="Failed marking status coordinates fresh after position update",
-    )
-    # LED updates are visually helpful but noncritical during a busy stream, so
-    # they can be deferred when status processing is already under pressure.
-    probe_active = bool(pin_state & {"P"})
-    hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
-
-    def _apply_led_panel_state() -> None:
-        app._update_led_panel(endstop_active, probe_active, hold_active)
-
-    if _should_defer_noncritical_updates() and stream_busy_for_noncritical:
-        _schedule_status_ui_callback(
-            app,
-            callback_attr="_status_led_panel_after_id",
-            callback=_apply_led_panel_state,
-            context="Failed applying deferred LED panel state from status",
-        )
-    else:
-        try:
-            _apply_led_panel_state()
-        except Exception as exc:
-            _log_suppressed("Failed updating LED panel from status", exc)
 
 
 def handle_status_event(app, raw: str):
     """Parse one status frame and apply state, position, and completion sync."""
 
-    event_start = time.perf_counter()
-    parse_elapsed_ms = 0.0
-    apply_elapsed_ms = 0.0
-    positions_elapsed_ms = 0.0
-    deferred_elapsed_ms = 0.0
-    settling = _status_settling_active(app)
-    _signal_thread_event(app, "_status_update_event")
-    now_ts = time.time()
-    app._last_status_ts = now_ts
-    previous_raw = str(getattr(app, "_last_status_raw", "") or "")
-    app._last_status_raw = raw
-    state_token = _status_state_token(raw)
-    state_lower = str(state_token or "").strip().lower()
-    homing_resolution_pending = _homing_status_resolution_pending(app)
-    live_updates_during_settling = bool(
-        settling and state_lower.startswith(("jog", "run", "hold"))
-    )
-    if state_token and not str(state_token).lower().startswith("idle"):
-        try:
-            app._status_last_non_idle_ts = time.monotonic()
-        except Exception as exc:
-            _log_suppressed("Failed tracking last non-idle status timestamp", exc)
-    # Short-circuit exact duplicates first, then a relaxed idle signature that
-    # tolerates benign idle-only churn outside active streaming.
-    if (not homing_resolution_pending) and raw == previous_raw:
-        app._status_seen = True
-        app._status_duplicate_count = int(getattr(app, "_status_duplicate_count", 0) or 0) + 1
-        if state_token:
-            _sync_deferred_stream_completion(app, state_token)
-        _mark_status_coordinates_fresh(
-            app,
-            context="Failed marking duplicate status coordinates fresh",
-        )
-        _record_status_perf_metric(
-            app,
-            "duplicate_short_circuit",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        _record_status_perf_metric(
-            app,
-            "total",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        return
-    if (
-        (not homing_resolution_pending)
-        and
-        state_lower.startswith("idle")
-        and not _stream_active_or_finishing(app)
-        and _status_relaxed_idle_signature(raw)
-        == _status_relaxed_idle_signature(previous_raw)
-    ):
-        app._status_seen = True
-        app._status_duplicate_count = int(
-            getattr(app, "_status_duplicate_count", 0) or 0
-        ) + 1
-        _sync_deferred_stream_completion(app, state_token or "Idle")
-        _mark_status_coordinates_fresh(
-            app,
-            context="Failed marking relaxed duplicate status coordinates fresh",
-        )
-        _record_status_perf_metric(
-            app,
-            "duplicate_short_circuit_relaxed",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        _record_status_perf_metric(
-            app,
-            "total",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        return
-    if not _status_apply_interval_ok(app, state_token):
-        _record_status_perf_metric(
-            app,
-            "settling_coalesced",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        _record_status_perf_metric(
-            app,
-            "total",
-            (time.perf_counter() - event_start) * 1000.0,
-        )
-        return
-    app._status_duplicate_count = 0
-    history = getattr(app, "_status_history", None)
-    if not isinstance(history, deque):
-        seed: list[tuple[float, str]] = []
-        if isinstance(history, list):
-            seed = history[-200:]
-        history = deque(seed, maxlen=200)
-        app._status_history = history
-    history.append((now_ts, raw))
-    # Parse and apply the machine-state portion before touching heavier DRO and
-    # macro updates.
-    parse_start = time.perf_counter()
-    fields = _parse_status_fields(raw)
-    if fields.feed is not None:
-        try:
-            app._last_status_feed_raw = float(fields.feed)
-        except Exception:
-            pass
-    parse_elapsed_ms = (time.perf_counter() - parse_start) * 1000.0
-    _record_status_perf_metric(app, "parse", parse_elapsed_ms)
-    app._status_seen = True
-    app._last_status_pins = fields.pins
-    display_state = _resolve_display_state(app, fields.state)
-    apply_start = time.perf_counter()
-    if settling and not live_updates_during_settling:
-        _apply_machine_state_minimal(app, fields.state, display_state)
-    else:
-        if not _apply_machine_state(app, fields.state, display_state):
-            apply_elapsed_ms = (time.perf_counter() - apply_start) * 1000.0
-            _record_status_perf_metric(
-                app,
-                "apply_state",
-                apply_elapsed_ms,
-            )
-            total_ms = (time.perf_counter() - event_start) * 1000.0
-            _record_status_perf_metric(app, "total", total_ms)
-            _log_slow_status_event(
-                app,
-                total_ms=total_ms,
-                state=fields.state,
-                parse_ms=parse_elapsed_ms,
-                apply_ms=apply_elapsed_ms,
-                positions_ms=positions_elapsed_ms,
-                deferred_ms=deferred_elapsed_ms,
-                settling=settling,
-            )
-            return
-    apply_elapsed_ms = (time.perf_counter() - apply_start) * 1000.0
-    _record_status_perf_metric(app, "apply_state", apply_elapsed_ms)
-    if settling and not live_updates_during_settling:
-        _record_status_perf_metric(
-            app,
-            "positions_macro",
-            0.0,
-        )
-    else:
-        # Position work can be deferred or coalesced while streaming so status
-        # handling does not outrun the UI queue.
-        update_start = time.perf_counter()
-        force_defer_positions = _status_positions_should_force_defer(
-            app,
-            event_started_perf=event_start,
-            noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
-        )
-        if _queue_coalesced_status_positions_update(
-            app,
-            fields,
-            force_defer=force_defer_positions,
-        ):
-            pass
-        else:
-            if not _stream_status_positions_coalesce_active(app):
-                _clear_coalesced_status_positions_state(app)
-            _update_positions_and_macro_state(
-                app,
-                fields,
-                event_started_perf=event_start,
-                noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
-            )
-            sync_manual_jog_prediction_with_status(app)
-            setattr(app, "_status_positions_last_apply_ts", float(time.monotonic()))
-        positions_elapsed_ms = (time.perf_counter() - update_start) * 1000.0
-        _record_status_perf_metric(
-            app,
-            "positions_macro",
-            positions_elapsed_ms,
-        )
-    # Completion sync stays last so it observes the latest state/position work
-    # from the current frame before deciding whether a run is actually done.
-    finalize_start = time.perf_counter()
-    _sync_deferred_stream_completion(app, fields.state)
-    deferred_elapsed_ms = (time.perf_counter() - finalize_start) * 1000.0
-    _record_status_perf_metric(
+    _handle_status_event_impl(
         app,
-        "deferred_completion",
-        deferred_elapsed_ms,
+        raw,
+        time_module=time,
+        deque_cls=deque,
+        settling_active=_status_settling_active,
+        signal_thread_event=_signal_thread_event,
+        status_state_token=_status_state_token,
+        homing_status_resolution_pending=_homing_status_resolution_pending,
+        stream_active_or_finishing=_stream_active_or_finishing,
+        mark_status_coordinates_fresh=_mark_status_coordinates_fresh,
+        record_status_perf_metric=_record_status_perf_metric,
+        sync_deferred_stream_completion=_sync_deferred_stream_completion,
+        status_relaxed_idle_signature=_status_relaxed_idle_signature,
+        status_apply_interval_ok=_status_apply_interval_ok,
+        parse_status_fields=_parse_status_fields,
+        resolve_display_state=_resolve_display_state,
+        apply_machine_state_minimal=_apply_machine_state_minimal,
+        apply_machine_state=_apply_machine_state,
+        status_positions_should_force_defer=_status_positions_should_force_defer,
+        queue_coalesced_status_positions_update=_queue_coalesced_status_positions_update,
+        stream_status_positions_coalesce_active=_stream_status_positions_coalesce_active,
+        clear_coalesced_status_positions_state=_clear_coalesced_status_positions_state,
+        update_positions_and_macro_state=_update_positions_and_macro_state,
+        sync_manual_jog_prediction_with_status=sync_manual_jog_prediction_with_status,
+        log_slow_status_event=_log_slow_status_event,
+        noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+        log_suppressed=_log_suppressed,
     )
-    total_ms = (time.perf_counter() - event_start) * 1000.0
-    _record_status_perf_metric(app, "total", total_ms)
-    _log_slow_status_event(
-        app,
-        total_ms=total_ms,
-        state=fields.state,
-        parse_ms=parse_elapsed_ms,
-        apply_ms=apply_elapsed_ms,
-        positions_ms=positions_elapsed_ms,
-        deferred_ms=deferred_elapsed_ms,
-        settling=settling,
-    )
+
 
 

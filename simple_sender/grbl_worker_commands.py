@@ -21,10 +21,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 import time
 
-from simple_sender.types import GrblWorkerState, ManualCommandResultTracker
+from simple_sender.types import (
+    GrblWorkerState,
+    ManualCommandResultTracker,
+    ReadyEvent,
+    StreamStateEvent,
+)
 
 from .utils.constants import (
     DEFAULT_SPINDLE_RPM,
@@ -44,11 +50,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 class GrblWorkerCommandMixin(GrblWorkerState):
@@ -220,9 +222,9 @@ class GrblWorkerCommandMixin(GrblWorkerState):
         self._reset_stream_buffer()
         self._clear_outgoing()
         self._emit_buffer_fill()
-        self.ui_q.put(("ready", False))
+        self.ui_q.put(ReadyEvent(False))
         if emit_state and was_streaming:
-            self.ui_q.put(("stream_state", "stopped", None))
+            self.ui_q.put(StreamStateEvent("stopped", None))
         self._abort_writes.clear()
         return True
     
@@ -348,3 +350,4 @@ class GrblWorkerCommandMixin(GrblWorkerState):
     # G-CODE STREAMING
     # ========================================================================
     
+

@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,7 @@ _TRANSIENT_TTK_STATES_TO_CLEAR = ("!pressed", "!selected", "!active")
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def clear_widget_transient_state(widget) -> None:
@@ -138,3 +135,4 @@ def set_manual_controls_enabled(app, enabled: bool):
         app._set_unit_mode(app.unit_mode.get())
         app._set_step_xy(app.step_xy.get())
         app._set_step_z(app.step_z.get())
+

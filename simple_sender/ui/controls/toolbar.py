@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import tkinter as tk
 import tkinter.font as tkfont
@@ -54,11 +55,7 @@ _TOOLBAR_FOCUS_BLUE = "#1565c0"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _widget_exists(widget: Any) -> bool:
@@ -657,4 +654,5 @@ def build_toolbar(app):
     except Exception as exc:
         _log_suppressed("Failed enforcing machine-state label width", exc)
     refresh_toolbar_action_focus(app)
+
 

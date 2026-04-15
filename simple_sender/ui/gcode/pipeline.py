@@ -22,6 +22,7 @@
 # ruff: noqa: F401
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import hashlib
 import os
 import queue
@@ -194,11 +195,7 @@ def _lightweight_cached_parse_result(result):
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _post_ui(app, func, *args, **kwargs) -> None:
@@ -567,3 +564,4 @@ def _find_overlong_lines(
         first_idx = fallback_index
         first_len = fallback_len
     return too_long, first_idx, first_len
+

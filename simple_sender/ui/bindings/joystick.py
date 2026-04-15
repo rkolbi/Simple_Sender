@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 import types
 from typing import Any, Callable
@@ -45,11 +46,76 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
+
+
+def _normal_safety_binding(app) -> dict[str, Any] | None:
+    binding = getattr(app, "_joystick_safety_normal_binding", None)
+    if not isinstance(binding, dict):
+        binding = getattr(app, "_joystick_safety_binding", None)
+    return dict(binding) if isinstance(binding, dict) else None
+
+
+def _slow_safety_binding(app) -> dict[str, Any] | None:
+    binding = getattr(app, "_joystick_safety_slow_binding", None)
+    return dict(binding) if isinstance(binding, dict) else None
+
+
+def _set_normal_safety_binding(app, binding: dict[str, Any] | None) -> None:
+    value = dict(binding) if isinstance(binding, dict) else None
+    app._joystick_safety_normal_binding = value
+    app._joystick_safety_binding = value
+
+
+def _set_slow_safety_binding(app, binding: dict[str, Any] | None) -> None:
+    app._joystick_safety_slow_binding = dict(binding) if isinstance(binding, dict) else None
+
+
+def _set_joystick_safety_state(app, mode: str | None) -> None:
+    normalized = str(mode or "").strip().lower() or None
+    if normalized not in {"normal", "slow"}:
+        normalized = None
+    app._joystick_safety_speed_mode = normalized
+    app._joystick_safety_active = normalized is not None
+
+
+def _resolve_joystick_safety_mode(app) -> str | None:
+    slow_binding = _slow_safety_binding(app)
+    if slow_binding and joystick_hold.binding_pressed(app, slow_binding, release=True):
+        return "slow"
+    normal_binding = _normal_safety_binding(app)
+    if normal_binding and joystick_hold.binding_pressed(app, normal_binding, release=True):
+        return "normal"
+    return None
+
+
+def joystick_jog_speed_scale(app) -> float:
+    safety_var = getattr(app, "joystick_safety_enabled", None)
+    if safety_var is None:
+        return 1.0
+    try:
+        safety_enabled = bool(safety_var.get())
+    except Exception:
+        safety_enabled = False
+    if not safety_enabled:
+        return 1.0
+    mode = getattr(app, "_joystick_safety_speed_mode", None)
+    if mode not in {"normal", "slow"}:
+        mode = _resolve_joystick_safety_mode(app)
+        _set_joystick_safety_state(app, mode)
+    if mode == "slow":
+        return 0.5
+    if mode == "normal":
+        return 1.0
+    return 0.0
+
+
+def _active_joystick_safety_mode(app) -> str | None:
+    mode = getattr(app, "_joystick_safety_speed_mode", None)
+    if mode not in {"normal", "slow"}:
+        mode = _resolve_joystick_safety_mode(app)
+        _set_joystick_safety_state(app, mode)
+    return mode if mode in {"normal", "slow"} else None
 
 
 def _stream_busy(app) -> bool:
@@ -259,13 +325,12 @@ def poll_joystick_events(
             if getattr(app, "_active_joystick_hold_binding", None):
                 app._stop_joystick_hold()
         if app.joystick_safety_enabled.get():
-            binding = getattr(app, "_joystick_safety_binding", None)
-            if binding:
-                active = joystick_hold.binding_pressed(app, binding, release=True)
-                if active != app._joystick_safety_active:
-                    app._joystick_safety_active = active
-                if not active and getattr(app, "_active_joystick_hold_binding", None):
-                    app._stop_joystick_hold()
+            mode = _resolve_joystick_safety_mode(app)
+            _set_joystick_safety_state(app, mode)
+            if mode is None and getattr(app, "_active_joystick_hold_binding", None):
+                app._stop_joystick_hold()
+        else:
+            _set_joystick_safety_state(app, None)
         if app._joystick_capture_state and not events:
             app._poll_joystick_states_from_hardware(py)
     except Exception as exc:
@@ -407,7 +472,7 @@ def set_joystick_event_status(app, text: str) -> None:
 def joystick_safety_ready(app) -> bool:
     if not app.joystick_safety_enabled.get():
         return True
-    return bool(getattr(app, "_joystick_safety_binding", None))
+    return bool(_normal_safety_binding(app) or _slow_safety_binding(app))
 
 
 def handle_joystick_event(
@@ -424,8 +489,12 @@ def handle_joystick_event(
     desc = describe_joystick_event(app, event)
     if desc:
         set_joystick_event_status(app, desc)
-    safety_binding = getattr(app, "_joystick_safety_binding", None)
-    safety_key = app._joystick_binding_key(safety_binding) if safety_binding else None
+    normal_safety_binding = _normal_safety_binding(app)
+    slow_safety_binding = _slow_safety_binding(app)
+    normal_safety_key = (
+        app._joystick_binding_key(normal_safety_binding) if normal_safety_binding else None
+    )
+    slow_safety_key = app._joystick_binding_key(slow_safety_binding) if slow_safety_binding else None
     key: tuple[Any, ...] | None = None
     button_down_event = False
     if event.type == py.JOYBUTTONUP:
@@ -433,10 +502,13 @@ def handle_joystick_event(
         button = getattr(event, "button", None)
         if joy is not None and button is not None:
             key = ("button", joy, button)
-            if safety_key and key == safety_key:
-                app._joystick_safety_active = False
+            if (normal_safety_key and key == normal_safety_key) or (
+                slow_safety_key and key == slow_safety_key
+            ):
+                _set_joystick_safety_state(app, _resolve_joystick_safety_mode(app))
                 if getattr(app, "_active_joystick_hold_binding", None):
-                    app._stop_joystick_hold()
+                    if getattr(app, "_joystick_safety_speed_mode", None) is None:
+                        app._stop_joystick_hold()
                 return
             app._handle_joystick_button_release(key)
         return
@@ -504,8 +576,11 @@ def handle_joystick_event(
         if capture_state.get("mode") == "safety":
             binding = app._joystick_binding_from_event(key)
             if binding:
-                app._joystick_safety_binding = binding
-                app._joystick_safety_active = False
+                if str(capture_state.get("safety_mode", "normal")).strip().lower() == "slow":
+                    _set_slow_safety_binding(app, binding)
+                else:
+                    _set_normal_safety_binding(app, binding)
+                _set_joystick_safety_state(app, None)
                 app._refresh_joystick_safety_display()
                 _save_bindings(app)
         else:
@@ -523,24 +598,32 @@ def handle_joystick_event(
         return
     if not app.joystick_bindings_enabled.get():
         return
-    if app.joystick_safety_enabled.get() and not joystick_safety_ready(app):
-        if hasattr(app, "joystick_event_status"):
-            app.joystick_event_status.set("Safety enabled but no safety button is set.")
-        if getattr(app, "_active_joystick_hold_binding", None):
-            app._stop_joystick_hold()
-        return
     if not button_down_event:
         return
-    if safety_key and key == safety_key:
-        app._joystick_safety_active = True
+    if slow_safety_key and key == slow_safety_key:
+        _set_joystick_safety_state(app, "slow")
         return
-    if app.joystick_safety_enabled.get() and safety_key and not app._joystick_safety_active:
+    if normal_safety_key and key == normal_safety_key:
+        if getattr(app, "_joystick_safety_speed_mode", None) != "slow":
+            _set_joystick_safety_state(app, "normal")
         return
     key, btn = _lookup_bound_button(app, key)
     if btn:
+        binding_id = app._button_binding_id(btn)
+        if app.joystick_safety_enabled.get():
+            if not joystick_safety_ready(app):
+                if hasattr(app, "joystick_event_status"):
+                    app.joystick_event_status.set(
+                        "Safety enabled but no normal/slow safety button is set."
+                    )
+                if getattr(app, "_active_joystick_hold_binding", None):
+                    app._stop_joystick_hold()
+                return
+            if _active_joystick_safety_mode(app) is None:
+                return
         if app._is_virtual_hold_button(btn):
             app._log_button_action(btn)
-            app._start_joystick_hold(app._button_binding_id(btn))
+            app._start_joystick_hold(binding_id)
             return
         try:
             if btn.cget("state") == "disabled":
@@ -729,11 +812,27 @@ def cancel_joystick_capture(app) -> None:
     app._joystick_capture_state = None
 
 
-def start_joystick_safety_capture(app) -> None:
+def _safety_status_var(app, mode: str):
+    attr_name = (
+        "joystick_safety_slow_status"
+        if str(mode).strip().lower() == "slow"
+        else "joystick_safety_normal_status"
+    )
+    var = getattr(app, attr_name, None)
+    if var is None and hasattr(app, "joystick_safety_status"):
+        return app.joystick_safety_status
+    return var
+
+
+def start_joystick_safety_capture(app, mode: str = "normal") -> None:
+    safety_mode = "slow" if str(mode).strip().lower() == "slow" else "normal"
     if not bool(app.joystick_bindings_enabled.get()):
         messagebox.showinfo(
             "Joystick safety",
-            "Enable USB joystick bindings before configuring the safety button.",
+            (
+                "Enable USB joystick bindings before configuring the "
+                f"{safety_mode} jog-speed safety button."
+            ),
         )
         return
     if not app._ensure_joystick_backend():
@@ -747,13 +846,15 @@ def start_joystick_safety_capture(app) -> None:
     app._cancel_joystick_safety_capture()
     state = {
         "mode": "safety",
-        "original": app.joystick_safety_status.get(),
+        "safety_mode": safety_mode,
         "timer": None,
     }
     timer_id = app.after(JOYSTICK_CAPTURE_TIMEOUT_MS, app._cancel_joystick_safety_capture)
     state["timer"] = timer_id
     app._joystick_capture_state = state
-    app.joystick_safety_status.set(JOYSTICK_LISTENING_TEXT)
+    status_var = _safety_status_var(app, safety_mode)
+    if status_var is not None:
+        status_var.set(JOYSTICK_LISTENING_TEXT)
     app._ensure_joystick_polling_running()
 
 
@@ -767,25 +868,27 @@ def cancel_joystick_safety_capture(app) -> None:
             app.after_cancel(timer_id)
         except Exception as exc:
             _log_suppressed("Failed canceling joystick safety capture timer", exc)
-    original = state.get("original", "Safety button: None")
-    app.joystick_safety_status.set(original)
     app._joystick_capture_state = None
+    app._refresh_joystick_safety_display()
 
 
-def clear_joystick_safety_binding(app) -> None:
-    app._joystick_safety_binding = None
-    app._joystick_safety_active = False
+def clear_joystick_safety_binding(app, mode: str = "normal") -> None:
+    if str(mode).strip().lower() == "slow":
+        _set_slow_safety_binding(app, None)
+    else:
+        _set_normal_safety_binding(app, None)
+    _set_joystick_safety_state(app, _resolve_joystick_safety_mode(app))
     app._refresh_joystick_safety_display()
     _save_bindings(app)
 
 
 def on_joystick_safety_toggle(app) -> None:
     if not app.joystick_safety_enabled.get():
-        app._joystick_safety_active = False
+        _set_joystick_safety_state(app, None)
         return
     if not joystick_safety_ready(app):
         if hasattr(app, "joystick_event_status"):
-            app.joystick_event_status.set("Safety enabled but no safety button is set.")
+            app.joystick_event_status.set("Safety enabled but no normal/slow safety button is set.")
 
 
 def joystick_binding_from_event(app, key):
@@ -866,3 +969,4 @@ def button_axis_name(app, btn) -> str:
     if btn in z_buttons:
         return "Z"
     return ""
+

@@ -21,11 +21,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import re
 import time
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
 from simple_sender.gcode_source import FileGcodeSource
+from simple_sender.ui.loaded_job_metadata_state import (
+    get_loaded_job_metadata_state,
+    sync_loaded_job_metadata_state_to_app,
+)
 from simple_sender.ui.tk_vars import read_bool_pref
 from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
@@ -113,11 +118,7 @@ def _count_motion_lines(lines: list[str]) -> int:
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _read_bool_setting(app, *, attr_name: str, key: str, default: bool = False) -> bool:
@@ -164,11 +165,32 @@ def _apply_in_memory_source_state(
     file_size_bytes: int = 0,
 ) -> None:
     _apply_state_defaults(app, _IN_MEMORY_GCODE_SOURCE_DEFAULTS)
-    app._gcode_file_size_bytes = max(0, int(file_size_bytes or 0))
-    app._gcode_executable_lines = max(0, int(total_lines or len(lines)))
-    app._gcode_executable_lines_known = True
-    app._gcode_motion_lines = _count_motion_lines(lines)
-    app._gcode_motion_lines_known = True
+    state = get_loaded_job_metadata_state(app)
+    state.storage_mode = "in_memory"
+    state.load_mode = "strict"
+    state.index_mode = "none"
+    state.source_line_count_known = True
+    state.source_offset_count = 0
+    state.source_offset_type = ""
+    state.file_size_bytes = max(0, int(file_size_bytes or 0))
+    state.file_line_count = 0
+    state.file_line_count_known = False
+    state.total_lines_known = True
+    state.executable_lines = max(0, int(total_lines or len(lines)))
+    state.executable_lines_known = True
+    state.motion_lines = _count_motion_lines(lines)
+    state.motion_lines_known = True
+    state.bounds_box = None
+    state.bounds_confidence = "rough"
+    state.dimensions_confidence = "rough"
+    state.estimated_job_time_sec = None
+    state.estimate_confidence = "provisional"
+    state.ssmeta_present = False
+    state.ssmeta = {}
+    state.dimensions_source = "scan"
+    state.units_source = "scan"
+    state.ssmeta_scan_reduced = False
+    sync_loaded_job_metadata_state_to_app(app, state)
 
 
 def _sync_loaded_job_restore_state(
@@ -256,14 +278,14 @@ def apply_loaded_gcode(
     app._clear_pending_ui_updates()
     _sync_loaded_job_restore_state(app, failed=False)
     app._last_gcode_lines = lines
-    app._gcode_retained_line_count = int(len(lines))
-    app._last_gcode_path = path
+    state = get_loaded_job_metadata_state(app)
+    state.retained_line_count = int(len(lines))
+    state.last_gcode_path = path
     if streaming_source is not None:
-        app._gcode_hash = lines_hash
+        state.gcode_hash = lines_hash
     else:
-        app._gcode_hash = (
-            lines_hash if lines_hash is not None else deps.hash_lines(lines)
-        )
+        state.gcode_hash = lines_hash if lines_hash is not None else deps.hash_lines(lines)
+    sync_loaded_job_metadata_state_to_app(app, state)
     app._stats_cache.clear()
     app._stats_pending_request = None
     stats_after_id = getattr(app, "_stats_after_id", None)
@@ -278,16 +300,18 @@ def apply_loaded_gcode(
     app._stats_after_id = None
     app._stats_token = int(getattr(app, "_stats_token", 0)) + 1
     _reset_loaded_runtime_tracking(app)
-    existing_source = getattr(app, "_gcode_source", None)
+    existing_source = state.source
     if existing_source is not None and existing_source is not streaming_source:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
-        try:
-            existing_source.close()
-        except Exception as exc:
-            _log_suppressed(
-                "Failed closing existing G-code source before applying newly loaded job",
-                exc,
-            )
+        close_existing_source = getattr(existing_source, "close", None)
+        if callable(close_existing_source):
+            try:
+                close_existing_source()
+            except Exception as exc:
+                _log_suppressed(
+                    "Failed closing existing G-code source before applying newly loaded job",
+                    exc,
+                )
         if cleanup_path:
             try:
                 deps.os.remove(cleanup_path)
@@ -295,7 +319,8 @@ def apply_loaded_gcode(
                 _log_suppressed(
                     "Failed removing existing G-code source cleanup path", exc
                 )
-    app._gcode_source = streaming_source
+    state.source = streaming_source
+    sync_loaded_job_metadata_state_to_app(app, state)
     if streaming_source is None:
         in_memory_file_size_bytes = 0
         try:
@@ -314,8 +339,9 @@ def apply_loaded_gcode(
             file_size_bytes=in_memory_file_size_bytes,
         )
     else:
-        app._gcode_storage_mode = "file_backed_streaming"
-        app._gcode_load_mode = str(
+        state = get_loaded_job_metadata_state(app)
+        state.storage_mode = "file_backed_streaming"
+        state.load_mode = str(
             getattr(streaming_source, "_load_mode", "quick_scan_ready")
             or "quick_scan_ready"
         )
@@ -327,7 +353,7 @@ def apply_loaded_gcode(
                 index_mode = "none"
         except Exception:
             index_mode = "none"
-        app._gcode_index_mode = index_mode
+        state.index_mode = index_mode
         line_count_known = True
         try:
             checker = getattr(streaming_source, "line_count_known", None)
@@ -339,15 +365,15 @@ def apply_loaded_gcode(
                 )
         except Exception:
             line_count_known = True
-        app._gcode_source_line_count_known = bool(line_count_known)
+        state.source_line_count_known = bool(line_count_known)
         offsets = getattr(streaming_source, "_offsets", None)
         try:
-            app._gcode_source_offset_count = (
+            state.source_offset_count = (
                 int(len(offsets)) if offsets is not None else 0
             )
         except Exception:
-            app._gcode_source_offset_count = 0
-        app._gcode_source_offset_type = str(getattr(offsets, "typecode", "") or "")
+            state.source_offset_count = 0
+        state.source_offset_type = str(getattr(offsets, "typecode", "") or "")
         try:
             app._gcode_prepare_sample_line_count = int(
                 getattr(streaming_source, "_prepare_sample_line_count", 0) or 0
@@ -372,26 +398,26 @@ def apply_loaded_gcode(
         app._gcode_prepare_sample_max_lines = int(
             getattr(streaming_source, "_prepare_sample_max_lines", 0) or 0
         )
-        app._gcode_file_size_bytes = int(
+        state.file_size_bytes = int(
             getattr(streaming_source, "_prepare_file_size_bytes", 0) or 0
         )
-        app._gcode_file_line_count = int(
+        state.file_line_count = int(
             getattr(streaming_source, "_prepare_file_line_count", 0) or 0
         )
-        app._gcode_file_line_count_known = bool(
+        state.file_line_count_known = bool(
             getattr(streaming_source, "_prepare_file_line_count_known", False)
         )
         source_path = str(getattr(streaming_source, "path", "") or "").strip()
-        if app._gcode_file_size_bytes <= 0 and source_path:
+        if state.file_size_bytes <= 0 and source_path:
             try:
-                app._gcode_file_size_bytes = max(
+                state.file_size_bytes = max(
                     0, int(deps.os.path.getsize(source_path))
                 )
             except Exception as exc:
                 _log_suppressed(
                     "Failed resolving file size from file-backed source path", exc
                 )
-        if app._gcode_file_line_count <= 0:
+        if state.file_line_count <= 0:
             fallback_line_count = 0
             try:
                 fallback_line_count = int(
@@ -409,31 +435,31 @@ def apply_loaded_gcode(
                     fallback_line_count = int(len(lines))
                 except Exception:
                     fallback_line_count = 0
-            app._gcode_file_line_count = max(0, int(fallback_line_count))
-        if (not app._gcode_file_line_count_known) and bool(line_count_known):
-            app._gcode_file_line_count_known = True
-        if app._gcode_file_line_count <= 0:
-            app._gcode_file_line_count_known = False
+            state.file_line_count = max(0, int(fallback_line_count))
+        if (not state.file_line_count_known) and bool(line_count_known):
+            state.file_line_count_known = True
+        if state.file_line_count <= 0:
+            state.file_line_count_known = False
         app._gcode_prepare_executable_total_lines = int(
             getattr(streaming_source, "_prepare_executable_total_lines", 0) or 0
         )
-        app._gcode_executable_lines = int(app._gcode_prepare_executable_total_lines)
-        app._gcode_executable_lines_known = bool(
+        state.executable_lines = int(app._gcode_prepare_executable_total_lines)
+        state.executable_lines_known = bool(
             getattr(
                 streaming_source,
                 "_prepare_executable_total_lines_known",
-                app._gcode_file_line_count_known,
+                state.file_line_count_known,
             )
         )
         app._gcode_prepare_motion_total_lines = int(
             getattr(streaming_source, "_prepare_motion_total_lines", 0) or 0
         )
-        app._gcode_motion_lines = int(app._gcode_prepare_motion_total_lines)
-        app._gcode_motion_lines_known = bool(
+        state.motion_lines = int(app._gcode_prepare_motion_total_lines)
+        state.motion_lines_known = bool(
             getattr(
                 streaming_source,
                 "_prepare_motion_total_lines_known",
-                app._gcode_file_line_count_known,
+                state.file_line_count_known,
             )
         )
         app._gcode_prepare_sampled_executable_lines = int(
@@ -445,17 +471,17 @@ def apply_loaded_gcode(
         app._gcode_quick_scan_ms = float(
             getattr(streaming_source, "_quick_scan_ms", 0.0) or 0.0
         )
-        app._gcode_bounds_box = getattr(streaming_source, "_quick_bounds_box", None)
-        app._gcode_bounds_confidence = str(
+        state.bounds_box = getattr(streaming_source, "_quick_bounds_box", None)
+        state.bounds_confidence = str(
             getattr(streaming_source, "_quick_bounds_confidence", "rough") or "rough"
         )
-        app._gcode_dimensions_confidence = str(
+        state.dimensions_confidence = str(
             getattr(
                 streaming_source,
                 "_quick_dimensions_confidence",
-                app._gcode_bounds_confidence,
+                state.bounds_confidence,
             )
-            or app._gcode_bounds_confidence
+            or state.bounds_confidence
         )
         reasons = getattr(
             streaming_source, "_quick_dimensions_confidence_reasons", None
@@ -463,10 +489,10 @@ def apply_loaded_gcode(
         app._gcode_dimensions_confidence_reasons = (
             dict(reasons) if isinstance(reasons, dict) else {}
         )
-        app._gcode_estimated_job_time_sec = getattr(
+        state.estimated_job_time_sec = getattr(
             streaming_source, "_quick_estimated_job_time_sec", None
         )
-        app._gcode_estimate_confidence = str(
+        state.estimate_confidence = str(
             getattr(streaming_source, "_quick_estimate_confidence", "provisional")
             or "provisional"
         )
@@ -478,18 +504,18 @@ def apply_loaded_gcode(
         )
         app._gcode_estimate_replaced_quick = False
         app._gcode_post_popup_background_tasks = "none"
-        app._gcode_ssmeta_present = bool(
+        state.ssmeta_present = bool(
             getattr(streaming_source, "_quick_ssmeta_present", False)
         )
         ssmeta = getattr(streaming_source, "_quick_ssmeta", None)
-        app._gcode_ssmeta = dict(ssmeta) if isinstance(ssmeta, dict) else {}
-        app._gcode_dimensions_source = str(
+        state.ssmeta = dict(ssmeta) if isinstance(ssmeta, dict) else {}
+        state.dimensions_source = str(
             getattr(streaming_source, "_quick_dimensions_source", "scan") or "scan"
         )
-        app._gcode_units_source = str(
+        state.units_source = str(
             getattr(streaming_source, "_quick_units_source", "scan") or "scan"
         )
-        app._gcode_ssmeta_scan_reduced = bool(
+        state.ssmeta_scan_reduced = bool(
             getattr(streaming_source, "_quick_ssmeta_scan_reduced", False)
         )
         quick_snapshot = getattr(
@@ -512,7 +538,8 @@ def apply_loaded_gcode(
             or "provisional"
         )
         app._gcode_offset_index_enabled = bool(index_mode in {"full", "sparse"})
-        app._gcode_total_lines_known = bool(app._gcode_file_line_count_known)
+        state.total_lines_known = bool(state.file_line_count_known)
+        sync_loaded_job_metadata_state_to_app(app, state)
     deps.set_sample_streaming_state(app, sample_only)
     try:
         app._set_job_button_mode(
@@ -522,25 +549,27 @@ def apply_loaded_gcode(
         _log_suppressed(
             "Failed updating job button mode after applying loaded G-code", exc
         )
+    state = get_loaded_job_metadata_state(app)
     if streaming_source is not None:
-        app._gcode_total_lines = int(getattr(app, "_gcode_executable_lines", 0) or 0)
+        state.total_lines = int(state.executable_lines or 0)
     else:
-        app._gcode_total_lines = int(total_lines) if total_lines is not None else len(lines)
-    if streaming_source is not None and app._gcode_total_lines <= 0 and total_lines is not None:
-        app._gcode_total_lines = int(max(0, int(total_lines)))
-    if streaming_source is not None and app._gcode_executable_lines <= 0:
-        app._gcode_executable_lines = int(max(0, app._gcode_total_lines))
-    if streaming_source is None and app._gcode_file_line_count <= 0:
-        app._gcode_file_line_count = int(len(lines))
-        app._gcode_file_line_count_known = True
-    if streaming_source is None and app._gcode_executable_lines <= 0:
-        app._gcode_executable_lines = int(app._gcode_total_lines)
-        app._gcode_executable_lines_known = True
-    if streaming_source is None and (not getattr(app, "_gcode_motion_lines_known", False)):
-        app._gcode_motion_lines = _count_motion_lines(lines)
-        app._gcode_motion_lines_known = True
+        state.total_lines = int(total_lines) if total_lines is not None else len(lines)
+    if streaming_source is not None and state.total_lines <= 0 and total_lines is not None:
+        state.total_lines = int(max(0, int(total_lines)))
+    if streaming_source is not None and state.executable_lines <= 0:
+        state.executable_lines = int(max(0, state.total_lines))
+    if streaming_source is None and state.file_line_count <= 0:
+        state.file_line_count = int(len(lines))
+        state.file_line_count_known = True
+    if streaming_source is None and state.executable_lines <= 0:
+        state.executable_lines = int(state.total_lines)
+        state.executable_lines_known = True
+    if streaming_source is None and (not state.motion_lines_known):
+        state.motion_lines = _count_motion_lines(lines)
+        state.motion_lines_known = True
     if streaming_source is None:
-        app._gcode_total_lines_known = True
+        state.total_lines_known = True
+    sync_loaded_job_metadata_state_to_app(app, state)
     load_started_at = getattr(app, "_gcode_load_started_at", None)
     if load_started_at is not None:
         try:
@@ -1004,3 +1033,4 @@ def apply_loaded_gcode(
         except Exception as exc:
             _log_suppressed("Failed scheduling deferred G-code apply stages", exc)
     _run_stage(0)
+

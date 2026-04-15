@@ -1,11 +1,19 @@
 ﻿# Simple Sender - Full Manual
-![Release: 3.0.11](https://img.shields.io/badge/release-3.0.11-blue)
+![Release: 3.1](https://img.shields.io/badge/release-3.1-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.0.11`. This is the current release-ready baseline.
+Current stable release: `3.1`. This is the current release-ready baseline.
+
+Current local validation snapshot for `3.1`:
+- Direct `pytest -q`: `1831 passed, 3 skipped`
+- Direct `ruff check .`: clean
+- Direct `mypy main.py simple_sender`: clean (`215` source files)
+- Wrapper `run_tests.bat`: clean (`7/7` gates passed)
+- Wrapper pytest + coverage stage inside `run_tests.bat`: `1831 passed, 3 skipped`
+- Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## Design Objectives and Key Features
 
@@ -384,6 +392,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; during deferred completion the top-right progress bar/label stay in sync and finalize at `100.0%` when GRBL reaches the final `Idle`.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
+- **UI queue wake-up:** When the UI queue is idle and new work arrives, the first posted UI event now wakes the drain loop promptly instead of waiting for the next normal periodic drain tick. Ongoing queue draining still uses the existing bounded timer/backoff model.
 
 ### Line length limitations and CAM guidance
 - Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
@@ -480,7 +489,7 @@ All directives above operate through the macro executor (`simple_sender/macro_ex
 | `CLOSE [timeout_s]` | Disconnect when connected and wait for close (default 10s). | `CLOSE 5` |
 | `HELP` | Show a fixed macro help dialog (no GRBL interaction). | `HELP` |
 | `QUIT`, `EXIT` | Close the application cleanly. | `QUIT` |
-| `LOAD <path>` | Load a specific G-code file (`app._load_gcode_from_path`), then let the macro stream it. | `LOAD C:\jobs\test.nc` |
+| `LOAD <path>` | Load a specific G-code file (`app._load_gcode_from_path`), then let the macro stream it. | `LOAD jobs/test.nc` |
 | `UNLOCK` | Send `$X` to clear alarms, the same command used in the UI. | `UNLOCK` |
 | `RESET` | Send soft reset (`Ctrl-X`). | `RESET` |
 | `PAUSE`, `FEEDHOLD` | Hold the stream (`!`). | `PAUSE` |
@@ -793,7 +802,7 @@ If you prefer guided probing, the built-in workflow set includes touch-plate and
 ## Joystick Bindings
 - Pygame must be installed before the app can talk to USB joystick devices; install dependencies with `python -m pip install -r requirements.txt` (or `python -m pip install pygame` if you skipped it), then start the sender from a console so you can watch the status messages while configuring bindings.
 - App Settings -> Keyboard Shortcuts now has a Joystick testing frame above the table: it reports detected controllers, echoes the most recent event, and houses the `Refresh joystick list` button with the `Enable USB Joystick Bindings` toggle sitting to its right. When bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically; use Refresh if you add or swap controllers while one is already connected. The same frame includes a "Stop joystick hold when app loses focus" safety toggle.
-- Optional safety hold: enable **Require safety hold for joystick actions**, then click **Set Safety Button** to capture a hold-to-enable button; **Clear Safety Button** removes it and the status line shows the current binding.
+- Optional safety hold: enable **Require safety hold for joystick actions**, then capture **Set Safety Button / Normal Jog Speed** and optionally **Set Safety Button / Slow Jog Speed**. With no safety held, no joypad/joystick bindings are acknowledged. With Normal held, all joypad/joystick bindings are active and joystick jogging uses the configured jog speed. With Slow held, all joypad/joystick bindings are active and joystick jogging uses exactly `50%` speed. If both are held, Slow wins. Keyboard and on-screen controls are unchanged. Legacy single safety-button settings migrate to the Normal binding.
 - Click a row's `Joystick` column to listen (it momentarily shows "Listening for joystick input..."); the testing area logs the incoming joystick event and the cell records the button/axis/hat plus direction so the table shows which input is bound. Press `X Remove/Clear Binding` in the same row to drop a mapping.
 - While the `Enable USB Joystick Bindings` toggle is on, the sender listens for joystick presses and triggers the matching action just like a keyboard shortcut; when you're done, toggle it off to stop polling. Every custom joystick binding is saved in the settings file so it survives restarts.
 - The Live input state panel reports joystick axes/buttons/hats and the latest keyboard input while testing; hot-plug status updates when devices connect/disconnect.
@@ -846,9 +855,9 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. The current stable `3.0.11` release baseline validates clean locally (`pytest -q`: `1800 passed, 3 skipped`; `ruff check .`: clean; `mypy main.py simple_sender`: clean; `Success: no issues found in 201 source files`; `run_tests.bat`: clean with `7/7` gates passed). Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as direct `ruff check .`. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1831 passed, 3 skipped`, `ruff check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The wrapper gate also passes clean: `run_tests.bat` is `7/7` green, its pytest + coverage stage reported `1831 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
-The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 201 source files`.
+The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
 
 Run a subset:
 ```powershell
@@ -1325,9 +1334,12 @@ Macro UI is included below along with the rest of the interface.
 - Joystick testing: status labels show detected devices and last input.
 - Refresh joystick list: rescans for connected joysticks.
 - Enable USB Joystick Bindings: toggles joystick polling and bindings; turning it off stops any active hold jog immediately.
-- Require safety hold for joystick actions: requires holding a safety button to allow joystick actions.
-- Set Safety Button: captures the safety-hold joystick button.
-- Clear Safety Button: clears the safety binding.
+- Require safety hold for joystick actions: makes the safety buttons the controller-enable gate for all joypad/joystick bindings.
+- Set Safety Button / Normal Jog Speed: captures the normal-speed safety button. Holding it enables all joypad/joystick bindings and keeps joystick jogging at the configured speed.
+- Set Safety Button / Slow Jog Speed: captures the slow-speed safety button. Holding it enables all joypad/joystick bindings and makes joystick jogging run at exactly `50%` speed.
+- Both safety buttons held: all joypad/joystick bindings remain active and Slow wins for jogging speed.
+- No safety held: no joypad/joystick bindings are acknowledged.
+- Legacy single safety binding: migrates to the Normal safety binding.
 - Stop joystick hold when app loses focus: ends held jog actions when focus leaves the window.
 - Hold release sensitivity: sets how many missed joystick polls are tolerated before a held jog is ended.
 - USB device-loss safety: if the joystick backend/device disappears during a hold jog, the app cancels the active jog.

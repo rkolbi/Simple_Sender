@@ -21,12 +21,24 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 import time
 from collections import deque
 from typing import cast
 
-from simple_sender.types import GrblWorkerState
+from simple_sender.types import (
+    AlarmEvent,
+    GcodeAckedEvent,
+    GrblWorkerState,
+    ProgressBytesEvent,
+    ProgressEvent,
+    ReadyEvent,
+    SettingsDumpDoneEvent,
+    StatusEvent,
+    StreamErrorEvent,
+    StreamStateEvent,
+)
 
 from .utils.constants import (
     RT_STATUS,
@@ -52,11 +64,7 @@ _STATUS_WAIT_OVERSHOOT_LOG_THRESHOLD_MS = 250.0
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _annotate_alarm(message: str) -> str:
@@ -391,7 +399,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             self._watchdog_ready_armed = False
             self._watchdog_ready_ts = time.time()
             self._connect_started_ts = 0.0
-            self.ui_q.put(("ready", True))
+            self.ui_q.put(ReadyEvent(True))
             logger.info("GRBL ready")
 
     def _watchdog_enforced(self, now: float) -> bool:
@@ -550,12 +558,12 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             logger.error(f"Failed to emit buffer state during alarm: {e}")
         
         # Notify UI of alarm state (safe)
-        self._safe_ui_put(("stream_state", "alarm", message), context="alarm state")
+        self._safe_ui_put(StreamStateEvent("alarm", message), context="alarm state")
         
         self._clear_outgoing()
         
         # Emit alarm event (safe)
-        self._safe_ui_put(("alarm", message), context="alarm event")
+        self._safe_ui_put(AlarmEvent(message), context="alarm event")
 
     # ========================================================================
     # INTERNAL HELPERS
@@ -590,7 +598,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                     self._settings_dump_seen = False
                     self._settings_dump_started_ts = 0.0
                     self.clear_watchdog_ignore("settings_dump")
-                    self._safe_ui_put(("settings_dump_done",), context="settings dump")
+                    self._safe_ui_put(SettingsDumpDoneEvent(), context="settings dump")
                     self._emit_ui_log_rx("ok", context="settings ok")
         else:
             ok_summary = self._flush_ok_log(now)
@@ -680,8 +688,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             
             # Report progress
             if ack_index is not None:
-                self.ui_q.put(("gcode_acked", ack_index))
-                self.ui_q.put(("progress", ack_index + 1, len(self._gcode)))
+                self.ui_q.put(GcodeAckedEvent(int(ack_index)))
+                self.ui_q.put(ProgressEvent(int(ack_index) + 1, len(self._gcode)))
                 if ack_line_idx is not None:
                     try:
                         ack_idx_int = int(ack_line_idx)
@@ -693,8 +701,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         self._live_acked_ring.append((ack_idx_int, ack_text))
                 if ack_byte_offset is not None and stream_file_size_bytes > 0:
                     self.ui_q.put(
-                        (
-                            "progress_bytes",
+                        ProgressBytesEvent(
                             min(int(ack_byte_offset), int(stream_file_size_bytes)),
                             int(stream_file_size_bytes),
                         )
@@ -713,7 +720,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                         self._pause_after_reason = None
                     msg = self._format_stream_error(line, err_idx, err_line)
                     self._pause_stream(reason="error")
-                    self.ui_q.put(("stream_error", msg, err_idx, err_line, self._gcode_name))
+                    self.ui_q.put(StreamErrorEvent(msg, err_idx, err_line, self._gcode_name))
                     self.ui_q.put(("log", f"[stream error] {msg}"))
                 else:
                     source = err_source if err_source else self._last_manual_source
@@ -776,7 +783,7 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Failed to parse Bf field: {e}")
             
-            self.ui_q.put(("status", line))
+            self.ui_q.put(StatusEvent(line))
     
     def _status_loop(self, stop_evt: threading.Event) -> None:
         """Status polling thread - periodically requests status.
@@ -947,3 +954,4 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         
         finally:
             logger.debug("Status thread stopped")
+

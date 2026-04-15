@@ -22,6 +22,7 @@
 
 from dataclasses import dataclass
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import math
 import os
 from typing import Iterable
@@ -41,11 +42,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 @dataclass(frozen=True)
@@ -547,3 +544,4 @@ def _feed_word(feed_raw: float | None, feed_specified: bool, last_feed_out: floa
     if feed_specified or last_feed_out is None or abs(feed_raw - last_feed_out) > 1e-9:
         return f"F{_format_float(feed_raw, LEVEL_DECIMALS)}"
     return None
+

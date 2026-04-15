@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
@@ -35,11 +36,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _cancel_machine_driving_tasks(app) -> None:
@@ -171,3 +168,4 @@ def position_all_stop_offset(app, event=None):
         btn.tk.call("raise", btn._w)
     except tk.TclError as exc:
         _log_suppressed("Failed raising ALL STOP button after placement", exc)
+

@@ -24,14 +24,12 @@ import os
 import time
 
 
-def _notify_duplicate_instance(exc: BaseException) -> None:
+def _show_startup_error_dialog(title: str, message: str) -> None:
     root = None
     try:
         import tkinter as tk
         from tkinter import messagebox
 
-        title = str(getattr(exc, "title", "Simple Sender Already Running") or "Simple Sender Already Running")
-        message = str(exc).strip() or "Another Simple Sender instance is already running."
         root = tk.Tk()
         root.withdraw()
         try:
@@ -41,7 +39,7 @@ def _notify_duplicate_instance(exc: BaseException) -> None:
         messagebox.showerror(title, message, parent=root)
     except Exception as notify_exc:
         logging.getLogger(__name__).warning(
-            "Duplicate-start notification failed; continuing with log-only warning: %s",
+            "Startup error notification failed; continuing with log-only warning: %s",
             notify_exc,
         )
     finally:
@@ -50,6 +48,15 @@ def _notify_duplicate_instance(exc: BaseException) -> None:
                 root.destroy()
             except Exception:
                 pass
+
+
+def _notify_duplicate_instance(exc: BaseException) -> None:
+    title = str(
+        getattr(exc, "title", "Simple Sender Already Running")
+        or "Simple Sender Already Running"
+    )
+    message = str(exc).strip() or "Another Simple Sender instance is already running."
+    _show_startup_error_dialog(title, message)
 
 
 def main() -> None:
@@ -87,6 +94,18 @@ def main() -> None:
             exc.payload.get("hostname"),
         )
         _notify_duplicate_instance(exc)
+        return
+    except Exception as exc:
+        logging.getLogger(__name__).exception(
+            "Runtime integrity startup check failed; aborting startup."
+        )
+        _show_startup_error_dialog(
+            "Startup failed",
+            (
+                "Simple Sender could not start because runtime state could not be initialized.\n\n"
+                f"{exc}"
+            ),
+        )
         return
     from simple_sender.application import App
     App(startup_started_at=startup_started_at).mainloop()

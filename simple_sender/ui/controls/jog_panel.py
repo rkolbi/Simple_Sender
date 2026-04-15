@@ -22,6 +22,7 @@
 
 import tkinter as tk
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 from tkinter import ttk
 from typing import Any, cast
 
@@ -45,11 +46,7 @@ _AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _nearest_step_index(values: list[float], target: float) -> int:
@@ -71,6 +68,27 @@ def _select_jog_feed(dx: float, dy: float, dz: float, feed_xy: float, feed_z: fl
     if abs(dz) > 0 and abs(dx) < JOG_FEED_EPSILON and abs(dy) < JOG_FEED_EPSILON:
         return float(feed_z)
     return float(feed_xy)
+
+
+def _joystick_jog_feed_scale(app, *, source: str | None = None) -> float:
+    source_tag = str(source or getattr(app, "_manual_input_source", None) or "").strip().lower()
+    if source_tag != "joystick":
+        return 1.0
+    safety_var = getattr(app, "joystick_safety_enabled", None)
+    if safety_var is None:
+        return 1.0
+    try:
+        safety_enabled = bool(safety_var.get())
+    except Exception:
+        safety_enabled = False
+    if not safety_enabled:
+        return 1.0
+    mode = str(getattr(app, "_joystick_safety_speed_mode", "") or "").strip().lower()
+    if mode == "slow":
+        return 0.5
+    if mode == "normal":
+        return 1.0
+    return 0.0
 
 
 def _axis_components(axis: str, delta: float) -> tuple[float, float, float]:
@@ -687,8 +705,9 @@ def build_jog_panel(app, parent):
     align.pack(fill="x")
     _configure_jog_grid_columns(align)
 
-    def _jog_feed_for_move(dx, dy, dz) -> float:
-        return _select_jog_feed(dx, dy, dz, app.jog_feed_xy.get(), app.jog_feed_z.get())
+    def _jog_feed_for_move(dx, dy, dz, *, source: str | None = None) -> float:
+        feed = _select_jog_feed(dx, dy, dz, app.jog_feed_xy.get(), app.jog_feed_z.get())
+        return float(feed) * float(_joystick_jog_feed_scale(app, source=source))
 
     def j(dx, dy, dz, *, source=None):
         if not app.grbl.is_connected():
@@ -700,8 +719,10 @@ def build_jog_panel(app, parent):
                 mark_manual_motion()
         except Exception as exc:
             _log_suppressed("Failed marking manual motion activity for status poll boost", exc)
-        feed = _jog_feed_for_move(dx, dy, dz)
         source_tag = source or getattr(app, "_manual_input_source", None) or "jog"
+        feed = _jog_feed_for_move(dx, dy, dz, source=source_tag)
+        if feed <= 0.0:
+            return False
         accepted = False
         try:
             accepted = bool(
@@ -795,4 +816,5 @@ def build_jog_panel(app, parent):
     app.macro_panel.attach_frames(macro_row, None)
 
     app._set_unit_mode(app.unit_mode.get())
+
 

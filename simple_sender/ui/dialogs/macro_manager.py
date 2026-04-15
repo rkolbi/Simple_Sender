@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
@@ -44,11 +45,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _resolve_macro_manager_parent(app: Any) -> tk.Wm | None:
@@ -558,3 +555,4 @@ def show_macro_manager(app: Any) -> None:
         dialog.window.focus_force()
     except Exception as exc:
         _log_suppressed("Failed focusing Macro Manager after creation", exc)
+

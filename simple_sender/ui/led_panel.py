@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -32,11 +33,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _bool_from_var(value: Any, default: bool = True) -> bool:
@@ -140,3 +137,4 @@ def on_led_visibility_change(app):
     app.settings["show_probe_indicator"] = bool(app.show_probe_indicator.get())
     app.settings["show_hold_indicator"] = bool(app.show_hold_indicator.get())
     update_led_visibility(app)
+

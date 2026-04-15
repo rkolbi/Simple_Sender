@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 import tkinter as tk
 from tkinter import ttk
@@ -34,11 +35,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def show_macro_prompt(
@@ -90,3 +87,4 @@ def show_macro_prompt(
             _log_suppressed("Failed logging macro prompt failure", log_exc)
         if result_q.empty():
             result_q.put(cancel_label)
+

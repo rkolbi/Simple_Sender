@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, TypeGuard
@@ -39,11 +40,7 @@ ScrollbarWidget = tk.Scrollbar | ttk.Scrollbar
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _is_scrollbar_widget(widget: Any) -> TypeGuard[ScrollbarWidget]:
@@ -270,3 +267,4 @@ def install_touch_scrollbar_support(app: Any) -> None:
         app.bind_all("<ButtonRelease-1>", _on_any_touch_release, add="+")
     except Exception as exc:
         _log_suppressed("Failed binding global touch-release cleanup for scrollbar support", exc)
+

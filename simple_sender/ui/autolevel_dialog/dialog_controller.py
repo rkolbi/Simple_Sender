@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # Simple Sender (GRBL G-code Sender)
 # Copyright (C) 2026 Bob Kolbasowski
 #
@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import math
 import os
 import tempfile
@@ -77,11 +78,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _post_ui_callback(app, callback, *, context: str) -> bool:
@@ -1646,3 +1643,4 @@ def show_auto_level_dialog(
     if deps is None:
         deps = build_auto_level_dialog_dependencies()
     AutoLevelDialogController(app, deps).show()
+

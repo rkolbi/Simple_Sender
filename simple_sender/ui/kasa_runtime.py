@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 from typing import Any, Callable
 
 from simple_sender.kasa_accessory import DeviceInfo, OutletInfo, validate_outlet_mapping
@@ -37,11 +38,7 @@ UiHandler = Callable[..., None]
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _post_ui(app, func: UiHandler, *args) -> None:
@@ -422,3 +419,4 @@ def stop_job_accessories(
             remaining_active.discard(int(outlet_id))
     app._kasa_job_active_outlets = remaining_active
     app._kasa_job_running = bool(remaining_active)
+

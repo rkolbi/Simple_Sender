@@ -28,6 +28,11 @@ import os
 from datetime import datetime
 from typing import Any, Callable
 
+from simple_sender.ui.diagnostics_export_runtime_state import (
+    get_diagnostics_export_runtime_state,
+    set_diagnostics_report_export_inflight,
+)
+
 
 def _post_ui_callback(
     app: Any,
@@ -114,21 +119,20 @@ def export_session_diagnostics(
             for start in range(0, len(text), 16_384):
                 outfile.write(text[start : start + 16_384])
 
-    use_background_export = bool(
-        getattr(app, "_diagnostics_report_async_export", True)
-    )
+    export_state = get_diagnostics_export_runtime_state(app)
+    use_background_export = bool(export_state.diagnostics_report_async_export)
     after = getattr(app, "after", None)
     if use_background_export and callable(after):
-        if bool(getattr(app, "_diagnostics_report_export_inflight", False)):
+        if bool(export_state.diagnostics_report_export_inflight):
             showinfo(
                 "Export diagnostics",
                 "A diagnostics report export is already running.",
             )
             return
-        app._diagnostics_report_export_inflight = True
+        set_diagnostics_report_export_inflight(app, True)
 
         def _complete_export(error: Exception | None = None) -> None:
-            app._diagnostics_report_export_inflight = False
+            set_diagnostics_report_export_inflight(app, False)
             if error is None:
                 showinfo("Export diagnostics", f"Saved to:\n{out_path}")
                 return
@@ -147,9 +151,7 @@ def export_session_diagnostics(
                 app,
                 lambda: _complete_export(error),
                 log_suppressed=log_suppressed,
-                on_drop=lambda: setattr(
-                    app, "_diagnostics_report_export_inflight", False
-                ),
+                on_drop=lambda: set_diagnostics_report_export_inflight(app, False),
             )
 
         try:
@@ -161,7 +163,7 @@ def export_session_diagnostics(
             worker.start()
             return
         except Exception as exc:
-            app._diagnostics_report_export_inflight = False
+            set_diagnostics_report_export_inflight(app, False)
             log_suppressed("Failed starting diagnostics report export thread", exc)
 
     try:

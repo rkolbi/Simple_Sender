@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # Simple Sender (GRBL G-code Sender)
 # Copyright (C) 2026 Bob Kolbasowski
 #
@@ -21,17 +21,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
-import json
-import os
-import platform
-import shutil
-import subprocess
-import sys
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
-import time
 import zipfile
-from collections import deque
-from datetime import datetime
 from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Any, cast
@@ -63,6 +55,9 @@ from .diagnostics_runtime_reporting import (
     format_mb as _format_mb,
     format_runtime_metrics as _format_runtime_metrics_impl,
 )
+from .diagnostics_runtime_metrics import (
+    build_runtime_metrics as _build_runtime_metrics_impl,
+)
 from .diagnostics_report_text import (
     build_performance_report_text as _build_performance_report_text_impl,
 )
@@ -86,7 +81,23 @@ from .diagnostics_report_export import (
 from .diagnostics_bundle_export import (
     export_diagnostics_bundle as _export_diagnostics_bundle_impl,
 )
-from simple_sender.services.preflight_service import PreflightService
+from .diagnostics_metadata import (
+    bounded_ssmeta as _bounded_ssmeta_impl,
+    build_system_info_text as _build_system_info_text_impl,
+    collect_build_info as _collect_build_info_impl,
+    effective_line_cache_cap_lines as _effective_line_cache_cap_lines_impl,
+    headless_live_state_line_estimate as _headless_live_state_line_estimate_impl,
+    json_dump as _json_dump_impl,
+    pi_profile_enabled as _pi_profile_enabled_impl,
+    resolved_settings_path as _resolved_settings_path_impl,
+)
+from .diagnostics_preflight import (
+    evaluate_run_preflight as _evaluate_run_preflight_impl,
+    format_validation_summary as _format_validation_summary_impl,
+    get_bounds as _get_bounds_impl,
+    get_travel_limits as _get_travel_limits_impl,
+    run_preflight_check as _run_preflight_check_impl,
+)
 
 CHECKLIST_ITEMS = [
     "Connect/disconnect: port list refreshes, status shows connected, $G and $$ populate settings.",
@@ -117,11 +128,7 @@ DIAGNOSTICS_SCHEMA_REV = "2026-03-07-telemetry-r2"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _set_var_value(app: Any, attr_name: str, value: Any) -> None:
@@ -129,835 +136,87 @@ def _set_var_value(app: Any, attr_name: str, value: Any) -> None:
 
 
 def _json_dump(obj: Any) -> str:
-    def _default(value: Any):
-        return str(value)
-
-    try:
-        return json.dumps(obj, indent=2, sort_keys=True, default=_default)
-    except Exception as exc:
-        _log_suppressed("Failed serializing diagnostics JSON payload", exc)
-        return "{}"
+    return cast(str, _json_dump_impl(obj, log_suppressed=_log_suppressed))
 
 
 def _collect_build_info(app: Any) -> dict[str, Any]:
-    version_getter = getattr(getattr(app, "version_var", None), "get", None)
-    app_version = str(version_getter() if callable(version_getter) else "").strip()
-    info: dict[str, Any] = {
-        "schema_rev": DIAGNOSTICS_SCHEMA_REV,
-        "package_version": str(SIMPLE_SENDER_PACKAGE_VERSION or "").strip(),
-        "app_version": app_version,
-        "build_commit": "",
-        "build_source": "",
-    }
-    env_commit = str(os.environ.get("SIMPLE_SENDER_BUILD_COMMIT", "") or "").strip()
-    if env_commit:
-        info["build_commit"] = env_commit
-        info["build_source"] = "env:SIMPLE_SENDER_BUILD_COMMIT"
-        return info
-    git_exe = str(shutil.which("git") or "").strip()
-    if not git_exe:
-        return info
-    cwd = ""
-    try:
-        cwd = os.getcwd()
-    except Exception:
-        cwd = ""
-    if not cwd:
-        return info
-    try:
-        proc = subprocess.run(
-            [git_exe, "rev-parse", "--short", "HEAD"],
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=1.5,
-            check=False,
-        )
-        commit = str(proc.stdout or "").strip()
-        if proc.returncode == 0 and commit:
-            info["build_commit"] = commit
-            info["build_source"] = "git"
-    except Exception as exc:
-        _log_suppressed("Failed collecting git commit metadata for diagnostics", exc)
-    return info
+    return cast(
+        dict[str, Any],
+        _collect_build_info_impl(
+            app,
+            diagnostics_schema_rev=DIAGNOSTICS_SCHEMA_REV,
+            package_version=str(SIMPLE_SENDER_PACKAGE_VERSION or "").strip(),
+            log_suppressed=_log_suppressed,
+        ),
+    )
 
 
 def _build_system_info_text(app: Any, *, build_info: dict[str, Any] | None = None) -> str:
-    lines: list[str] = []
-    lines.append("Simple Sender system snapshot")
-    lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
-    version_getter = getattr(getattr(app, "version_var", None), "get", None)
-    version_text = str(version_getter() if callable(version_getter) else "").strip()
-    if version_text:
-        lines.append(f"App version: {version_text}")
-    if build_info is None:
-        build_info = _collect_build_info(app)
-    if isinstance(build_info, dict):
-        schema_rev = str(build_info.get("schema_rev", "") or "").strip()
-        if schema_rev:
-            lines.append(f"Diagnostics schema: {schema_rev}")
-        package_version = str(build_info.get("package_version", "") or "").strip()
-        if package_version:
-            lines.append(f"Package version: {package_version}")
-        commit = str(build_info.get("build_commit", "") or "").strip()
-        source = str(build_info.get("build_source", "") or "").strip()
-        if commit:
-            lines.append(f"Build commit: {commit}")
-        if source:
-            lines.append(f"Build source: {source}")
-    lines.append(f"Python: {sys.version.splitlines()[0] if sys.version else 'n/a'}")
-    lines.append(f"Executable: {sys.executable}")
-    lines.append(f"Platform: {platform.platform()}")
-    lines.append(f"Machine: {platform.machine()}")
-    lines.append(f"Processor: {platform.processor()}")
-    lines.append(f"PID: {os.getpid()}")
-    try:
-        cwd = os.getcwd()
-    except Exception:
-        cwd = ""
-    if cwd:
-        lines.append(f"CWD: {cwd}")
-    env = os.environ
-    for key in ("USER", "LOGNAME", "HOME", "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY"):
-        value = str(env.get(key, "") or "").strip()
-        if value:
-            lines.append(f"{key}: {value}")
-    return "\n".join(lines) + "\n"
+    return cast(
+        str,
+        _build_system_info_text_impl(
+            app,
+            collect_build_info=_collect_build_info,
+            build_info=build_info,
+        ),
+    )
 
 
 def _resolved_settings_path(app: Any) -> Path | None:
-    raw_path = str(getattr(app, "settings_path", "") or "").strip()
-    if not raw_path:
-        return None
-    path = Path(raw_path)
-    if not path.is_file():
-        return None
-    return path
+    return cast(Path | None, _resolved_settings_path_impl(app))
 
 
 def _pi_profile_enabled(app: Any) -> bool:
-    var = getattr(app, "pi_profile_enabled", None)
-    if var is not None:
-        try:
-            return bool(var.get())
-        except Exception:
-            pass
-    settings = getattr(app, "settings", None)
-    if isinstance(settings, dict):
-        try:
-            return bool(settings.get("pi_profile_enabled", False))
-        except Exception:
-            return False
-    return False
+    return cast(bool, _pi_profile_enabled_impl(app))
 
 
 def _effective_line_cache_cap_lines(app: Any) -> tuple[int, str]:
-    stored = getattr(app, "_gcode_full_line_cache_cap_lines", None)
-    if stored is not None:
-        try:
-            cap = max(0, int(stored))
-            profile = str(
-                getattr(app, "_gcode_full_line_cache_profile", "") or ""
-            ).strip()
-            if profile:
-                return cap, profile
-        except Exception:
-            pass
-    if _pi_profile_enabled(app):
-        return int(GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER), "pi"
-    return int(GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT), "default"
+    return cast(
+        tuple[int, str],
+        _effective_line_cache_cap_lines_impl(
+            app,
+            default_cap=int(GCODE_FULL_LINE_CACHE_MAX_LINES_DEFAULT),
+            low_power_cap=int(GCODE_FULL_LINE_CACHE_MAX_LINES_LOW_POWER),
+            pi_profile_enabled=_pi_profile_enabled,
+        ),
+    )
 
 
 def _headless_live_state_line_estimate(gview: Any) -> int:
-    if gview is None:
-        return 0
-    try:
-        return int(getattr(gview, "lines_count", 0) or 0)
-    except Exception:
-        return 0
+    return cast(int, _headless_live_state_line_estimate_impl(gview))
 
 
 def _bounded_ssmeta(ssmeta: Any) -> dict[str, str]:
-    if not isinstance(ssmeta, dict):
-        return {}
-    out: dict[str, str] = {}
-    for raw_key in sorted(ssmeta.keys())[:64]:
-        key = str(raw_key or "").strip()
-        if not key:
-            continue
-        value = str(ssmeta.get(raw_key, "") or "").strip()
-        if len(value) > 256:
-            value = f"{value[:253]}..."
-        out[key] = value
-    return out
-
-
-_DEFAULT_PREFLIGHT_SERVICE = PreflightService()
+    return cast(dict[str, str], _bounded_ssmeta_impl(ssmeta))
 
 
 def _format_validation_summary(report: Any) -> list[str]:
-    if report is None:
-        return []
-    summary = []
-    if getattr(report, "long_line_count", 0):
-        summary.append(f"Overlong lines: {report.long_line_count}")
-    unsupported_axes = getattr(report, "unsupported_axes", {})
-    if unsupported_axes:
-        axes = ", ".join(f"{k} x{v}" for k, v in unsupported_axes.items())
-        summary.append(f"Unsupported axes: {axes}")
-    unsupported_g = getattr(report, "unsupported_g_codes", {})
-    if unsupported_g:
-        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_g.items())
-        summary.append(f"Unsupported G-codes: {codes}")
-    unsupported_m = getattr(report, "unsupported_m_codes", {})
-    if unsupported_m:
-        codes = ", ".join(f"{k} x{v}" for k, v in unsupported_m.items())
-        summary.append(f"Unsupported M-codes: {codes}")
-    grbl_warnings = getattr(report, "grbl_warnings", {})
-    if grbl_warnings:
-        warnings = ", ".join(f"{k} x{v}" for k, v in grbl_warnings.items())
-        summary.append(f"GRBL warnings: {warnings}")
-    unsupported_words = getattr(report, "unsupported_words", {})
-    if unsupported_words:
-        words = ", ".join(f"{k} x{v}" for k, v in unsupported_words.items())
-        summary.append(f"Unknown words: {words}")
-    hazards = sorted(getattr(report, "modal_hazards", set()))
-    if hazards:
-        summary.append(f"Modal hazards: {', '.join(hazards)}")
-    if getattr(report, "line_issue_count", 0):
-        summary.append(f"Line issues: {report.line_issue_count}")
-    return summary
+    return cast(list[str], _format_validation_summary_impl(report))
 
 
 def _get_bounds(app: Any):
-    bounds = _DEFAULT_PREFLIGHT_SERVICE.get_bounds(app)
-    if bounds is None:
-        return None
-    return bounds.as_tuple()
+    return _get_bounds_impl(app)
 
 
 def _get_travel_limits(app: Any) -> dict[str, float]:
-    return _DEFAULT_PREFLIGHT_SERVICE.get_travel_limits(app).as_dict()
+    return cast(dict[str, float], _get_travel_limits_impl(app))
 
 
 def _runtime_metrics(app: Any) -> dict[str, Any]:
-    metrics: dict[str, Any] = {}
-    metrics["build_info"] = _collect_build_info(app)
-    try:
-        configured_poll = float(getattr(app, "status_poll_interval").get())
-    except Exception:
-        configured_poll = 0.0
-    if configured_poll > 0.0:
-        metrics["status_poll_interval_configured_s"] = float(configured_poll)
-    try:
-        kasa_snapshot = kasa_status_snapshot(app)
-    except Exception as exc:
-        _log_suppressed("Failed collecting Kasa status snapshot for diagnostics", exc)
-        kasa_snapshot = {}
-    if isinstance(kasa_snapshot, dict) and kasa_snapshot:
-        metrics["kasa_status"] = dict(kasa_snapshot)
-    try:
-        kasa_line = str(format_kasa_status_line(app) or "").strip()
-    except Exception as exc:
-        _log_suppressed("Failed building Kasa status line for diagnostics", exc)
-        kasa_line = ""
-    if kasa_line:
-        metrics["kasa_status_line"] = kasa_line
-    grbl = getattr(app, "grbl", None)
-    getter = getattr(grbl, "get_runtime_metrics", None) if grbl is not None else None
-    if callable(getter):
-        try:
-            raw = getter()
-        except Exception as exc:
-            _log_suppressed("Failed collecting runtime telemetry metrics", exc)
-            raw = {}
-        if isinstance(raw, dict):
-            metrics.update(cast(dict[str, Any], raw))
-            if (
-                "status_poll_interval_effective_s" not in metrics
-                and "status_poll_interval_s" in metrics
-            ):
-                metrics["status_poll_interval_effective_s"] = float(
-                    metrics.get("status_poll_interval_s", 0.0) or 0.0
-                )
-    perf_monitor = getattr(app, "_perf_monitor", None)
-    metrics["perf_available"] = False
-    if perf_monitor is None:
-        metrics["perf_phase_sampling_note"] = (
-            "Runtime performance profiling is disabled. "
-            "Enable diagnostics performance profiling and restart before capture."
-        )
-    else:
-        snapshot_getter = getattr(perf_monitor, "runtime_snapshot", None)
-        if not callable(snapshot_getter):
-            metrics["perf_phase_sampling_note"] = (
-                "Runtime performance profiling monitor is unavailable."
-            )
-        else:
-            try:
-                snapshot = snapshot_getter()
-            except Exception as exc:
-                _log_suppressed(
-                    "Failed collecting performance-monitor runtime snapshot", exc
-                )
-                snapshot = None
-            if not isinstance(snapshot, dict):
-                metrics["perf_phase_sampling_note"] = (
-                    "Runtime performance profiling snapshot is unavailable."
-                )
-            else:
-                metrics["perf_available"] = bool(snapshot.get("available", True))
-                for key, value in snapshot.items():
-                    metrics[f"perf_{key}"] = value
-                phase_metrics = snapshot.get("phase_metrics")
-                if isinstance(phase_metrics, dict):
-                    phase_sample_counts: dict[str, int] = {}
-                    missing_phases: list[str] = []
-                    for phase_name in (
-                        "idle_connected",
-                        "streaming",
-                    ):
-                        phase_entry = phase_metrics.get(phase_name)
-                        samples = 0
-                        if isinstance(phase_entry, dict):
-                            samples = int(phase_entry.get("samples", 0) or 0)
-                        phase_sample_counts[phase_name] = samples
-                        if samples <= 0:
-                            missing_phases.append(phase_name)
-                    metrics["perf_phase_sample_counts"] = phase_sample_counts
-                    metrics["perf_phase_sampling_active"] = bool(
-                        any(count > 0 for count in phase_sample_counts.values())
-                    )
-                    if missing_phases:
-                        metrics["perf_phase_sampling_note"] = (
-                            "Phase samples missing for: "
-                            + ", ".join(missing_phases)
-                            + ". Keep diagnostics profiling enabled and spend at least one sample interval in each phase."
-                        )
-                    else:
-                        metrics["perf_phase_sampling_note"] = (
-                            "Phase sampling populated for idle-connected and streaming."
-                        )
-                else:
-                    metrics["perf_phase_sampling_note"] = (
-                        "Phase metrics unavailable from performance monitor snapshot."
-                    )
-    raw_status_perf = getattr(app, "_status_perf_metrics", None)
-    if isinstance(raw_status_perf, dict) and raw_status_perf:
-        status_perf: dict[str, dict[str, float | int]] = {}
-        for raw_name, raw_entry in raw_status_perf.items():
-            if not isinstance(raw_entry, dict):
-                continue
-            name = str(raw_name or "").strip()
-            if not name:
-                continue
-            count = int(raw_entry.get("count", 0) or 0)
-            total_ms = float(raw_entry.get("total_ms", 0.0) or 0.0)
-            max_ms = float(raw_entry.get("max_ms", 0.0) or 0.0)
-            avg_ms = (total_ms / count) if count > 0 else 0.0
-            status_perf[name] = {
-                "count": count,
-                "avg_ms": avg_ms,
-                "max_ms": max_ms,
-            }
-        if status_perf:
-            metrics["status_perf_metrics"] = status_perf
-    gview = getattr(app, "gview", None)
-    if gview is not None:
-        try:
-            metrics["headless_live_state_line_estimate"] = _headless_live_state_line_estimate(gview)
-        except Exception:
-            metrics["headless_live_state_line_estimate"] = 0
-    metrics["live_gcode_past_count"] = int(
-        getattr(app, "_live_gcode_past_count", 0) or 0
-    )
-    metrics["live_gcode_current_count"] = int(
-        getattr(app, "_live_gcode_current_count", 0) or 0
-    )
-    metrics["live_gcode_next_count"] = int(
-        getattr(app, "_live_gcode_next_count", 0) or 0
-    )
-    metrics["live_gcode_pending_depth"] = int(
-        getattr(app, "_live_gcode_pending_depth", 0) or 0
-    )
-    metrics["live_gcode_last_acked_index"] = int(
-        getattr(app, "_live_gcode_last_acked_index", -1) or -1
-    )
-    metrics["live_gcode_last_acked_byte_offset"] = int(
-        getattr(app, "_live_gcode_last_acked_byte_offset", 0) or 0
-    )
-    metrics["last_stream_error_message"] = str(
-        getattr(app, "_last_stream_error_message", "") or ""
-    )
-    metrics["last_stream_error_file_name"] = str(
-        getattr(app, "_last_stream_error_file_name", "") or ""
-    )
-    metrics["last_stream_error_line_index"] = int(
-        getattr(app, "_last_stream_error_line_index", -1) or -1
-    )
-    metrics["last_stream_error_line_number"] = int(
-        getattr(app, "_last_stream_error_line_number", 0) or 0
-    )
-    metrics["last_stream_error_line_text"] = str(
-        getattr(app, "_last_stream_error_line_text", "") or ""
-    )
-    metrics["last_stream_error_hint"] = str(
-        getattr(app, "_last_stream_error_hint", "") or ""
-    )
-    jog_dro_trace = getattr(app, "_jog_dro_trace", None)
-    if isinstance(jog_dro_trace, deque):
-        trace_tail = list(jog_dro_trace)[-400:]
-        metrics["jog_dro_trace_count"] = int(len(jog_dro_trace))
-        metrics["jog_dro_trace_tail"] = trace_tail
-    elif isinstance(jog_dro_trace, list):
-        trace_tail = list(jog_dro_trace)[-400:]
-        metrics["jog_dro_trace_count"] = int(len(jog_dro_trace))
-        metrics["jog_dro_trace_tail"] = trace_tail
-    else:
-        metrics["jog_dro_trace_count"] = 0
-    jog_interp_stats = getattr(app, "_jog_dro_interp_stats", None)
-    if isinstance(jog_interp_stats, dict):
-        metrics["jog_dro_interp_stats"] = dict(jog_interp_stats)
-    jog_mode = "off"
-    jog_mode_var = getattr(app, "jog_dro_smoothing_mode", None)
-    if jog_mode_var is not None:
-        try:
-            jog_mode = str(jog_mode_var.get() or "").strip().lower() or "off"
-        except Exception:
-            jog_mode = "off"
-    elif isinstance(getattr(app, "settings", None), dict):
-        jog_mode = str(getattr(app, "settings", {}).get("jog_dro_smoothing_mode", "off") or "").strip().lower() or "off"
-    metrics["jog_dro_interp_mode"] = jog_mode
-    jog_state = getattr(app, "_manual_jog_predict_state", None)
-    jog_source = ""
-    if isinstance(jog_state, dict):
-        jog_source = str(jog_state.get("source", "") or "").strip().lower()
-    jog_source_is_joystick = jog_source.startswith("joystick") or jog_source.startswith("jog_hold")
-    jog_mode_allows_source = bool(
-        jog_mode == "all_jog" or (jog_mode == "ui_jog_only" and not jog_source_is_joystick)
-    )
-    metrics["jog_dro_interp_active"] = bool(jog_state and jog_mode_allows_source)
-
-    storage_mode = str(getattr(app, "_gcode_storage_mode", "") or "").strip() or "none"
-    gcode_source = getattr(app, "_gcode_source", None)
-    source_path = str(getattr(gcode_source, "path", "") or "").strip()
-    source_line_count_known = bool(
-        getattr(app, "_gcode_source_line_count_known", False)
-    )
-    if gcode_source is not None:
-        try:
-            checker = getattr(gcode_source, "line_count_known", None)
-            if callable(checker):
-                source_line_count_known = bool(checker())
-            else:
-                source_line_count_known = bool(
-                    getattr(gcode_source, "_line_count_known", source_line_count_known)
-                )
-        except Exception:
-            pass
-    elif storage_mode != "in_memory":
-        source_line_count_known = False
-    metrics["gcode_storage_mode"] = storage_mode
-    metrics["gcode_load_mode"] = str(getattr(app, "_gcode_load_mode", "") or "").strip()
-    metrics["gcode_index_mode"] = str(
-        getattr(app, "_gcode_index_mode", "") or ""
-    ).strip()
-    metrics["gcode_source_line_count_known"] = bool(source_line_count_known)
-    time_to_ready = getattr(app, "_gcode_time_to_stream_ready_ms", None)
-    time_to_popup = getattr(app, "_gcode_time_to_popup_close_ms", None)
-    try:
-        metrics["gcode_time_to_stream_ready_ms"] = (
-            float(time_to_ready) if time_to_ready is not None else None
-        )
-    except (TypeError, ValueError):
-        metrics["gcode_time_to_stream_ready_ms"] = None
-    try:
-        metrics["gcode_time_to_popup_close_ms"] = (
-            float(time_to_popup) if time_to_popup is not None else None
-        )
-    except (TypeError, ValueError):
-        metrics["gcode_time_to_popup_close_ms"] = None
-    metrics["gcode_file_backed"] = bool(gcode_source is not None)
-    cap_lines, cap_profile = _effective_line_cache_cap_lines(app)
-    metrics["gcode_line_cache_cap_lines"] = int(cap_lines)
-    metrics["gcode_line_cache_cap_profile"] = cap_profile
-    metrics["gcode_line_cache_cap_hit"] = bool(
-        getattr(app, "_gcode_full_line_cache_cap_hit", False)
-    )
-    try:
-        metrics["gcode_sample_line_cap"] = int(
-            getattr(app, "_gcode_sample_line_cap", 0) or 0
-        )
-    except (TypeError, ValueError):
-        metrics["gcode_sample_line_cap"] = 0
-    try:
-        retained_line_count = int(getattr(app, "_gcode_retained_line_count", 0) or 0)
-    except (TypeError, ValueError):
-        retained_line_count = 0
-    if retained_line_count <= 0:
-        retained = getattr(app, "_last_gcode_lines", None)
-        try:
-            retained_line_count = int(len(retained)) if retained is not None else 0
-        except Exception:
-            retained_line_count = 0
-    metrics["gcode_retained_line_count"] = retained_line_count
-    try:
-        metrics["gcode_source_offset_count"] = int(
-            getattr(app, "_gcode_source_offset_count", 0) or 0
-        )
-    except (TypeError, ValueError):
-        metrics["gcode_source_offset_count"] = 0
-    metrics["gcode_source_offset_type"] = str(
-        getattr(app, "_gcode_source_offset_type", "") or ""
-    )
-    metrics["gcode_offset_index_enabled"] = bool(
-        getattr(app, "_gcode_offset_index_enabled", False)
-    )
-    metrics["gcode_prepare_sample_line_count"] = int(
-        getattr(app, "_gcode_prepare_sample_line_count", 0) or 0
-    )
-    metrics["gcode_prepare_sample_head_lines"] = int(
-        getattr(app, "_gcode_prepare_sample_head_lines", 0) or 0
-    )
-    metrics["gcode_prepare_sample_tail_lines"] = int(
-        getattr(app, "_gcode_prepare_sample_tail_lines", 0) or 0
-    )
-    metrics["gcode_prepare_sample_interval_lines"] = int(
-        getattr(app, "_gcode_prepare_sample_interval_lines", 0) or 0
-    )
-    metrics["gcode_prepare_sample_max_lines"] = int(
-        getattr(app, "_gcode_prepare_sample_max_lines", 0) or 0
-    )
-    file_size_bytes = int(getattr(app, "_gcode_file_size_bytes", 0) or 0)
-    if file_size_bytes <= 0 and source_path:
-        try:
-            if os.path.isfile(source_path):
-                file_size_bytes = max(0, int(os.path.getsize(source_path)))
-        except Exception:
-            pass
-    file_line_count = int(getattr(app, "_gcode_file_line_count", 0) or 0)
-    if file_line_count <= 0 and gcode_source is not None:
-        try:
-            file_line_count = max(0, int(getattr(gcode_source, "_line_count", 0) or 0))
-        except Exception:
-            file_line_count = 0
-    if file_line_count <= 0:
-        try:
-            file_line_count = max(0, int(getattr(app, "_gcode_total_lines", 0) or 0))
-        except Exception:
-            file_line_count = 0
-    file_line_count_known = bool(
-        getattr(app, "_gcode_file_line_count_known", False)
-    )
-    if (not file_line_count_known) and source_line_count_known and file_line_count > 0:
-        file_line_count_known = True
-    if file_line_count <= 0:
-        file_line_count_known = False
-    executable_line_count = int(getattr(app, "_gcode_executable_lines", 0) or 0)
-    if executable_line_count <= 0:
-        executable_line_count = int(
-            getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0
-        )
-    if executable_line_count <= 0:
-        executable_line_count = int(getattr(app, "_gcode_total_lines", 0) or 0)
-    executable_line_count_known = bool(
-        getattr(app, "_gcode_executable_lines_known", False)
-    )
-    if (not executable_line_count_known) and executable_line_count > 0:
-        executable_line_count_known = bool(
-            getattr(app, "_gcode_source_line_count_known", False)
-        )
-    motion_line_count = int(getattr(app, "_gcode_motion_lines", 0) or 0)
-    if motion_line_count <= 0:
-        motion_line_count = int(getattr(app, "_gcode_prepare_motion_total_lines", 0) or 0)
-    motion_line_count_known = bool(getattr(app, "_gcode_motion_lines_known", False))
-    if (not motion_line_count_known) and motion_line_count > 0:
-        motion_line_count_known = bool(executable_line_count_known)
-    total_line_count = int(file_line_count)
-    total_line_count_known = bool(file_line_count_known)
-    metrics["gcode_file_size_bytes"] = int(file_size_bytes)
-    stream_file_size_bytes = int(
-        getattr(
+    return cast(
+        dict[str, Any],
+        _build_runtime_metrics_impl(
             app,
-            "_stream_progress_file_size_bytes",
-            metrics.get("stream_file_size_bytes", 0),
-        )
-        or 0
+            collect_build_info=_collect_build_info,
+            kasa_status_snapshot=kasa_status_snapshot,
+            format_kasa_status_line=format_kasa_status_line,
+            log_suppressed=_log_suppressed,
+            headless_live_state_line_estimate=_headless_live_state_line_estimate,
+            effective_line_cache_cap_lines=_effective_line_cache_cap_lines,
+            deferred_completion_wait_snapshot=deferred_completion_wait_snapshot,
+            bounded_ssmeta=_bounded_ssmeta,
+        ),
     )
-    if stream_file_size_bytes <= 0:
-        stream_file_size_bytes = int(file_size_bytes)
-    acked_byte_offset = int(
-        getattr(
-            app,
-            "_stream_acked_byte_offset",
-            metrics.get("acked_byte_offset", 0),
-        )
-        or 0
-    )
-    if stream_file_size_bytes > 0:
-        acked_byte_offset = min(max(0, acked_byte_offset), stream_file_size_bytes)
-    else:
-        acked_byte_offset = max(0, acked_byte_offset)
-    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    stream_done_pending_idle = bool(getattr(app, "_stream_done_pending_idle", False))
-    (
-        stream_done_wait_active,
-        stream_done_wait_current_s,
-        stream_done_wait_last_s,
-        stream_done_wait_total_s,
-        stream_done_wait_count,
-    ) = deferred_completion_wait_snapshot(app, now_ts=time.time())
-    if (
-        stream_state == "done"
-        and not stream_done_pending_idle
-        and stream_file_size_bytes > 0
-    ):
-        acked_byte_offset = int(stream_file_size_bytes)
-    stream_progress_pct = float(
-        getattr(
-            app,
-            "_stream_progress_pct",
-            metrics.get("stream_progress_pct", 0.0),
-        )
-        or 0.0
-    )
-    if stream_file_size_bytes > 0:
-        stream_progress_pct = max(
-            0.0,
-            min(
-                100.0,
-                (float(acked_byte_offset) / float(stream_file_size_bytes)) * 100.0,
-            ),
-        )
-        if stream_state == "done" and not stream_done_pending_idle:
-            stream_progress_pct = 100.0
-    else:
-        stream_progress_pct = max(0.0, min(100.0, stream_progress_pct))
-    metrics["stream_progress_pct"] = float(stream_progress_pct)
-    metrics["acked_byte_offset"] = int(acked_byte_offset)
-    metrics["stream_file_size_bytes"] = int(stream_file_size_bytes)
-    metrics["stream_done_pending_idle"] = bool(stream_done_pending_idle)
-    metrics["stream_done_wait_active"] = bool(stream_done_wait_active)
-    metrics["stream_done_wait_current_s"] = float(stream_done_wait_current_s)
-    metrics["stream_done_wait_last_s"] = float(stream_done_wait_last_s)
-    metrics["stream_done_wait_total_s"] = float(stream_done_wait_total_s)
-    metrics["stream_done_wait_count"] = int(stream_done_wait_count)
-    metrics["file_size_bytes"] = int(stream_file_size_bytes if stream_file_size_bytes > 0 else file_size_bytes)
-    metrics["gcode_total_lines"] = int(total_line_count)
-    metrics["gcode_total_lines_known"] = bool(total_line_count_known)
-    metrics["gcode_total_lines_estimated"] = bool(
-        total_line_count > 0 and (not total_line_count_known)
-    )
-    metrics["gcode_executable_lines"] = int(executable_line_count)
-    metrics["gcode_executable_lines_known"] = bool(executable_line_count_known)
-    metrics["gcode_executable_lines_estimated"] = bool(
-        executable_line_count > 0 and (not executable_line_count_known)
-    )
-    metrics["gcode_motion_lines"] = int(motion_line_count)
-    metrics["gcode_motion_lines_known"] = bool(motion_line_count_known)
-    metrics["gcode_motion_lines_estimated"] = bool(
-        motion_line_count > 0 and (not motion_line_count_known)
-    )
-    metrics["gcode_prepare_executable_total_lines"] = int(
-        getattr(app, "_gcode_prepare_executable_total_lines", 0) or 0
-    )
-    metrics["gcode_prepare_motion_total_lines"] = int(
-        getattr(app, "_gcode_prepare_motion_total_lines", 0) or 0
-    )
-    metrics["gcode_prepare_sampled_executable_lines"] = int(
-        getattr(app, "_gcode_prepare_sampled_executable_lines", 0) or 0
-    )
-    metrics["gcode_prepare_sampled_motion_lines"] = int(
-        getattr(app, "_gcode_prepare_sampled_motion_lines", 0) or 0
-    )
-    metrics["gcode_quick_scan_ms"] = float(
-        getattr(app, "_gcode_quick_scan_ms", 0.0) or 0.0
-    )
-    metrics["quick_scan_ms"] = float(metrics["gcode_quick_scan_ms"])
-    bounds_box = getattr(app, "_gcode_bounds_box", None)
-    if isinstance(bounds_box, dict):
-        metrics["gcode_bounds_box"] = dict(bounds_box)
-        metrics["bounds_box"] = dict(bounds_box)
-    metrics["gcode_bounds_confidence"] = str(
-        getattr(app, "_gcode_bounds_confidence", "") or ""
-    )
-    metrics["bounds_confidence"] = str(metrics["gcode_bounds_confidence"])
-    estimated_job_time_sec = getattr(app, "_gcode_estimated_job_time_sec", None)
-    try:
-        metrics["estimated_job_time_sec"] = (
-            int(estimated_job_time_sec) if estimated_job_time_sec is not None else None
-        )
-    except (TypeError, ValueError):
-        metrics["estimated_job_time_sec"] = None
-    raw_estimate_confidence = str(getattr(app, "_estimate_confidence", "") or "")
-    metrics["estimate_confidence"] = (
-        "confident"
-        if raw_estimate_confidence.strip().lower() == "confident"
-        else "rough"
-    )
-    raw_dimensions_confidence = str(
-        getattr(app, "_gcode_dimensions_confidence", "")
-        or getattr(app, "_gcode_bounds_confidence", "")
-    )
-    metrics["dimensions_confidence"] = (
-        "confident"
-        if raw_dimensions_confidence.strip().lower() == "confident"
-        else "rough"
-    )
-    estimate_reasons = getattr(app, "_gcode_estimate_confidence_reasons", None)
-    if isinstance(estimate_reasons, dict):
-        metrics["estimate_confidence_reasons"] = {
-            str(k): bool(v) for k, v in estimate_reasons.items()
-        }
-    dim_reasons = getattr(app, "_gcode_dimensions_confidence_reasons", None)
-    if isinstance(dim_reasons, dict):
-        metrics["dimensions_confidence_reasons"] = {
-            str(k): bool(v) for k, v in dim_reasons.items()
-        }
-    metrics["ssmeta_present"] = bool(getattr(app, "_gcode_ssmeta_present", False))
-    metrics["gcode_ssmeta"] = _bounded_ssmeta(getattr(app, "_gcode_ssmeta", None))
-    metrics["dimensions_source"] = str(
-        getattr(app, "_gcode_dimensions_source", "scan") or "scan"
-    )
-    metrics["units_source"] = str(getattr(app, "_gcode_units_source", "scan") or "scan")
-    metrics["ssmeta_scan_reduced"] = bool(
-        getattr(app, "_gcode_ssmeta_scan_reduced", False)
-    )
-    metrics["post_popup_background_tasks"] = "none"
-    metrics["time_to_popup_close_ms"] = metrics.get("gcode_time_to_popup_close_ms")
-    metrics["time_to_stream_ready_ms"] = metrics.get("gcode_time_to_stream_ready_ms")
-    metrics["gcode_stats_compute_mode"] = str(
-        getattr(app, "_gcode_stats_compute_mode", "") or ""
-    )
-    metrics["gcode_stats_sample_scale"] = float(
-        getattr(app, "_gcode_stats_sample_scale", 1.0) or 1.0
-    )
-    metrics["gcode_stats_sample_line_count"] = int(
-        getattr(app, "_gcode_stats_sample_line_count", 0) or 0
-    )
-    metrics["gcode_stats_sample_total_lines"] = int(
-        getattr(app, "_gcode_stats_sample_total_lines", 0) or 0
-    )
-    metrics["gcode_stats_sample_executable_lines"] = int(
-        getattr(app, "_gcode_stats_sample_executable_lines", 0) or 0
-    )
-    metrics["gcode_stats_sample_motion_lines"] = int(
-        getattr(app, "_gcode_stats_sample_motion_lines", 0) or 0
-    )
-    metrics["gcode_stats_executable_total_lines"] = int(
-        getattr(app, "_gcode_stats_executable_total_lines", 0) or 0
-    )
-    metrics["gcode_stats_motion_total_lines"] = int(
-        getattr(app, "_gcode_stats_motion_total_lines", 0) or 0
-    )
-    metrics["gcode_stats_chunk_max_ms"] = float(
-        getattr(app, "_gcode_stats_chunk_max_ms", 0.0) or 0.0
-    )
-    metrics["gcode_stats_chunk_max_section"] = str(
-        getattr(app, "_gcode_stats_chunk_max_section", "") or "unknown"
-    )
-    metrics["gcode_stats_chunk_yield_count"] = int(
-        getattr(app, "_gcode_stats_chunk_yield_count", 0) or 0
-    )
-    loaded_total_min = getattr(app, "_loaded_estimate_total_min", None)
-    try:
-        metrics["estimate_loaded_total_min"] = (
-            float(loaded_total_min) if loaded_total_min is not None else None
-        )
-    except (TypeError, ValueError):
-        metrics["estimate_loaded_total_min"] = None
-    metrics["estimate_loaded_source"] = str(
-        getattr(app, "_loaded_estimate_source", "") or ""
-    )
-    observed_total_min = getattr(app, "_live_estimate_observed_total_min", None)
-    try:
-        metrics["estimate_live_observed_total_min"] = (
-            float(observed_total_min) if observed_total_min is not None else None
-        )
-    except (TypeError, ValueError):
-        metrics["estimate_live_observed_total_min"] = None
-    metrics["estimate_rate_source"] = str(getattr(app, "_rapid_rates_source", "") or "")
-    rapid_rates = getattr(app, "_rapid_rates", None)
-    if isinstance(rapid_rates, tuple) and len(rapid_rates) == 3:
-        try:
-            metrics["estimate_rapid_rates_mm_min"] = [
-                float(rapid_rates[0]),
-                float(rapid_rates[1]),
-                float(rapid_rates[2]),
-            ]
-        except Exception:
-            pass
-    accel_rates = getattr(app, "_accel_rates", None)
-    if isinstance(accel_rates, tuple) and len(accel_rates) == 3:
-        try:
-            metrics["estimate_accel_rates_mm_s2"] = [
-                float(accel_rates[0]),
-                float(accel_rates[1]),
-                float(accel_rates[2]),
-            ]
-        except Exception:
-            pass
-    estimate_inputs = getattr(app, "_estimate_inputs_snapshot", None)
-    if isinstance(estimate_inputs, dict):
-        metrics["estimate_inputs_snapshot"] = dict(estimate_inputs)
-    al_source_path = str(getattr(app, "_auto_level_job_source_path", "") or "").strip()
-    metrics["auto_level_source_path"] = al_source_path
-    metrics["auto_level_source_exists"] = bool(
-        al_source_path and os.path.isfile(al_source_path)
-    )
-    metrics["auto_level_source_hash"] = str(
-        getattr(app, "_auto_level_job_hash", "") or ""
-    )
-    metrics["auto_level_source_total_lines"] = int(
-        getattr(app, "_auto_level_job_total_lines", 0) or 0
-    )
-    prereq_snapshot = getattr(app, "_auto_level_prereq_snapshot", None)
-    if isinstance(prereq_snapshot, dict):
-        metrics["auto_level_prereq_snapshot"] = dict(prereq_snapshot)
-        metrics["auto_level_prereq_ready"] = bool(
-            prereq_snapshot.get("bounds_ready", False)
-        )
-        metrics["auto_level_prereq_stage"] = str(prereq_snapshot.get("stage", "") or "")
-
-    stream_queue_depth = None
-    stream_resume_depth = None
-    stream_pending_item = None
-    stream_buf_used = None
-    if grbl is not None:
-        try:
-            line_queue = getattr(grbl, "_stream_line_queue", None)
-            stream_queue_depth = (
-                int(len(line_queue)) if line_queue is not None else None
-            )
-        except Exception:
-            stream_queue_depth = None
-        try:
-            resume_preamble = getattr(grbl, "_resume_preamble", None)
-            stream_resume_depth = (
-                int(len(resume_preamble)) if resume_preamble is not None else None
-            )
-        except Exception:
-            stream_resume_depth = None
-        try:
-            stream_pending_item = bool(
-                getattr(grbl, "_stream_pending_item", None) is not None
-            )
-        except Exception:
-            stream_pending_item = None
-        try:
-            stream_buf_used = int(getattr(grbl, "_stream_buf_used", 0) or 0)
-        except Exception:
-            stream_buf_used = None
-    if stream_queue_depth is not None:
-        metrics["stream_outstanding_queue_depth"] = stream_queue_depth
-    if stream_resume_depth is not None:
-        metrics["stream_resume_preamble_depth"] = stream_resume_depth
-    if stream_pending_item is not None:
-        metrics["stream_pending_item"] = bool(stream_pending_item)
-    if stream_buf_used is not None:
-        metrics["stream_buf_used_bytes"] = stream_buf_used
-    return metrics
 
 
 def _format_runtime_metrics(
@@ -1802,39 +1061,24 @@ def open_run_checklist(app: Any) -> None:
 
 
 def evaluate_run_preflight(app: Any) -> tuple[list[str], list[str]]:
-    result = PreflightService(
-        get_bounds=_get_bounds,
-        get_travel_limits=_get_travel_limits,
-    ).validate_job(app)
-    return list(result.failures), list(result.warnings)
+    return cast(
+        tuple[list[str], list[str]],
+        _evaluate_run_preflight_impl(
+            app,
+            get_bounds=_get_bounds,
+            get_travel_limits=_get_travel_limits,
+        ),
+    )
 
 
 def run_preflight_check(app) -> None:
-    path = getattr(app, "_last_gcode_path", None)
-    if not path:
-        messagebox.showinfo("Preflight check", "Load a G-code file first.")
-        return
-    failures, warnings = evaluate_run_preflight(app)
-    report = getattr(app, "_gcode_validation_report", None)
-    issues: list[str] = []
-    if failures:
-        issues.extend(failures)
-    if warnings:
-        issues.extend(warnings)
-    if report is not None:
-        issues.extend(_format_validation_summary(report))
-    if issues:
-        title = "Preflight check"
-        prefix = "Review before running:\n"
-        if failures:
-            title = "Preflight check (fail)"
-            prefix = "Blocking issues found:\n"
-        messagebox.showwarning(
-            title,
-            prefix + "\n".join(f"- {item}" for item in issues),
-        )
-        return
-    messagebox.showinfo("Preflight check", "No issues detected.")
+    _run_preflight_check_impl(
+        app,
+        evaluate_run_preflight=evaluate_run_preflight,
+        format_validation_summary=_format_validation_summary,
+        showinfo=_messagebox_info,
+        showwarning=_messagebox_warning,
+    )
 
 
 def _build_performance_report_text(app: Any) -> str:
@@ -1851,6 +1095,10 @@ def _build_performance_report_text(app: Any) -> str:
 
 def _messagebox_info(title: str, message: str) -> None:
     messagebox.showinfo(title, message)
+
+
+def _messagebox_warning(title: str, message: str) -> None:
+    messagebox.showwarning(title, message)
 
 
 def _messagebox_error(title: str, message: str) -> None:
@@ -2003,4 +1251,5 @@ def export_session_diagnostics(app) -> None:
         showerror=_messagebox_error,
         thread_cls=threading.Thread,
     )
+
 

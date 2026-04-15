@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 from tkinter import ttk
 
 from simple_sender.ui.widgets_common import set_kb_id
@@ -30,11 +31,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _unit_scale(unit_mode: str) -> float:
@@ -152,3 +149,4 @@ def dro_row(app, parent, axis, var, zero_cmd, *, ttk_mod=None, set_kb_id_func=No
     btn.grid(row=0, column=2, sticky="w")
     set_kb_id_func(btn, f"zero_{axis.lower()}")
     return btn
+

@@ -22,6 +22,7 @@
 
 from datetime import datetime, timedelta
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import time
 import tkinter as tk
@@ -45,11 +46,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _persist_ui_setting_change(app, *, failure_text: str) -> bool:
@@ -1023,3 +1020,4 @@ def send_manual(app, command: str, source: str) -> bool:
     if accepted and (upper.startswith("$X") or upper.startswith("$H")):
         mark_alarm_clear_requested(app)
     return accepted
+

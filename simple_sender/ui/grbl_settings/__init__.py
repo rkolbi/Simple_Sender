@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 import time
 import tkinter as tk
@@ -52,11 +53,7 @@ _SETTINGS_VERIFY_RETRY_FAILURE_KEYS = (
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def parse_setting_line(line: str) -> tuple[str, str, int | None] | None:
@@ -754,4 +751,5 @@ class GRBLSettingsController:
     def _settings_tooltip_hide(self, _event: Any | None = None) -> None:
         if self.settings_tip:
             self.settings_tip._hide()
+
 

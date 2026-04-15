@@ -21,10 +21,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
 import threading
 import time
-from collections import deque
 from tkinter import filedialog, messagebox
 from typing import Any, Callable
 
@@ -34,6 +34,11 @@ from simple_sender.services.job_service import (
     JobService,
     JobStartOutcome,
     JobStopOutcome,
+)
+from simple_sender.ui.connection_runtime_state import (
+    append_connection_timeline_event,
+    get_connection_runtime_state,
+    sync_connection_runtime_state_to_app,
 )
 from simple_sender.ui.dry_run_start_prompt import confirm_dry_run_start_mode
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
@@ -48,29 +53,15 @@ from simple_sender.utils.constants import BAUD_DEFAULT
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
-_CONNECTION_TIMELINE_LIMIT = 200
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _append_connection_timeline_event(app, event: str, details: str = "") -> None:
-    history = getattr(app, "_connection_timeline", None)
-    if history is None:
-        history = deque(maxlen=_CONNECTION_TIMELINE_LIMIT)
-        setattr(app, "_connection_timeline", history)
-    payload = {
-        "ts": float(time.time()),
-        "event": str(event or "").strip() or "unknown",
-        "details": str(details or "").strip(),
-    }
     try:
-        history.append(payload)
+        append_connection_timeline_event(app, event, details, now_ts=time.time())
     except Exception as exc:
         _log_suppressed("Failed appending connection timeline event", exc)
 
@@ -291,11 +282,7 @@ def _set_connection_controls_pending(app, label: str) -> None:
 
 
 def _sync_connection_controls(app) -> None:
-    try:
-        connected = bool(getattr(app, "connected", False))
-    except Exception as exc:
-        _log_suppressed("Failed reading connected flag while syncing connection controls", exc)
-        connected = False
+    connected = bool(get_connection_runtime_state(app).connected)
     try:
         is_streaming = bool(app.grbl.is_streaming())
     except Exception as exc:
@@ -319,11 +306,10 @@ def _sync_connection_controls(app) -> None:
 
 
 def _note_connection_ui_sync_drop(app, phase: str) -> None:
-    try:
-        setattr(app, "_connection_ui_sync_failed", True)
-        setattr(app, "_connection_ui_sync_failure_phase", str(phase or "").strip() or "unknown")
-    except Exception:
-        pass
+    state = get_connection_runtime_state(app)
+    state.ui_sync_failed = True
+    state.ui_sync_failure_phase = str(phase or "").strip() or "unknown"
+    sync_connection_runtime_state_to_app(app, state)
     _append_connection_timeline_event(
         app,
         "connection_ui_sync_dropped",
@@ -334,10 +320,11 @@ def _note_connection_ui_sync_drop(app, phase: str) -> None:
 def toggle_connect(app):
     if not app._ensure_serial_available():
         return False
-    if getattr(app, "_connecting", False):
+    runtime = get_connection_runtime_state(app)
+    if runtime.connecting:
         _set_connection_controls_pending(app, "Connecting...")
         return False
-    if getattr(app, "_disconnecting", False):
+    if runtime.disconnecting:
         _set_connection_controls_pending(app, "Disconnecting...")
         return False
     if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
@@ -346,7 +333,7 @@ def toggle_connect(app):
             BusyMessages.STOP_STREAM_BEFORE_DISCONNECTING,
         )
         return False
-    is_connected = bool(getattr(app, "connected", False))
+    is_connected = bool(runtime.connected)
     try:
         is_connected = is_connected or bool(app.grbl.is_connected())
     except Exception as exc:
@@ -381,12 +368,14 @@ def start_connect_worker(
     show_error: bool = True,
     on_failure: Callable[[Exception], Any] | None = None,
 ):
-    if app._connecting:
+    runtime = get_connection_runtime_state(app)
+    if runtime.connecting:
         _set_connection_controls_pending(app, "Connecting...")
         return
     try:
         if bool(app.grbl.is_connected()):
-            if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
+            runtime = get_connection_runtime_state(app)
+            if runtime.connected and runtime.ready:
                 _append_connection_timeline_event(
                     app,
                     "connect_worker_skip_already_connected",
@@ -403,7 +392,8 @@ def start_connect_worker(
     except Exception as exc:
         _log_suppressed("Failed checking worker connection state before connect worker", exc)
     try:
-        if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
+        runtime = get_connection_runtime_state(app)
+        if runtime.connected and runtime.ready:
             if bool(app.grbl.is_connected()):
                 _append_connection_timeline_event(
                     app,
@@ -444,7 +434,9 @@ def start_connect_worker(
                     on_drop=lambda: _note_connection_ui_sync_drop(app, "connect_failure"),
                 )
         finally:
-            app._connecting = False
+            runtime = get_connection_runtime_state(app)
+            runtime.connecting = False
+            sync_connection_runtime_state_to_app(app, runtime)
             if not connected_ok:
                 _post_ui(
                     app,
@@ -453,14 +445,16 @@ def start_connect_worker(
                     on_drop=lambda: _note_connection_ui_sync_drop(app, "connect_failure_sync"),
                 )
 
-    app._connecting = True
+    runtime.connecting = True
+    sync_connection_runtime_state_to_app(app, runtime)
     _set_connection_controls_pending(app, "Connecting...")
     app._connect_thread = threading.Thread(target=worker, daemon=True)
     app._connect_thread.start()
 
 
 def start_disconnect_worker(app):
-    if app._disconnecting:
+    runtime = get_connection_runtime_state(app)
+    if runtime.disconnecting:
         _set_connection_controls_pending(app, "Disconnecting...")
         return
 
@@ -479,7 +473,9 @@ def start_disconnect_worker(app):
             except Exception as log_exc:
                 _log_suppressed("Failed queueing disconnect failure log message", log_exc)
         finally:
-            app._disconnecting = False
+            runtime = get_connection_runtime_state(app)
+            runtime.disconnecting = False
+            sync_connection_runtime_state_to_app(app, runtime)
             if not disconnected_ok:
                 _post_ui(
                     app,
@@ -488,7 +484,8 @@ def start_disconnect_worker(app):
                     on_drop=lambda: _note_connection_ui_sync_drop(app, "disconnect_failure_sync"),
                 )
 
-    app._disconnecting = True
+    runtime.disconnecting = True
+    sync_connection_runtime_state_to_app(app, runtime)
     _set_connection_controls_pending(app, "Disconnecting...")
     app._disconnect_thread = threading.Thread(target=worker, daemon=True)
     app._disconnect_thread.start()
@@ -597,3 +594,4 @@ def stop_job(app):
         status_text=f"Stop Job failed: {message}",
         log_text=f"[job] Stop Job failed: {message}",
     )
+

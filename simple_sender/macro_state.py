@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 import time
 from typing import Any, Callable
@@ -39,11 +40,7 @@ _MACRO_STATUS_REQUERY_INTERVAL_S = 0.1
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _wait_for_event_or_sleep(
@@ -364,3 +361,4 @@ def macro_restore_state(
             macro_vars["units"] = units
     ui_q.put(("log", f"{prefix} {label} {restored_message}"))
     return True
+

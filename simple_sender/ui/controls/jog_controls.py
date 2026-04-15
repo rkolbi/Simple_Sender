@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 
 from simple_sender.utils.constants import (
@@ -37,11 +38,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def unit_toggle_label(app, mode: str | None = None) -> str:
@@ -241,3 +238,4 @@ def apply_safe_mode_profile(app) -> None:
         )
     except Exception as exc:
         _log_suppressed("Failed logging safe jog profile application", exc)
+

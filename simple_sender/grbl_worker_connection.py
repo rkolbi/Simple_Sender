@@ -25,11 +25,18 @@
 from __future__ import annotations
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import traceback
 import threading
 from typing import Any, TYPE_CHECKING
 
-from simple_sender.types import GrblWorkerState
+from simple_sender.types import (
+    ConnectionEvent,
+    GrblWorkerState,
+    ReadyEvent,
+    StreamInterruptedEvent,
+    StreamStateEvent,
+)
 
 from .utils.constants import (
     BAUD_DEFAULT,
@@ -48,11 +55,7 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 class _FallbackSerialException(Exception):
@@ -229,7 +232,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
             self._tx_thread.start()
             self._status_thread.start()
 
-            self.ui_q.put(("conn", True, port))
+            self.ui_q.put(ConnectionEvent(True, port))
             logger.info(f"Connected to {port} at {baud} baud")
 
         except serial_exc as e:
@@ -291,8 +294,8 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._jog_cancel_last_sent_ts = 0.0
 
         # Notify UI
-        self.ui_q.put(("ready", False))
-        self.ui_q.put(("stream_state", "stopped", None))
+        self.ui_q.put(ReadyEvent(False))
+        self.ui_q.put(StreamStateEvent("stopped", None))
 
         # Close serial port
         serial_exc = _serial_exception_type(self._serial_module())
@@ -319,7 +322,7 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._tx_thread = None
         self._status_thread = None
 
-        self.ui_q.put(("conn", False, None))
+        self.ui_q.put(ConnectionEvent(False, None))
 
     def is_connected(self) -> bool:
         """Check if connected to GRBL.
@@ -382,13 +385,14 @@ class GrblWorkerConnectionMixin(GrblWorkerState):
         self._clear_outgoing()
         try:
             if was_streaming:
-                self.ui_q.put(("stream_interrupted", True, reason))
-            self.ui_q.put(("ready", False))
-            self.ui_q.put(("stream_state", "stopped", reason))
-            self.ui_q.put(("conn", False, None))
+                self.ui_q.put(StreamInterruptedEvent(True, reason))
+            self.ui_q.put(ReadyEvent(False))
+            self.ui_q.put(StreamStateEvent("stopped", reason))
+            self.ui_q.put(ConnectionEvent(False, None))
         except Exception as exc:
             _log_suppressed("Failed queueing disconnect state updates to UI", exc)
         try:
             self.ui_q.put(("log", f"[disconnect] {detail}"))
         except Exception as exc:
             _log_suppressed("Failed queueing disconnect reason log to UI", exc)
+

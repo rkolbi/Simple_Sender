@@ -156,16 +156,16 @@ def stop_joystick_hold(app, binding_id: str | None = None):
     return _core.stop_joystick_hold(app, binding_id)
 
 
-def start_joystick_safety_capture(app):
-    return _core.start_joystick_safety_capture(app)
+def start_joystick_safety_capture(app, mode: str = "normal"):
+    return _core.start_joystick_safety_capture(app, mode=mode)
 
 
 def cancel_joystick_safety_capture(app):
     return _core.cancel_joystick_safety_capture(app)
 
 
-def clear_joystick_safety_binding(app):
-    return _core.clear_joystick_safety_binding(app)
+def clear_joystick_safety_binding(app, mode: str = "normal"):
+    return _core.clear_joystick_safety_binding(app, mode=mode)
 
 
 def on_joystick_safety_toggle(app):

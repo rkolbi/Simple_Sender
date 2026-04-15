@@ -23,6 +23,7 @@
 """Resume-from-line helpers and cached modal preamble reconstruction."""
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -58,11 +59,7 @@ _resume_cache_order: deque[int] = deque()
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    key = (context, type(exc).__name__)
-    if key in _logged_suppressed:
-        return
-    _logged_suppressed.add(key)
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 @dataclass(slots=True)
@@ -503,3 +500,4 @@ def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: boo
             app._start_job_accessories("job_resume")
     except Exception as exc:
         _log_suppressed("Failed starting Kasa job accessories on Resume From", exc)
+

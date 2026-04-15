@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any
@@ -37,7 +38,7 @@ _BTN_CANCEL = "Cancel"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
-    logger.debug("%s: %s", context, exc, exc_info=exc)
+    log_suppressed_exception(logger, context, exc)
 
 
 def _normal_run_button_text(action_label: str) -> str:
@@ -138,3 +139,4 @@ def confirm_dry_run_start_mode(
 __all__ = [
     "confirm_dry_run_start_mode",
 ]
+
