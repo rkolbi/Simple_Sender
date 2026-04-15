@@ -225,6 +225,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Linux dialogs default to /root/CNC_Jobs unless App Settings > Theme > Linux File Dialog Default Path is set to a different valid folder.",
                     "Loaded jobs stay read-only. The sender strips BOM markers, comments, and bare % lines, then compacts or splits supported lines to respect GRBL's 80-byte limit.",
                     "Job Info is a large read-only popup that shows SSMETA metadata when present, plus file size, line counters, estimate, dimensions, and separate Toolpaths and Tools lists when the metadata provides them.",
+                    "If load metadata is already available, the first Job Info popup open renders it immediately without requiring a reopen or reload.",
                 ),
             ),
             _sub(
@@ -356,7 +357,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "GRBL Settings UI",
                 bullets=(
+                    "If the post-connect $$ snapshot is already available, the first GRBL Settings popup open uses that cached data immediately.",
                     "Refresh $$ is available when the machine is idle, not alarmed, and fully through the handshake.",
+                    "Refresh $$ requests a newer controller snapshot; it is not required for the first usable display when cached data already exists.",
                     "The GRBL Settings popup is scrollable, shows descriptions and units, supports inline numeric validation, and highlights pending edits until you save them.",
                     "If enabled, the optional Raw $$ page opens the last raw settings dump in the same popup.",
                 ),
@@ -763,8 +766,12 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "pygame must be installed before the app can talk to USB joystick devices.",
                     "App Settings > Keyboard Shortcuts includes a joystick testing frame that reports detected controllers, shows the latest event, and includes a Refresh joystick list button.",
                     "Enable USB Joystick Bindings turns on polling and action triggering. If bindings are enabled and no joystick is present, newly plugged controllers are discovered automatically.",
-                    "Require safety hold for joystick actions can force you to hold a chosen safety button before joystick actions are accepted.",
-                    "Set Safety Button captures the joystick button used for safety hold, and Clear Safety Button removes it.",
+                    "Require safety hold for joystick actions makes the safety buttons the controller-enable gate for all joypad and joystick bindings.",
+                    "Set Safety Button / Normal Jog Speed captures the normal-speed safety button. Holding it enables all joypad and joystick bindings while joystick jogging stays at the configured speed.",
+                    "Set Safety Button / Slow Jog Speed captures the slow-speed safety button. Holding it enables all joypad and joystick bindings while joystick jogging runs at exactly 50 percent speed.",
+                    "If both safety buttons are held, Slow wins. If neither is held, no joypad or joystick bindings are acknowledged.",
+                    "Keyboard shortcuts and on-screen jog controls are unchanged by the joystick safety hold settings.",
+                    "Legacy single safety-button settings migrate to the Normal safety binding.",
                     "Clicking a row's Joystick column listens for the next joystick input so a button, axis, or hat direction can be assigned to that action.",
                     "Every custom joystick binding is saved in settings and survives restarts.",
                     "If the toggle is left on before closing, the app reopens with joystick capture enabled automatically.",
@@ -960,6 +967,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Read-only scrollable job summary.",
                     "Shows SSMETA header fields when present.",
                     "Shows quick-scan metrics, dimensions, estimate, and separate Toolpaths and Tools lists when metadata provides them.",
+                    "If metadata is already available from the load pipeline, the first popup open shows it immediately.",
                 ),
             ),
             _sub(
@@ -1011,7 +1019,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "GRBL Settings Popup",
                 bullets=(
-                    "Refresh $$: requests a fresh settings dump and populates the table.",
+                    "If the post-connect $$ snapshot was already captured, the first popup open renders that cached snapshot immediately.",
+                    "Refresh $$: requests a fresh settings dump and populates the table when you want a newer controller snapshot.",
                     "Save Changes: writes edited settings back to GRBL in sequence and verifies them with a follow-up refresh.",
                     "Settings table: scrollable columns for Setting, Name, Value, Units, and Description.",
                     "Edited highlight: pending edits remain highlighted until saved or reverted.",
@@ -1120,7 +1129,10 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Refresh joystick list.",
                     "Enable USB Joystick Bindings.",
                     "Require safety hold for joystick actions.",
-                    "Set Safety Button and Clear Safety Button.",
+                    "Set Safety Button / Normal Jog Speed.",
+                    "Set Safety Button / Slow Jog Speed.",
+                    "No safety held: no joypad or joystick bindings are acknowledged.",
+                    "Both safety buttons held: all joypad and joystick bindings remain active and Slow wins for jog speed.",
                     "Stop joystick hold when app loses focus.",
                     "Hold release sensitivity.",
                     "Live input state labels.",
