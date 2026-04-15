@@ -1140,6 +1140,9 @@ def handle_gcode_loaded_stream(app, evt):
             signature[0] or "<none>",
             signature[1] or "<none>",
         )
+        app._gcode_validation_report = report
+        app._gcode_loading = False
+        app._finish_gcode_loading()
         _signal_gcode_load_result(app, token=token, success=True, path=path)
         _cleanup_streaming_source(source, context="Idempotent gcode_loaded_stream skip")
         return
