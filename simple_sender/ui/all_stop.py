@@ -71,6 +71,16 @@ def _cancel_machine_driving_tasks(app) -> None:
         _log_suppressed("Failed canceling auto-level probing during ALL STOP", exc)
 
 
+def _safe_all_stop_call(action, *, context: str) -> bool:
+    if not callable(action):
+        return False
+    try:
+        return bool(action())
+    except Exception as exc:
+        _log_suppressed(context, exc)
+        return False
+
+
 def all_stop_action(app):
     try:
         app._stop_joystick_hold()
@@ -89,10 +99,16 @@ def all_stop_action(app):
     reset_applied = False
     stop_applied = False
     if mode in {"reset", "stop_reset"}:
-        stop_applied = bool(app.grbl.stop_stream())
+        stop_applied = _safe_all_stop_call(
+            getattr(app.grbl, "stop_stream", None),
+            context="Failed executing stop_stream during ALL STOP",
+        )
         action_applied = bool(stop_applied)
     if mode == "reset":
-        reset_applied = bool(app.grbl.reset())
+        reset_applied = _safe_all_stop_call(
+            getattr(app.grbl, "reset", None),
+            context="Failed executing reset during ALL STOP",
+        )
         action_applied = bool(reset_applied)
     elif mode == "stop_reset":
         stop_stream_resets = False
@@ -107,21 +123,36 @@ def all_stop_action(app):
                 )
                 stop_stream_resets = True
         if not stop_stream_resets:
-            reset_applied = bool(app.grbl.reset())
+            reset_applied = _safe_all_stop_call(
+                getattr(app.grbl, "reset", None),
+                context="Failed executing reset during ALL STOP",
+            )
             action_applied = bool(reset_applied) or bool(action_applied)
         elif not action_applied:
-            reset_applied = bool(app.grbl.reset())
+            reset_applied = _safe_all_stop_call(
+                getattr(app.grbl, "reset", None),
+                context="Failed executing reset during ALL STOP",
+            )
             action_applied = bool(reset_applied)
     else:
-        action_applied = bool(app.grbl.stop_stream())
+        action_applied = _safe_all_stop_call(
+            getattr(app.grbl, "stop_stream", None),
+            context="Failed executing stop_stream during ALL STOP",
+        )
     if action_applied:
         if mode == "reset":
             if reset_applied:
-                invalidate_job_setup_state(app)
+                try:
+                    invalidate_job_setup_state(app)
+                except Exception as exc:
+                    _log_suppressed("Failed invalidating job setup state after ALL STOP reset", exc)
             else:
                 action_applied = False
         else:
-            invalidate_job_setup_state(app)
+            try:
+                invalidate_job_setup_state(app)
+            except Exception as exc:
+                _log_suppressed("Failed invalidating job setup state after ALL STOP stop/reset", exc)
     if action_applied:
         return
     try:
