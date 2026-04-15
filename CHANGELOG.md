@@ -9,18 +9,22 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [3.1] - 2026-04-14
 
+### Fixed
+- The `Preparing Job` path now fails cleanly if a deferred load/apply step breaks after initial progress has rendered, instead of leaving the popup stuck at an early progress value.
+- Remaining worker-thread completion helpers in diagnostics/export/backup flows now fall back from `_post_ui_thread(...)` directly to `ui_q.put(...)` instead of attempting off-thread Tk `after(...)` scheduling on degraded paths.
+
 ### Documentation
 - Current release-facing docs now present `3.1` as the stable, release-ready baseline instead of `3.0.11`.
-- Current wrapper-gate validation wording was corrected so the pytest + coverage stage inside `run_tests.bat` now truthfully reports `1831 passed, 3 skipped`.
+- Current release-facing docs were refreshed again so the current direct and wrapper validation snapshots stay truthful after the latest green runs.
 
 ### Validation
 - `3.1` is the current stable, release-ready baseline for the present workflow architecture.
 - Current local repository validation snapshot for `3.1`:
-  - direct `pytest -q`: `1831 passed, 3 skipped`
+  - direct `pytest -q`: `1840 passed, 1 skipped`
   - direct `ruff check .`: clean
   - direct `mypy main.py simple_sender`: clean (`215` source files)
   - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1831 passed, 3 skipped`
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
   - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## [3.0.11] - 2026-04-12

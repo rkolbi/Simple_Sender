@@ -397,12 +397,12 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
                         source,
                         context=f"Deferred gcode_loaded_stream {phase_name} failure",
                     )
-                _signal_gcode_load_result(
+                _fail_gcode_load(
                     app,
                     token=token,
-                    success=False,
                     path=path,
-                    error=str(exc),
+                    err=str(exc),
+                    dialog_prefix="Failed to load file",
                 )
                 _set_load_settling(app, False)
                 _finalize_metrics(aborted=True, reason=f"phase_failed:{phase_name}")
@@ -1211,18 +1211,41 @@ def handle_gcode_load_invalid_command(
     app.status.config(text="G-code load failed")
 
 
-def handle_gcode_load_error(app, token, _path, err):
+def _fail_gcode_load(
+    app,
+    *,
+    token,
+    path: str | None,
+    err,
+    dialog_prefix: str,
+) -> None:
     if token != app._gcode_load_token:
         return
-    _signal_gcode_load_result(app, token=token, success=False, error=str(err))
+    _signal_gcode_load_result(
+        app,
+        token=token,
+        success=False,
+        path=path,
+        error=str(err),
+    )
     app._gcode_validation_report = None
     _clear_autolevel_restore(app)
     app._gcode_loading = False
     app._finish_gcode_loading()
     app.gcode_stats_var.set("")
     app._gcode_status_last_text = ""
-    messagebox.showerror("Open G-code", f"Failed to read file:\n{err}")
+    messagebox.showerror("Open G-code", f"{dialog_prefix}:\n{err}")
     app.status.config(text="G-code load failed")
+
+
+def handle_gcode_load_error(app, token, path, err):
+    _fail_gcode_load(
+        app,
+        token=token,
+        path=path,
+        err=err,
+        dialog_prefix="Failed to read file",
+    )
 
 
 def _clear_autolevel_restore(app) -> None:

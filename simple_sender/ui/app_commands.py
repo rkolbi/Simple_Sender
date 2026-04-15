@@ -81,13 +81,6 @@ def _post_ui(app, func, *args, on_drop: Callable[[], None] | None = None, **kwar
             return True
         except Exception as exc:
             _log_suppressed("Failed posting UI callback via _post_ui_thread", exc)
-    after = getattr(app, "after", None)
-    if callable(after):
-        try:
-            after(0, lambda: func(*args, **kwargs))
-            return True
-        except Exception as exc:
-            _log_suppressed("Failed posting UI callback via after", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:

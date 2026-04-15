@@ -281,6 +281,8 @@ def schedule_ui_queue_drain(
 def request_ui_queue_wake(app: AppProtocol) -> bool:
     if bool(getattr(app, "_closing", False)):
         return False
+    if threading.current_thread() is not threading.main_thread():
+        return False
     if bool(getattr(app, "_ui_queue_drain_running", False)):
         return False
     ui_q = getattr(app, "ui_q", None)

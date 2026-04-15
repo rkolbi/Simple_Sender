@@ -51,13 +51,6 @@ def _post_ui_callback(
                 "Failed posting diagnostics bundle callback via _post_ui_thread",
                 exc,
             )
-    after = getattr(app, "after", None)
-    if callable(after):
-        try:
-            after(0, callback)
-            return True
-        except Exception as exc:
-            log_suppressed("Failed posting diagnostics bundle callback to UI thread", exc)
     ui_q = getattr(app, "ui_q", None)
     if ui_q is not None:
         try:

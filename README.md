@@ -8,11 +8,11 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 Current stable release: `3.1`. This is the current release-ready baseline.
 
 Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1831 passed, 3 skipped`
+- Direct `pytest -q`: `1840 passed, 1 skipped`
 - Direct `ruff check .`: clean
 - Direct `mypy main.py simple_sender`: clean (`215` source files)
 - Wrapper `run_tests.bat`: clean (`7/7` gates passed)
-- Wrapper pytest + coverage stage inside `run_tests.bat`: `1831 passed, 3 skipped`
+- Wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
 - Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## Design Objectives and Key Features
@@ -378,6 +378,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in Job Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
+- **Prepare/apply failure cleanup:** If a later load/apply step fails after the `Preparing Job` popup opens, the load now fails cleanly instead of leaving the popup stuck at an early progress value.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
 - **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
@@ -855,7 +856,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as direct `ruff check .`. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1831 passed, 3 skipped`, `ruff check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The wrapper gate also passes clean: `run_tests.bat` is `7/7` green, its pytest + coverage stage reported `1831 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as direct `ruff check .`. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1840 passed, 1 skipped`, `ruff check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The wrapper gate also passes clean: `run_tests.bat` is `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
 
