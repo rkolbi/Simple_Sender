@@ -402,6 +402,7 @@ class GrblWorker(
         self._last_rx_status_log_ts = 0.0
         self._last_tx_status_query_log_ts = 0.0
         self._ui_rx_log_enabled = True
+        self._verbose_runtime_logging = False
 
     def _serial_module(self):
         return serial
@@ -468,6 +469,9 @@ class GrblWorker(
     def set_ui_rx_logging(self, enabled: bool) -> None:
         self._ui_rx_log_enabled = bool(enabled)
 
+    def set_runtime_logging_mode(self, mode: str) -> None:
+        self._verbose_runtime_logging = str(mode or "").strip().lower() == "verbose"
+
     def _should_forward_log_rx_line(self, line: str) -> bool:
         text = str(line or "").strip()
         if not text:
@@ -509,12 +513,21 @@ class GrblWorker(
             if (now - self._last_tx_status_query_log_ts) < interval_s:
                 return False
             self._last_tx_status_query_log_ts = now
+            return True
+        if not self._verbose_runtime_logging:
+            if text.startswith("RT "):
+                return True
+            if text.startswith("$") and (not text.startswith("$J=")):
+                return True
+            return False
         return True
 
     def _log_tx_line(self, line: str) -> None:
-        if not line or (not self._should_log_tx_line(line)):
+        if not line:
             return
         self._record_serial_activity("TX", line)
+        if not self._should_log_tx_line(line):
+            return
         rx_logger = self._rx_logger
         if not rx_logger:
             return

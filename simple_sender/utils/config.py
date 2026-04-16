@@ -82,6 +82,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "fallback_rapid_rate": "5000.0",
     "fullscreen_on_startup": True,
     "gui_logging_enabled": True,
+    "runtime_logging_mode": "Standard",
     "pi_profile_enabled": False,
     "pi_profile_prompt_shown": False,
     "job_completion_beep": False,

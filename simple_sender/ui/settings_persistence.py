@@ -448,6 +448,17 @@ def _build_ui_settings(
             DEFAULT_SETTINGS.get("linux_file_dialog_default_path", "/root/CNC_Jobs")
             or "/root/CNC_Jobs"
         ).strip() or "/root/CNC_Jobs"
+    runtime_logging_mode = _read_string_setting_value(
+        app,
+        attr_name="runtime_logging_mode",
+        key="runtime_logging_mode",
+        fallback="Standard",
+        strip=True,
+    )
+    if runtime_logging_mode.lower() == "verbose":
+        runtime_logging_mode = "Verbose"
+    else:
+        runtime_logging_mode = "Standard"
     return {
         "tooltips_enabled": bool(app.tooltip_enabled.get()),
         "tooltip_timeout_sec": tooltip_timeout_value,
@@ -464,6 +475,7 @@ def _build_ui_settings(
             fallback=False,
         ),
         "gui_logging_enabled": bool(app.gui_logging_enabled.get()),
+        "runtime_logging_mode": runtime_logging_mode,
         "pi_profile_enabled": _read_bool_setting_value(
             app,
             attr_name="pi_profile_enabled",

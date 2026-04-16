@@ -1155,6 +1155,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "App Settings: Diagnostics",
                 bullets=(
+                    "Logging Mode: Standard or Verbose.",
+                    "Standard is the default and reduces routine TX file logging while keeping recent serial activity available for diagnostics.",
+                    "Verbose preserves fuller detailed TX logging for troubleshooting.",
                     "Developer Options.",
                     "Preflight check (Run check).",
                     "Export session diagnostics (Save report).",
@@ -1162,6 +1165,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Export diagnostics bundle (Save ZIP).",
                     "Save final performance report (Save to Logs).",
                     "Apply perf-test preset.",
+                    "Apply perf-test preset forces Logging Mode to Standard.",
                     "Backup bundle Export and Import.",
                     "Sample-only threshold (lines).",
                     "Ultra-large threshold (MB) and threshold info.",
@@ -1203,6 +1207,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Shutdown (Linux only).",
                     "Reboot (Linux only).",
                     "Pi profile (Linux only).",
+                    "Pi profile forces Logging Mode to Standard for lower-overhead operation.",
                 ),
             ),
             _sub(

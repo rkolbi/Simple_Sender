@@ -8,12 +8,12 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 Current stable release: `3.1`. This is the current release-ready baseline.
 
 Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1840 passed, 1 skipped`
-- Direct `ruff check .`: clean
+- Direct `pytest -q`: `1852 passed, 1 skipped`
+- Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
 - Direct `mypy main.py simple_sender`: clean (`215` source files)
-- Wrapper `run_tests.bat`: clean (`7/7` gates passed)
-- Wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
-- Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+- Last verified wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
+- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
+- Last verified wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## Design Objectives and Key Features
 
@@ -335,7 +335,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   **GRBL Settings:** Editable table with descriptions, tooltips, inline validation, and pending-change highlighting before you save values back to the controller. It opens in a large popup, and if the post-connect `$$` snapshot has already been captured, the first popup open renders that cached data immediately.
   
-  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, optional App Settings popup preloading on next launch, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick actions), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Jogging defaults + Safe mode + jog DRO smoothing, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Diagnostics (bundle export for everyone plus a Developer Options toggle that reveals preflight, runtime telemetry, session report export, backup bundles, perf-test preset, and large-file thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
+  **App Settings:** Version banner, a built-in Search filter, and a Basic/Advanced view selector above grouped sections for Interface (fullscreen, optional App Settings popup preloading on next launch, performance mode, GUI logging, auxiliary-button visibility, status indicators, status-bar quick buttons + quick actions), Theme (theme, UI scale, Linux file-dialog scale on Linux, scrollbar width, tooltips + duration, numeric keypad), Jogging defaults + Safe mode + jog DRO smoothing, Zeroing mode, Keyboard shortcuts + joystick safety, Kasa Plug (Linux-only), Macro scripting, Estimation, Diagnostics (bundle export for everyone plus a Developer Options toggle that reveals preflight, runtime telemetry, session report export, backup bundles, `Logging Mode` with `Standard`/`Verbose`, the perf-test preset, and large-file thresholds), Safety (ALL STOP, dry run sanitize, homing watchdog), Safety Aids (Training Wheels, reconnect on open), Status polling, Error dialogs, and System controls (`Close Application` on all platforms, plus Linux-only `Shutdown`, `Reboot`, and `Pi profile`). It opens in a large popup.
 
   **About:** Large read-only operator reference popup with built-in search, Previous/Next navigation, live match counts, and the same practical workflow/reference material described in this README. Tooltips are intentionally disabled inside this popup so the document stays easy to read.
   
@@ -391,6 +391,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Lifecycle console logging:** Job lifecycle logging stays intentionally sparse and truthful: load, start, immediate early telemetry, `10%` progress milestones, sparse heartbeat while running, and completion are logged without reverting to noisy per-line progress chatter.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; during deferred completion the top-right progress bar/label stay in sync and finalize at `100.0%` when GRBL reaches the final `Idle`.
+- **Logging Mode:** App Settings > Diagnostics now includes `Logging Mode` with `Standard` and `Verbose`. `Standard` is the default and reduces routine TX file logging while still keeping recent serial activity available for diagnostics. `Verbose` preserves fuller detailed TX logging for troubleshooting.
 - **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
 - **UI queue wake-up:** When the UI queue is idle and new work arrives, the first posted UI event now wakes the drain loop promptly instead of waiting for the next normal periodic drain tick. Ongoing queue draining still uses the existing bounded timer/backoff model.
@@ -838,6 +839,7 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
 - The **Logs** popup (and **View Logs...** in App Settings > Interface) shows the rotating log files with Source (Application/Serial/UI/Errors/All) and Level (DEBUG..CRITICAL) filters. Use **Refresh** to reload, **Clear Logs** to truncate active logs/remove rotated logs, and **Export Logs...** to save a zip bundle for support.
+- App Settings > Diagnostics > **Logging Mode** controls routine runtime file-log volume: `Standard` is recommended for normal use and reduces routine TX file logging, while `Verbose` preserves fuller detailed TX logging for troubleshooting.
   - If you open **View Logs...** from **App Settings**, App Settings stays open underneath. If you then use **Clear Logs**, its confirmation opens above **Logs** without closing or hiding either **Logs** or **App Settings**.
   - The **Logs** popup button is hidden by default. Enable it with **App Settings > Interface > Auxiliary panel buttons > Show Logs Button** if you want it in the lower control row; **View Logs...** remains available either way.
 
@@ -856,7 +858,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as direct `ruff check .`. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1840 passed, 1 skipped`, `ruff check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The wrapper gate also passes clean: `run_tests.bat` is `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1852 passed, 1 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
 
@@ -1361,12 +1363,13 @@ Macro UI is included below along with the rest of the interface.
 
 ### App Settings: Diagnostics
 - Developer Options: reveals the advanced diagnostics controls described below.
+- Logging Mode: `Standard` is the default and reduces routine TX file logging while keeping recent serial activity available for diagnostics; `Verbose` preserves fuller detailed TX logging for troubleshooting.
 - Preflight check (Run check): evaluates the loaded job for readiness, bounds availability, and machine-travel overruns using the current `$130/$131/$132` travel settings when available.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Runtime telemetry (Open telemetry): opens a live telemetry window for worker queue depth and TX/runtime counters.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
-- Apply perf-test preset: enables the low-overhead diagnostics profiling preset intended for repeatable performance capture.
+- Apply perf-test preset: enables the low-overhead diagnostics profiling preset intended for repeatable performance capture, and it forces `Logging Mode = Standard`.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip. Import validates settings before replacing the live copy, reports repaired values, and asks before replacing colliding macro/checklist assets.
 - Sample-only threshold (lines): cleaned line count threshold for aggressive sampled prepare behavior (set `0` to disable line-based trigger).
 - Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (sample-only + skip full validation); set `0` to disable.
@@ -1399,7 +1402,7 @@ Macro UI is included below along with the rest of the interface.
 - Restart workflow: there is no separate in-app `Restart Application` button in the current build; close the app, then relaunch it when you need a restart.
 - Shutdown (Linux only): powers off the system after confirmation.
 - Reboot (Linux only): reboots the system after confirmation.
-- Pi profile (Linux only): applies Raspberry Pi-oriented UI/performance defaults for lower CPU and memory usage.
+- Pi profile (Linux only): applies Raspberry Pi-oriented UI/performance defaults for lower CPU and memory usage, and it forces `Logging Mode = Standard`.
 
 ### Checklists Popup
 - Checklist items: checkbox list loaded from `checklist-*.chk` files.

@@ -95,6 +95,30 @@ def on_gui_logging_change(app):
     )
 
 
+def on_runtime_logging_mode_change(app, *_):
+    raw_mode = str(app.runtime_logging_mode.get() or "").strip().lower()
+    mode = "Verbose" if raw_mode == "verbose" else "Standard"
+    app.runtime_logging_mode.set(mode)
+    grbl = getattr(app, "grbl", None)
+    if grbl is not None:
+        setter = getattr(grbl, "set_runtime_logging_mode", None)
+        if callable(setter):
+            try:
+                setter(mode)
+            except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+                _log_suppressed("Failed applying runtime logging mode to GRBL worker", exc)
+    try:
+        app.streaming_controller.handle_log(
+            f"[settings] Runtime logging mode: {mode}"
+        )
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError) as exc:
+        _log_suppressed("Failed logging runtime logging mode change", exc)
+    _persist_ui_setting_change(
+        app,
+        failure_text="Runtime logging mode changed for this session only; settings save failed",
+    )
+
+
 def on_theme_change(app, *_):
     app._apply_theme(app.selected_theme.get())
     if hasattr(app, "_refresh_toolbar_action_focus"):

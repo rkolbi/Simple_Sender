@@ -378,6 +378,19 @@ def _init_worker_and_runtime_controllers(
             exc_info=exc,
         )
     try:
+        app.grbl.set_runtime_logging_mode(
+            app.settings.get(
+                "runtime_logging_mode",
+                default_settings.get("runtime_logging_mode", "Standard"),
+            )
+        )
+    except Exception as exc:
+        logger.debug(
+            "Failed applying initial runtime logging mode to worker: %s",
+            exc,
+            exc_info=exc,
+        )
+    try:
         app._on_homing_watchdog_change()
     except Exception as exc:
         logger.debug(

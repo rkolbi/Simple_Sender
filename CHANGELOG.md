@@ -12,20 +12,29 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ### Fixed
 - The `Preparing Job` path now fails cleanly if a deferred load/apply step breaks after initial progress has rendered, instead of leaving the popup stuck at an early progress value.
 - Remaining worker-thread completion helpers in diagnostics/export/backup flows now fall back from `_post_ui_thread(...)` directly to `ui_q.put(...)` instead of attempting off-thread Tk `after(...)` scheduling on degraded paths.
+- Standard logging now still preserves the recent in-memory serial activity tail used by diagnostics while continuing to suppress routine streamed TX file logging on the targeted hot path.
+
+### Changed
+- App Settings > Diagnostics now includes `Logging Mode` with `Standard` and `Verbose`:
+  - `Standard` is the default and reduces routine TX file logging
+  - `Verbose` preserves fuller detailed TX logging behavior
+- Low-overhead preset/profile behavior is now truthful:
+  - the diagnostics performance preset now forces `runtime_logging_mode = Standard`
+  - Pi profile now forces `runtime_logging_mode = Standard`
 
 ### Documentation
 - Current release-facing docs now present `3.1` as the stable, release-ready baseline instead of `3.0.11`.
-- Current release-facing docs were refreshed again so the current direct and wrapper validation snapshots stay truthful after the latest green runs.
+- Current release-facing docs were refreshed again so the current direct validation snapshot, the last verified wrapper-gate snapshot, and current logging-mode/preset behavior stay truthful after the latest green runs.
 
 ### Validation
 - `3.1` is the current stable, release-ready baseline for the present workflow architecture.
 - Current local repository validation snapshot for `3.1`:
-  - direct `pytest -q`: `1840 passed, 1 skipped`
-  - direct `ruff check .`: clean
+  - direct `pytest -q`: `1852 passed, 1 skipped`
+  - repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
   - direct `mypy main.py simple_sender`: clean (`215` source files)
-  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
-  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+  - last verified wrapper `run_tests.bat`: clean (`7/7` gates passed)
+  - last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
+  - last verified wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## [3.0.11] - 2026-04-12
 

@@ -55,6 +55,7 @@ from simple_sender.ui.ui_actions import (
     apply_ui_scale,
     bind_touch_command_feedback,
     on_auxiliary_button_visibility_change,
+    on_runtime_logging_mode_change,
     on_touch_command_feedback,
     on_linux_file_dialog_default_path_change,
     on_gui_logging_change,
@@ -113,6 +114,9 @@ class UiTogglesMixin:
 
     def _on_gui_logging_change(self):
         on_gui_logging_change(self)
+
+    def _on_runtime_logging_mode_change(self, *_):
+        on_runtime_logging_mode_change(self)
 
     def _on_performance_mode_change(self):
         on_performance_mode_change(self)

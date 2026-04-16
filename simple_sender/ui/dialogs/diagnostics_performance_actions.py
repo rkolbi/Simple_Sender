@@ -38,6 +38,16 @@ def apply_performance_test_preset(
     showerror: Callable[[str, str], None],
     perf_test_status_poll_interval: float,
 ) -> None:
+    def _invoke_handler(handler_name: str) -> None:
+        handler = getattr(app, handler_name, None)
+        if callable(handler):
+            try:
+                handler()
+            except Exception as exc:
+                log_suppressed(
+                    f"Failed applying diagnostics preset handler {handler_name}", exc
+                )
+
     try:
         app._status_perf_metrics_enabled = True
     except Exception as exc:
@@ -48,7 +58,9 @@ def apply_performance_test_preset(
     set_var_value(app, "performance_leak_watch_enabled", False)
     set_var_value(app, "performance_mode", True)
     set_var_value(app, "gui_logging_enabled", False)
+    set_var_value(app, "runtime_logging_mode", "Standard")
     set_var_value(app, "status_poll_interval", perf_test_status_poll_interval)
+    _invoke_handler("_on_runtime_logging_mode_change")
 
     settings = getattr(app, "settings", None)
     if isinstance(settings, dict):
@@ -56,6 +68,7 @@ def apply_performance_test_preset(
         settings["performance_leak_watch_enabled"] = False
         settings["performance_mode"] = True
         settings["gui_logging_enabled"] = False
+        settings["runtime_logging_mode"] = "Standard"
         settings["status_poll_interval"] = perf_test_status_poll_interval
 
     saver = getattr(app, "_save_settings", None)
@@ -82,6 +95,7 @@ def apply_performance_test_preset(
             "- Leak-watch snapshots: OFF\n"
             "- Performance mode: ON\n"
             "- GUI logging: OFF\n"
+            "- Runtime logging mode: Standard\n"
             f"- Status poll interval: {perf_test_status_poll_interval:.2f}s\n\n"
             "Restart the app before the next run for clean benchmark numbers."
         ),

@@ -80,6 +80,12 @@ def _init_behavior_preferences(
             return int(fallback)
         return value
 
+    def _runtime_logging_mode_setting() -> str:
+        raw = str(setting("runtime_logging_mode", "Standard") or "").strip().lower()
+        if raw == "verbose":
+            return "Verbose"
+        return "Standard"
+
     app.tooltip_enabled = tk.BooleanVar(value=setting("tooltips_enabled", True))
     app.tooltip_timeout_sec = tk.DoubleVar(value=setting("tooltip_timeout_sec", 10.0))
     app.numeric_keypad_enabled = tk.BooleanVar(
@@ -89,6 +95,7 @@ def _init_behavior_preferences(
         value=setting("developer_options_enabled", False)
     )
     app.gui_logging_enabled = tk.BooleanVar(value=setting("gui_logging_enabled", True))
+    app.runtime_logging_mode = tk.StringVar(value=_runtime_logging_mode_setting())
     app.pi_profile_enabled = tk.BooleanVar(value=setting("pi_profile_enabled", False))
     app.error_dialogs_enabled = tk.BooleanVar(value=setting("error_dialogs_enabled", True))
     app.grbl_popup_enabled = tk.BooleanVar(value=setting("grbl_popup_enabled", True))

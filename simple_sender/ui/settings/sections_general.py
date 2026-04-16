@@ -83,6 +83,8 @@ def _aligned_setting_label(frame, *, text: str):
 
 
 def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
+    if not hasattr(app, "runtime_logging_mode"):
+        app.runtime_logging_mode = tk.StringVar(master=parent, value="Standard")
     diagnostics_frame = ttk.LabelFrame(parent, text="Diagnostics", padding=8)
     diagnostics_frame.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     diagnostics_frame.grid_columnconfigure(1, weight=1)
@@ -126,76 +128,95 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         app.logging_check,
         "Record GUI button actions in the console log when enabled.",
     )
-    ttk.Label(developer_frame, text="Preflight check").grid(
+    _aligned_setting_label(developer_frame, text="Logging Mode").grid(
         row=1, column=0, sticky="w", padx=(0, 10), pady=4
+    )
+    app.runtime_logging_mode_combo = ttk.Combobox(
+        developer_frame,
+        state="readonly",
+        values=["Standard", "Verbose"],
+        textvariable=app.runtime_logging_mode,
+        width=16,
+    )
+    app.runtime_logging_mode_combo.grid(row=1, column=1, sticky="w", pady=4)
+    app.runtime_logging_mode_combo.bind(
+        "<<ComboboxSelected>>",
+        getattr(app, "_on_runtime_logging_mode_change", lambda *_args, **_kwargs: None),
+    )
+    apply_tooltip(
+        app.runtime_logging_mode_combo,
+        "Standard is recommended for normal use and lowers routine file-log volume. Verbose keeps fuller runtime logging for troubleshooting and may increase disk activity.",
+    )
+    ttk.Label(developer_frame, text="Preflight check").grid(
+        row=2, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_preflight_check = ttk.Button(
         developer_frame,
         text="Run check",
         command=app._run_preflight_check,
     )
-    app.btn_preflight_check.grid(row=1, column=1, sticky="w", pady=4)
+    app.btn_preflight_check.grid(row=2, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_preflight_check,
         "Scan loaded G-code for bounds and validation warnings.",
     )
     ttk.Label(developer_frame, text="Export session diagnostics").grid(
-        row=2, column=0, sticky="w", padx=(0, 10), pady=4
+        row=3, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_export_diagnostics = ttk.Button(
         developer_frame,
         text="Save report",
         command=app._export_session_diagnostics,
     )
-    app.btn_export_diagnostics.grid(row=2, column=1, sticky="w", pady=4)
+    app.btn_export_diagnostics.grid(row=3, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_export_diagnostics,
         "Save recent console/status history and settings to a text file.",
     )
     ttk.Label(developer_frame, text="Runtime telemetry").grid(
-        row=3, column=0, sticky="w", padx=(0, 10), pady=4
+        row=4, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_runtime_telemetry = ttk.Button(
         developer_frame,
         text="Open telemetry",
         command=app._open_runtime_telemetry,
     )
-    app.btn_runtime_telemetry.grid(row=3, column=1, sticky="w", pady=4)
+    app.btn_runtime_telemetry.grid(row=4, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_runtime_telemetry,
         "Open a live runtime telemetry window for queue depth and TX-loop counters.",
     )
     ttk.Label(developer_frame, text="Save final performance report").grid(
-        row=4, column=0, sticky="w", padx=(0, 10), pady=4
+        row=5, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_save_performance_report = ttk.Button(
         developer_frame,
         text="Save to Logs",
         command=app._save_performance_report_to_logs,
     )
-    app.btn_save_performance_report.grid(row=4, column=1, sticky="w", pady=4)
+    app.btn_save_performance_report.grid(row=5, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_save_performance_report,
         "Write a timestamped performance report into the app Logs folder.",
     )
     ttk.Label(developer_frame, text="Apply perf-test preset").grid(
-        row=5, column=0, sticky="w", padx=(0, 10), pady=4
+        row=6, column=0, sticky="w", padx=(0, 10), pady=4
     )
     app.btn_apply_perf_test_preset = ttk.Button(
         developer_frame,
         text="Apply preset",
         command=app._apply_performance_test_preset,
     )
-    app.btn_apply_perf_test_preset.grid(row=5, column=1, sticky="w", pady=4)
+    app.btn_apply_perf_test_preset.grid(row=6, column=1, sticky="w", pady=4)
     apply_tooltip(
         app.btn_apply_perf_test_preset,
         "Enable profiling, disable leak watch, and apply low-overhead runtime settings (restart required).",
     )
     ttk.Label(developer_frame, text="Backup bundle").grid(
-        row=6, column=0, sticky="w", padx=(0, 10), pady=4
+        row=7, column=0, sticky="w", padx=(0, 10), pady=4
     )
     backup_row = ttk.Frame(developer_frame)
-    backup_row.grid(row=6, column=1, sticky="w", pady=4)
+    backup_row.grid(row=7, column=1, sticky="w", pady=4)
     app.btn_export_backup_bundle = ttk.Button(
         backup_row,
         text="Export bundle",
@@ -217,14 +238,14 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         "Import settings and macro assets from a previously exported bundle.",
     )
     ttk.Label(developer_frame, text="Sample-only threshold (lines)").grid(
-        row=7, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.streaming_line_threshold_entry = ttk.Entry(
         developer_frame,
         textvariable=app.streaming_line_threshold,
         width=10,
     )
-    app.streaming_line_threshold_entry.grid(row=7, column=1, sticky="w", pady=(6, 0))
+    app.streaming_line_threshold_entry.grid(row=8, column=1, sticky="w", pady=(6, 0))
     attach_numeric_keypad(app.streaming_line_threshold_entry, allow_decimal=False)
     apply_tooltip(
         app.streaming_line_threshold_entry,
@@ -236,7 +257,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
             value=max(0, int(GCODE_ULTRA_LARGE_SIZE_THRESHOLD) // (1024 * 1024)),
         )
     ttk.Label(developer_frame, text="Ultra-large threshold (MB)").grid(
-        row=8, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
+        row=9, column=0, sticky="w", padx=(0, 10), pady=(6, 0)
     )
     app.ultra_large_size_threshold_mb_entry = ttk.Entry(
         developer_frame,
@@ -244,7 +265,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         width=10,
     )
     app.ultra_large_size_threshold_mb_entry.grid(
-        row=8, column=1, sticky="w", pady=(6, 0)
+        row=9, column=1, sticky="w", pady=(6, 0)
     )
     attach_numeric_keypad(app.ultra_large_size_threshold_mb_entry, allow_decimal=False)
     apply_tooltip(
@@ -283,7 +304,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
         textvariable=app.ultra_large_size_threshold_info_var,
     )
     app.ultra_large_size_threshold_info_label.grid(
-        row=9, column=1, sticky="w", pady=(2, 0)
+        row=10, column=1, sticky="w", pady=(2, 0)
     )
     apply_tooltip(
         app.ultra_large_size_threshold_info_label,
