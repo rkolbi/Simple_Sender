@@ -714,6 +714,9 @@ class GRBLSettingsController:
         desc = info.get("desc", "")
         units = info.get("units", "")
         tooltip = info.get("tooltip", "")
+        detail_fallback_note = str(
+            getattr(self.app, "_grbl_setting_detail_fallback_note", "") or ""
+        ).strip()
         baseline_val = self._settings_baseline.get(key, "")
         current_val = self._settings_values.get(key, "")
         verify_failed_expected = self._settings_verify_failed.get(key)
@@ -729,6 +732,8 @@ class GRBLSettingsController:
             parts.append(tooltip)
         elif desc:
             parts.append(desc)
+            if detail_fallback_note:
+                parts.append(detail_fallback_note)
         if units:
             parts.append(f"Units: {units}")
         if allow_text:

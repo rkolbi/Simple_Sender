@@ -8,7 +8,7 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 Current stable release: `3.1`. This is the current release-ready baseline.
 
 Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1852 passed, 1 skipped`
+- Direct `pytest -q`: `1861 passed, 3 skipped`
 - Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
 - Direct `mypy main.py simple_sender`: clean (`215` source files)
 - Last verified wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
@@ -365,7 +365,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
-- **Tooltips:** Available for normal buttons/fields and settings tables; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. The About popup intentionally leaves tooltips disabled so the reference text and search highlights stay unobstructed. Toggle the normal app tooltips with the Tips button in the status bar or App Settings.
+- **Tooltips:** Available for normal buttons/fields and settings tables; disabled controls append a reason. Tooltips are wrapped and screen-bounded. After clicking a widget, that widget's tooltip is suppressed until the pointer leaves and re-enters. The About popup intentionally leaves tooltips disabled so the reference text and search highlights stay unobstructed. The Tips quick toggle now uses state-specific help text, and the Logs popup controls also expose explicit tooltips. Toggle the normal app tooltips with the Tips button in the status bar or App Settings.
 - **Worker-thread UI marshaling:** Background workers post UI updates through the UI queue/UI-thread helpers instead of calling Tk widgets directly, reducing cross-thread Tk risk during connect/load/settings/log operations.
 - **Manual queue backpressure:** Immediate/manual commands use a bounded queue; if it fills, new commands are dropped and the UI status shows the cumulative dropped count.
 - **Job Setup run gate:** Run checks the current Job Setup tool-reference state used by Tool Change, not just the Tool Ref display text. If the stored reference is missing, non-numeric, or missing the current `TOOL_REFERENCE_FORMAT`, it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
@@ -427,6 +427,8 @@ This is a practical end-to-end flow, with rationale for the key options.
 
 ## GRBL Settings UI
 - If the post-connect `$$` snapshot has already been captured, the first popup open uses that cached data immediately. Refresh $$ (idle, not alarmed, after handshake) requests a newer dump. The table is scrollable, shows descriptions, supports inline numeric validation/ranges, and keeps pending edits highlighted until saved. If enabled, the optional Raw $$ popup button opens the raw text capture.
+- Standard GRBL 1.1h settings now include richer built-in hover help in the popup. If the older upstream markdown reference assets are present locally, that richer upstream text still overrides the bundled help.
+- If a setting has no richer reference text available, the popup falls back to the compact built-in description and states that it is doing so.
 
 ## Macros
 
@@ -461,9 +463,9 @@ Macro scripting remains fully open, and runtime hardening is applied around it: 
 Tool-reference workflows store `TOOL_REFERENCE` from work Z (`wz`) because `G10 L20` writes the WCS Z offset. `%update` blocks until a fresh status report arrives for user macros, so `wx/wy/wz` are current before capture or adjustment. User macros snapshot the current modal state and can restore it with `STATE_RETURN` (or `%state_return`). The built-in Job Setup and Tool Change workflows use the same modal snapshot/restore safety model internally, but they are now implemented directly in application code.
 
 Current fixed-sensor / bitsetter measurement behavior is:
-- one coarse seek onto the sensor using the current App Settings Z jog speed as the coarse feed for Job Setup / Tool Change
+- one coarse seek onto the sensor using the configured Bit Setter Rough Probe Speed for Job Setup / Tool Change
 - then 5 exact samples using the shared high-precision helper
-- each sample retracts `5.0 mm`, dwells `0.5 s`, and re-probes `6.0 mm` at `175 mm/min`
+- each sample retracts `5.0 mm`, dwells for the configured Bit Setter Probe Dwell, and re-probes `6.0 mm` at the configured Bit Setter Fine Probe Speed
 - the final result discards the low/high sample and averages the middle 3
 - normal acceptance still requires spread `<= 0.050 mm`
 - Tool Change only: if the first round exceeds `0.050 mm`, one retry round is attempted at `100 mm/min`; the retry must still pass the normal spread rule or the Tool Change fails
@@ -648,9 +650,9 @@ VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root to pro
 ## Estimation
 - Estimates bounds, feed time, and rapid time (uses $110-112 when available, then manual max-rate entries and the fallback rapid rate).
 - The loaded job always reports:
-  - `Estimated Job Time: HH:MM [CONFIDENT|ROUGH]`
+  - `Estimated Job Time: HH:MM [CONFIDENT|PROVISIONAL|ROUGH]`
   - `Job Dimensions: X,Y,Z mm / X,Y,Z in [CONFIDENT|ROUGH]`
-- Confidence is derived from available machine settings and scan coverage.
+- Confidence is derived from available machine settings and scan coverage. Estimate confidence now preserves the useful distinction between fully confident, provisional, and rough paths instead of flattening every non-confident case together.
 - If header `SSMETA` includes complete extents and units, dimensions are sourced from metadata and reported as confident; estimate confidence still depends on machine settings/live observations.
 - No Top View/Spatial render stage runs during load in the lean sender runtime.
 
@@ -858,7 +860,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1852 passed, 1 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1861 passed, 3 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
 
@@ -1211,6 +1213,7 @@ Macro UI is included below along with the rest of the interface.
 - Refresh: reloads log files (last ~1000 lines).
 - Clear Logs: truncates active logs and removes rotated log files after confirmation.
 - Export Logs: writes a zip bundle for support and reports complete success, partial success (with failed files), or total failure.
+- The source filter, level filter, Refresh, Export Logs, Clear Logs, and Close controls all have explicit tooltip/help text.
 
 ### Right-side Controls
 - Feed override slider: sets feed override target (10-200%).

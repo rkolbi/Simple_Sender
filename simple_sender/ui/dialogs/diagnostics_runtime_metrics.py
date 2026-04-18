@@ -33,6 +33,15 @@ def _safe_float_var_get(app: Any, attr_name: str) -> float:
         return 0.0
 
 
+def _normalize_confidence_label(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value == "confident":
+        return "confident"
+    if value == "provisional":
+        return "provisional"
+    return "rough"
+
+
 def _append_kasa_metrics(
     app: Any,
     metrics: dict[str, Any],
@@ -428,17 +437,13 @@ def _append_gcode_source_metrics(
     except (TypeError, ValueError):
         metrics["estimated_job_time_sec"] = None
     raw_estimate_confidence = str(getattr(app, "_estimate_confidence", "") or "")
-    metrics["estimate_confidence"] = (
-        "confident" if raw_estimate_confidence.strip().lower() == "confident" else "rough"
-    )
+    metrics["estimate_confidence"] = _normalize_confidence_label(raw_estimate_confidence)
     raw_dimensions_confidence = str(
         getattr(app, "_gcode_dimensions_confidence", "")
         or getattr(app, "_gcode_bounds_confidence", "")
     )
-    metrics["dimensions_confidence"] = (
-        "confident"
-        if raw_dimensions_confidence.strip().lower() == "confident"
-        else "rough"
+    metrics["dimensions_confidence"] = _normalize_confidence_label(
+        raw_dimensions_confidence
     )
     estimate_reasons = getattr(app, "_gcode_estimate_confidence_reasons", None)
     if isinstance(estimate_reasons, dict):

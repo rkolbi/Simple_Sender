@@ -53,14 +53,36 @@ def _apply_toggle_button_state(app, btn, enabled: bool):
     btn.config(style=on_style if enabled else off_style)
 
 
+def tooltips_toggle_tooltip_text(enabled: bool) -> str:
+    if enabled:
+        return "Hide tooltips across the app."
+    return "Show tooltips across the app."
+
+
+def _update_tooltip_text(btn, text: str) -> None:
+    try:
+        btn._tooltip_text = text
+    except Exception:
+        return
+    existing = getattr(btn, "_tooltip", None)
+    setter = getattr(existing, "set_text", None)
+    if callable(setter):
+        try:
+            setter(text)
+        except Exception:
+            return
+
+
 def refresh_tooltips_toggle_text(app):
     text = "Tips"
     enabled = app.tooltip_enabled.get()
+    tooltip_text = tooltips_toggle_tooltip_text(bool(enabled))
     for attr in ("btn_toggle_tips", "btn_toggle_tips_settings"):
         btn = getattr(app, attr, None)
         if btn:
             btn.config(text=text)
             _apply_toggle_button_state(app, btn, enabled)
+            _update_tooltip_text(btn, tooltip_text)
 
 
 def refresh_keybindings_toggle_text(app):

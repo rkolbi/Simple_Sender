@@ -50,7 +50,12 @@ def _job_loaded_for_file_info(app) -> bool:
 
 
 def _fmt_confidence(raw: str | None) -> str:
-    return "CONFIDENT" if str(raw or "").strip().lower() == "confident" else "ROUGH"
+    value = str(raw or "").strip().lower()
+    if value == "confident":
+        return "CONFIDENT"
+    if value == "provisional":
+        return "PROVISIONAL"
+    return "ROUGH"
 
 
 def _fmt_duration(seconds: float | int | None) -> str:

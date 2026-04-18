@@ -397,9 +397,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Bit Setter and Tool Reference Behavior",
                 bullets=(
-                    "The fixed sensor process starts with one coarse seek using the current App Settings Z jog speed as the coarse feed for Job Setup and Tool Change.",
+                    "The fixed sensor process starts with one coarse seek using the Bit Setter Rough Probe Speed from App Settings for Job Setup and Tool Change.",
                     "It then takes five exact samples using the shared high-precision helper.",
-                    "Each exact sample retracts 5.0 mm, dwells for 0.5 s, and re-probes 6.0 mm at 175 mm/min.",
+                    "Each exact sample retracts 5.0 mm, dwells for the configured Bit Setter Probe Dwell, and re-probes 6.0 mm at the configured Bit Setter Fine Probe Speed.",
                     "The final result discards the highest and lowest values and averages the middle three.",
                     "Normal acceptance requires the sample spread to stay at or below 0.050 mm.",
                     "Tool Change gets one retry round at 100 mm/min if the first round exceeds the normal spread limit. If the retry still fails, Tool Change fails.",
@@ -671,7 +671,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
         "Estimation",
         bullets=(
             "Simple Sender estimates bounds, feed time, and rapid time using $110, $111, and $112 when available, then falls back to the manual max-rate entries and fallback rapid rate when necessary.",
-            "Loaded jobs report Estimated Job Time as HH:MM with a CONFIDENT or ROUGH confidence label.",
+            "Loaded jobs report Estimated Job Time as HH:MM with a CONFIDENT, PROVISIONAL, or ROUGH confidence label based on the data available.",
             "Loaded jobs also report Job Dimensions in both millimeters and inches with a CONFIDENT or ROUGH label.",
             "If SSMETA includes complete extents and units, dimensions are reported from metadata and marked confident.",
             "Estimate confidence still depends on machine settings and observed data, even when dimensions come from metadata.",

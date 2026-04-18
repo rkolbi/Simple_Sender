@@ -70,6 +70,7 @@ _TOKEN_AXIS_WORD = re.compile(r"[XYZ][-+]?(?:\d+(?:\.\d*)?|\.\d+)?", re.IGNORECA
 
 _ESTIMATE_CONFIDENCE_PROVISIONAL = "provisional"
 _ESTIMATE_CONFIDENCE_CONFIDENT = "confident"
+_ESTIMATE_CONFIDENCE_ROUGH = "rough"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -78,7 +79,11 @@ def _log_suppressed(context: str, exc: BaseException) -> None:
 
 def _confidence_badge(raw: str | None) -> str:
     value = str(raw or "").strip().lower()
-    return "CONFIDENT" if value == _ESTIMATE_CONFIDENCE_CONFIDENT else "ROUGH"
+    if value == _ESTIMATE_CONFIDENCE_CONFIDENT:
+        return "CONFIDENT"
+    if value == _ESTIMATE_CONFIDENCE_PROVISIONAL:
+        return "PROVISIONAL"
+    return "ROUGH"
 
 
 def _set_gcode_status_text_if_changed(app, text: str) -> None:

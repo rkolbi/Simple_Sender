@@ -26,6 +26,7 @@ from tkinter import ttk
 from typing import Any
 
 from simple_sender.constants.messages import StatusMessages
+from simple_sender.ui.toggle_text import tooltips_toggle_tooltip_text
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import set_kb_id
 
@@ -232,6 +233,10 @@ def build_status_bar(app, before):
     )
     set_kb_id(app.btn_toggle_tips, "toggle_tooltips")
     app.btn_toggle_tips.pack(side="right", padx=(8, 0))
+    apply_tooltip(
+        app.btn_toggle_tips,
+        tooltips_toggle_tooltip_text(bool(app.tooltip_enabled.get())),
+    )
     app.btn_toggle_keybinds = ttk.Button(
         status_bar,
         text="Keys",

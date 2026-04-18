@@ -24,7 +24,15 @@ import csv
 import os
 import re
 
+from simple_sender.ui.grbl_settings.bundled_reference import (
+    BUNDLED_GRBL_SETTING_TOOLTIPS,
+)
 from simple_sender.utils.constants import GRBL_SETTING_DESC, GRBL_SETTING_KEYS
+
+GRBL_SETTINGS_FALLBACK_DETAIL_NOTE = (
+    "Detailed reference text is unavailable for this setting in this build; "
+    "showing the compact built-in description."
+)
 
 
 def load_grbl_setting_info(app, base_dir: str):
@@ -83,8 +91,6 @@ def load_grbl_setting_info(app, base_dir: str):
             }
         keys = GRBL_SETTING_KEYS[:]
 
-    load_grbl_setting_tooltips(info, base_dir)
-
     pocket_overrides = {
         0: ("Step Pulse Length", "Length of the step pulse delivered to drivers."),
         1: ("Step Idle Delay", "Time before steppers disable after motion (255 keeps enabled)."),
@@ -133,11 +139,16 @@ def load_grbl_setting_info(app, base_dir: str):
             info[key]["desc"] = desc
         keys.append(idx)
 
+    detail_reference_available = load_grbl_setting_tooltips(info, base_dir)
+
     app._grbl_setting_info = info
     app._grbl_setting_keys = sorted(set(keys))
+    app._grbl_setting_detail_reference_available = bool(detail_reference_available)
+    app._grbl_setting_detail_fallback_note = GRBL_SETTINGS_FALLBACK_DETAIL_NOTE
 
 
-def load_grbl_setting_tooltips(info: dict, base_dir: str):
+def load_grbl_setting_tooltips(info: dict, base_dir: str) -> bool:
+    loaded_any = False
     md_path = os.path.join(
         base_dir,
         "ref",
@@ -147,33 +158,44 @@ def load_grbl_setting_tooltips(info: dict, base_dir: str):
         "markdown",
         "settings.md",
     )
-    if not os.path.isfile(md_path):
-        return
-    try:
-        with open(md_path, "r", encoding="utf-8", errors="replace") as f:
-            md = f.read()
-    except Exception:
-        return
-    pattern = re.compile(r"^#### \$(\d+)[^\n]*\n(.*?)(?=^#### \$|\Z)", re.M | re.S)
-    for match in pattern.finditer(md):
-        idx = int(match.group(1))
-        body = match.group(2).strip()
-        if not body:
-            continue
-        lines: list[str] = []
-        for raw in body.splitlines():
-            s = raw.strip()
-            if not s:
-                if lines and lines[-1] != "":
-                    lines.append("")
-                continue
-            if s.startswith("|"):
-                continue
-            if s.startswith(":"):
-                continue
-            s = s.replace("`", "")
-            lines.append(s)
-        tooltip = "\n".join([ln for ln in lines if ln != ""]).strip()
+    if os.path.isfile(md_path):
+        try:
+            with open(md_path, "r", encoding="utf-8", errors="replace") as f:
+                md = f.read()
+        except Exception:
+            md = ""
+        if md:
+            pattern = re.compile(r"^#### \$(\d+)[^\n]*\n(.*?)(?=^#### \$|\Z)", re.M | re.S)
+            for match in pattern.finditer(md):
+                idx = int(match.group(1))
+                body = match.group(2).strip()
+                if not body:
+                    continue
+                lines: list[str] = []
+                for raw in body.splitlines():
+                    s = raw.strip()
+                    if not s:
+                        if lines and lines[-1] != "":
+                            lines.append("")
+                        continue
+                    if s.startswith("|"):
+                        continue
+                    if s.startswith(":"):
+                        continue
+                    s = s.replace("`", "")
+                    lines.append(s)
+                tooltip = "\n".join([ln for ln in lines if ln != ""]).strip()
+                key = f"${idx}"
+                if key in info and tooltip:
+                    info[key]["tooltip"] = tooltip
+                    loaded_any = True
+    for idx, tooltip in BUNDLED_GRBL_SETTING_TOOLTIPS.items():
         key = f"${idx}"
-        if key in info and tooltip:
-            info[key]["tooltip"] = tooltip
+        if key not in info:
+            continue
+        if str(info[key].get("tooltip", "") or "").strip():
+            continue
+        info[key]["tooltip"] = str(tooltip or "").strip()
+        if info[key]["tooltip"]:
+            loaded_any = True
+    return loaded_any

@@ -5,7 +5,33 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
-- No unreleased changes are currently staged beyond the `3.1` release baseline.
+### Changed
+- GRBL Settings popup help now restores richer per-setting reference text in the safest possible way:
+  - standard GRBL 1.1h settings now ship with bundled repo-local rich tooltip text
+  - if the older upstream markdown reference file is present locally, its richer text still overrides the bundled content
+  - settings that still lack richer reference text continue to use the existing compact fallback path
+- Estimate-confidence wording is now more truthful across the current UI/help surface:
+  - user-facing estimate labels now preserve `PROVISIONAL` instead of flattening every non-confident path to `ROUGH`
+  - diagnostics/runtime metrics preserve that same distinction
+
+### Fixed
+- Fixed-sensor / bit-setter operator help text now matches the current implementation:
+  - coarse seek uses `Bit Setter Rough Probe Speed`
+  - exact samples use `Bit Setter Fine Probe Speed`
+  - dwell uses `Bit Setter Probe Dwell`
+- Small visible help surfaces were tightened:
+  - the `Tips` quick toggle now has state-specific tooltip text
+  - Logs popup filters and action buttons now have explicit tooltip/help text
+
+### Documentation
+- README and changelog were refreshed so the current docs stay aligned with the shipped baseline:
+  - direct local validation snapshot now reflects the latest full green run
+  - GRBL Settings docs now describe the bundled rich-help layer and preserved fallback behavior
+  - estimation docs now mention the current `CONFIDENT` / `PROVISIONAL` / `ROUGH` distinction
+
+### Validation
+- Current local repository validation snapshot after the latest truthfulness/help/doc updates:
+  - direct `pytest -q`: `1861 passed, 3 skipped`
 
 ## [3.1] - 2026-04-14
 

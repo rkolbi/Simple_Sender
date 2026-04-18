@@ -42,6 +42,7 @@ from simple_sender.ui.theme_helpers import (
     notebook_page_style_name,
     text_display_theme_options,
 )
+from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.utils.atomic_files import atomic_replace_path
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.logging_config import get_log_dir
@@ -65,6 +66,14 @@ LOG_SOURCES = {
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_LOG_VIEWER_TOOLTIP_TEXT = {
+    "source": "Choose which log file group to show.",
+    "level": "Show entries at or above this severity.",
+    "refresh": "Reload the selected logs with the current filters.",
+    "export": "Save the current log files to a ZIP archive.",
+    "clear": "Clear active logs and remove rotated log files.",
+    "close": "Close the Logs window.",
+}
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -290,6 +299,17 @@ def _format_export_outcome(
     )
 
 
+def _apply_log_viewer_tooltips(viewer) -> None:
+    apply_tooltip(viewer.source_combo, _LOG_VIEWER_TOOLTIP_TEXT["source"])
+    apply_tooltip(viewer.level_combo, _LOG_VIEWER_TOOLTIP_TEXT["level"])
+    apply_tooltip(viewer.refresh_button, _LOG_VIEWER_TOOLTIP_TEXT["refresh"])
+    apply_tooltip(viewer.export_button, _LOG_VIEWER_TOOLTIP_TEXT["export"])
+    apply_tooltip(viewer.clear_button, _LOG_VIEWER_TOOLTIP_TEXT["clear"])
+    close_button = getattr(viewer, "close_button", None)
+    if close_button is not None:
+        apply_tooltip(close_button, _LOG_VIEWER_TOOLTIP_TEXT["close"])
+
+
 class LogViewer(ttk.Frame):
     def __init__(
         self,
@@ -361,13 +381,18 @@ class LogViewer(ttk.Frame):
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(8, 0))
-        ttk.Button(actions, text="Refresh", command=self.refresh).pack(side="left")
+        self.refresh_button = ttk.Button(actions, text="Refresh", command=self.refresh)
+        self.refresh_button.pack(side="left")
         self.export_button = ttk.Button(actions, text="Export Logs...", command=self.export_logs)
         self.export_button.pack(side="left", padx=(8, 0))
         self.clear_button = ttk.Button(actions, text="Clear Logs", command=self.clear_logs)
         self.clear_button.pack(side="left", padx=(8, 0))
         if self._include_close:
-            ttk.Button(actions, text="Close", command=self._close).pack(side="right")
+            self.close_button = ttk.Button(actions, text="Close", command=self._close)
+            self.close_button.pack(side="right")
+        else:
+            self.close_button = None
+        _apply_log_viewer_tooltips(self)
 
         self.source_combo.bind("<<ComboboxSelected>>", self.refresh)
         self.level_combo.bind("<<ComboboxSelected>>", self.refresh)
