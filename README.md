@@ -8,11 +8,11 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 Current stable release: `3.1`. This is the current release-ready baseline.
 
 Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1861 passed, 3 skipped`
+- Direct `pytest -q`: `1873 passed, 2 skipped`
 - Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
 - Direct `mypy main.py simple_sender`: clean (`215` source files)
 - Last verified wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1838 passed, 3 skipped`
+- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1872 passed, 3 skipped`
 - Last verified wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## Design Objectives and Key Features
@@ -77,6 +77,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read Job) through the shared file-dialog path, clear/unload button, inline status/progress. On Linux, Tk file dialogs use the current theme plus temporary scaling/min-size safeguards so they stay readable on Pi/Openbox touchscreen setups, and default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** points somewhere else.
+- Top-toolbar icon assets are repo-local under `simple_sender/ui/icons`. Runtime now prefers app-local raster PNG toolbar assets for Windows/Linux parity, keeps repo-local SVG lookup as a compatibility fallback, and only falls back to the drawn button shapes when asset loading truly fails.
 - Header metadata support (`SSMETA ...`) parsed from the job file header (bounded read) and surfaced in the Job Info view.
 - Status bar shows streaming file name when a job is running.
 - Lean sender UX: no Top View/Spatial rendering paths in the runtime load pipeline.
@@ -92,7 +93,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
-- Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), and python-kasa (used for Kasa Plug control on Linux).
+- Python 3.11+, Tkinter (bundled), pyserial, pygame (required for joystick bindings), python-kasa (used for Kasa Plug control on Linux), and Pillow (used by the toolbar icon asset pipeline).
 
 ```powershell
 python -m venv .venv
@@ -313,7 +314,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 6) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
-- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job, Clear Job, Run/Pause/Resume/Stop, Unlock.
+- **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job, Clear Job, Run/Pause/Resume/Stop, Unlock. The toolbar prefers the app-local icon assets in `simple_sender/ui/icons`; if those assets cannot be loaded, the existing drawn shape icons remain the final fallback.
 
 - **Hints:** Most controls show tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again. The About popup intentionally disables tooltips so reading and search results stay unobstructed.
 
@@ -860,7 +861,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1861 passed, 3 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1838 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1873 passed, 2 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1872 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
 
@@ -970,6 +971,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
+- Toolbar icons fall back to drawn shapes: confirm the app-local assets in `simple_sender/ui/icons` are present and install the pinned runtime dependencies from `requirements.txt`. The normal Windows/Linux toolbar path now uses those repo-local PNG assets and does not require `PySide6` for normal icon display.
 - Raspberry Pi feels sluggish: keep `Performance mode` enabled, avoid unnecessary background apps, prefer local SSD/fast SD storage, and use diagnostics export to see whether UI queue drain or file parsing is the bottleneck.
 - Large file handling feels slow: let the initial load/prepare finish, avoid repeated reloads during diagnostics capture, and expect some stats work to be sampled or deferred on ultra-large files.
 - Macro behavior is unexpected: confirm the macro came from a trusted source, review the sample view or Macro Manager contents, and re-test with the spindle off before relying on it.

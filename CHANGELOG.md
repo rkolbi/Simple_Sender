@@ -6,6 +6,11 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ## [Unreleased]
 
 ### Changed
+- Top-toolbar asset loading is now cross-platform reliable for the current runtime:
+  - toolbar assets now resolve from app-local `simple_sender/ui/icons`
+  - runtime prefers repo-local PNG toolbar assets for the normal Windows/Linux path
+  - repo-local SVG lookup remains available as a compatibility fallback
+  - drawn toolbar shapes remain the final fallback only when asset loading truly fails
 - GRBL Settings popup help now restores richer per-setting reference text in the safest possible way:
   - standard GRBL 1.1h settings now ship with bundled repo-local rich tooltip text
   - if the older upstream markdown reference file is present locally, its richer text still overrides the bundled content
@@ -15,6 +20,9 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - diagnostics/runtime metrics preserve that same distinction
 
 ### Fixed
+- Cross-platform toolbar icon rendering now matches the intended design:
+  - Windows and Raspberry Pi / Linux no longer rely on a fragile Qt-only SVG render path for the normal toolbar icon display path
+  - the normal deployed toolbar path now uses app-local raster assets and runtime tinting through Pillow
 - Fixed-sensor / bit-setter operator help text now matches the current implementation:
   - coarse seek uses `Bit Setter Rough Probe Speed`
   - exact samples use `Bit Setter Fine Probe Speed`
@@ -26,12 +34,18 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ### Documentation
 - README and changelog were refreshed so the current docs stay aligned with the shipped baseline:
   - direct local validation snapshot now reflects the latest full green run
+  - wrapper-gate snapshot now reflects the latest clean `run_tests.bat` execution
+  - runtime dependency docs now include Pillow for the current toolbar icon pipeline
+  - toolbar icon docs now describe the current app-local raster-first path plus SVG/drawn fallback behavior
   - GRBL Settings docs now describe the bundled rich-help layer and preserved fallback behavior
   - estimation docs now mention the current `CONFIDENT` / `PROVISIONAL` / `ROUGH` distinction
 
 ### Validation
-- Current local repository validation snapshot after the latest truthfulness/help/doc updates:
-  - direct `pytest -q`: `1861 passed, 3 skipped`
+- Current local repository validation snapshot after the latest toolbar/docs truthfulness updates:
+  - direct `pytest -q`: `1873 passed, 2 skipped`
+  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1872 passed, 3 skipped`
+  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## [3.1] - 2026-04-14
 

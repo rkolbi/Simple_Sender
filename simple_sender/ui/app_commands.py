@@ -40,9 +40,10 @@ from simple_sender.ui.connection_runtime_state import (
     get_connection_runtime_state,
     sync_connection_runtime_state_to_app,
 )
+from simple_sender.ui.controls.toolbar import set_toolbar_button_label
 from simple_sender.ui.dry_run_start_prompt import confirm_dry_run_start_mode
 from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
-from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.icons import ICON_CONNECT
 from simple_sender.ui.job_setup_state import (
     confirm_job_start_without_setup,
     has_valid_job_setup_state,
@@ -261,7 +262,8 @@ def refresh_ports(app, auto_connect: bool = False):
 
 def _set_connection_controls_pending(app, label: str) -> None:
     try:
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state="disabled")
+        set_toolbar_button_label(app.btn_conn, ICON_CONNECT, label)
+        app.btn_conn.config(state="disabled")
     except Exception as exc:
         _log_suppressed("Failed setting connect button to pending state", exc)
     try:
@@ -285,7 +287,8 @@ def _sync_connection_controls(app) -> None:
     btn_state = "disabled" if busy else "normal"
     label = "Disconnect" if connected else "Connect"
     try:
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, label), state=btn_state)
+        set_toolbar_button_label(app.btn_conn, ICON_CONNECT, label)
+        app.btn_conn.config(state=btn_state)
     except Exception as exc:
         _log_suppressed("Failed syncing connect button state", exc)
     try:

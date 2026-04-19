@@ -20,9 +20,18 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+
 def icon_label(icon: str, label: str) -> str:
     """Render a button label with a leading icon."""
     return f"{icon} {label}"
+
+
+def stacked_icon_label(icon: str, *lines: str) -> str:
+    """Render a toolbar label with a leading icon row and stacked caption lines."""
+    cleaned = [str(line).strip() for line in lines if str(line).strip()]
+    if not cleaned:
+        return str(icon)
+    return "\n".join([str(icon)] + cleaned)
 
 ICON_REFRESH = "⟳"
 ICON_CONNECT = "⚡"

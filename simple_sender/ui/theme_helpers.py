@@ -1009,6 +1009,60 @@ def _apply_home_button_theme(app, palette: dict):
     )
 
 
+def _apply_top_toolbar_button_theme(app, palette: dict) -> None:
+    style = getattr(app, "style", None)
+    if style is None:
+        return
+    base_style = str(getattr(app, "top_toolbar_button_style", "") or "").strip()
+    role_styles = getattr(app, "top_toolbar_button_styles", None)
+    role_styles = role_styles if isinstance(role_styles, dict) else {}
+    button_bg = palette.get("button_bg", "#f0f0f0") if isinstance(palette, dict) else "#f0f0f0"
+    hover = palette.get("button_hover", button_bg) if isinstance(palette, dict) else button_bg
+    pressed = palette.get("button_pressed", button_bg) if isinstance(palette, dict) else button_bg
+    disabled_bg = palette.get("bg", "#f0f0f0") if isinstance(palette, dict) else "#f0f0f0"
+    disabled_fg = palette.get("muted_fg", "#808080") if isinstance(palette, dict) else "#808080"
+    palette_colors = {
+        "default": palette.get("fg", "#202020"),
+        "connection": palette.get("accent", "#1565c0"),
+        "job": palette.get("accent_secondary") or palette.get("accent") or "#6d4c41",
+        "run": "#2e7d32",
+        "pause": "#ef6c00",
+        "resume": "#00897b",
+        "stop": "#c62828",
+        "recovery": "#8d6e63",
+    }
+    style_names: dict[str, str] = {}
+    if base_style:
+        style_names["default"] = base_style
+    for role, style_name in role_styles.items():
+        normalized_name = str(style_name or "").strip()
+        if normalized_name:
+            style_names[str(role or "").strip() or "default"] = normalized_name
+    for role, style_name in style_names.items():
+        accent = _normalize_color(app, str(palette_colors.get(role, palette_colors["default"])), "#202020")
+        style.configure(
+            style_name,
+            background=button_bg,
+            foreground=accent,
+            bordercolor=accent,
+            lightcolor=button_bg,
+            darkcolor=button_bg,
+        )
+        style.map(
+            style_name,
+            background=[
+                ("pressed", pressed),
+                ("active", hover),
+                ("disabled", disabled_bg),
+            ],
+            foreground=[
+                ("pressed", accent),
+                ("active", accent),
+                ("disabled", disabled_fg),
+            ],
+        )
+
+
 def _reapply_button_metrics(app) -> None:
     style = app.style
     touch_padding = (10, 12)
@@ -1022,6 +1076,27 @@ def _reapply_button_metrics(app) -> None:
         )
     except Exception as exc:
         _log_suppressed("Failed reapplying icon button metrics", exc)
+    try:
+        toolbar_font = getattr(app, "top_toolbar_button_font", None)
+        style_names = [
+            str(getattr(app, "top_toolbar_button_style", "") or "").strip(),
+            *(
+                str(style_name or "").strip()
+                for style_name in getattr(app, "top_toolbar_button_styles", {}).values()
+            ),
+        ]
+        for style_name in style_names:
+            if not style_name:
+                continue
+            style.configure(
+                style_name,
+                anchor="center",
+                justify="center",
+                padding=touch_padding,
+                font=toolbar_font,
+            )
+    except Exception as exc:
+        _log_suppressed("Failed reapplying top-toolbar button metrics", exc)
     try:
         style_name = getattr(app, "home_button_style", "")
         if style_name:
@@ -1083,6 +1158,10 @@ def apply_theme(app, theme: str) -> str:
                     _apply_icon_button_theme(app, palette)
                 except Exception as exc:
                     _log_suppressed("Failed applying icon button theme overrides", exc)
+                try:
+                    _apply_top_toolbar_button_theme(app, palette)
+                except Exception as exc:
+                    _log_suppressed("Failed applying top-toolbar button theme overrides", exc)
             else:
                 app.theme_palette = {}
             _seed_plain_tk_widget_defaults(app)

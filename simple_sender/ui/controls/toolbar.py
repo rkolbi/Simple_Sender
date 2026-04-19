@@ -23,10 +23,11 @@
 import logging
 from simple_sender.utils.log_suppressed import log_suppressed_exception
 import os
+from pathlib import Path
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
-from typing import Any
+from typing import Any, cast
 
 from simple_sender.constants.messages import MachineStateMessages
 from simple_sender.ui.icons import (
@@ -42,16 +43,43 @@ from simple_sender.ui.icons import (
     ICON_RUN,
     ICON_STOP,
     ICON_UNLOCK,
-    icon_label,
+    stacked_icon_label,
 )
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
+from simple_sender.ui.widgets_buttons import ToolbarShapeButton
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 _TOOLBAR_GROUP_LABEL_STYLE = "SimpleSender.ToolbarGroup.TLabel"
 _TOOLBAR_GROUP_FOCUS_LABEL_STYLE = "SimpleSender.ToolbarGroupFocus.TLabel"
 _TOOLBAR_FOCUS_BLUE = "#1565c0"
+
+_TOOLBAR_BUTTON_ACCENTS = {
+    "connection": "#5b7cff",
+    "job": "#5fd0ff",
+    "run": "#2e7d32",
+    "pause": "#ef6c00",
+    "resume": "#00a79d",
+    "stop": "#d83b2d",
+    "recovery": "#b08974",
+}
+_TOOLBAR_BUTTON_DEFAULT_SIZE = 72
+_TOOLBAR_ASSET_PRIMARY_DIR = Path(__file__).resolve().parents[1] / "icons"
+_TOOLBAR_ASSET_FALLBACK_DIRS = (
+    Path(__file__).resolve().parents[3] / "ref" / "icons",
+)
+_TOOLBAR_ASSET_NAME_BY_KEY = {
+    "refresh": "refresh.svg",
+    "connect": "connect.svg",
+    "read_job": "read_job.svg",
+    "clear_job": "clear_job.svg",
+    "run": "run.svg",
+    "pause": "pause.svg",
+    "resume": "resume.svg",
+    "stop_reset": "stop.svg",
+    "unlock": "unlock.svg",
+}
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -236,9 +264,332 @@ def _apply_toolbar_group_style(label: Any, style_name: str) -> None:
         _log_suppressed("Failed applying toolbar group label style", exc)
 
 
+def toolbar_button_label(icon: str, *lines: str) -> str:
+    return stacked_icon_label(icon, *lines)
+
+
+def set_toolbar_button_label(button: Any, icon: str, *lines: str) -> None:
+    if not _widget_exists(button):
+        return
+    text = toolbar_button_label(icon, *lines)
+    try:
+        setter = getattr(button, "set_content", None)
+        if callable(setter):
+            setter(text)
+        else:
+            button.config(text=text)
+    except Exception as exc:
+        _log_suppressed("Failed updating toolbar button label", exc)
+    try:
+        button._toolbar_accessible_label = " ".join(str(line).strip() for line in lines if str(line).strip())
+    except Exception as exc:
+        _log_suppressed("Failed caching toolbar button accessible label", exc)
+
+
+def _toolbar_button_accent(app: Any, role: str) -> str:
+    palette = getattr(app, "theme_palette", None)
+    palette = palette if isinstance(palette, dict) else {}
+    if role == "connection":
+        return str(palette.get("accent") or _TOOLBAR_BUTTON_ACCENTS["connection"])
+    if role == "job":
+        return str(
+            palette.get("accent_secondary")
+            or palette.get("accent")
+            or _TOOLBAR_BUTTON_ACCENTS["job"]
+        )
+    return str(_TOOLBAR_BUTTON_ACCENTS.get(role, palette.get("fg") or "#202020"))
+
+
+def _toolbar_button_background(app: Any) -> str:
+    try:
+        bar = getattr(app, "toolbar_bar", None)
+        if bar is not None:
+            background = str(bar.cget("background") or "").strip()
+            if background:
+                return background
+    except Exception:
+        pass
+    style = getattr(app, "style", None)
+    if style is not None:
+        try:
+            frame_style = getattr(getattr(app, "toolbar_bar", None), "cget", lambda _key: "")("style") or "TFrame"
+            background = str(style.lookup(frame_style, "background") or "").strip()
+            if background:
+                return background
+        except Exception:
+            pass
+    try:
+        return str(app.cget("background") or "").strip() or "#1f2430"
+    except Exception:
+        return "#1f2430"
+
+
+def _toolbar_icon_pixel_size(button: Any) -> int:
+    width = int(getattr(button, "_width", getattr(button, "width", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
+    height = int(getattr(button, "_height", getattr(button, "height", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
+    return max(18, int(min(width, height) * 0.42))
+
+
+def _toolbar_asset_svg_path(asset_key: str) -> Path | None:
+    filename = _TOOLBAR_ASSET_NAME_BY_KEY.get(str(asset_key or "").strip().lower())
+    if not filename:
+        return None
+    for asset_dir in (_TOOLBAR_ASSET_PRIMARY_DIR, *_TOOLBAR_ASSET_FALLBACK_DIRS):
+        svg_path = asset_dir / filename
+        if svg_path.exists():
+            return svg_path
+    return _TOOLBAR_ASSET_PRIMARY_DIR / filename
+
+
+def _toolbar_asset_raster_path(asset_key: str) -> Path | None:
+    svg_filename = _TOOLBAR_ASSET_NAME_BY_KEY.get(str(asset_key or "").strip().lower())
+    if not svg_filename:
+        return None
+    raster_filename = f"{Path(svg_filename).stem}.png"
+    for asset_dir in (_TOOLBAR_ASSET_PRIMARY_DIR, *_TOOLBAR_ASSET_FALLBACK_DIRS):
+        raster_path = asset_dir / raster_filename
+        if raster_path.exists():
+            return raster_path
+    return _TOOLBAR_ASSET_PRIMARY_DIR / raster_filename
+
+
+def _load_toolbar_raster_asset_images(
+    app: Any,
+    *,
+    raster_path: Path,
+    size_px: int,
+    normal_color: str,
+    disabled_color: str,
+) -> dict[str, object] | None:
+    try:
+        from PIL import Image, ImageColor, ImageTk
+    except Exception as exc:
+        _log_suppressed("Failed importing Pillow for toolbar raster icons", exc)
+        return None
+
+    def _render(color: str) -> object | None:
+        try:
+            with Image.open(raster_path) as image:
+                rgba = image.convert("RGBA")
+            if rgba.size != (size_px, size_px):
+                resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                rgba = rgba.resize((size_px, size_px), resampling)
+            alpha = rgba.getchannel("A")
+            if alpha.getbbox() is None:
+                alpha = rgba.convert("L")
+            solid = Image.new("RGBA", rgba.size, ImageColor.getcolor(str(color), "RGBA"))
+            solid.putalpha(alpha)
+            return cast(object, ImageTk.PhotoImage(solid, master=app))
+        except Exception as exc:
+            _log_suppressed(f"Failed loading toolbar raster asset '{raster_path.name}'", exc)
+            return None
+
+    normal_image = _render(normal_color)
+    if normal_image is None:
+        return None
+    disabled_image = _render(disabled_color) or normal_image
+    return {
+        "normal": normal_image,
+        "disabled": disabled_image,
+    }
+
+
+def _load_toolbar_svg_asset_images(
+    app: Any,
+    *,
+    svg_path: Path,
+    size_px: int,
+    normal_color: str,
+    disabled_color: str,
+) -> dict[str, object] | None:
+    try:
+        from PIL import Image, ImageTk
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtSvg import QSvgRenderer
+    except Exception as exc:
+        _log_suppressed("Failed importing local SVG render dependencies for toolbar icons", exc)
+        return None
+
+    def _render(color: str) -> object | None:
+        try:
+            svg_text = svg_path.read_text(encoding="utf-8").replace("currentColor", str(color))
+            renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+            if not renderer.isValid():
+                return None
+            image = QImage(size_px, size_px, QImage.Format_ARGB32)
+            image.fill(0)
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            renderer.render(painter)
+            painter.end()
+            ptr = image.bits()
+            raw = bytes(ptr[: image.sizeInBytes()])
+            pil_image = Image.frombuffer(
+                "RGBA",
+                (image.width(), image.height()),
+                raw,
+                "raw",
+                "BGRA",
+                0,
+                1,
+            ).copy()
+            return cast(object, ImageTk.PhotoImage(pil_image, master=app))
+        except Exception as exc:
+            _log_suppressed(f"Failed rendering toolbar SVG asset '{svg_path.name}'", exc)
+            return None
+
+    normal_image = _render(normal_color)
+    if normal_image is None:
+        return None
+    disabled_image = _render(disabled_color) or normal_image
+    return {
+        "normal": normal_image,
+        "disabled": disabled_image,
+    }
+
+
+def _load_toolbar_asset_images(
+    app: Any,
+    *,
+    asset_key: str,
+    size_px: int,
+    normal_color: str,
+    disabled_color: str,
+) -> dict[str, object] | None:
+    raster_path = _toolbar_asset_raster_path(asset_key)
+    svg_path = _toolbar_asset_svg_path(asset_key)
+    if (raster_path is None or not raster_path.exists()) and (svg_path is None or not svg_path.exists()):
+        return None
+    cache = getattr(app, "_toolbar_asset_image_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        app._toolbar_asset_image_cache = cache
+    source_path = raster_path if raster_path is not None and raster_path.exists() else svg_path
+    if source_path is None:
+        return None
+    cache_key = (
+        str(source_path),
+        int(size_px),
+        str(normal_color),
+        str(disabled_color),
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict) and cached:
+        return cached
+    images = None
+    if raster_path is not None and raster_path.exists():
+        images = _load_toolbar_raster_asset_images(
+            app,
+            raster_path=raster_path,
+            size_px=size_px,
+            normal_color=normal_color,
+            disabled_color=disabled_color,
+        )
+    if images is None and svg_path is not None and svg_path.exists():
+        images = _load_toolbar_svg_asset_images(
+            app,
+            svg_path=svg_path,
+            size_px=size_px,
+            normal_color=normal_color,
+            disabled_color=disabled_color,
+        )
+    if images is None:
+        return None
+    cache[cache_key] = images
+    return images
+
+
+def refresh_toolbar_button_theme(app: Any) -> None:
+    button_bg = _toolbar_button_background(app)
+    palette = getattr(app, "theme_palette", None)
+    palette = palette if isinstance(palette, dict) else {}
+    disabled_color = str(palette.get("muted_fg") or "#808080")
+    for button in getattr(app, "_toolbar_buttons", ()) or ():
+        if not isinstance(button, ToolbarShapeButton):
+            continue
+        role = str(getattr(button, "_toolbar_role", "") or "").strip() or "job"
+        try:
+            button.refresh_palette(accent=_toolbar_button_accent(app, role), bg=button_bg)
+            asset_key = str(getattr(button, "_toolbar_asset_key", "") or "").strip()
+            if asset_key:
+                images = _load_toolbar_asset_images(
+                    app,
+                    asset_key=asset_key,
+                    size_px=_toolbar_icon_pixel_size(button),
+                    normal_color=_toolbar_button_accent(app, role),
+                    disabled_color=disabled_color,
+                )
+                button.set_icon_images(images)
+            else:
+                button.set_icon_images(None)
+        except Exception as exc:
+            _log_suppressed("Failed refreshing toolbar shape button palette", exc)
+
+
+def _toolbar_button_style(app: Any, role: str = "default") -> str:
+    role_styles = getattr(app, "top_toolbar_button_styles", None)
+    if isinstance(role_styles, dict):
+        style_name = str(role_styles.get(role, "") or "").strip()
+        if style_name:
+            return style_name
+    style_name = str(getattr(app, "top_toolbar_button_style", "") or "").strip()
+    if style_name:
+        return style_name
+    style_name = str(getattr(app, "icon_button_style", "") or "").strip()
+    return style_name or "TButton"
+
+
+def _create_toolbar_button(
+    app: Any,
+    parent: Any,
+    *,
+    icon: str,
+    lines: tuple[str, ...],
+    role: str,
+    shape: str,
+    asset_key: str | None,
+    command: Any,
+    kb_id: str,
+    tooltip: str,
+    width: int = _TOOLBAR_BUTTON_DEFAULT_SIZE,
+    height: int = _TOOLBAR_BUTTON_DEFAULT_SIZE,
+    padx: tuple[int, int] = (0, 0),
+    state: str | None = None,
+) -> Any:
+    style_name = _toolbar_button_style(app, role)
+    kwargs: dict[str, Any] = {}
+    if state is not None:
+        kwargs["state"] = state
+    button = ToolbarShapeButton(
+        parent,
+        text=toolbar_button_label(icon, *lines),
+        command=command,
+        shape=shape,
+        accent=_toolbar_button_accent(app, role),
+        width=width,
+        height=height,
+        style=style_name,
+        bg=_toolbar_button_background(app),
+        **kwargs,
+    )
+    try:
+        button._toolbar_default_style = style_name
+        button._toolbar_role = role
+        button._toolbar_asset_key = str(asset_key or "").strip().lower()
+        button._toolbar_accessible_label = " ".join(lines)
+    except Exception as exc:
+        _log_suppressed("Failed caching toolbar button presentation metadata", exc)
+    set_kb_id(button, kb_id)
+    button.pack(side="left", padx=padx)
+    apply_tooltip(button, tooltip)
+    return button
+
+
 def refresh_toolbar_action_focus(app) -> None:
     _ensure_toolbar_group_styles(app)
-    default_style = str(getattr(app, "icon_button_style", "TButton"))
+    default_style = _toolbar_button_style(app, "default")
     tracked_buttons = [
         getattr(app, "btn_conn", None),
         getattr(app, "btn_open", None),
@@ -251,7 +602,8 @@ def refresh_toolbar_action_focus(app) -> None:
         getattr(app, "btn_alarm_recover", None),
     ]
     for btn in tracked_buttons:
-        _apply_toolbar_button_style(btn, default_style)
+        style_name = str(getattr(btn, "_toolbar_default_style", "") or "").strip() or default_style
+        _apply_toolbar_button_style(btn, style_name)
     group_labels = getattr(app, "_toolbar_group_title_labels", {}) or {}
     default_group_style = str(
         getattr(app, "toolbar_group_label_style", _TOOLBAR_GROUP_LABEL_STYLE)
@@ -304,10 +656,11 @@ def update_job_button_mode(app, mode: str) -> None:
     ):
         return
     if mode == "auto_level":
-        btn.config(
-            text=icon_label(ICON_AUTO_LEVEL, "Auto-Level"),
-            command=lambda: app._confirm_and_run("Auto-Level", app._show_auto_level_dialog),
-        )
+        set_toolbar_button_label(btn, ICON_AUTO_LEVEL, "Auto", "Level")
+        btn._toolbar_asset_key = ""
+        btn.set_icon_images(None)
+        btn.config(shape="hex", command=lambda: app._confirm_and_run("Auto-Level", app._show_auto_level_dialog))
+        refresh_toolbar_button_theme(app)
         if leveled:
             reason = "Auto-level unavailable (already leveled)."
             tooltip = "Auto-level is already applied. Load the original file to re-level."
@@ -325,10 +678,10 @@ def update_job_button_mode(app, mode: str) -> None:
         except Exception as exc:
             _log_suppressed("Failed adding Auto-Level job button to offline controls", exc)
     else:
-        btn.config(
-            text=icon_label(ICON_JOB_READ, "Read Job"),
-            command=app.open_gcode,
-        )
+        set_toolbar_button_label(btn, ICON_JOB_READ, "Read", "Job")
+        btn._toolbar_asset_key = "read_job"
+        btn.config(shape="document", command=app.open_gcode)
+        refresh_toolbar_button_theme(app)
         try:
             btn._disabled_reason = None
         except Exception as exc:
@@ -431,9 +784,10 @@ def update_recover_button_visibility(app):
 
 
 def build_toolbar(app):
-    bar = ttk.Frame(app, padding=(8, 6, 8, 6))
+    bar = ttk.Frame(app, padding=(8, 8, 8, 8))
     bar.pack(side="top", fill="x")
     app.toolbar_bar = bar
+    app._toolbar_buttons = []
     _ensure_toolbar_group_styles(app)
 
     def _build_group(parent, title: str):
@@ -446,7 +800,7 @@ def build_toolbar(app):
         )
         title_label.pack(side="top", anchor="w")
         row = ttk.Frame(group)
-        row.pack(side="top", anchor="w", pady=(2, 0))
+        row.pack(side="top", anchor="w", pady=(4, 0))
         return group, row, title_label
 
     def _add_group_separator(parent):
@@ -473,41 +827,56 @@ def build_toolbar(app):
         "Recovery": recovery_label,
     }
 
-    ttk.Label(connection_row, text="Port:").pack(side="left")
+    ttk.Label(connection_row, text="Port:").pack(side="left", padx=(0, 2))
     app.port_combo = ttk.Combobox(connection_row, width=18, textvariable=app.current_port, state="readonly")
-    app.port_combo.pack(side="left", padx=(6, 4))
+    app.port_combo.pack(side="left", padx=(6, 8))
 
-    app.btn_refresh = ttk.Button(
+    app.btn_refresh = _create_toolbar_button(
+        app,
         connection_row,
-        text=icon_label(ICON_REFRESH, "Refresh"),
-        style=app.icon_button_style,
+        icon=ICON_REFRESH,
+        lines=("Refresh",),
+        role="connection",
+        shape="refresh",
+        asset_key="refresh",
         command=app.refresh_ports,
+        kb_id="port_refresh",
+        tooltip="Refresh the list of serial ports.",
+        width=70,
+        padx=(0, 6),
     )
-    set_kb_id(app.btn_refresh, "port_refresh")
-    app.btn_refresh.pack(side="left", padx=(0, 10))
-    apply_tooltip(app.btn_refresh, "Refresh the list of serial ports.")
-    app.btn_conn = ttk.Button(
+    app._toolbar_buttons.append(app.btn_refresh)
+    app.btn_conn = _create_toolbar_button(
+        app,
         connection_row,
-        text=icon_label(ICON_CONNECT, "Connect"),
-        style=app.icon_button_style,
+        icon=ICON_CONNECT,
+        lines=("Connect",),
+        role="connection",
+        shape="bolt",
+        asset_key="connect",
         command=lambda: app._confirm_and_run("Connect/Disconnect", app.toggle_connect),
+        kb_id="port_connect",
+        tooltip="Connect or disconnect from the selected serial port.",
+        width=70,
     )
-    set_kb_id(app.btn_conn, "port_connect")
-    app.btn_conn.pack(side="left")
-    apply_tooltip(app.btn_conn, "Connect or disconnect from the selected serial port.")
+    app._toolbar_buttons.append(app.btn_conn)
     attach_log_gcode(app.btn_conn, "")
 
-    app.btn_open = ttk.Button(
+    app.btn_open = _create_toolbar_button(
+        app,
         job_row,
-        text=icon_label(ICON_JOB_READ, "Read Job"),
-        style=app.icon_button_style,
+        icon=ICON_JOB_READ,
+        lines=("Read", "Job"),
+        role="job",
+        shape="document",
+        asset_key="read_job",
         command=app.open_gcode,
+        kb_id="gcode_open",
+        tooltip="Load a G-code job for streaming (read-only).",
     )
-    set_kb_id(app.btn_open, "gcode_open")
-    app.btn_open.pack(side="left")
+    app._toolbar_buttons.append(app.btn_open)
     app._manual_controls.append(app.btn_open)
     app._offline_controls.add(app.btn_open)
-    apply_tooltip(app.btn_open, "Load a G-code job for streaming (read-only).")
     app.job_button_hint = ttk.Label(job_row, text="")
     try:
         app._job_button_hint_visible = False
@@ -517,94 +886,138 @@ def build_toolbar(app):
         app._job_button_mode = "read_job"
     except Exception as exc:
         _log_suppressed("Failed initializing default job-button mode", exc)
-    app.btn_clear = ttk.Button(
+    app.btn_clear = _create_toolbar_button(
+        app,
         job_row,
-        text=icon_label(ICON_JOB_CLEAR, "Clear Job"),
-        style=app.icon_button_style,
+        icon=ICON_JOB_CLEAR,
+        lines=("Clear", "Job"),
+        role="job",
+        shape="tray",
+        asset_key="clear_job",
         command=lambda: app._confirm_and_run("Clear Job", app._clear_gcode),
+        kb_id="gcode_clear",
+        tooltip="Unload the current job and reset the live job state.",
+        padx=(6, 0),
     )
-    set_kb_id(app.btn_clear, "gcode_clear")
-    app.btn_clear.pack(side="left", padx=(6, 0))
+    app._toolbar_buttons.append(app.btn_clear)
     app._manual_controls.append(app.btn_clear)
     app._offline_controls.add(app.btn_clear)
-    apply_tooltip(app.btn_clear, "Unload the current job and reset the live job state.")
-    app.btn_run = ttk.Button(
+    app.btn_run = _create_toolbar_button(
+        app,
         run_row,
-        text=icon_label(ICON_RUN, "Run"),
-        style=app.icon_button_style,
+        icon=ICON_RUN,
+        lines=("Run",),
+        role="run",
+        shape="play",
+        asset_key="run",
         command=lambda: app._confirm_and_run("Run job", app.run_job),
+        kb_id="job_run",
+        tooltip="Start streaming the loaded G-code.",
+        padx=(8, 0),
+        width=66,
         state="disabled",
     )
-    set_kb_id(app.btn_run, "job_run")
-    app.btn_run.pack(side="left", padx=(8, 0))
-    apply_tooltip(app.btn_run, "Start streaming the loaded G-code.")
+    app._toolbar_buttons.append(app.btn_run)
     attach_log_gcode(app.btn_run, "Cycle Start")
-    app.btn_pause = ttk.Button(
+    app.btn_pause = _create_toolbar_button(
+        app,
         run_row,
-        text=icon_label(ICON_PAUSE, "Pause"),
-        style=app.icon_button_style,
+        icon=ICON_PAUSE,
+        lines=("Pause",),
+        role="pause",
+        shape="pause",
+        asset_key="pause",
         command=lambda: app._confirm_and_run("Pause job", app.pause_job),
+        kb_id="job_pause",
+        tooltip="Feed hold the running job.",
+        padx=(6, 0),
+        width=66,
         state="disabled",
     )
-    set_kb_id(app.btn_pause, "job_pause")
-    app.btn_pause.pack(side="left", padx=(6, 0))
-    apply_tooltip(app.btn_pause, "Feed hold the running job.")
+    app._toolbar_buttons.append(app.btn_pause)
     attach_log_gcode(app.btn_pause, "!")
-    app.btn_resume = ttk.Button(
+    app.btn_resume = _create_toolbar_button(
+        app,
         run_row,
-        text=icon_label(ICON_RESUME, "Resume"),
-        style=app.icon_button_style,
+        icon=ICON_RESUME,
+        lines=("Resume",),
+        role="resume",
+        shape="play",
+        asset_key="resume",
         command=lambda: app._confirm_and_run("Resume job", app.resume_job),
+        kb_id="job_resume",
+        tooltip="Resume a paused job.",
+        padx=(6, 0),
+        width=66,
         state="disabled",
     )
-    set_kb_id(app.btn_resume, "job_resume")
-    app.btn_resume.pack(side="left", padx=(6, 0))
-    apply_tooltip(app.btn_resume, "Resume a paused job.")
+    app._toolbar_buttons.append(app.btn_resume)
     attach_log_gcode(app.btn_resume, "~")
-    app.btn_stop = ttk.Button(
+    app.btn_stop = _create_toolbar_button(
+        app,
         run_row,
-        text=icon_label(ICON_STOP, "Stop/Reset"),
-        style=app.icon_button_style,
+        icon=ICON_STOP,
+        lines=("Stop", "Reset"),
+        role="stop",
+        shape="square",
+        asset_key="stop_reset",
         command=lambda: app._confirm_and_run("Stop/Reset", app.stop_job),
+        kb_id="job_stop_reset",
+        tooltip="Stop the job and soft reset GRBL.",
+        padx=(6, 0),
         state="disabled",
     )
-    set_kb_id(app.btn_stop, "job_stop_reset")
-    app.btn_stop.pack(side="left", padx=(6, 0))
-    apply_tooltip(app.btn_stop, "Stop the job and soft reset GRBL.")
+    app._toolbar_buttons.append(app.btn_stop)
     attach_log_gcode(app.btn_stop, "Ctrl-X")
-    app.btn_resume_from = ttk.Button(
+    app.btn_resume_from = _create_toolbar_button(
+        app,
         run_row,
-        text=icon_label(ICON_RESUME_FROM, "Resume From..."),
-        style=app.icon_button_style,
+        icon=ICON_RESUME_FROM,
+        lines=("Resume", "From"),
+        role="resume",
+        shape="return",
+        asset_key=None,
         command=lambda: app._confirm_and_run("Resume from line", app._show_resume_dialog),
+        kb_id="job_resume_from",
+        tooltip="Resume from a specific line with modal re-sync.",
+        padx=(6, 0),
         state="disabled",
     )
-    set_kb_id(app.btn_resume_from, "job_resume_from")
-    app.btn_resume_from.pack(side="left", padx=(6, 0))
-    apply_tooltip(app.btn_resume_from, "Resume from a specific line with modal re-sync.")
-    app.btn_unlock_top = ttk.Button(
+    app._toolbar_buttons.append(app.btn_resume_from)
+    app.btn_unlock_top = _create_toolbar_button(
+        app,
         recovery_row,
-        text=icon_label(ICON_UNLOCK, "Unlock"),
-        style=app.icon_button_style,
+        icon=ICON_UNLOCK,
+        lines=("Unlock",),
+        role="recovery",
+        shape="lock",
+        asset_key="unlock",
         command=lambda: app._confirm_and_run(
             "Unlock ($X)", lambda: app._run_if_connected(app.grbl.unlock)
         ),
+        kb_id="unlock_top",
+        tooltip="Send $X to clear alarm (top-bar).",
+        padx=(6, 0),
+        width=68,
         state="disabled",
     )
-    set_kb_id(app.btn_unlock_top, "unlock_top")
-    app.btn_unlock_top.pack(side="left", padx=(6, 0))
+    app._toolbar_buttons.append(app.btn_unlock_top)
     app._manual_controls.append(app.btn_unlock_top)
-    apply_tooltip(app.btn_unlock_top, "Send $X to clear alarm (top-bar).")
-    app.btn_alarm_recover = ttk.Button(
+    app.btn_alarm_recover = _create_toolbar_button(
+        app,
         recovery_row,
-        text=icon_label(ICON_RECOVER, "Recover"),
-        style=app.icon_button_style,
+        icon=ICON_RECOVER,
+        lines=("Recover",),
+        role="recovery",
+        shape="shield",
+        asset_key=None,
         command=app._show_alarm_recovery,
+        kb_id="alarm_recover",
+        tooltip="Show alarm recovery steps.",
+        padx=(6, 0),
         state="disabled",
     )
-    set_kb_id(app.btn_alarm_recover, "alarm_recover")
-    app.btn_alarm_recover.pack(side="left", padx=(6, 0))
-    apply_tooltip(app.btn_alarm_recover, "Show alarm recovery steps.")
+    app._toolbar_buttons.append(app.btn_alarm_recover)
 
     app._recover_separator = None
 
@@ -653,6 +1066,13 @@ def build_toolbar(app):
         app._ensure_state_label_width(app.machine_state.get())
     except Exception as exc:
         _log_suppressed("Failed enforcing machine-state label width", exc)
+    try:
+        from simple_sender.ui.theme_helpers import register_theme_refresh
+
+        register_theme_refresh(app, lambda: refresh_toolbar_button_theme(app))
+    except Exception as exc:
+        _log_suppressed("Failed registering toolbar button theme refresh callback", exc)
+    refresh_toolbar_button_theme(app)
     refresh_toolbar_action_focus(app)
 
 

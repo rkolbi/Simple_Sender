@@ -28,7 +28,7 @@ from typing import Any
 
 from . import joystick_hold
 from . import joystick as joystick_bindings
-from simple_sender.ui.widgets_buttons import StopSignButton, VirtualHoldButton
+from simple_sender.ui.widgets_buttons import StopSignButton, ToolbarShapeButton, VirtualHoldButton
 from simple_sender.utils.constants import CLEAR_ICON
 
 logger = logging.getLogger(__name__)
@@ -168,7 +168,7 @@ def collect_buttons(app) -> list:
 
     def walk(widget):
         for child in widget.winfo_children():
-            if isinstance(child, (ttk.Button, tk.Button, StopSignButton)):
+            if isinstance(child, (ttk.Button, tk.Button, StopSignButton, ToolbarShapeButton)):
                 if child not in seen:
                     seen.add(child)
                     buttons.append(child)

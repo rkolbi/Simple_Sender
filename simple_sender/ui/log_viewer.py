@@ -387,6 +387,7 @@ class LogViewer(ttk.Frame):
         self.export_button.pack(side="left", padx=(8, 0))
         self.clear_button = ttk.Button(actions, text="Clear Logs", command=self.clear_logs)
         self.clear_button.pack(side="left", padx=(8, 0))
+        self.close_button: ttk.Button | None
         if self._include_close:
             self.close_button = ttk.Button(actions, text="Close", command=self._close)
             self.close_button.pack(side="right")

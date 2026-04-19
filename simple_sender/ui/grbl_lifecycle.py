@@ -34,7 +34,8 @@ from simple_sender.ui.connection_runtime_state import (
     get_connection_runtime_state,
     sync_connection_runtime_state_to_app,
 )
-from simple_sender.ui.icons import ICON_CONNECT, icon_label
+from simple_sender.ui.controls.toolbar import set_toolbar_button_label
+from simple_sender.ui.icons import ICON_CONNECT
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.modal_sync import clear_modal_sync_state, request_modal_state_sync
@@ -630,7 +631,8 @@ def handle_connection_event(app, is_on: bool, port):
             app._update_unit_toggle_display()
         except Exception as exc:
             _log_suppressed("Failed refreshing unit toggle display after connect", exc)
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Disconnect"), state="normal")
+        set_toolbar_button_label(app.btn_conn, ICON_CONNECT, "Disconnect")
+        app.btn_conn.config(state="normal")
         try:
             app.btn_refresh.config(state="normal")
         except Exception as exc:
@@ -692,7 +694,8 @@ def handle_connection_event(app, is_on: bool, port):
             app._stop_macro_status()
         except Exception as exc:
             _log_suppressed("Failed stopping macro status poll after disconnect", exc)
-        app.btn_conn.config(text=icon_label(ICON_CONNECT, "Connect"), state="normal")
+        set_toolbar_button_label(app.btn_conn, ICON_CONNECT, "Connect")
+        app.btn_conn.config(state="normal")
         try:
             app.btn_refresh.config(state="normal")
         except Exception as exc:

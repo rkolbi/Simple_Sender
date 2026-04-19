@@ -472,6 +472,36 @@ def _init_style_preferences(app, *, tkfont, ttk) -> None:
         size=home_size,
         weight="bold",
     )
+    toolbar_size = home_size + 1
+    if toolbar_size < 1:
+        toolbar_size = 1
+    app.top_toolbar_button_font = tkfont.Font(
+        family=default_font.cget("family"),
+        size=toolbar_size,
+        weight="bold",
+    )
+    app.top_toolbar_button_style = "SimpleSender.ToolbarButton.TButton"
+    app.top_toolbar_button_styles = {
+        "connection": "SimpleSender.ToolbarConnection.TButton",
+        "job": "SimpleSender.ToolbarJob.TButton",
+        "run": "SimpleSender.ToolbarRun.TButton",
+        "pause": "SimpleSender.ToolbarPause.TButton",
+        "resume": "SimpleSender.ToolbarResume.TButton",
+        "stop": "SimpleSender.ToolbarStop.TButton",
+        "recovery": "SimpleSender.ToolbarRecovery.TButton",
+    }
+    toolbar_button_padding = (10, 12)
+    for style_name in (
+        app.top_toolbar_button_style,
+        *app.top_toolbar_button_styles.values(),
+    ):
+        app.style.configure(
+            style_name,
+            anchor="center",
+            justify="center",
+            padding=toolbar_button_padding,
+            font=app.top_toolbar_button_font,
+        )
     app._ui_scale_named_font_bases = {}
     for name in (
         "TkDefaultFont",
