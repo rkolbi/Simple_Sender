@@ -29,6 +29,11 @@ from typing import Any, cast
 from simple_sender.ui.dro import convert_units
 from simple_sender.ui.widgets_keypad import prompt_numeric_keypad
 from simple_sender.ui.widgets_buttons import StopSignButton
+from simple_sender.ui.controls.separators import (
+    apply_main_window_subtle_separator_theme,
+    create_main_window_subtle_separator,
+    MAIN_WINDOW_SUBTLE_SEPARATOR_PADX,
+)
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.utils.constants import (
@@ -43,6 +48,7 @@ logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 JOG_STOP_POSITION_RETRY_MS = 50
 _AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
+POSITION_SECTION_GAP_WIDTH = (MAIN_WINDOW_SUBTLE_SEPARATOR_PADX * 4) + 1
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -178,46 +184,9 @@ def _bind_position_column_sync(app, align) -> None:
     app.after(0, _sync_pos_column_widths)
 
 
-def _bind_jog_separator_position(app, align, sep_jog_line, xy_steps, z_steps) -> None:
-    def _position_jog_separator(_event=None):
-        try:
-            height = int(align.winfo_height())
-        except Exception as exc:
-            _log_suppressed("Failed reading jog separator container height", exc)
-            height = 0
-        if height <= 0:
-            return
-
-        cx = None
-        try:
-            if hasattr(app, "_xy_step_plus") and hasattr(app, "_z_step_minus"):
-                x1 = xy_steps.winfo_x() + app._xy_step_plus.winfo_x() + app._xy_step_plus.winfo_width() // 2
-                x2 = z_steps.winfo_x() + app._z_step_minus.winfo_x() + app._z_step_minus.winfo_width() // 2
-                if x1 > 0 and x2 > 0:
-                    cx = (x1 + x2) // 2
-        except Exception as exc:
-            _log_suppressed("Failed deriving jog separator center from step controls", exc)
-            cx = None
-
-        if cx is None:
-            try:
-                bbox = align.grid_bbox(8, 1)
-            except Exception as exc:
-                _log_suppressed("Failed reading jog separator grid bbox", exc)
-                return
-            if not bbox:
-                return
-            x, _y, w, _h = bbox
-            cx = x + w // 2
-
-        sep_jog_line.place(x=cx, y=0, height=height)
-
-    align.bind("<Configure>", _position_jog_separator, add="+")
-    app.after(0, _position_jog_separator)
-
-
 def _build_step_controls(app, align, z_jog_left_pad: int):
     STEP_BAR_LENGTH = 144
+
     xy_steps = ttk.Frame(align)
     xy_steps.grid(row=4, column=4, columnspan=3, pady=(6, 0), sticky="new")
     xy_steps.grid_columnconfigure(2, weight=1, minsize=STEP_BAR_LENGTH)
@@ -240,7 +209,7 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
         width=4,
         command=lambda: _step_xy_delta(-1),
     )
-    app._xy_step_minus.grid(row=0, column=1, sticky="w")
+    app._xy_step_minus.grid(row=0, column=1, sticky="nw")
     apply_tooltip(app._xy_step_minus, "Decrease XY step.")
 
     app._xy_step_progress = ttk.Progressbar(
@@ -259,7 +228,7 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
         width=4,
         command=lambda: _step_xy_delta(1),
     )
-    app._xy_step_plus.grid(row=0, column=3, sticky="e")
+    app._xy_step_plus.grid(row=0, column=3, sticky="ne")
     apply_tooltip(app._xy_step_plus, "Increase XY step.")
 
     initial_idx = int(app._xy_step_index.get())
@@ -294,7 +263,7 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
         width=4,
         command=lambda: _step_z_delta(-1),
     )
-    app._z_step_minus.grid(row=0, column=1, sticky="w")
+    app._z_step_minus.grid(row=0, column=1, sticky="nw")
     apply_tooltip(app._z_step_minus, "Decrease Z step.")
 
     app._z_step_progress = ttk.Progressbar(
@@ -313,7 +282,7 @@ def _build_step_controls(app, align, z_jog_left_pad: int):
         width=4,
         command=lambda: _step_z_delta(1),
     )
-    app._z_step_plus.grid(row=0, column=3, sticky="e")
+    app._z_step_plus.grid(row=0, column=3, sticky="ne")
     apply_tooltip(app._z_step_plus, "Increase Z step.")
 
     initial_z_idx = int(app._z_step_index.get())
@@ -469,9 +438,9 @@ def _bind_jog_stop_position(app, align, z_steps) -> None:
 
 def _configure_jog_grid_columns(align) -> None:
     align.grid_columnconfigure(0, weight=0)   # MPos
-    align.grid_columnconfigure(1, weight=0)   # sep
+    align.grid_columnconfigure(1, weight=0, minsize=POSITION_SECTION_GAP_WIDTH)   # MPos/WPos gap
     align.grid_columnconfigure(2, weight=0)   # WPos
-    align.grid_columnconfigure(3, weight=0)   # sep
+    align.grid_columnconfigure(3, weight=0, minsize=POSITION_SECTION_GAP_WIDTH)   # WPos/Jog gap
     align.grid_columnconfigure(4, weight=0)   # X-
     align.grid_columnconfigure(5, weight=0)   # Y+/Y-
     align.grid_columnconfigure(6, weight=0)   # X+
@@ -488,14 +457,22 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     ttk.Label(align, text="Work Position (WPos)").grid(row=0, column=2, sticky="w", pady=(0, 4))
     ttk.Label(align, text="Jog").grid(row=0, column=4, columnspan=7, sticky="w", pady=(0, 4))
 
-    sep_mpos = ttk.Separator(align, orient="vertical")
-    sep_mpos.grid(row=0, column=1, rowspan=6, sticky="ns", padx=(8, 8))
-    sep_wpos = ttk.Separator(align, orient="vertical")
-    sep_wpos.grid(row=0, column=3, rowspan=6, sticky="ns", padx=(8, 8))
-    style = ttk.Style()
-    sep_bg = style.lookup("TFrame", "background") or app.cget("bg")
-    sep_jog_line = tk.Frame(align, width=1, bg=sep_bg)
-
+    sep_mpos = create_main_window_subtle_separator(align, app, orient="vertical")
+    sep_mpos.grid(
+        row=0,
+        column=1,
+        rowspan=6,
+        sticky="ns",
+        padx=(MAIN_WINDOW_SUBTLE_SEPARATOR_PADX, MAIN_WINDOW_SUBTLE_SEPARATOR_PADX),
+    )
+    sep_wpos = create_main_window_subtle_separator(align, app, orient="vertical")
+    sep_wpos.grid(
+        row=0,
+        column=3,
+        rowspan=6,
+        sticky="ns",
+        padx=(MAIN_WINDOW_SUBTLE_SEPARATOR_PADX, MAIN_WINDOW_SUBTLE_SEPARATOR_PADX),
+    )
     app.btn_jog_mpos_x_to = app._dro_value_row(
         align,
         "X",
@@ -584,7 +561,7 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     app._refresh_zeroing_ui()
 
     _bind_position_column_sync(app, align)
-    return sep_mpos, sep_wpos, sep_jog_line
+    return sep_mpos, sep_wpos
 
 
 def _build_xy_jog_controls(app, align, j, jog_cmd) -> None:
@@ -610,20 +587,10 @@ def _build_xy_jog_controls(app, align, j, jog_cmd) -> None:
     apply_tooltip(app.btn_jog_x_plus, "Jog +X by the selected step.")
 
 
-def _apply_separator_styles(app, sep_mpos, sep_wpos, sep_jog_line) -> str:
-    style = ttk.Style()
-    sep_color = style.lookup("TLabelframe", "bordercolor") or style.lookup("TSeparator", "background")
-    pad_bg = style.lookup("TFrame", "background") or app.cget("bg")
-    style.configure("JogSeparator.TSeparator", background=sep_color)
+def _apply_separator_styles(app, sep_mpos, sep_wpos) -> str:
+    pad_bg = ""
     for sep in (sep_mpos, sep_wpos):
-        try:
-            sep.configure(style="JogSeparator.TSeparator")
-        except Exception as exc:
-            _log_suppressed("Failed applying jog separator style", exc)
-    try:
-        sep_jog_line.configure(bg=sep_color)
-    except Exception as exc:
-        _log_suppressed("Failed applying jog separator line color", exc)
+        pad_bg = apply_main_window_subtle_separator_theme(app, sep, orient="vertical")
     if isinstance(pad_bg, str):
         return pad_bg
     return str(pad_bg or "")
@@ -778,14 +745,14 @@ def build_jog_panel(app, parent):
             on_apply=_apply_target,
         )
 
-    sep_mpos, sep_wpos, sep_jog_line = _build_position_and_action_controls(
+    sep_mpos, sep_wpos = _build_position_and_action_controls(
         app,
         align,
         open_mpos_target=_open_mpos_target,
     )
 
     _build_xy_jog_controls(app, align, j, jog_cmd)
-    pad_bg = _apply_separator_styles(app, sep_mpos, sep_wpos, sep_jog_line)
+    pad_bg = _apply_separator_styles(app, sep_mpos, sep_wpos)
     z_jog_left_pad = _build_z_and_stop_controls(app, align, j, jog_cmd, pad_bg)
 
     app._manual_controls.extend([
@@ -800,7 +767,6 @@ def build_jog_panel(app, parent):
     app._manual_controls.append(app.btn_all_stop)
 
     xy_steps, z_steps = _build_step_controls(app, align, z_jog_left_pad)
-    _bind_jog_separator_position(app, align, sep_jog_line, xy_steps, z_steps)
     _bind_jog_stop_position(app, align, z_steps)
 
     app._manual_controls.extend([app._xy_step_minus, app._xy_step_plus])

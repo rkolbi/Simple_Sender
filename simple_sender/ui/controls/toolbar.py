@@ -48,6 +48,10 @@ from simple_sender.ui.icons import (
 from simple_sender.ui.widgets_tooltips import apply_tooltip
 from simple_sender.ui.widgets_common import attach_log_gcode, set_kb_id
 from simple_sender.ui.widgets_buttons import ToolbarShapeButton
+from simple_sender.ui.controls.separators import (
+    create_main_window_subtle_separator,
+    MAIN_WINDOW_SUBTLE_SEPARATOR_PADX,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -84,7 +88,6 @@ _TOOLBAR_ASSET_NAME_BY_KEY = {
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
     log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
-
 
 def _widget_exists(widget: Any) -> bool:
     if widget is None:
@@ -337,6 +340,7 @@ def refresh_top_toolbar_text_visibility(app: Any) -> None:
         if not icon and not lines:
             continue
         set_toolbar_button_label(button, icon, *lines)
+    refresh_toolbar_button_theme(app)
 
 
 def _toolbar_button_accent(app: Any, role: str) -> str:
@@ -381,7 +385,10 @@ def _toolbar_icon_pixel_size(button: Any) -> int:
     width = int(getattr(button, "_width", getattr(button, "width", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
     height = int(getattr(button, "_height", getattr(button, "height", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
     full_height = int(getattr(button, "_layout_full_height", height) or height)
-    return max(18, int(min(width, max(height, full_height)) * 0.42))
+    base_size = max(18, int(min(width, max(height, full_height)) * 0.42))
+    if bool(getattr(button, "_compact_layout_enabled", False)):
+        return max(18, int(round(base_size * 1.20)))
+    return base_size
 
 
 def _toolbar_asset_svg_path(asset_key: str) -> Path | None:
@@ -859,7 +866,7 @@ def build_toolbar(app):
     _ensure_toolbar_group_styles(app)
 
     def _build_group(parent, title: str):
-        group = ttk.Frame(parent, padding=(0, 0, 8, 0))
+        group = ttk.Frame(parent, padding=(0, 0, 0, 0))
         group.pack(side="left", fill="y")
         title_label = ttk.Label(
             group,
@@ -872,7 +879,12 @@ def build_toolbar(app):
         return group, row, title_label
 
     def _add_group_separator(parent):
-        ttk.Separator(parent, orient="vertical").pack(side="left", fill="y", padx=(0, 8), pady=(0, 2))
+        create_main_window_subtle_separator(parent, app, orient="vertical").pack(
+            side="left",
+            fill="y",
+            padx=(MAIN_WINDOW_SUBTLE_SEPARATOR_PADX, MAIN_WINDOW_SUBTLE_SEPARATOR_PADX),
+            pady=(0, 2),
+        )
 
     groups = ttk.Frame(bar)
     groups.pack(side="left", fill="x", expand=True)

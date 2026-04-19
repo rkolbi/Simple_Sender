@@ -6,6 +6,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ## [Unreleased]
 
 ### Changed
+- Runtime package version now reports `3.1` so the app title/diagnostics/runtime marker metadata match the current release docs.
 - Top-toolbar asset loading is now cross-platform reliable for the current runtime:
   - toolbar assets now resolve from app-local `simple_sender/ui/icons`
   - runtime prefers repo-local PNG toolbar assets for the normal Windows/Linux path
@@ -23,6 +24,12 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Cross-platform toolbar icon rendering now matches the intended design:
   - Windows and Raspberry Pi / Linux no longer rely on a fragile Qt-only SVG render path for the normal toolbar icon display path
   - the normal deployed toolbar path now uses app-local raster assets and runtime tinting through Pillow
+- Release-gate hardening after the latest separator/layout work:
+  - the shared separator helper is typed cleanly again, so `mypy main.py simple_sender` is green on the full tree
+  - toolbar dummy-widget tests now follow the real separator helper path instead of the pre-helper architecture
+- CI gate drift was corrected:
+  - GitHub Actions now uses the same full Ruff gate path as the documented local release gate
+  - the workflow mypy manifest check now expects the current `141`-file manifest instead of the stale `150` count
 - Fixed-sensor / bit-setter operator help text now matches the current implementation:
   - coarse seek uses `Bit Setter Rough Probe Speed`
   - exact samples use `Bit Setter Fine Probe Speed`
@@ -44,17 +51,22 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - toolbar icon docs now describe the current app-local raster-first path plus SVG/drawn fallback behavior
   - GRBL Settings docs now describe the bundled rich-help layer and preserved fallback behavior
   - estimation docs now mention the current `CONFIDENT` / `PROVISIONAL` / `ROUGH` distinction
+  - release-note/About filenames now identify the current `3.1` baseline
+  - Raspberry Pi image artifact naming now matches the `3.1` release label
 - README and in-app About/help content were tightened again for current operator-facing truthfulness:
   - Job Info and Start Job confirmation now describe `Tools Required` instead of `Tools`
   - required-tools docs now state that repeated identical entries are deduplicated in first-seen order
   - App Settings / Macro Manager docs now describe the current child-popup ownership behavior
 
 ### Validation
-- Current local repository validation snapshot after the latest toolbar/docs truthfulness updates:
-  - direct `pytest -q`: `1883 passed, 3 skipped`
+- Current local repository validation snapshot after the latest release-candidate review:
+  - direct `pytest -q`: `1886 passed, 2 skipped`
+  - repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
+  - direct `mypy main.py simple_sender`: clean (`217` source files)
   - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1884 passed, 2 skipped`
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1886 passed, 2 skipped`
   - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+  - targeted runtime smoke (`App()` create/update/destroy): clean
 
 ## [3.1] - 2026-04-14
 

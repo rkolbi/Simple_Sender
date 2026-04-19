@@ -7,13 +7,14 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.1`. This is the current release-ready baseline.
 
-Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1883 passed, 3 skipped`
+Current local validation snapshot for `3.1` as of `2026-04-19`:
+- Direct `pytest -q`: `1886 passed, 2 skipped`
 - Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
-- Direct `mypy main.py simple_sender`: clean (`216` source files)
+- Direct `mypy main.py simple_sender`: clean (`217` source files)
 - Last verified wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1884 passed, 2 skipped`
+- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1886 passed, 2 skipped`
 - Last verified wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+- Targeted runtime smoke (`App()` create/update/destroy): clean
 
 ## Design Objectives and Key Features
 
@@ -861,9 +862,9 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1883 passed, 3 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`216` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1884 passed, 2 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. As of `2026-04-19`, the current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1886 passed, 2 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`217` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1886 passed, 2 skipped`, and its final mypy manifest gate is clean on `141` source files. A targeted runtime smoke check that instantiates, updates, and destroys `App()` also completed cleanly. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
-The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 216 source files`.
+The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 217 source files`.
 
 Run a subset:
 ```powershell
@@ -918,7 +919,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
-- v3.0 release notes: `RELEASE_NOTES_v3.0.md`.
+- v3.1 release notes: `RELEASE_NOTES_v3.1.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
