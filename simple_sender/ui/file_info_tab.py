@@ -233,6 +233,18 @@ def ssmeta_tools(ssmeta: Mapping[str, object]) -> list[str]:
     )
 
 
+def ordered_unique_values(values: list[str]) -> list[str]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value).strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        unique_values.append(item)
+    return unique_values
+
+
 def _append_ssmeta_list_section(lines: list[str], title: str, values: list[str]) -> None:
     if not values:
         return
@@ -292,7 +304,11 @@ def render_file_info_text(app) -> str:
             lines.append(f"- {label}: {value}")
             seen_labels.add(label)
         _append_ssmeta_list_section(lines, "Toolpaths", ssmeta_toolpaths(ssmeta_map))
-        _append_ssmeta_list_section(lines, "Tools", ssmeta_tools(ssmeta_map))
+        _append_ssmeta_list_section(
+            lines,
+            "Tools Required",
+            ordered_unique_values(ssmeta_tools(ssmeta_map)),
+        )
         extents_rows = _format_ssmeta_extents(ssmeta_map)
         if extents_rows:
             lines.append("")

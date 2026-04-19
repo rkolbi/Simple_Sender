@@ -8,11 +8,11 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 Current stable release: `3.1`. This is the current release-ready baseline.
 
 Current local validation snapshot for `3.1`:
-- Direct `pytest -q`: `1873 passed, 2 skipped`
+- Direct `pytest -q`: `1883 passed, 3 skipped`
 - Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
-- Direct `mypy main.py simple_sender`: clean (`215` source files)
+- Direct `mypy main.py simple_sender`: clean (`216` source files)
 - Last verified wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1872 passed, 3 skipped`
+- Last verified wrapper pytest + coverage stage inside `run_tests.bat`: `1884 passed, 2 skipped`
 - Last verified wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## Design Objectives and Key Features
@@ -291,7 +291,7 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Use the always-visible right-side controls to flip the spindle, generate spoilboard surfacing G-code, and fine-tune feed/spindle overrides via the slider controls (10-200% range).
 7) **Start and monitor**
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
-   - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools` as separate truthful lists. It does not invent one-to-one pairings between them, and it no longer shows a stale G-code validation line.
+   - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools Required` as separate truthful lists. The required-tools list removes repeated identical entries while preserving first-seen order. It does not invent one-to-one pairings between toolpaths and tools, and it no longer shows a stale G-code validation line.
    - After confirmation, streaming starts immediately and keeps run-path checks lean; use Preflight and Job Info when you want extra review before cutting.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
@@ -376,7 +376,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
-- **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools` as separate lists in Job Info and in the Start Job confirmation. It does not guess pairings that are not present in the file.
+- **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools Required` as separate lists in Job Info and in the Start Job confirmation. The required-tools display removes repeated identical entries while preserving first-seen order. The app does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Prepare/apply failure cleanup:** If a later load/apply step fails after the `Preparing Job` popup opens, the load now fails cleanly instead of leaving the popup stuck at an early progress value.
@@ -861,9 +861,9 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1873 passed, 2 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`215` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1872 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It now runs the same full Ruff scope as the repo-supported Ruff path. The current stable `3.1` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1883 passed, 3 skipped`, `python tools/run_ruff.py check .`: clean, and `mypy main.py simple_sender`: clean (`216` source files). The last verified wrapper gate snapshot also passes clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1884 passed, 2 skipped`, and its final mypy manifest gate is clean on `141` source files. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
-The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 215 source files`.
+The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 216 source files`.
 
 Run a subset:
 ```powershell
@@ -1205,7 +1205,8 @@ Macro UI is included below along with the rest of the interface.
 
 ### Job Info Popup
 - Read-only, scrollable job/metadata summary.
-- Shows `SSMETA` header fields (when present), quick-scan metrics, and separate `Toolpaths` / `Tools` lists when metadata provides them.
+- Shows `SSMETA` header fields (when present), quick-scan metrics, and separate `Toolpaths` / `Tools Required` lists when metadata provides them.
+- `Tools Required` removes repeated identical entries while preserving first-seen order.
 - If metadata is already available from the load pipeline, the first popup open shows it immediately; no extra refresh, reopen, or reload is required.
 
 ### Logs Popup
@@ -1303,7 +1304,7 @@ Macro UI is included below along with the rest of the interface.
 - Total timeout (sec): maximum time allowed for a full general macro run (`900` by default; `0` disables).
 - Disable Macro Timeouts: disables normal prompt, line, and total timeout enforcement for general macro runs.
 - Protected built-in workflow waits: `Job Setup`, `Tool Change`, streamed tool changes, and the other protected built-in workflow actions run outside the general user-macro timeout limits.
-- Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder the 5 editable user-macro slots without leaving the app.
+- Open Macro Manager: edit headers/body, duplicate one slot to another, and reorder the 5 editable user-macro slots without leaving the app. When launched from App Settings, Macro Manager opens above App Settings and closing it leaves App Settings open.
 - Recommendation: leave scripting off unless you trust the macro source.
 
 ### App Settings: Probing & Setup
@@ -1426,6 +1427,7 @@ Macro UI is included below along with the rest of the interface.
 - Save/Delete: writes or removes the selected macro file in the active writable macro directory.
 - Duplicate: copies one macro slot to a different slot.
 - Reorder: moves macro contents between slots while keeping numbered naming.
+- App Settings ownership: when opened from App Settings, Macro Manager stays above that popup and does not close it.
 
 ### Macro Prompt Dialog
 - Message: macro-supplied prompt text.

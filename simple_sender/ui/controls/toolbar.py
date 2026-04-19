@@ -140,6 +140,16 @@ def _var_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _toolbar_text_visible(app: Any) -> bool:
+    setting_var = getattr(app, "show_top_toolbar_text", None)
+    if setting_var is not None:
+        return _var_bool(setting_var, default=True)
+    settings = getattr(app, "settings", None)
+    if isinstance(settings, dict):
+        return bool(settings.get("show_top_toolbar_text", True))
+    return True
+
+
 def _toolbar_focus_group(app: Any) -> str | None:
     stream_state = str(getattr(app, "_stream_state", "") or "").lower()
     connected = bool(getattr(app, "connected", False))
@@ -204,12 +214,27 @@ def _ensure_toolbar_group_styles(app: Any) -> None:
             or style.lookup("TLabel", "foreground")
             or "#000000"
         )
-        default_bg = (
-            palette.get("bg")
-            or style.lookup("TLabel", "background")
-            or style.lookup("TFrame", "background")
-            or "#f0f0f0"
-        )
+        default_bg = ""
+        bar = getattr(app, "toolbar_bar", None)
+        try:
+            frame_style = str(getattr(bar, "cget", lambda _key: "")("style") or "TFrame").strip() or "TFrame"
+            default_bg = str(style.lookup(frame_style, "background") or "").strip()
+        except Exception:
+            default_bg = ""
+        if not default_bg:
+            try:
+                default_bg = str(style.lookup("TFrame", "background") or "").strip()
+            except Exception:
+                default_bg = ""
+        if not default_bg:
+            default_bg = str(palette.get("panel_bg") or "").strip()
+        if not default_bg:
+            try:
+                default_bg = str(style.lookup("TLabel", "background") or "").strip()
+            except Exception:
+                default_bg = ""
+        if not default_bg:
+            default_bg = str(palette.get("bg") or "").strip() or "#f0f0f0"
         base_font = tkfont.nametofont("TkDefaultFont")
         focus_font = tkfont.Font(
             family=base_font.cget("family"),
@@ -268,10 +293,19 @@ def toolbar_button_label(icon: str, *lines: str) -> str:
     return stacked_icon_label(icon, *lines)
 
 
+def _toolbar_button_content(owner: Any, icon: str, lines: tuple[str, ...]) -> str:
+    if _toolbar_text_visible(owner):
+        return toolbar_button_label(icon, *lines)
+    return ""
+
+
 def set_toolbar_button_label(button: Any, icon: str, *lines: str) -> None:
     if not _widget_exists(button):
         return
-    text = toolbar_button_label(icon, *lines)
+    owner = getattr(button, "_toolbar_owner", None)
+    lines_tuple = tuple(str(line) for line in lines)
+    text_visible = _toolbar_text_visible(owner)
+    text = _toolbar_button_content(owner, icon, lines_tuple)
     try:
         setter = getattr(button, "set_content", None)
         if callable(setter):
@@ -281,9 +315,28 @@ def set_toolbar_button_label(button: Any, icon: str, *lines: str) -> None:
     except Exception as exc:
         _log_suppressed("Failed updating toolbar button label", exc)
     try:
+        layout_setter = getattr(button, "set_layout_mode", None)
+        if callable(layout_setter):
+            layout_setter(compact=not text_visible)
+    except Exception as exc:
+        _log_suppressed("Failed updating toolbar button layout mode", exc)
+    try:
+        button._toolbar_icon = str(icon or "")
+        button._toolbar_caption_lines = lines_tuple
         button._toolbar_accessible_label = " ".join(str(line).strip() for line in lines if str(line).strip())
     except Exception as exc:
         _log_suppressed("Failed caching toolbar button accessible label", exc)
+
+
+def refresh_top_toolbar_text_visibility(app: Any) -> None:
+    for button in getattr(app, "_toolbar_buttons", ()) or ():
+        if not _widget_exists(button):
+            continue
+        icon = str(getattr(button, "_toolbar_icon", "") or "")
+        lines = tuple(getattr(button, "_toolbar_caption_lines", ()) or ())
+        if not icon and not lines:
+            continue
+        set_toolbar_button_label(button, icon, *lines)
 
 
 def _toolbar_button_accent(app: Any, role: str) -> str:
@@ -327,7 +380,8 @@ def _toolbar_button_background(app: Any) -> str:
 def _toolbar_icon_pixel_size(button: Any) -> int:
     width = int(getattr(button, "_width", getattr(button, "width", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
     height = int(getattr(button, "_height", getattr(button, "height", _TOOLBAR_BUTTON_DEFAULT_SIZE)) or _TOOLBAR_BUTTON_DEFAULT_SIZE)
-    return max(18, int(min(width, height) * 0.42))
+    full_height = int(getattr(button, "_layout_full_height", height) or height)
+    return max(18, int(min(width, max(height, full_height)) * 0.42))
 
 
 def _toolbar_asset_svg_path(asset_key: str) -> Path | None:
@@ -564,7 +618,7 @@ def _create_toolbar_button(
         kwargs["state"] = state
     button = ToolbarShapeButton(
         parent,
-        text=toolbar_button_label(icon, *lines),
+        text=_toolbar_button_content(app, icon, lines),
         command=command,
         shape=shape,
         accent=_toolbar_button_accent(app, role),
@@ -575,12 +629,21 @@ def _create_toolbar_button(
         **kwargs,
     )
     try:
+        button._toolbar_owner = app
         button._toolbar_default_style = style_name
         button._toolbar_role = role
         button._toolbar_asset_key = str(asset_key or "").strip().lower()
+        button._toolbar_icon = str(icon or "")
+        button._toolbar_caption_lines = tuple(str(line) for line in lines)
         button._toolbar_accessible_label = " ".join(lines)
     except Exception as exc:
         _log_suppressed("Failed caching toolbar button presentation metadata", exc)
+    try:
+        layout_setter = getattr(button, "set_layout_mode", None)
+        if callable(layout_setter):
+            layout_setter(compact=not _toolbar_text_visible(app))
+    except Exception as exc:
+        _log_suppressed("Failed setting initial toolbar button layout mode", exc)
     set_kb_id(button, kb_id)
     button.pack(side="left", padx=padx)
     apply_tooltip(button, tooltip)
@@ -755,6 +818,11 @@ def on_resume_button_visibility_change(app):
 def on_recover_button_visibility_change(app):
     app.settings["show_recover_button"] = bool(app.show_recover_button.get())
     update_recover_button_visibility(app)
+
+
+def on_top_toolbar_text_visibility_change(app):
+    app.settings["show_top_toolbar_text"] = _toolbar_text_visible(app)
+    refresh_top_toolbar_text_visibility(app)
 
 
 def update_resume_button_visibility(app):

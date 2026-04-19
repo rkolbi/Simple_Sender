@@ -30,7 +30,7 @@ from tkinter import messagebox, ttk
 import tkinter.font as tkfont
 
 from simple_sender.ui.alarm_state import mark_alarm_clear_requested
-from simple_sender.ui.file_info_tab import ssmeta_toolpaths, ssmeta_tools
+from simple_sender.ui.file_info_tab import ordered_unique_values, ssmeta_toolpaths, ssmeta_tools
 from simple_sender.ui.gcode.stats import format_duration
 from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
 from simple_sender.ui.modal_sync import request_modal_state_sync
@@ -903,7 +903,7 @@ def _run_job_metadata_summary_text(app) -> str:
             )
         )
 
-    tools = ssmeta_tools(ssmeta_map)
+    tools = ordered_unique_values(ssmeta_tools(ssmeta_map))
     if tools:
         sections.append(
             "\n".join(

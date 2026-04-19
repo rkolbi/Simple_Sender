@@ -62,6 +62,10 @@ def patch_messagebox() -> None:
     messagebox.showwarning = wrap(messagebox.showwarning)
     messagebox.showerror = wrap(messagebox.showerror)
     messagebox.askyesno = wrap(messagebox.askyesno)
+    messagebox.askokcancel = wrap(messagebox.askokcancel)
+    messagebox.askyesnocancel = wrap(messagebox.askyesnocancel)
+    messagebox.askretrycancel = wrap(messagebox.askretrycancel)
+    messagebox.askquestion = wrap(messagebox.askquestion)
     _PATCHED = True
 
 

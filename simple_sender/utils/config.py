@@ -138,6 +138,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "startup_auto_connect_delay_s": 5.0,
     "show_recover_button": False,
     "show_resume_from_button": False,
+    "show_top_toolbar_text": True,
     "show_endstop_indicator": True,
     "show_probe_indicator": True,
     "show_hold_indicator": True,

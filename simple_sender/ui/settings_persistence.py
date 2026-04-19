@@ -563,6 +563,12 @@ def _build_ui_settings(
         "console_positions_enabled": pos_status_enabled,
         "show_resume_from_button": bool(app.show_resume_from_button.get()),
         "show_recover_button": bool(app.show_recover_button.get()),
+        "show_top_toolbar_text": _read_bool_setting_value(
+            app,
+            attr_name="show_top_toolbar_text",
+            key="show_top_toolbar_text",
+            fallback=True,
+        ),
         "app_settings_preload_enabled": _read_bool_setting_value(
             app,
             attr_name="app_settings_preload_enabled",

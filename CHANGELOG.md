@@ -30,6 +30,11 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Small visible help surfaces were tightened:
   - the `Tips` quick toggle now has state-specific tooltip text
   - Logs popup filters and action buttons now have explicit tooltip/help text
+- Top toolbar group labels now use the toolbar/frame background instead of the darker root background, so `Connection`, `Job`, `Run`, and `Recovery` stay visually aligned with the surrounding header row.
+- Required-tools displays are now more consistent across user-facing review surfaces:
+  - Job Info now labels the list as `Tools Required:`
+  - Job Info and the run-confirmation metadata summary now deduplicate repeated tool entries while preserving first-seen order
+- Direct `mypy main.py simple_sender` is green again after typing the runtime toolbar-button metadata fields attached to `ToolbarShapeButton`.
 
 ### Documentation
 - README and changelog were refreshed so the current docs stay aligned with the shipped baseline:
@@ -39,12 +44,16 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - toolbar icon docs now describe the current app-local raster-first path plus SVG/drawn fallback behavior
   - GRBL Settings docs now describe the bundled rich-help layer and preserved fallback behavior
   - estimation docs now mention the current `CONFIDENT` / `PROVISIONAL` / `ROUGH` distinction
+- README and in-app About/help content were tightened again for current operator-facing truthfulness:
+  - Job Info and Start Job confirmation now describe `Tools Required` instead of `Tools`
+  - required-tools docs now state that repeated identical entries are deduplicated in first-seen order
+  - App Settings / Macro Manager docs now describe the current child-popup ownership behavior
 
 ### Validation
 - Current local repository validation snapshot after the latest toolbar/docs truthfulness updates:
-  - direct `pytest -q`: `1873 passed, 2 skipped`
+  - direct `pytest -q`: `1883 passed, 3 skipped`
   - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1872 passed, 3 skipped`
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1884 passed, 2 skipped`
   - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 
 ## [3.1] - 2026-04-14

@@ -378,7 +378,25 @@ def build_interface_section(app, parent: ttk.Frame, row: int) -> int:
         app.app_settings_preload_check,
         "Build the App Settings popup hidden after startup so the first open is faster. Disabled by default and takes effect on next launch.",
     )
-    next_row = _build_interface_performance_row(app, interface_frame, 2)
+    if not hasattr(app, "show_top_toolbar_text"):
+        app.show_top_toolbar_text = tk.BooleanVar(master=interface_frame, value=True)
+    on_top_toolbar_text_visibility_change = getattr(
+        app,
+        "_on_top_toolbar_text_visibility_change",
+        lambda *_args, **_kwargs: None,
+    )
+    app.top_toolbar_text_check = ttk.Checkbutton(
+        interface_frame,
+        text="Show Top Toolbar Text",
+        variable=app.show_top_toolbar_text,
+        command=on_top_toolbar_text_visibility_change,
+    )
+    app.top_toolbar_text_check.grid(row=2, column=0, sticky="w", pady=(4, 0))
+    apply_tooltip(
+        app.top_toolbar_text_check,
+        "Show or hide the text captions under the top toolbar icons. Tooltips and commands stay unchanged.",
+    )
+    next_row = _build_interface_performance_row(app, interface_frame, 3)
     next_row = _build_interface_logging_row(app, interface_frame, next_row)
     next_row = _build_interface_auxiliary_button_visibility_row(app, interface_frame, next_row)
     next_row = _build_interface_indicators_row(app, interface_frame, next_row)

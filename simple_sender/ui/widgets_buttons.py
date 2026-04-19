@@ -229,13 +229,22 @@ class ToolbarShapeButton(tk.Canvas):
         self._focused = False
         self._width = int(width)
         self._height = int(height)
+        self._layout_full_height = int(height)
+        self._layout_compact_height = self._compute_compact_height(
+            self._width,
+            self._layout_full_height,
+        )
+        self._compact_layout_enabled = False
         self._label_font = label_font
         self._disabled_text = "#808080"
         self._disabled_accent = self._blend_color(self._accent, "#808080", 0.55)
         self._icon_images: dict[str, object] = {}
+        self._toolbar_owner: Any | None = None
         self._toolbar_default_style: str = self._style
         self._toolbar_role: str = ""
         self._toolbar_asset_key: str = ""
+        self._toolbar_icon: str = ""
+        self._toolbar_caption_lines: tuple[str, ...] = ()
         self._toolbar_accessible_label: str = ""
         self._log_button = True
         self.bind("<ButtonPress-1>", self._on_press, add="+")
@@ -247,6 +256,10 @@ class ToolbarShapeButton(tk.Canvas):
         self.bind("<space>", self._on_invoke_key, add="+")
         self.bind("<Return>", self._on_invoke_key, add="+")
         self._redraw()
+
+    def _compute_compact_height(self, width: int, full_height: int) -> int:
+        base = max(1, min(int(width), int(full_height)))
+        return max(46, int(round(base * 0.67)))
 
     def _blend_color(self, base: str, target: str, factor: float) -> str:
         base = str(base or "").lstrip("#")
@@ -288,6 +301,23 @@ class ToolbarShapeButton(tk.Canvas):
         self._icon_images = dict(images or {})
         self._redraw()
 
+    def set_layout_mode(self, *, compact: bool) -> None:
+        self._compact_layout_enabled = bool(compact)
+        target_height = (
+            self._layout_compact_height
+            if self._compact_layout_enabled
+            else self._layout_full_height
+        )
+        if target_height == self._height:
+            self._redraw()
+            return
+        self._height = int(target_height)
+        try:
+            super().configure(height=self._height)
+        except tk.TclError:
+            return
+        self._redraw()
+
     def _label_lines(self) -> list[str]:
         lines = [str(line).strip() for line in str(self._text or "").splitlines() if str(line).strip()]
         if len(lines) > 1:
@@ -311,6 +341,8 @@ class ToolbarShapeButton(tk.Canvas):
         return outline, fill, text
 
     def _shape_center(self) -> tuple[float, float]:
+        if self._compact_layout_enabled:
+            return self._width / 2.0, max(18.0, self._height * 0.50)
         return self._width / 2.0, max(18.0, self._height * 0.30)
 
     def _shape_size(self) -> float:
@@ -731,6 +763,14 @@ class ToolbarShapeButton(tk.Canvas):
         if "accent" in config_options:
             self._accent = str(config_options.pop("accent") or self._accent)
             self._disabled_accent = self._blend_color(self._accent, "#808080", 0.55)
+        if "height" in config_options:
+            new_height = int(config_options["height"] or self._height)
+            self._height = new_height
+            self._layout_full_height = new_height
+            self._layout_compact_height = self._compute_compact_height(
+                self._width,
+                self._layout_full_height,
+            )
         result = super().configure(**config_options)
         self._redraw()
         return result

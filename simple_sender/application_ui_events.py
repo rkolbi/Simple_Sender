@@ -33,6 +33,7 @@ from typing import Any, cast
 import tkinter as tk
 from simple_sender.constants.messages import MachineStateMessages
 from simple_sender.ui.controls.toolbar import (
+    on_top_toolbar_text_visibility_change,
     on_recover_button_visibility_change,
     refresh_toolbar_action_focus,
     on_resume_button_visibility_change,
@@ -244,6 +245,9 @@ class UiEventsMixin:
 
     def _on_recover_button_visibility_change(self):
         on_recover_button_visibility_change(self)
+
+    def _on_top_toolbar_text_visibility_change(self):
+        on_top_toolbar_text_visibility_change(self)
 
     def _update_resume_button_visibility(self):
         update_resume_button_visibility(self)
