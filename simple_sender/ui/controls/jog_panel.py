@@ -184,6 +184,30 @@ def _bind_position_column_sync(app, align) -> None:
     app.after(0, _sync_pos_column_widths)
 
 
+def _match_unit_toggle_width(app) -> None:
+    def _sync_width() -> None:
+        unit_btn = getattr(app, "btn_unit_toggle", None)
+        target_btn = getattr(app, "btn_jog_mpos_x_to", None)
+        if unit_btn is None or target_btn is None:
+            return
+        target_width_px = max(int(target_btn.winfo_reqwidth()), int(target_btn.winfo_width()))
+        if target_width_px <= 0:
+            return
+        manager = str(unit_btn.winfo_manager() or "")
+        if manager == "grid":
+            unit_row = unit_btn.master
+            unit_row.grid_columnconfigure(2, minsize=target_width_px)
+            unit_btn.grid_configure(sticky="ew")
+            return
+        if manager == "pack":
+            target_width_chars = int(target_btn.cget("width") or 0)
+            if target_width_chars <= 0:
+                target_width_chars = len(str(target_btn.cget("text") or ""))
+            unit_btn.config(width=target_width_chars)
+
+    app.after(0, _sync_width)
+
+
 def _build_step_controls(app, align, z_jog_left_pad: int):
     STEP_BAR_LENGTH = 144
 
@@ -515,6 +539,11 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
         action_cmd=app._toggle_unit_mode,
         action_kb_id="unit_toggle",
     )
+    unit_toggle_manager = str(app.btn_unit_toggle.winfo_manager() or "")
+    if unit_toggle_manager == "grid":
+        app.btn_unit_toggle.grid_configure(pady=(4, 0))
+    elif unit_toggle_manager == "pack":
+        app.btn_unit_toggle.pack_configure(pady=(4, 0))
     app._manual_controls.append(app.btn_unit_toggle)
     app._offline_controls.add(app.btn_unit_toggle)
     apply_tooltip(
@@ -547,7 +576,7 @@ def _build_position_and_action_controls(app, align, *, open_mpos_target):
     app._manual_controls.extend([app.btn_zero_x, app.btn_zero_y, app.btn_zero_z])
 
     btns = ttk.Frame(align)
-    btns.grid(row=4, column=2, sticky="new", pady=2)
+    btns.grid(row=4, column=2, sticky="new", pady=(6, 0))
     app.btn_goto_zero = ttk.Button(btns, text="Goto Zero", command=app.goto_zero)
     set_kb_id(app.btn_goto_zero, "goto_zero")
     app.btn_goto_zero.pack(side="left", expand=True, fill="x")
@@ -782,5 +811,6 @@ def build_jog_panel(app, parent):
     app.macro_panel.attach_frames(macro_row, None)
 
     app._set_unit_mode(app.unit_mode.get())
+    _match_unit_toggle_width(app)
 
 

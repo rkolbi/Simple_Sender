@@ -5,8 +5,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+## [3.11] - 2026-04-20
+
 ### Changed
-- Runtime package version now reports `3.1` so the app title/diagnostics/runtime marker metadata match the current release docs.
+- Runtime package version now reports `3.11` so the app title/diagnostics/runtime marker metadata match the current release docs.
 - Top-toolbar asset loading is now cross-platform reliable for the current runtime:
   - toolbar assets now resolve from app-local `simple_sender/ui/icons`
   - runtime prefers repo-local PNG toolbar assets for the normal Windows/Linux path
@@ -42,6 +44,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - Job Info now labels the list as `Tools Required:`
   - Job Info and the run-confirmation metadata summary now deduplicate repeated tool entries while preserving first-seen order
 - Direct `mypy main.py simple_sender` is green again after typing the runtime toolbar-button metadata fields attached to `ToolbarShapeButton`.
+- Narrow jog-row polish now matches the current rendered layout:
+  - `mm/inch`, `Goto Zero`, and `Zero All` align vertically with the jog-step controls on their row
+  - `mm/inch` now matches the `Jog to` button width without shifting neighboring controls
+- Toolbar separator coverage now follows the current palette math instead of a stale hard-coded blend value, so the prerelease gate reflects the real toolbar styling path.
 
 ### Documentation
 - README and changelog were refreshed so the current docs stay aligned with the shipped baseline:
@@ -51,20 +57,21 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - toolbar icon docs now describe the current app-local raster-first path plus SVG/drawn fallback behavior
   - GRBL Settings docs now describe the bundled rich-help layer and preserved fallback behavior
   - estimation docs now mention the current `CONFIDENT` / `PROVISIONAL` / `ROUGH` distinction
-  - release-note/About filenames now identify the current `3.1` baseline
-  - Raspberry Pi image artifact naming now matches the `3.1` release label
+  - release-note/About filenames now identify the current `3.11` baseline
+  - Raspberry Pi image artifact naming now matches the `3.11` release label
 - README and in-app About/help content were tightened again for current operator-facing truthfulness:
   - Job Info and Start Job confirmation now describe `Tools Required` instead of `Tools`
   - required-tools docs now state that repeated identical entries are deduplicated in first-seen order
   - App Settings / Macro Manager docs now describe the current child-popup ownership behavior
+- Release-facing docs now identify `3.11` consistently across README, release notes, About text, and Raspberry Pi image guidance.
 
 ### Validation
 - Current local repository validation snapshot after the latest release-candidate review:
-  - direct `pytest -q`: `1886 passed, 2 skipped`
+  - direct `pytest -q`: `1885 passed, 3 skipped`
   - repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
   - direct `mypy main.py simple_sender`: clean (`217` source files)
   - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1886 passed, 2 skipped`
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1885 passed, 3 skipped`
   - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
   - targeted runtime smoke (`App()` create/update/destroy): clean
 
