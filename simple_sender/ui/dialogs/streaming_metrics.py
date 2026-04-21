@@ -31,6 +31,9 @@ import tkinter.font as tkfont
 
 from simple_sender.builtin_workflow_runtime import park_safe_machine_z_command_sequence
 from simple_sender.macro_state import macro_wait_for_idle
+from simple_sender.ui.dialogs.runtime_modal_policy import (
+    RuntimeModalRecoveryController,
+)
 from simple_sender.ui.events.stream_state_ui import apply_stream_busy_state, restore_controls_after_stream
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
@@ -38,6 +41,7 @@ from simple_sender.utils.constants import MACRO_LINE_TIMEOUT
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_JOB_COMPLETION_DIALOG_ID = "simple_sender.ui.dialogs.streaming_metrics._show_job_completion_dialog"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -697,21 +701,31 @@ def _show_job_completion_dialog(
     header.pack(fill="x")
     ttk.Label(header, text=header_text, font=title_font).pack(side="left")
     btn = ttk.Button(header, text="OK")
-    btn.pack(side="right")
+    btn.pack(side="right", padx=(0, 6))
     ttk.Label(dialog, text=message, font=body_font, justify="left", wraplength=520).pack(
         anchor="w", pady=(12, 6)
+    )
+    recovery = RuntimeModalRecoveryController(
+        app,
+        dialog,
+        dialog_id=_JOB_COMPLETION_DIALOG_ID,
+        action_buttons=(btn,),
+    )
+    recovery.attach_lock_toggle(
+        header,
+        pack_kwargs={"side": "right"},
     )
 
     def close():
         if getattr(app, "_completion_dialog", None) is None:
             return
+        recovery.cleanup()
         app._completion_dialog = None
         _stop_completion_flash(app)
         try:
             dialog.destroy()
         except Exception as exc:
             _log_suppressed("Failed destroying job completion dialog", exc)
-
     btn.configure(command=close)
     dialog.protocol("WM_DELETE_WINDOW", close)
     try:

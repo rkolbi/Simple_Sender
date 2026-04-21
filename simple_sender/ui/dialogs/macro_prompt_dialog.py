@@ -28,10 +28,14 @@ from tkinter import ttk
 from typing import Callable
 
 from simple_sender.ui.dialogs.popup_utils import center_window
+from simple_sender.ui.dialogs.runtime_modal_policy import (
+    RuntimeModalRecoveryController,
+)
 from simple_sender.ui.widgets_common import set_kb_id
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
+_MACRO_PROMPT_DIALOG_ID = "simple_sender.ui.dialogs.macro_prompt_dialog.show_macro_prompt"
 
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
@@ -58,8 +62,14 @@ def show_macro_prompt(
         lbl.pack(fill="x", pady=(0, 10))
         btn_row = ttk.Frame(frm)
         btn_row.pack(fill="x")
+        action_row = ttk.Frame(btn_row)
+        action_row.pack(side="left")
+        lock_row = ttk.Frame(btn_row)
+        lock_row.pack(side="right")
+        choice_buttons: list[ttk.Button] = []
 
         def choose(label: str):
+            recovery.cleanup()
             if result_q.empty():
                 result_q.put(label)
             try:
@@ -71,9 +81,21 @@ def show_macro_prompt(
             return lambda: choose(label)
 
         for idx, lbl_text in enumerate(choices):
-            b = ttk.Button(btn_row, text=lbl_text, command=_make_command(lbl_text))
+            b = ttk.Button(action_row, text=lbl_text, command=_make_command(lbl_text))
             set_kb_id(b, f"macro_prompt_{idx}")
             b.pack(side="left", padx=(0, 6))
+            choice_buttons.append(b)
+        recovery = RuntimeModalRecoveryController(
+            app,
+            dlg,
+            dialog_id=_MACRO_PROMPT_DIALOG_ID,
+            action_buttons=choice_buttons,
+        )
+        recovery.attach_lock_toggle(
+            lock_row,
+            kb_id="macro_prompt_screen_lock",
+            pack_kwargs={"side": "right"},
+        )
 
         def on_close():
             choose(cancel_label)

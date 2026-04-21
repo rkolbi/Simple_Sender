@@ -70,13 +70,64 @@ def _install_bindtag_recursive(app: Any, widget: Any) -> None:
         _install_bindtag_recursive(app, child)
 
 
+def _widget_exists(widget: Any) -> bool:
+    if widget is None:
+        return False
+    try:
+        return bool(widget.winfo_exists())
+    except Exception:
+        return True
+
+
+def _screen_lock_toggle_widgets(app: Any) -> list[Any]:
+    widgets: list[Any] = []
+    seen: set[int] = set()
+
+    def _append(widget: Any) -> None:
+        if widget is None or not _widget_exists(widget):
+            return
+        widget_id = id(widget)
+        if widget_id in seen:
+            return
+        seen.add(widget_id)
+        widgets.append(widget)
+
+    _append(getattr(app, "btn_screen_lock", None))
+
+    extras = list(getattr(app, "_screen_lock_toggle_widgets", ()))
+    alive_extras = [widget for widget in extras if _widget_exists(widget)]
+    if alive_extras != extras:
+        app._screen_lock_toggle_widgets = alive_extras
+    for widget in alive_extras:
+        _append(widget)
+    return widgets
+
+
+def register_screen_lock_toggle_widget(app: Any, widget: Any) -> None:
+    if widget is None:
+        return
+    widgets = list(getattr(app, "_screen_lock_toggle_widgets", ()))
+    if widget not in widgets:
+        widgets.append(widget)
+        app._screen_lock_toggle_widgets = widgets
+    _install_bindtag(app, widget)
+    refresh_screen_lock_toggle_text(app)
+
+
+def unregister_screen_lock_toggle_widget(app: Any, widget: Any) -> None:
+    widgets = [item for item in getattr(app, "_screen_lock_toggle_widgets", ()) if item is not widget]
+    app._screen_lock_toggle_widgets = widgets
+
+
 def _is_unlock_widget(app: Any, widget: Any) -> bool:
-    unlock = getattr(app, "btn_screen_lock", None)
-    if unlock is None or widget is None:
+    if widget is None:
+        return False
+    unlock_widgets = _screen_lock_toggle_widgets(app)
+    if not unlock_widgets:
         return False
     current = widget
     while current is not None:
-        if current is unlock:
+        if any(current is unlock_widget for unlock_widget in unlock_widgets):
             return True
         try:
             parent_name = current.winfo_parent()
@@ -92,17 +143,15 @@ def _is_unlock_widget(app: Any, widget: Any) -> bool:
 
 
 def refresh_screen_lock_toggle_text(app: Any) -> None:
-    btn = getattr(app, "btn_screen_lock", None)
-    if btn is None:
-        return
     try:
         locked = bool(getattr(app, "_screen_lock_active", False))
     except Exception:
         locked = False
-    try:
-        btn.config(text="Unlock" if locked else "Lock")
-    except Exception:
-        return
+    for btn in _screen_lock_toggle_widgets(app):
+        try:
+            btn.config(text="Unlock" if locked else "Lock")
+        except Exception:
+            continue
 
 
 def on_screen_lock_event(app: Any, event: Any):
@@ -128,6 +177,7 @@ def init_screen_lock_guard(app: Any) -> None:
     app._screen_lock_guard_ready = True
     app._screen_lock_active = bool(getattr(app, "_screen_lock_active", False))
     app._screen_lock_bindtag = SCREEN_LOCK_BINDTAG
+    app._screen_lock_toggle_widgets = list(getattr(app, "_screen_lock_toggle_widgets", ()))
     for sequence in SCREEN_LOCK_EVENTS:
         try:
             app.bind_class(
@@ -146,13 +196,17 @@ def init_screen_lock_guard(app: Any) -> None:
     refresh_screen_lock_toggle_text(app)
 
 
-def toggle_screen_lock(app: Any) -> None:
+def toggle_screen_lock(app: Any, *, parent: Any | None = None) -> None:
     active = bool(getattr(app, "_screen_lock_active", False))
+    prompt_kwargs = {}
+    if parent is not None:
+        prompt_kwargs["parent"] = parent
     if active:
         if not bool(
             messagebox.askyesno(
                 "Unlock screen",
                 "Unlock the screen and re-enable operator input?",
+                **prompt_kwargs,
             )
         ):
             return
@@ -161,6 +215,7 @@ def toggle_screen_lock(app: Any) -> None:
             messagebox.askyesno(
                 "Lock screen",
                 "Lock the screen and ignore operator input until unlocked?",
+                **prompt_kwargs,
             )
         ):
             return

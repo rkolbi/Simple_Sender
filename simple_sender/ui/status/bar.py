@@ -293,7 +293,10 @@ def build_status_bar(app, before):
     )
     set_kb_id(app.btn_screen_lock, "screen_lock")
     app.btn_screen_lock.pack(side="right", padx=(8, 0))
-    apply_tooltip(app.btn_screen_lock, "Lock/unlock the screen. When locked, only this button accepts input.")
+    apply_tooltip(
+        app.btn_screen_lock,
+        "Lock/unlock the screen. When locked, only Lock/Unlock controls accept input.",
+    )
     app._refresh_tooltips_toggle_text()
     app._refresh_keybindings_toggle_text()
     app._refresh_autolevel_overlay_button()
