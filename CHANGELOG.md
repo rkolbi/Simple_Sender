@@ -5,6 +5,35 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+### Fixed
+- Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:
+  - file-backed streaming now keeps reading until true cleaned EOF is reached
+  - normal stream `done` now requires verified EOF plus final-line acknowledgement instead of trusting an estimate
+  - resume-from-line no longer rejects valid resume points just because the current file-backed source length estimate is still low
+- Real-job completion hardening now enforces a safer end state before reporting clean completion:
+  - the sender now forcibly issues spindle-off on the authoritative successful-completion path
+  - the completion cleanup now reuses the same Park safe-Z command path used by the built-in Park workflow
+  - completion now warns the operator instead of silently claiming clean success when EOF verification or post-job safer-state cleanup fails
+- EOF-completion diagnostics are now more truthful:
+  - completion dialogs and diagnostics now include explicit EOF-verification evidence
+  - a falsey `0` final acknowledged-line index no longer degrades into `-1` in the EOF evidence path
+
+### Documentation
+- Release-facing docs were refreshed for the current repository revision:
+  - README validation snapshots now reflect the latest direct and wrapper-gate results separately
+  - release notes now mention the verified-EOF and safer-completion hardening
+  - About text now reflects the current verified-EOF and post-job safety behavior
+
+### Validation
+- Current local repository validation snapshot for the current repository revision:
+  - direct `pytest -q`: `1900 passed, 2 skipped`
+  - repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
+  - direct `mypy main.py simple_sender`: clean (`217` source files)
+  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
+  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+  - targeted runtime smoke (`App()` create/update/destroy): clean
+
 ## [3.11] - 2026-04-20
 
 ### Changed

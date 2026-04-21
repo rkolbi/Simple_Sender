@@ -7,16 +7,16 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.11`. This is the current release-ready baseline.
 
-Current local validation snapshot for `3.11` as of `2026-04-20`:
-- Direct `pytest -q`: `1885 passed, 3 skipped`
+Current local validation snapshot for the current repository revision as of `2026-04-21`:
+- Direct `pytest -q`: `1900 passed, 2 skipped`
 - Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
 - Direct `mypy main.py simple_sender`: clean (`217` source files)
 - Wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Wrapper pytest + coverage stage inside `run_tests.bat`: `1885 passed, 3 skipped`
+- Wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
 - Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
 - Targeted runtime smoke (`App()` create/update/destroy): clean
 
-The current three skips are environment-driven: one opt-in Kasa integration test that requires explicit device credentials, plus two alarm-recovery UI tests that skip when Tcl/Tk is unavailable in the active interpreter.
+Direct `pytest -q` and the wrapper pytest + coverage stage are both green in this environment, but they do not currently report identical skip counts. `run_tests.bat` remains the authoritative local release gate.
 
 ## Design Objectives and Key Features
 
@@ -93,6 +93,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 - Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
 - Macros: protected built-in workflow buttons stay fixed, while the 5 user-macro slots can be edited/duplicated/reordered in the in-app Macro Manager.
 - Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
+- Real-job completion now requires verified cleaned EOF before clean success, then enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow; if EOF verification or safer completion cleanup cannot be completed, the operator gets a warning instead of a silent clean-complete claim.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
@@ -396,7 +397,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; during deferred completion the top-right progress bar/label stay in sync and finalize at `100.0%` when GRBL reaches the final `Idle`.
 - **Logging Mode:** App Settings > Diagnostics now includes `Logging Mode` with `Standard` and `Verbose`. `Standard` is the default and reduces routine TX file logging while still keeping recent serial activity available for diagnostics. `Verbose` preserves fuller detailed TX logging for troubleshooting.
-- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Completion waits for GRBL to report `Idle` after the final line is acknowledged.
+- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Clean completion now requires verified cleaned EOF, waits for GRBL to report `Idle` after the final line is acknowledged, and for real jobs enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow before reporting clean success.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
 - **UI queue wake-up:** When the UI queue is idle and new work arrives, the first posted UI event now wakes the drain loop promptly instead of waiting for the next normal periodic drain tick. Ongoing queue draining still uses the existing bounded timer/backoff model.
 
@@ -864,7 +865,7 @@ Run the suite:
 ```powershell
 python -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-20`, the current stable `3.11` release baseline validates clean locally. Direct checks currently report `pytest -q`: `1885 passed, 3 skipped`, `python tools/run_ruff.py check .`: clean, and `python -m mypy main.py simple_sender`: clean (`217` source files). The verified wrapper gate snapshot is also clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1885 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. A targeted runtime smoke check that instantiates, updates, and destroys `App()` also completed cleanly. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-21`, the current repository revision validates clean locally. Direct checks currently report `pytest -q`: `1900 passed, 2 skipped`, `python tools/run_ruff.py check .`: clean, and `python -m mypy main.py simple_sender`: clean (`217` source files). The verified wrapper gate snapshot is also clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1899 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. A targeted runtime smoke check that instantiates, updates, and destroys `App()` also completed cleanly. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 217 source files`.
 

@@ -17,6 +17,8 @@ These notes describe the current stable, release-ready `3.11` baseline. This rel
   - Run / Job Setup validity now matches the real Tool Change prerequisites
   - alarm and warning dialogs now match the dark UI consistently
   - file/job summary surfaces keep tool metadata truthful
+  - normal successful completion now requires verified cleaned EOF before clean success
+  - real-job completion now enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow, warning instead of silently claiming clean completion when that safer end state cannot be achieved
 - Release-candidate hardening and polish:
   - toolbar separator tests now follow the current palette math instead of a stale hard-coded blend value
   - the `mm/inch`, `Goto Zero`, and `Zero All` row now aligns cleanly with the jog-step controls
@@ -48,10 +50,11 @@ These notes describe the current stable, release-ready `3.11` baseline. This rel
 
 ## Current Validation Snapshot
 
-As of `2026-04-20`, the current repository revision validates clean locally:
+As of `2026-04-21`, the current repository revision validates clean locally:
 
-- `pytest -q`: `1885 passed, 3 skipped`
+- `pytest -q`: `1900 passed, 2 skipped`
 - `python tools/run_ruff.py check .`: clean
 - `python -m mypy main.py simple_sender`: clean (`217` source files)
 - `run_tests.bat`: clean (`7/7` gates passed)
+- wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
 - targeted runtime smoke (`App()` create/update/destroy): clean
