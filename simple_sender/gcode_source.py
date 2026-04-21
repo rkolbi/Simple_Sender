@@ -263,6 +263,11 @@ class FileGcodeSource:
                     if not cleaned:
                         continue
                     self._cursor_index += 1
+                    if (
+                        not self._line_count_known
+                        and self._cursor_index + 1 > self._line_count
+                    ):
+                        self._line_count = self._cursor_index + 1
                     line = cleaned
                     line_start_offset = raw_start_offset
                     line_end_offset = raw_end_offset

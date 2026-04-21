@@ -530,6 +530,12 @@ def _init_gcode_and_autolevel_state(
     app._gcode_ssmeta_present = False
     app._gcode_ssmeta = {}
     app._gcode_ssmeta_scan_reduced = False
+    app._stream_completion_verified_eof = False
+    app._stream_completion_total_lines = 0
+    app._stream_completion_total_lines_known = False
+    app._stream_completion_last_acked_index = -1
+    app._stream_completion_shortfall_lines = 0
+    app._stream_completion_warning = ""
     app._gcode_stats_compute_mode = ""
     app._gcode_stats_sample_scale = 1.0
     app._gcode_stats_sample_line_count = 0
@@ -706,6 +712,7 @@ def _init_stream_and_override_state(
     app._gcode_restore_failure_message = ""
     app._job_started_at = None
     app._job_completion_notified = False
+    app._job_completion_finalize_pending = False
 
     app._alarm_latched = False
     app._alarm_clear_requested = False

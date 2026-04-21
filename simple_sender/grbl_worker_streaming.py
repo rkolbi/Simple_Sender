@@ -86,6 +86,52 @@ class _StreamSourceReadError(RuntimeError):
 
 
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    @staticmethod
+    def _stream_source_line_count_known(source: object) -> bool:
+        checker = getattr(source, "line_count_known", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                pass
+        return bool(getattr(source, "_line_count_known", True))
+
+    def _stream_source_index_exhausted(self, source: object, idx: int) -> bool:
+        reader = getattr(source, "read_line_with_offsets", None)
+        if callable(reader) and not self._stream_source_line_count_known(source):
+            return False
+        try:
+            return int(idx) >= len(source)  # type: ignore[arg-type]
+        except Exception:
+            return False
+
+    def _stream_source_index_known_out_of_range(self, source: object, idx: int) -> bool:
+        reader = getattr(source, "read_line_with_offsets", None)
+        if callable(reader) and not self._stream_source_line_count_known(source):
+            return False
+        try:
+            return int(idx) >= len(source)  # type: ignore[arg-type]
+        except Exception:
+            return False
+
+    def _stream_completion_verified(
+        self,
+        *,
+        source: object,
+        send_index: int,
+        ack_index: int,
+    ) -> tuple[bool, int, bool]:
+        line_count_known = self._stream_source_line_count_known(source)
+        total_lines = max(0, int(len(source)))  # type: ignore[arg-type]
+        if not self._stream_source_index_exhausted(source, send_index):
+            return False, total_lines, line_count_known
+        reader = getattr(source, "read_line_with_offsets", None)
+        if callable(reader) and not line_count_known:
+            return False, total_lines, line_count_known
+        if ack_index < total_lines - 1:
+            return False, total_lines, line_count_known
+        return True, total_lines, line_count_known
+
     def stop_stream_performs_reset(self) -> bool:
         return True
 
@@ -286,7 +332,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return
 
         start_index = max(0, int(start_index))
-        if start_index >= len(self._gcode):
+        source_obj: object | None = self._gcode
+        reader = getattr(source_obj, "read_line_with_offsets", None)
+        if self._stream_source_index_known_out_of_range(self._gcode, start_index):
             msg = (
                 f"[resume failed] Requested start line {start_index + 1} "
                 "exceeds the loaded job length."
@@ -294,8 +342,6 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             logger.warning(msg)
             self.ui_q.put(("log", msg))
             return
-        source_obj: object | None = self._gcode
-        reader = getattr(source_obj, "read_line_with_offsets", None)
         if not callable(reader):
             source_obj = getattr(self, "_gcode_source", None)
             reader = getattr(source_obj, "read_line_with_offsets", None)
@@ -577,11 +623,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return None
         if self._resume_preamble:
             return None
-        if self._send_index >= len(self._gcode):
-            return None
         source = self._gcode
         reader = getattr(source, "read_line_with_offsets", None)
         if not callable(reader):
+            return None
+        if self._stream_source_index_exhausted(source, self._send_index):
             return None
         return (
             int(self._stream_token),
@@ -647,7 +693,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return False
         if idx != self._send_index:
             return False
-        if idx >= len(self._gcode):
+        if self._stream_source_index_exhausted(source, idx):
             return False
         return True
 
@@ -660,12 +706,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return self._stream_pending_item
         if self._resume_preamble:
             return StreamPendingItem(line=self._resume_preamble[0], is_gcode=False, idx=None)
-        if self._send_index >= len(self._gcode):
+        source = self._gcode
+        if self._stream_source_index_exhausted(source, self._send_index):
             return None
         line_end_offset: int | None = None
         source_path = ""
         try:
-            source = self._gcode
             source_path = str(getattr(source, "path", "") or "").strip()
             reader = getattr(source, "read_line_with_offsets", None)
             if callable(reader):
@@ -1106,11 +1152,17 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 self._resume_preamble or
                 self._stream_tool_change_pending is not None
             )
-        
+            completion_verified, total_lines, line_count_known = (
+                self._stream_completion_verified(
+                    source=self._gcode,
+                    send_index=send_index,
+                    ack_index=ack_index,
+                )
+            )
+
         if (self._streaming and
             not pending and
-            send_index >= len(self._gcode) and
-            ack_index >= len(self._gcode) - 1):
+            completion_verified):
             stream_file_size = max(
                 0, int(getattr(self, "_stream_file_size_bytes", 0) or 0)
             )
@@ -1122,7 +1174,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 )
             self._streaming = False
             self.ui_q.put(StreamStateEvent("done", None))
-            logger.info("Streaming complete")
+            logger.info(
+                "Streaming complete (verified_eof=%s, total_lines=%d)",
+                bool(line_count_known),
+                int(total_lines),
+            )
 
     def _purge_pending_jogs(self) -> None:
         if self._purge_jog_queue.is_set():

@@ -244,6 +244,7 @@ class JobService:
         app._reset_gcode_view_for_run()
         app._job_started_at = self._now_factory()
         app._job_completion_notified = False
+        app._job_completion_finalize_pending = False
         streaming_controller = getattr(app, "streaming_controller", None)
         if streaming_controller is not None:
             log_job_started = getattr(streaming_controller, "log_job_started", None)

@@ -555,6 +555,31 @@ def _append_stream_progress_metrics(
     metrics["stream_done_wait_last_s"] = float(stream_done_wait_last_s)
     metrics["stream_done_wait_total_s"] = float(stream_done_wait_total_s)
     metrics["stream_done_wait_count"] = int(stream_done_wait_count)
+    metrics["stream_completion_verified_eof"] = bool(
+        getattr(app, "_stream_completion_verified_eof", False)
+    )
+    metrics["stream_completion_total_lines"] = int(
+        getattr(app, "_stream_completion_total_lines", 0) or 0
+    )
+    metrics["stream_completion_total_lines_known"] = bool(
+        getattr(app, "_stream_completion_total_lines_known", False)
+    )
+    raw_completion_acked_index = getattr(app, "_stream_completion_last_acked_index", -1)
+    try:
+        completion_acked_index = int(raw_completion_acked_index)
+    except Exception:
+        completion_acked_index = -1
+    metrics["stream_completion_last_acked_index"] = int(completion_acked_index)
+    metrics["stream_completion_last_acked_line"] = max(
+        0,
+        int(completion_acked_index) + 1,
+    )
+    metrics["stream_completion_shortfall_lines"] = int(
+        getattr(app, "_stream_completion_shortfall_lines", 0) or 0
+    )
+    metrics["stream_completion_warning"] = str(
+        getattr(app, "_stream_completion_warning", "") or ""
+    )
     metrics["file_size_bytes"] = int(
         stream_file_size_bytes if stream_file_size_bytes > 0 else file_size_bytes
     )

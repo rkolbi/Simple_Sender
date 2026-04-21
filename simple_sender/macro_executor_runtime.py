@@ -44,6 +44,7 @@ from simple_sender.utils.constants import (
     MACRO_TOTAL_TIMEOUT,
     USER_MACRO_SLOT_COUNT,
 )
+from simple_sender.utils.grbl_errors import annotate_grbl_message
 from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
 from simple_sender.types import MacroExecutorState
 logger = logging.getLogger(__name__)
@@ -52,6 +53,88 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
     log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
+
+
+def _show_operator_warning(app, title: str, message: str) -> None:
+    post_ui = getattr(app, "_post_ui_thread", None)
+    if callable(post_ui):
+        post_ui(messagebox.showwarning, title, message)
+        return
+    messagebox.showwarning(title, message)
+
+
+def _tool_change_failure_guidance(exc: BaseException) -> tuple[str, str]:
+    raw_detail = str(exc).strip() or "Unknown Tool Change failure."
+    detail = annotate_grbl_message(raw_detail)
+    normalized = detail.lower()
+
+    if (
+        "tool_reference not set" in normalized
+        or "tool reference is missing the current sensor-reference format" in normalized
+        or "tool reference work z is missing or invalid" in normalized
+        or "tool reference machine z is missing or invalid" in normalized
+    ):
+        return (
+            "Tool Change blocked",
+            "Tool Change needs a current tool reference from Job Setup.\n\n"
+            "Run Job Setup again before changing tools.",
+        )
+    if "grbl $132" in normalized:
+        return (
+            "Tool Change blocked",
+            "Tool Change needs a valid GRBL $132 max Z travel value.\n\n"
+            "Refresh GRBL settings, confirm $132 is correct, then retry.",
+        )
+    if "controller disconnected during macro execution" in normalized:
+        return (
+            "Tool Change failed",
+            "Tool Change stopped because the controller disconnected.\n\n"
+            "Reconnect, confirm machine state, rerun Job Setup if needed, then retry.",
+        )
+    if "probe controller is unavailable" in normalized:
+        return (
+            "Tool Change failed",
+            "Tool Change could not read the fixed sensor / probe input.\n\n"
+            "Check the bit setter or probe wiring, then retry.",
+        )
+    if "tool measurement was inconsistent" in normalized:
+        return (
+            "Tool Change failed",
+            "Tool Change probe readings were inconsistent.\n\n"
+            "Clean/check the bit setter, tool, and wiring, then retry.",
+        )
+    if "probe-trip report" in normalized or "probe report" in normalized:
+        return (
+            "Tool Change failed",
+            "Tool Change did not get a valid fixed-sensor probe reading.\n\n"
+            "Check the bit setter / probe state and wiring, then retry.",
+        )
+    if "timed out" in normalized:
+        return (
+            "Tool Change failed",
+            "Tool Change timed out waiting for the controller or probe response.\n\n"
+            "Verify the controller is ready, then retry.",
+        )
+    if "macro command failed:" in normalized:
+        if "error:9" in normalized or "locked out during alarm" in normalized:
+            return (
+                "Tool Change blocked",
+                "Tool Change could not move because the controller is locked, in alarm, or not ready.\n\n"
+                "Clear the controller state, re-home if position is no longer trustworthy, and retry.\n\n"
+                f"Controller detail: {detail}",
+            )
+        return (
+            "Tool Change failed",
+            "Tool Change motion was rejected by GRBL.\n\n"
+            "This can happen if the machine is not homed or if the Bit Setter X/Y or probe Z settings fall outside travel.\n\n"
+            f"Controller detail: {detail}",
+        )
+    return (
+        "Tool Change failed",
+        "Tool Change could not finish.\n\n"
+        f"Detail: {detail}",
+    )
+
 
 class MacroRunnerMixin(MacroExecutorState):
     _last_macro_run_success: bool | None
@@ -313,6 +396,12 @@ class MacroRunnerMixin(MacroExecutorState):
                 f"Wait for the previous job to fully finish before running a {noun}.",
             )
             return True
+        if bool(getattr(self.app, "_job_completion_finalize_pending", False)):
+            messagebox.showwarning(
+                title,
+                f"Wait for the previous job to finish post-job safety cleanup before running a {noun}.",
+            )
+            return True
         if self.grbl.is_streaming():
             allow_during_tool_change = bool(
                 allow_streaming_paused
@@ -515,13 +604,21 @@ class MacroRunnerMixin(MacroExecutorState):
             if canceled:
                 self._workflow_audit("Runtime canceled by operator.", force=True)
             else:
+                show_raw_dialog = True
+                if str(getattr(action, "workflow_id", "") or "") == "tool_change":
+                    warning_title, warning_message = _tool_change_failure_guidance(exc)
+                    try:
+                        _show_operator_warning(self.app, warning_title, warning_message)
+                        show_raw_dialog = False
+                    except Exception as dialog_exc:
+                        _log_suppressed("Failed showing Tool Change guidance dialog", dialog_exc)
                 logger.exception("Built-in workflow '%s' failed", action.workflow_id)
                 self.ui_q.put(("log", f"[workflow] {workflow_name} failed: {exc}"))
                 self._workflow_audit(f"Runtime error: {exc}", force=True)
                 self.app._log_exception(
                     "Workflow error",
                     exc,
-                    show_dialog=True,
+                    show_dialog=show_raw_dialog,
                     dialog_title="Workflow error",
                 )
         finally:

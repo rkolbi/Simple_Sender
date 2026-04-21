@@ -21,6 +21,18 @@ _XYZ_CLEAR_Y_MM = -15.0
 _XYZ_SECOND_SIDE_X_MM = 30.0
 
 
+def park_safe_machine_z_mm() -> float:
+    return float(_SAFE_MACHINE_Z_MM)
+
+
+def park_safe_machine_z_command_sequence() -> tuple[str, ...]:
+    return (
+        "G21",
+        "G90",
+        f"G53 G0 Z{park_safe_machine_z_mm()}",
+    )
+
+
 def _state_namespace(executor) -> Any:
     with executor.macro_vars() as macro_vars:
         macro_ns = macro_vars["macro"]
@@ -48,6 +60,20 @@ def _set_state(executor, key: str, value: Any) -> None:
 def _get_state(executor, key: str, default: Any = None) -> Any:
     state_ns = _state_namespace(executor)
     return getattr(state_ns, str(key), default)
+
+
+def _require_state_float(
+    executor,
+    key: str,
+    *,
+    fallback: Any = None,
+    error_message: str,
+) -> float:
+    value = _get_state(executor, key, fallback)
+    try:
+        return round(float(value), 4)
+    except Exception as exc:
+        raise RuntimeError(error_message) from exc
 
 
 def _safe_wait_for_idle(executor) -> None:
@@ -121,10 +147,9 @@ def _fixed_sensor_probe_settings(executor) -> tuple[tool_measurement.ToolProbeCy
 
 
 def _move_to_fixed_sensor(executor, *, bit_setter_x_mm: float, bit_setter_y_mm: float, probe_z_location: float) -> None:
-    executor._macro_send("G21")
     executor._macro_send("M5")
-    executor._macro_send("G90")
-    executor._macro_send(f"G53 G0 Z{_SAFE_MACHINE_Z_MM}")
+    for command in park_safe_machine_z_command_sequence():
+        executor._macro_send(command)
     executor._macro_send(f"G53 G0 X{bit_setter_x_mm} Y{bit_setter_y_mm}")
     _safe_wait_for_idle(executor)
     executor._macro_send(f"G53 Z{probe_z_location}")
@@ -133,8 +158,8 @@ def _move_to_fixed_sensor(executor, *, bit_setter_x_mm: float, bit_setter_y_mm: 
 def _return_from_fixed_sensor(executor) -> None:
     executor._macro_send("G91")
     executor._macro_send(f"G0 Z{_TOOL_SENSOR_RETRACT_MM}")
-    executor._macro_send("G90")
-    executor._macro_send(f"G53 Z{_SAFE_MACHINE_Z_MM}")
+    for command in ("G90", f"G53 Z{park_safe_machine_z_mm()}"):
+        executor._macro_send(command)
     _safe_wait_for_idle(executor)
     executor._macro_send("G0 X0 Y0")
 
@@ -142,9 +167,8 @@ def _return_from_fixed_sensor(executor) -> None:
 def run_park_work(executor) -> None:
     _safe_wait_for_idle(executor)
     executor._macro_send("M5")
-    executor._macro_send("G21")
-    executor._macro_send("G90")
-    executor._macro_send(f"G53 G0 Z{_SAFE_MACHINE_Z_MM}")
+    for command in park_safe_machine_z_command_sequence():
+        executor._macro_send(command)
     _safe_wait_for_idle(executor)
     executor._macro_send("G0 X0 Y0")
     executor._workflow_restore_state()
@@ -154,9 +178,8 @@ def run_park_bit_setter(executor) -> None:
     _safe_wait_for_idle(executor)
     cycle = tool_measurement.tool_probe_cycle_settings(executor.app)
     executor._macro_send("M5")
-    executor._macro_send("G21")
-    executor._macro_send("G90")
-    executor._macro_send(f"G53 G0 Z{_SAFE_MACHINE_Z_MM}")
+    for command in park_safe_machine_z_command_sequence():
+        executor._macro_send(command)
     executor._macro_send(f"G53 G0 X{cycle.bit_setter_x_mm} Y{cycle.bit_setter_y_mm}")
     _safe_wait_for_idle(executor)
     executor._workflow_restore_state()
@@ -421,16 +444,19 @@ def run_tool_change(executor) -> None:
         raise RuntimeError(
             "Tool reference is missing the current sensor-reference format; rerun Job Setup before changing tools."
         )
-    _set_state(
+    reference_wz = _require_state_float(
         executor,
         "TOOL_REFERENCE_WZ",
-        round(float(_get_state(executor, "TOOL_REFERENCE_WZ", _get_state(executor, "TOOL_REFERENCE"))), 4),
+        fallback=_get_state(executor, "TOOL_REFERENCE"),
+        error_message="Tool reference work Z is missing or invalid; rerun Job Setup before changing tools.",
     )
-    _set_state(
+    reference_mz = _require_state_float(
         executor,
         "TOOL_REFERENCE_MZ",
-        round(float(_get_state(executor, "TOOL_REFERENCE_MZ", _get_state(executor, "TOOL_REFERENCE"))), 4),
+        error_message="Tool reference machine Z is missing or invalid; rerun Job Setup before changing tools.",
     )
+    _set_state(executor, "TOOL_REFERENCE_WZ", reference_wz)
+    _set_state(executor, "TOOL_REFERENCE_MZ", reference_mz)
     _log_work_position_snapshot(executor, "Tool change start", include_tool_reference=True)
     _move_to_fixed_sensor(
         executor,
@@ -476,8 +502,8 @@ def run_tool_change(executor) -> None:
     _safe_wait_for_idle(executor)
     _wait_for_fresh_status(executor)
     compensation = tool_measurement.build_tool_change_compensation(
-        reference_work_z=float(_get_state(executor, "TOOL_REFERENCE_WZ")),
-        reference_machine_z=float(_get_state(executor, "TOOL_REFERENCE_MZ")),
+        reference_work_z=reference_wz,
+        reference_machine_z=reference_mz,
         current_machine_z=float(_get_state(executor, "CURRENT_TOOL_PROBE_MZ")),
     )
     delta_mm = round(float(compensation.delta_mm), 4)

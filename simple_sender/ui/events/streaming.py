@@ -167,6 +167,82 @@ def _refresh_stream_busy_toolbar_focus(app) -> None:
         )
 
 
+def _reset_stream_completion_evidence(app) -> None:
+    app._stream_completion_verified_eof = False
+    app._stream_completion_total_lines = 0
+    app._stream_completion_total_lines_known = False
+    app._stream_completion_last_acked_index = -1
+    app._stream_completion_shortfall_lines = 0
+    app._stream_completion_warning = ""
+
+
+def _sync_stream_completion_evidence(app) -> None:
+    raw_ack_index = getattr(app, "_last_acked_index", -1)
+    try:
+        ack_index = int(raw_ack_index)
+    except Exception:
+        ack_index = -1
+    total_lines = 0
+    total_lines_known = False
+    source = getattr(app, "_gcode_source", None)
+    if source is not None:
+        checker = getattr(source, "line_count_known", None)
+        if callable(checker):
+            try:
+                total_lines_known = bool(checker())
+            except Exception:
+                total_lines_known = False
+        else:
+            total_lines_known = bool(getattr(source, "_line_count_known", False))
+        try:
+            total_lines = max(0, int(len(source)))
+        except Exception:
+            total_lines = 0
+    if total_lines <= 0:
+        try:
+            total_lines = max(
+                0,
+                int(getattr(app, "_gcode_executable_lines", 0) or 0),
+            )
+        except Exception:
+            total_lines = 0
+        if total_lines > 0:
+            total_lines_known = bool(
+                getattr(app, "_gcode_executable_lines_known", False)
+            )
+    if total_lines <= 0:
+        try:
+            total_lines = max(0, int(getattr(app, "_gcode_total_lines", 0) or 0))
+        except Exception:
+            total_lines = 0
+        if total_lines > 0 and not total_lines_known:
+            total_lines_known = bool(getattr(app, "_gcode_total_lines_known", False))
+    verified_eof = bool(total_lines_known and ack_index >= (total_lines - 1))
+    shortfall_lines = 0
+    if total_lines_known and total_lines > 0:
+        shortfall_lines = max(0, total_lines - max(0, ack_index + 1))
+    app._stream_completion_verified_eof = bool(verified_eof)
+    app._stream_completion_total_lines = int(total_lines)
+    app._stream_completion_total_lines_known = bool(total_lines_known)
+    app._stream_completion_last_acked_index = int(ack_index)
+    app._stream_completion_shortfall_lines = int(shortfall_lines)
+    if source is not None and total_lines_known and total_lines > 0:
+        app._gcode_source_line_count_known = True
+        app._gcode_executable_lines = int(total_lines)
+        app._gcode_executable_lines_known = True
+    if verified_eof:
+        app._stream_completion_warning = ""
+    elif total_lines_known:
+        app._stream_completion_warning = (
+            f"True EOF was not verified: acked={max(0, ack_index + 1)} "
+            f"of {max(0, total_lines)} executable lines."
+        )
+    else:
+        app._stream_completion_warning = (
+            "True EOF was not verified: the final executable line count was not resolved."
+        )
+
+
 def _stream_busy_from_state(state: str | None, done_pending_idle: bool) -> bool:
     if bool(done_pending_idle):
         return True
@@ -774,6 +850,7 @@ def handle_stream_state_event(app, evt):
         app.throughput_var.set("TX: 0 B/s")
 
     if st == "loaded":
+        _reset_stream_completion_evidence(app)
         app._stream_done_pending_idle = False
         total = loaded_total
         app.progress_pct.set(0)
@@ -790,6 +867,7 @@ def handle_stream_state_event(app, evt):
             set_run_resume_hook=set_run_resume_from,
         )
     elif st == "running":
+        _reset_stream_completion_evidence(app)
         app._stream_done_pending_idle = False
         end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
@@ -802,6 +880,7 @@ def handle_stream_state_event(app, evt):
         app._set_manual_controls_enabled(False)
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
     elif st == "paused":
+        _reset_stream_completion_evidence(app)
         app._stream_done_pending_idle = False
         end_deferred_completion_wait(app, now_ts=now)
         with app.macro_executor.macro_vars() as macro_vars:
@@ -819,6 +898,7 @@ def handle_stream_state_event(app, evt):
             macro_vars["running"] = False
             macro_vars["paused"] = False
         if st == "done":
+            _sync_stream_completion_evidence(app)
             defer_done = should_defer_done_until_idle(app, now_ts=now)
             app._stream_done_pending_idle = bool(defer_done)
             if defer_done:
@@ -840,6 +920,7 @@ def handle_stream_state_event(app, evt):
                 ),
             )
         else:
+            _reset_stream_completion_evidence(app)
             app._stream_done_pending_idle = False
             end_deferred_completion_wait(app, now_ts=now)
             app.progress_pct.set(0)
@@ -856,6 +937,7 @@ def handle_stream_state_event(app, evt):
                 set_run_resume_hook=set_run_resume_from,
             )
     elif st == "error":
+        _reset_stream_completion_evidence(app)
         _stop_job_lifecycle_logging(app)
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False
@@ -874,6 +956,7 @@ def handle_stream_state_event(app, evt):
         app.btn_resume.config(state="disabled")
         app.status.config(text=f"Stream error: {evt[2]}")
     elif st == "alarm":
+        _reset_stream_completion_evidence(app)
         _stop_job_lifecycle_logging(app)
         _stop_job_accessories_for_state(app, st)
         app._stream_done_pending_idle = False

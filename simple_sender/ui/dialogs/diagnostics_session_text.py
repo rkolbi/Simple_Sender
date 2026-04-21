@@ -202,6 +202,34 @@ def build_session_diagnostics_lines(
         f"executable={exec_lines:,} ({'known' if exec_known else 'estimated'}), "
         f"motion={motion_lines:,} ({'known' if motion_known else 'estimated'})"
     )
+    completion_verified_eof = bool(
+        getattr(app, "_stream_completion_verified_eof", False)
+    )
+    completion_total_lines = int(
+        getattr(app, "_stream_completion_total_lines", 0) or 0
+    )
+    completion_total_lines_known = bool(
+        getattr(app, "_stream_completion_total_lines_known", False)
+    )
+    completion_last_acked_index = int(
+        getattr(app, "_stream_completion_last_acked_index", -1) or -1
+    )
+    completion_shortfall_lines = int(
+        getattr(app, "_stream_completion_shortfall_lines", 0) or 0
+    )
+    completion_warning = str(
+        getattr(app, "_stream_completion_warning", "") or ""
+    ).strip()
+    lines.append(
+        "Completion EOF verification: "
+        f"verified={completion_verified_eof}, "
+        f"total_lines={completion_total_lines:,}, "
+        f"total_known={completion_total_lines_known}, "
+        f"last_acked_line={max(0, completion_last_acked_index + 1):,}, "
+        f"shortfall_lines={completion_shortfall_lines:,}"
+    )
+    if completion_warning:
+        lines.append(f"Completion EOF warning: {completion_warning}")
     lines.append(
         "SSMETA: "
         f"{'present' if bool(getattr(app, '_gcode_ssmeta_present', False)) else 'not_found'}, "

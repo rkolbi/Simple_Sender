@@ -497,6 +497,7 @@ def clear_gcode(app):
     _restore_macro_state(app, macro_state_snapshot)
     app._job_started_at = None
     app._job_completion_notified = False
+    app._job_completion_finalize_pending = False
     file_info_refresher = getattr(app, "_refresh_file_info_tab", None)
     if callable(file_info_refresher):
         try:
