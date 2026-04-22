@@ -1,6 +1,5 @@
 __pycache__/
 _sync_logs/
-scripts/
 *.py[cod]
 .venv/
 env/
@@ -9,6 +8,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+scripts/
 .coverage
 coverage.xml
 htmlcov/
