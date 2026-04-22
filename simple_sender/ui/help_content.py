@@ -244,7 +244,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Update Safety and Shop File Transfer",
                 paragraphs=(
-                    "Do not sync, overwrite, or partially update a live running Simple Sender install. Close the application first, or reboot and then update the runtime files. The duplicate-instance/runtime marker is a safety check, not a hot-update workflow.",
+                    "Do not sync, overwrite, or partially update a live running Simple Sender install. Close the application first, or reboot and then update the runtime files. The duplicate-instance/runtime marker is a safety check, not a hot-update workflow. The Windows share sync helper stages to a sibling pending-update folder when the runtime marker exists instead of hot-overwriting the live install.",
                     "If you run Simple Sender on a Raspberry Pi, a Samba share can make file transfer easier so the Windows CAM computer can save directly to the machine over the network. This is optional but fits the intended Pi-based shop workflow well.",
                 ),
                 bullets=(

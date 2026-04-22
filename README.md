@@ -1,22 +1,21 @@
 ﻿# Simple Sender - Full Manual
-![Release: 3.11](https://img.shields.io/badge/release-3.11-blue)
+![Release: 3.12](https://img.shields.io/badge/release-3.12-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.11`. This is the current release-ready baseline.
+Current stable release: `3.12`. This is the current release-ready baseline.
 
-Current local validation snapshot for the current repository revision as of `2026-04-21`:
-- Direct `pytest -q`: `1900 passed, 2 skipped`
-- Repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
-- Direct `mypy main.py simple_sender`: clean (`217` source files)
+Current local validation snapshot for the current repository revision as of `2026-04-22` in the verified local Windows / Python `3.12.1` environment:
+- Repo-supported `pytest -q` path (`.\.venv\Scripts\python.exe -m pytest -q`): `1906 passed, 3 skipped`
+- Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
+- Direct tree check (`.\.venv\Scripts\python.exe -m mypy main.py simple_sender`): clean (`218` source files)
 - Wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
+- Wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
 - Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
-- Targeted runtime smoke (`App()` create/update/destroy): clean
 
-Direct `pytest -q` and the wrapper pytest + coverage stage are both green in this environment, but they do not currently report identical skip counts. `run_tests.bat` remains the authoritative local release gate.
+The repo-supported direct `pytest -q` path and the wrapper pytest + coverage stage are both green in this environment, but they do not currently report identical pass/skip counts. `run_tests.bat` remains the authoritative local release gate. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## Design Objectives and Key Features
 
@@ -113,6 +112,7 @@ Settings are stored in the per-user Simple Sender app-data folder: `%LOCALAPPDAT
 - Do not sync, overwrite, or partially update a live running Simple Sender install.
 - Close the application first, or reboot/shutdown the Pi before syncing updates to the runtime files.
 - The runtime marker/duplicate-instance guard exists to block unsafe overlapping runtime conditions. It is a safety check, not a hot-update workflow.
+- The Windows share sync helper now stages to a sibling pending-update folder when the runtime marker exists; it does not hot-overwrite the live install while the app is running.
 
 ### Recommended: Samba share setup on Raspberry Pi / Linux
 
@@ -853,7 +853,7 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 ## Testing
 Dev dependencies (tests + type checking):
 ```powershell
-python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 ```
 
 Tests are grouped by scope:
@@ -863,46 +863,45 @@ Tests are grouped by scope:
 
 Run the suite:
 ```powershell
-python -m pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-21`, the current repository revision validates clean locally. Direct checks currently report `pytest -q`: `1900 passed, 2 skipped`, `python tools/run_ruff.py check .`: clean, and `python -m mypy main.py simple_sender`: clean (`217` source files). The verified wrapper gate snapshot is also clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1899 passed, 3 skipped`, and its final mypy manifest gate is clean on `141` source files. A targeted runtime smoke check that instantiates, updates, and destroys `App()` also completed cleanly. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-22`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment. Direct checks currently report `.\.venv\Scripts\python.exe -m pytest -q`: `1906 passed, 3 skipped`, `.\.venv\Scripts\python.exe tools/run_ruff.py check .`: clean, and `.\.venv\Scripts\python.exe -m mypy main.py simple_sender`: clean (`218` source files). The verified wrapper gate snapshot is also clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1907 passed, 2 skipped`, and its final mypy manifest gate is clean on `141` source files. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
-The current `mypy.ini` manifest runs mypy against 141 source files, while `python -m mypy main.py simple_sender` currently reports `Success: no issues found in 217 source files`.
+The current `mypy.ini` manifest runs mypy against 141 source files, while `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` currently reports `Success: no issues found in 218 source files`.
 
 Run a subset:
 ```powershell
 # Unit
-python -m pytest tests/unit
+.\.venv\Scripts\python.exe -m pytest tests/unit
 
 # Integration
-python -m pytest tests/integration
+.\.venv\Scripts\python.exe -m pytest tests/integration
 
 # UI
-python -m pytest tests/ui
+.\.venv\Scripts\python.exe -m pytest tests/ui
 ```
 
 Coverage:
 ```powershell
-python -m pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
+.\.venv\Scripts\python.exe -m pytest --cov=simple_sender --cov-report=term-missing --cov-report=html
 ```
 
 Critical-path coverage gate (same check used by `run_tests.bat`):
 ```powershell
-python -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term
-python tools/check_core_coverage.py coverage.xml
+.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term
+.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml
 ```
 
 Type checking (mypy):
 ```powershell
-python -m mypy main.py simple_sender
+.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini
 ```
 
 Ruff gate:
 ```powershell
-python -m ruff check .
+.\.venv\Scripts\python.exe tools/run_ruff.py check .
 ```
-If `python -m ruff` fails on Windows due a broken global launcher, run `.\.venv\Scripts\ruff.exe check .` instead.
-You can also use the resilient launcher helper: `python tools/run_ruff.py check .`.
+The helper keeps the repo-local interpreter and Ruff entrypoint aligned on Windows.
 
 One-command local gate:
 ```powershell
@@ -911,18 +910,18 @@ run_tests.bat
 
 Import stability check (same gate used in CI):
 ```powershell
-python -c "import simple_sender.ui.settings"
+.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"
 ```
 
 Optional pre-commit hooks (mypy manifest + ruff + mypy):
 ```powershell
-python -m pip install pre-commit
+.\.venv\Scripts\python.exe -m pip install pre-commit
 pre-commit install
 pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
-- v3.11 release notes: `RELEASE_NOTES_v3.11.md`.
+- v3.12 release notes: `RELEASE_NOTES_v3.12.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).

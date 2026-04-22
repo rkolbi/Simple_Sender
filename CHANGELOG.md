@@ -5,6 +5,16 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+### Changed
+- Runtime package metadata now reports `3.12`.
+- Current release-facing docs now identify the active application baseline as `3.12`.
+
+### Documentation
+- Release-note/About filenames now identify the `3.12` baseline.
+- Raspberry Pi image guidance now reflects that no Raspberry Pi image artifact is checked into the repository; build or attach a release asset separately when needed.
+- Update-safety docs now note that the Windows share sync helper stages to a sibling pending-update folder when the runtime marker exists instead of hot-overwriting the live install.
+- Current validation/testing docs now use the repo `.venv` Python path for copy-paste-safe Windows validation and tooling commands.
+
 ### Fixed
 - Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:
   - file-backed streaming now keeps reading until true cleaned EOF is reached
@@ -25,14 +35,14 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - About text now reflects the current verified-EOF and post-job safety behavior
 
 ### Validation
-- Current local repository validation snapshot for the current repository revision:
-  - direct `pytest -q`: `1900 passed, 2 skipped`
-  - repo-supported Ruff path (`python tools/run_ruff.py check .`): clean
-  - direct `mypy main.py simple_sender`: clean (`217` source files)
+- Current local repository validation snapshot for the current repository revision in the verified local Windows / Python `3.12.1` environment:
+  - repo-supported `pytest -q` path (`.\.venv\Scripts\python.exe -m pytest -q`): `1906 passed, 3 skipped`
+  - repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
+  - direct tree check (`.\.venv\Scripts\python.exe -m mypy main.py simple_sender`): clean (`218` source files)
   - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
+  - wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
   - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
-  - targeted runtime smoke (`App()` create/update/destroy): clean
+- This local validation snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## [3.11] - 2026-04-20
 

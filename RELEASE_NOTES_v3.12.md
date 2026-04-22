@@ -1,6 +1,6 @@
-# Simple Sender v3.11
+# Simple Sender v3.12
 
-These notes describe the current stable, release-ready `3.11` baseline. This release carries forward the current split-layout/popup workflow model, the current probing and tool-measurement safeguards, the current toolbar asset pipeline, and a fresh prerelease review that tightened release-gate truthfulness and small lower-UI polish details.
+These notes describe the current stable, release-ready `3.12` baseline. This release carries forward the current split-layout/popup workflow model, the current probing and tool-measurement safeguards, the current toolbar asset pipeline, and a fresh prerelease review that tightened release-gate truthfulness and small lower-UI polish details.
 
 ## Highlights
 
@@ -31,30 +31,31 @@ These notes describe the current stable, release-ready `3.11` baseline. This rel
   - live job-view bookkeeping now uses a headless runtime state object instead of a visible lower G-code widget
   - aligned tests, docs, and runtime naming with the current split-layout/popup model
 - Current release alignment:
-  - runtime package metadata now reports `3.11`
-  - release-facing docs now consistently describe the `3.11` baseline
-  - the checked-in Raspberry Pi image artifact is labeled `SimpleSender_3.11-rpi4-dietpi.img.xz`
-  - if you need strict image provenance for distribution, verify or rebuild that image artifact before shipping it
+  - runtime package metadata now reports `3.12`
+  - release-facing docs now consistently describe the `3.12` baseline
+  - no Raspberry Pi image artifact is checked into this repository
+  - if you need strict image provenance or a version-aligned distributable image for `3.12`, rebuild it and publish it separately, for example as a release asset, before shipping it
 
 ## Practical Notes
 
-- These notes cover the stable `3.11` release line for the present workflow architecture.
-- The current stable baseline is `3.11`, with docs aligned to the shipped Job Setup, Tool Change, controller safety, progress/completion, current queue-responsiveness behavior, current logging-mode / low-overhead preset behavior, and the current cross-platform toolbar icon pipeline.
+- These notes cover the stable `3.12` release line for the present workflow architecture.
+- The current stable baseline is `3.12`, with docs aligned to the shipped Job Setup, Tool Change, controller safety, progress/completion, current queue-responsiveness behavior, current logging-mode / low-overhead preset behavior, and the current cross-platform toolbar icon pipeline.
 - The intended audience is operators who want the current stronger workflow baseline with stable-release truthfulness around the current runtime and docs.
 - Older lower-UI visibility fallback keys from the notebook-era model have been removed; the current popup/button model is now the only supported runtime architecture.
 - In the current baseline, toolbar icon assets live under `simple_sender/ui/icons`, the normal runtime path prefers app-local raster assets for Windows/Linux consistency, and SVG/drawn icons remain compatibility fallbacks instead of the primary deployment path.
 
 ## Release Focus
 
-`3.11` is the current release-ready packaging of that workflow direction: the runtime version, release notes, About summary, README, and release artifact naming now all identify the same baseline.
+`3.12` is the current release-ready packaging of that workflow direction for the runtime and release-facing docs. No Raspberry Pi image artifact is checked into this repository; rebuild and publish one separately if you need a version-aligned distributable image.
 
 ## Current Validation Snapshot
 
-As of `2026-04-21`, the current repository revision validates clean locally:
+As of `2026-04-22`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment:
 
-- `pytest -q`: `1900 passed, 2 skipped`
-- `python tools/run_ruff.py check .`: clean
-- `python -m mypy main.py simple_sender`: clean (`217` source files)
+- `.\.venv\Scripts\python.exe -m pytest -q`: `1906 passed, 3 skipped`
+- `.\.venv\Scripts\python.exe tools/run_ruff.py check .`: clean
+- `.\.venv\Scripts\python.exe -m mypy main.py simple_sender`: clean (`218` source files)
 - `run_tests.bat`: clean (`7/7` gates passed)
-- wrapper pytest + coverage stage inside `run_tests.bat`: `1899 passed, 3 skipped`
-- targeted runtime smoke (`App()` create/update/destroy): clean
+- wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
+
+This local validation snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.

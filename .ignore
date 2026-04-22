@@ -4,6 +4,8 @@ ref/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
+_sync_logs/
+scripts/
 *.pyc
 coverage.xml
 htmlcov/
