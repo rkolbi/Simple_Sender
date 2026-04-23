@@ -7,15 +7,16 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.12`. This is the current release-ready baseline.
 
-Current local validation snapshot for the current repository revision as of `2026-04-22` in the verified local Windows / Python `3.12.1` environment:
-- Repo-supported `pytest -q` path (`.\.venv\Scripts\python.exe -m pytest -q`): `1906 passed, 3 skipped`
+Current local validation snapshot for the current repository revision as of `2026-04-23` in the verified local Windows / Python `3.12.1` environment:
+- Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"`): clean
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
-- Direct tree check (`.\.venv\Scripts\python.exe -m mypy main.py simple_sender`): clean (`218` source files)
-- Wrapper `run_tests.bat` snapshot: clean (`7/7` gates passed)
-- Wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
-- Wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
+- Compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools`): clean
+- Mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
+- Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
+- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`): `1921 passed, 2 skipped`
+- Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
 
-The repo-supported direct `pytest -q` path and the wrapper pytest + coverage stage are both green in this environment, but they do not currently report identical pass/skip counts. `run_tests.bat` remains the authoritative local release gate. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+`run_tests.bat` remains the recommended local convenience wrapper, but it was not rerun for this snapshot. The direct `.\.venv\Scripts\python.exe -m pytest -q` path and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were also not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## Design Objectives and Key Features
 
@@ -90,6 +91,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 - Idle status spam suppressed in console; filters for alarms/errors.
 - Preflight check tool summarizes readiness/bounds/validation on demand from App Settings.
 - Diagnostics include session report export, one-click diagnostics ZIP export, and backup bundle import/export (settings, macros, checklists).
+- The repository now also includes a hardware-focused operator checklist in `MACHINE_VALIDATION_CHECKLIST.md` for the remaining machine-only validation steps that automated tests cannot fully prove.
 - Macros: protected built-in workflow buttons stay fixed, while the 5 user-macro slots can be edited/duplicated/reordered in the in-app Macro Manager.
 - Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
 - Real-job completion now requires verified cleaned EOF before clean success, then enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow; if EOF verification or safer completion cleanup cannot be completed, the operator gets a warning instead of a silent clean-complete claim.
@@ -865,9 +867,9 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-22`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment. Direct checks currently report `.\.venv\Scripts\python.exe -m pytest -q`: `1906 passed, 3 skipped`, `.\.venv\Scripts\python.exe tools/run_ruff.py check .`: clean, and `.\.venv\Scripts\python.exe -m mypy main.py simple_sender`: clean (`218` source files). The verified wrapper gate snapshot is also clean: `run_tests.bat` was `7/7` green, its pytest + coverage stage reported `1907 passed, 2 skipped`, and its final mypy manifest gate is clean on `141` source files. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-23`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`: `1921 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: clean (aggregate critical coverage `90.4%`). `run_tests.bat`, direct `pytest -q`, and direct `mypy main.py simple_sender` were not rerun for this snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
-The current `mypy.ini` manifest runs mypy against 141 source files, while `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` currently reports `Success: no issues found in 218 source files`.
+The current `mypy.ini` manifest runs mypy against 141 explicitly configured source files. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
 Run a subset:
 ```powershell
@@ -979,7 +981,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - Large file handling feels slow: let the initial load/prepare finish, avoid repeated reloads during diagnostics capture, and expect some stats work to be sampled or deferred on ultra-large files.
 - Macro behavior is unexpected: confirm the macro came from a trusted source, review the sample view or Macro Manager contents, and re-test with the spindle off before relying on it.
 - Performance troubleshooting: use App Settings > Diagnostics to export a session bundle or save the runtime performance report before changing thresholds or polling intervals.
-- Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle (Save ZIP). For plain text only, use Export session diagnostics (Save report). Backup bundle export/import is for settings/macro/checklist transfer.
+- Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle (Save ZIP). For plain text only, use Export session diagnostics (Save report). Backup bundle export/import is for settings/macro/checklist transfer. For on-machine validation or failure reproduction, also work through [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) and capture the session bundle before restarting.
 
 ## FAQ
 - **4-axis or grblHAL?** Not supported (3-axis GRBL 1.1h only).
@@ -1377,6 +1379,7 @@ Macro UI is included below along with the rest of the interface.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Runtime telemetry (Open telemetry): opens a live telemetry window for worker queue depth and TX/runtime counters.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
+- Hardware-only validation support: use the repo-root `MACHINE_VALIDATION_CHECKLIST.md` when you need a disciplined manual pass for reconnect, probing/modal-restore, Kasa reconciliation, popup stacking/focus, or Pi/Openbox/Tcl-Tk behavior that the automated suite cannot fully prove.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
 - Apply perf-test preset: enables the low-overhead diagnostics profiling preset intended for repeatable performance capture, and it forces `Logging Mode = Standard`.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip. Import validates settings before replacing the live copy, reports repaired values, and asks before replacing colliding macro/checklist assets.

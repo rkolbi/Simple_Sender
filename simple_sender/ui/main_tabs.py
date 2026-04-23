@@ -193,6 +193,37 @@ def _build_gcode_view_runtime_state(app) -> None:
     app.gview = HeadlessGcodeView()
 
 
+def _report_popup_activation_failure(
+    app,
+    *,
+    key: str,
+    title: str,
+    phase: str,
+    exc: BaseException,
+) -> None:
+    logger.warning(
+        "Lower popup %r could not %s: %s",
+        key,
+        phase,
+        exc,
+        exc_info=exc,
+    )
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is None:
+        return
+    try:
+        ui_q.put(
+            (
+                "log",
+                "[ui] "
+                f"{title} popup opened but could not {phase}. "
+                "Check popup stacking/focus behavior on this desktop.",
+            )
+        )
+    except Exception:
+        logger.exception("Failed queueing popup activation warning for %r", key)
+
+
 def _show_popup_window(
     app,
     *,
@@ -261,8 +292,14 @@ def _show_popup_window(
         try:
             popup.lift()
             popup.focus_force()
-        except Exception:
-            pass
+        except Exception as exc:
+            _report_popup_activation_failure(
+                app,
+                key=key,
+                title=title,
+                phase="raise/focus",
+                exc=exc,
+            )
         if callable(on_show):
             on_show()
     return popup

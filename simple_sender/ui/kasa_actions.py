@@ -269,6 +269,27 @@ def log_kasa_message(app, message: str) -> None:
         _log_suppressed("Failed queueing Kasa log message to UI thread", exc)
 
 
+def _post_kasa_ui_callback(app, callback, *, context: str) -> bool:
+    if threading.current_thread() is threading.main_thread():
+        callback()
+        return True
+    post_ui = getattr(app, "_post_ui_thread", None)
+    if callable(post_ui):
+        try:
+            post_ui(callback)
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via _post_ui_thread", exc)
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put(("ui_post", callback, (), {}))
+            return True
+        except Exception as exc:
+            _log_suppressed(f"{context} via ui_q", exc)
+    return False
+
+
 def _set_widget_state(widget: Any, state: str) -> None:
     if widget is None:
         return
@@ -352,13 +373,20 @@ def on_kasa_command_result(app, result: OutletCommandResult) -> None:
                 detail += f" error={result.error}"
             log_kasa_message(app, f"Warning:{detail}")
 
-    if threading.current_thread() is threading.main_thread():
-        _apply()
-        return
-    try:
-        app._post_ui_thread(_apply)
-    except Exception as exc:
-        _log_suppressed("Failed posting Kasa command result to UI thread", exc)
+    posted = _post_kasa_ui_callback(
+        app,
+        _apply,
+        context="Failed posting Kasa command result to UI thread",
+    )
+    if not posted:
+        logger.warning(
+            "Dropped Kasa command result before UI reconcile: outlet=%s command=%s source=%s success=%s error=%s",
+            int(result.outlet_id),
+            "ON" if bool(result.on) else "OFF",
+            str(getattr(result, "source", "") or ""),
+            bool(result.success),
+            str(getattr(result, "error", "") or ""),
+        )
 
 
 def refresh_kasa_controls_state(app) -> None:
@@ -742,4 +770,3 @@ __all__ = [
     "test_kasa_outlet",
     "validate_kasa_outlet_mapping",
 ]
-

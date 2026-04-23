@@ -33,6 +33,7 @@ These notes describe the current stable, release-ready `3.12` baseline. This rel
 - Current release alignment:
   - runtime package metadata now reports `3.12`
   - release-facing docs now consistently describe the `3.12` baseline
+  - the repository now includes `MACHINE_VALIDATION_CHECKLIST.md` for the remaining on-machine validation work that automation alone cannot fully prove
   - no Raspberry Pi image artifact is checked into this repository
   - if you need strict image provenance or a version-aligned distributable image for `3.12`, rebuild it and publish it separately, for example as a release asset, before shipping it
 
@@ -50,12 +51,14 @@ These notes describe the current stable, release-ready `3.12` baseline. This rel
 
 ## Current Validation Snapshot
 
-As of `2026-04-22`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment:
+As of `2026-04-23`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
 
-- `.\.venv\Scripts\python.exe -m pytest -q`: `1906 passed, 3 skipped`
+- `.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"`: clean
 - `.\.venv\Scripts\python.exe tools/run_ruff.py check .`: clean
-- `.\.venv\Scripts\python.exe -m mypy main.py simple_sender`: clean (`218` source files)
-- `run_tests.bat`: clean (`7/7` gates passed)
-- wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
+- `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools`: clean
+- `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`: clean
+- `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: clean (`141` configured source files)
+- `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`: `1921 passed, 2 skipped`
+- `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: clean (aggregate critical coverage `90.4%`)
 
-This local validation snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+`run_tests.bat`, direct `pytest -q`, and direct `mypy main.py simple_sender` were not rerun for this snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local validation snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.

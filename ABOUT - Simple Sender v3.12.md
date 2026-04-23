@@ -18,7 +18,7 @@ That same safety posture now extends to end-of-job handling. For real jobs, the 
 
 The `3.12` release also keeps the top toolbar's icon path practical and deployment-friendly. Toolbar assets live in `simple_sender/ui/icons`, the normal runtime path prefers app-local raster icons for consistent Windows and Raspberry Pi / Linux rendering, and the app still preserves safe fallback icons if those assets cannot be loaded.
 
-This release also includes a deliberate prerelease truthfulness pass. The validated local gate is current, the release-facing docs are aligned to the shipped workflows and settings, and the latest lower jog-row polish is now reflected in both the runtime layout and the test suite.
+This release also includes a deliberate prerelease truthfulness pass. The validated local gate is current, the release-facing docs are aligned to the shipped workflows and settings, and the latest lower jog-row polish is now reflected in both the runtime layout and the test suite. The repository also now includes a dedicated `MACHINE_VALIDATION_CHECKLIST.md` for the remaining reconnect, probing/modal-restore, accessory, popup, and Pi/Openbox validation work that automated tests cannot fully prove on their own.
 
 Dry Run workflow truthfulness is also part of that safety posture. When Dry Run is enabled, both **Run** and **Resume** paths now require an explicit operator decision to continue in Dry Run, switch to Normal Run, or cancel before stream start/resume side effects are committed.
 
@@ -28,6 +28,6 @@ Another practical feature is support for **automatic control of Kasa-connected a
 
 Overall, Simple Sender v3.12 is built around a straightforward idea: a CNC sender should be **lightweight, stable, clear, and genuinely useful at the machine**. It should support real workflows, help the operator stay organized, and make repetitive or error-prone tasks easier to manage. Everything in the app's design objectives points back to that same goal.
 
-The `3.12` release-ready baseline carries forward that workflow direction with cleaner lower-UI behavior, stronger tool-change and setup truthfulness, current logging-mode behavior, the current cross-platform toolbar icon pipeline, and a freshly revalidated release gate.
+The `3.12` release-ready baseline carries forward that workflow direction with cleaner lower-UI behavior, stronger tool-change and setup truthfulness, current logging-mode behavior, the current cross-platform toolbar icon pipeline, richer validation diagnostics for popup/reconnect/accessory edge cases, and a freshly revalidated release gate.
 
 If you want a GRBL sender that emphasizes **practical shop use, touchscreen-friendly operation, reliable large-file streaming, multi-tool workflow support, machine-side automation, and day-to-day dependability**, that is exactly what Simple Sender is built to provide.

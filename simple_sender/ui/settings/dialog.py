@@ -20,6 +20,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import logging
 import os
 import platform
 import shutil
@@ -31,6 +32,7 @@ from typing import Any, Callable
 
 from simple_sender.ui.scrollable_container import build_scrollable_container
 from simple_sender.ui.theme_helpers import notebook_page_style_name
+from simple_sender.utils.log_suppressed import log_suppressed_exception
 from .sections import (
     build_auto_level_section,
     build_diagnostics_section,
@@ -52,6 +54,8 @@ from .sections import (
 )
 from simple_sender.utils.task_timing import record_task_timing
 
+logger = logging.getLogger(__name__)
+_logged_suppressed: set[tuple[str, str]] = set()
 _APP_SETTINGS_VIEW_BASIC = "Basic"
 _APP_SETTINGS_VIEW_ADVANCED = "Advanced"
 _NO_MATCHING_SETTINGS_TEXT = "No matching settings"
@@ -66,6 +70,10 @@ _LAZY_SECTION_TITLES = frozenset(
         "Diagnostics",
     }
 )
+
+
+def _log_suppressed(context: str, exc: BaseException) -> None:
+    log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
 
 
 def _format_system_info_bytes(value: int | None) -> str:
@@ -456,15 +464,23 @@ def _ensure_section_built(app, entry: dict[str, Any]) -> bool:
         builder(app, placeholder, 0)
         built_now = True
         entry["built"] = True
-    except Exception:
+    except Exception as exc:
         entry["available"] = False
         entry["built"] = True
+        section_title = str(entry.get("title", "unknown") or "unknown")
+        _log_suppressed(f"Failed building App Settings section {section_title}", exc)
     bind_wheel = getattr(app, "_bind_app_settings_mousewheel", None)
     if callable(bind_wheel):
-        bind_wheel()
+        try:
+            bind_wheel()
+        except Exception as exc:
+            _log_suppressed("Failed rebinding App Settings mousewheel handlers", exc)
     bind_touch = getattr(app, "_bind_app_settings_touch_scroll", None)
     if callable(bind_touch):
-        bind_touch()
+        try:
+            bind_touch()
+        except Exception as exc:
+            _log_suppressed("Failed rebinding App Settings touch handlers", exc)
     return built_now
 
 
@@ -653,11 +669,18 @@ def activate_app_settings_surface(app) -> None:
 
     app._app_settings_tab_active = True
     _note_app_settings_interaction(app)
-    try:
-        app._bind_app_settings_mousewheel()
-        app._bind_app_settings_touch_scroll()
-    except Exception:
-        return
+    bind_wheel = getattr(app, "_bind_app_settings_mousewheel", None)
+    if callable(bind_wheel):
+        try:
+            bind_wheel()
+        except Exception as exc:
+            _log_suppressed("Failed binding App Settings mousewheel handlers", exc)
+    bind_touch = getattr(app, "_bind_app_settings_touch_scroll", None)
+    if callable(bind_touch):
+        try:
+            bind_touch()
+        except Exception as exc:
+            _log_suppressed("Failed binding App Settings touch handlers", exc)
     _schedule_app_settings_sticky_header(app, force=True)
     _schedule_app_settings_lazy_build(app)
 
@@ -667,11 +690,18 @@ def deactivate_app_settings_surface(app) -> None:
 
     app._app_settings_tab_active = False
     _suspend_app_settings_background_work(app)
-    try:
-        app._unbind_app_settings_mousewheel()
-        app._unbind_app_settings_touch_scroll()
-    except Exception:
-        return
+    unbind_wheel = getattr(app, "_unbind_app_settings_mousewheel", None)
+    if callable(unbind_wheel):
+        try:
+            unbind_wheel()
+        except Exception as exc:
+            _log_suppressed("Failed unbinding App Settings mousewheel handlers", exc)
+    unbind_touch = getattr(app, "_unbind_app_settings_touch_scroll", None)
+    if callable(unbind_touch):
+        try:
+            unbind_touch()
+        except Exception as exc:
+            _log_suppressed("Failed unbinding App Settings touch handlers", exc)
 
 
 def _schedule_app_settings_sticky_header(app, *, force: bool = False) -> None:
@@ -1311,6 +1341,5 @@ def build_app_settings_panel(app, parent):
         else:
             _schedule_app_settings_sticky_header(app, force=True)
     return sstab
-
 
 

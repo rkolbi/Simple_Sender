@@ -28,7 +28,7 @@ import threading
 import time
 from collections import deque
 from functools import lru_cache
-from typing import Sequence, cast
+from typing import Sequence, TYPE_CHECKING, cast
 
 from simple_sender.types import (
     GcodeAckedEvent,
@@ -86,6 +86,9 @@ class _StreamSourceReadError(RuntimeError):
 
 
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    if TYPE_CHECKING:
+        def manual_queue_busy(self) -> bool: ...
+
     @staticmethod
     def _stream_source_line_count_known(source: object) -> bool:
         checker = getattr(source, "line_count_known", None)
@@ -1460,10 +1463,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         start = time.time()
         wake_event = getattr(self, "_tx_activity_evt", None)
         while True:
+            manual_pending = bool(self.manual_queue_busy())
             with self._stream_lock:
                 pending = (
-                    bool(self._stream_line_queue)
-                    or self._manual_pending_item is not None
+                    manual_pending
                     or bool(self._resume_preamble)
                 )
             if not pending:

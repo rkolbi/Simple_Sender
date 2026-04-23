@@ -405,6 +405,18 @@ def _read_setting_value(app, *, attr_name: str, key: str, fallback: object) -> o
                 return getter()
             except Exception as exc:
                 _log_suppressed(f"Failed reading settings variable {attr_name}", exc)
+                try:
+                    app.ui_q.put(
+                        (
+                            "log",
+                            f"[settings] Failed reading {attr_name}; keeping previous value.",
+                        )
+                    )
+                except Exception as log_exc:
+                    _log_suppressed(
+                        f"Failed reporting settings read fallback for {attr_name}",
+                        log_exc,
+                    )
     return app.settings.get(key, _setting_default(key, fallback))
 
 
@@ -1235,4 +1247,3 @@ def save_settings(app):
                 log_exc,
             )
         raise wrapped_exc from exc
-

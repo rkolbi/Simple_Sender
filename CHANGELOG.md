@@ -14,6 +14,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Raspberry Pi image guidance now reflects that no Raspberry Pi image artifact is checked into the repository; build or attach a release asset separately when needed.
 - Update-safety docs now note that the Windows share sync helper stages to a sibling pending-update folder when the runtime marker exists instead of hot-overwriting the live install.
 - Current validation/testing docs now use the repo `.venv` Python path for copy-paste-safe Windows validation and tooling commands.
+- Release-facing docs now point operators at `MACHINE_VALIDATION_CHECKLIST.md` for the remaining hardware-only validation work that the automated suite cannot fully prove.
+- README/current-release validation notes now reflect the latest rerun explicit repo-supported gate instead of older `pytest -q` / wrapper counts that were not rerun for the current revision snapshot.
 
 ### Fixed
 - Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:
@@ -27,22 +29,35 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - EOF-completion diagnostics are now more truthful:
   - completion dialogs and diagnostics now include explicit EOF-verification evidence
   - a falsey `0` final acknowledged-line index no longer degrades into `-1` in the EOF evidence path
+- Manual-command completion state is now more truthful:
+  - queued-but-not-yet-sent manual commands now keep the manual-busy state active
+  - `wait_for_manual_completion()` no longer reports success while commands still remain queued for send
+  - no-source manual commands now default to `manual` instead of inheriting a stale prior source label
+- UI/settings survivability diagnostics are now more truthful in degraded paths:
+  - App Settings activation/deactivation and lazy section build failures now log instead of disappearing silently
+  - settings save now logs when a Tk variable read fails and the previous persisted value is kept
+  - Kasa command results now fall back to `ui_q` when `_post_ui_thread` fails, and an explicit warning is logged if a result still drops before UI reconciliation
+  - popup raise/focus failures now surface an operator-visible log message instead of failing silently
+  - auto-level modal restore now logs incomplete restore commands even when the failure path returns `False` instead of throwing
+  - connection timeline details now include reconnect/session context such as user-disconnect vs unexpected drop, resume-pending state, restore-failure state, and pending modal-sync state
 
 ### Documentation
 - Release-facing docs were refreshed for the current repository revision:
-  - README validation snapshots now reflect the latest direct and wrapper-gate results separately
+  - README validation snapshots now reflect the latest explicitly rerun repo-supported gate instead of mixing in older command counts that were not rerun for the current revision note
   - release notes now mention the verified-EOF and safer-completion hardening
   - About text now reflects the current verified-EOF and post-job safety behavior
 
 ### Validation
-- Current local repository validation snapshot for the current repository revision in the verified local Windows / Python `3.12.1` environment:
-  - repo-supported `pytest -q` path (`.\.venv\Scripts\python.exe -m pytest -q`): `1906 passed, 3 skipped`
+- Current local repository validation snapshot for the current repository revision in the verified local Windows / Python `3.12.1` environment as of `2026-04-23`:
+  - import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"`): clean
   - repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
-  - direct tree check (`.\.venv\Scripts\python.exe -m mypy main.py simple_sender`): clean (`218` source files)
-  - wrapper `run_tests.bat`: clean (`7/7` gates passed)
-  - wrapper pytest + coverage stage inside `run_tests.bat`: `1907 passed, 2 skipped`
-  - wrapper final mypy manifest gate inside `run_tests.bat`: clean (`141` source files)
-- This local validation snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+  - compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools`): clean
+  - mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
+  - repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
+  - repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`): `1921 passed, 2 skipped`
+  - critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
+- `run_tests.bat`, direct `pytest -q`, and direct `mypy main.py simple_sender` were not rerun for this specific snapshot, so older counts from those commands remain historical rather than being presented as current.
+- This local validation snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## [3.11] - 2026-04-20
 

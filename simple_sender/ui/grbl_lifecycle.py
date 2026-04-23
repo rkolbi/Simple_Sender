@@ -256,6 +256,21 @@ def _record_connection_timeline(app, event: str, details: str = "") -> None:
         _log_suppressed("Failed appending connection timeline event", exc)
 
 
+def _format_connection_timeline_details(**values: object) -> str:
+    parts: list[str] = []
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            text = "1" if value else "0"
+        else:
+            text = str(value or "").strip()
+        if not text:
+            continue
+        parts.append(f"{key}={text}")
+    return " ".join(parts)
+
+
 def _arm_status_connect_settling(app, *, duration_s: float) -> None:
     try:
         duration = float(duration_s)
@@ -611,7 +626,6 @@ def handle_connection_event(app, is_on: bool, port):
     alarm_latched = bool(getattr(app, "_alarm_latched", False))
     alarm_message = str(getattr(app, "_alarm_message", "") or "")
     if runtime.connected:
-        _record_connection_timeline(app, "connected", f"port={port or ''}")
         app._auto_reconnect_last_port = port or app._auto_reconnect_last_port
         app._auto_reconnect_pending = False
         app._auto_reconnect_last_attempt = 0.0
@@ -682,6 +696,16 @@ def handle_connection_event(app, is_on: bool, port):
             _restore_loaded_gcode_after_connect(app)
         except Exception as exc:
             _handle_reconnect_gcode_restore_failure(app, exc)
+        _record_connection_timeline(
+            app,
+            "connected",
+            _format_connection_timeline_details(
+                port=port,
+                alarm_latched=alarm_latched,
+                resume_pending=bool(getattr(app, "_resume_after_disconnect", False)),
+                restore_failed=bool(getattr(app, "_gcode_restore_failed", False)),
+            ),
+        )
         if alarm_latched:
             alarm_status = alarm_message or "ALARM latched: verify machine, then use Unlock ($X) or Home ($H)."
             try:
@@ -689,7 +713,17 @@ def handle_connection_event(app, is_on: bool, port):
             except Exception as exc:
                 _log_suppressed("Failed restoring latched alarm lock after reconnect", exc)
     else:
-        _record_connection_timeline(app, "disconnected")
+        preserve_latched_alarm = bool(alarm_latched) and not bool(getattr(app, "_user_disconnect", False))
+        _record_connection_timeline(
+            app,
+            "disconnected",
+            _format_connection_timeline_details(
+                port=getattr(app, "_connected_port", None),
+                user_disconnect=bool(getattr(app, "_user_disconnect", False)),
+                preserve_alarm=preserve_latched_alarm,
+                resume_pending=bool(getattr(app, "_resume_after_disconnect", False)),
+            ),
+        )
         try:
             app._stop_macro_status()
         except Exception as exc:
@@ -707,7 +741,6 @@ def handle_connection_event(app, is_on: bool, port):
         runtime.connected_port = None
         runtime.ready = False
         runtime.alarm_locked = False
-        preserve_latched_alarm = bool(alarm_latched) and not bool(getattr(app, "_user_disconnect", False))
         if preserve_latched_alarm:
             app._alarm_message = alarm_message
             app._alarm_recovery_log_key = None
@@ -775,7 +808,15 @@ def handle_ready_event(app, ready):
     sync_connection_runtime_state_to_app(app, runtime)
     if not runtime.ready:
         invalidate_job_setup_state(app)
-        _record_connection_timeline(app, "ready_false")
+        _record_connection_timeline(
+            app,
+            "ready_false",
+            _format_connection_timeline_details(
+                port=runtime.connected_port,
+                alarm_latched=bool(getattr(app, "_alarm_latched", False)),
+                connected=bool(runtime.connected),
+            ),
+        )
         runtime.status_seen = False
         _clear_status_frame_cache(app)
         runtime.alarm_locked = False
@@ -794,7 +835,16 @@ def handle_ready_event(app, ready):
     if runtime.alarm_locked:
         return
     if runtime.connected and runtime.connected_port:
-        _record_connection_timeline(app, "ready_true", f"port={runtime.connected_port}")
+        _record_connection_timeline(
+            app,
+            "ready_true",
+            _format_connection_timeline_details(
+                port=runtime.connected_port,
+                restore_failed=bool(getattr(app, "_gcode_restore_failed", False)),
+                modal_sync_pending=bool(getattr(app, "_pending_modal_sync", False)),
+                resume_pending=bool(getattr(app, "_resume_after_disconnect", False)),
+            ),
+        )
         restore_failure_message = str(
             getattr(app, "_gcode_restore_failure_message", "") or ""
         ).strip()
@@ -1007,4 +1057,3 @@ def effective_status_poll_interval(app) -> float:
 def apply_status_poll_profile(app):
     interval = effective_status_poll_interval(app)
     app.grbl.set_status_poll_interval(interval)
-

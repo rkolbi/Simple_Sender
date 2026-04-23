@@ -146,9 +146,17 @@ class AutoLevelProbeRunner:
             self._log(f"[autolevel] Probe run failed: {exc}")
         finally:
             try:
-                self._restore_modal_state(prev_units, prev_distance, settings.idle_timeout)
+                restore_failures = self._restore_modal_state(
+                    prev_units,
+                    prev_distance,
+                    settings.idle_timeout,
+                )
             except Exception as exc:
                 self._log(f"[autolevel] Modal restore failed: {exc}")
+            else:
+                if restore_failures:
+                    failed_text = ", ".join(restore_failures)
+                    self._log(f"[autolevel] Modal restore incomplete: {failed_text}")
             if force_g90_on_exit:
                 try:
                     self._force_g90_restore()
@@ -170,11 +178,20 @@ class AutoLevelProbeRunner:
         except Exception:
             return None, None
 
-    def _restore_modal_state(self, units: str | None, distance: str | None, timeout: float) -> None:
+    def _restore_modal_state(
+        self,
+        units: str | None,
+        distance: str | None,
+        timeout: float,
+    ) -> list[str]:
+        failed: list[str] = []
         if units:
-            self._send_and_wait(units, timeout)
+            if not self._send_and_wait(units, timeout):
+                failed.append(units)
         if distance:
-            self._send_and_wait(distance, timeout)
+            if not self._send_and_wait(distance, timeout):
+                failed.append(distance)
+        return failed
 
     def _force_g90_restore(self) -> None:
         if not self.app.grbl.is_connected():
@@ -342,4 +359,3 @@ class AutoLevelProbeRunner:
             self.app.ui_q.put(("log", message))
         except Exception as exc:
             _log_suppressed("Failed queueing auto-level probe runner log message", exc)
-

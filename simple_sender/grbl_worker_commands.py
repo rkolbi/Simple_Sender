@@ -79,14 +79,11 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                 _log_suppressed("Failed queueing blocked manual-command log while streaming", exc)
             return None
 
-        if source:
-            self._last_manual_source = str(source)
-        elif not self._last_manual_source:
-            self._last_manual_source = "manual"
-        command_source = self._last_manual_source
         command = command.strip()
         if not command:
             return None
+        command_source = str(source or "").strip() or "manual"
+        self._last_manual_source = command_source
         cmd_upper = command.upper()
         if cmd_upper.startswith("$J="):
             self._mark_manual_motion_status_grace()
@@ -292,7 +289,15 @@ class GrblWorkerCommandMixin(GrblWorkerState):
             for queue_item in self._stream_line_queue:
                 if not queue_item.is_gcode:
                     return True
-        return False
+            if self._manual_source_queue or self._manual_tracker_queue:
+                return True
+        try:
+            return int(self._outgoing_q.qsize()) > 0
+        except Exception:
+            try:
+                return not bool(self._outgoing_q.empty())
+            except Exception:
+                return False
 
     def manual_queue_backpressure(self) -> bool:
         """Return True when manual queue is blocked by buffer limits."""
@@ -350,4 +355,3 @@ class GrblWorkerCommandMixin(GrblWorkerState):
     # G-CODE STREAMING
     # ========================================================================
     
-
