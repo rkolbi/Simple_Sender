@@ -16,6 +16,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - Current validation/testing docs now use the repo `.venv` Python path for copy-paste-safe Windows validation and tooling commands.
 - Release-facing docs now point operators at `MACHINE_VALIDATION_CHECKLIST.md` for the remaining hardware-only validation work that the automated suite cannot fully prove.
 - README/current-release validation notes now reflect the latest rerun explicit repo-supported gate instead of older `pytest -q` / wrapper counts that were not rerun for the current revision snapshot.
+- Dry Run docs/help text now distinguish fresh Run from resume-start paths (`Resume From` / reconnect resume) instead of implying that every resume action prompts.
+- Kasa operator help text now reflects the current single-outlet fallback instead of implying that every supported device must expose two outlets.
 
 ### Fixed
 - Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:

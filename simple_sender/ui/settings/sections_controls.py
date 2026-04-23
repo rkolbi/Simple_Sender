@@ -794,7 +794,7 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
     app.kasa_device_combo.bind("<<ComboboxSelected>>", app._on_kasa_device_selected)
     apply_tooltip(
         app.kasa_device_combo,
-        "Choose one physical Kasa device (requires at least two outlets).",
+        "Choose one physical Kasa device. Single-outlet devices remain usable for Vacuum-only control.",
     )
 
     app.kasa_outlet_info_label = ttk.Label(
@@ -968,5 +968,4 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
     app._on_kasa_mapping_change(None)
     app._refresh_kasa_controls_state()
     return row + 1
-
 

@@ -20,7 +20,7 @@ The `3.12` release also keeps the top toolbar's icon path practical and deployme
 
 This release also includes a deliberate prerelease truthfulness pass. The validated local gate is current, the release-facing docs are aligned to the shipped workflows and settings, and the latest lower jog-row polish is now reflected in both the runtime layout and the test suite. The repository also now includes a dedicated `MACHINE_VALIDATION_CHECKLIST.md` for the remaining reconnect, probing/modal-restore, accessory, popup, and Pi/Openbox validation work that automated tests cannot fully prove on their own.
 
-Dry Run workflow truthfulness is also part of that safety posture. When Dry Run is enabled, both **Run** and **Resume** paths now require an explicit operator decision to continue in Dry Run, switch to Normal Run, or cancel before stream start/resume side effects are committed.
+Dry Run workflow truthfulness is also part of that safety posture. When Dry Run is enabled, both a fresh **Run** and resume-start paths such as **Resume From** and reconnect resume require an explicit operator decision to continue in Dry Run, switch to Normal Run, or cancel before stream start/resume side effects are committed.
 
 The app also includes features aimed at making everyday machine control faster and more convenient. It supports **keyboard shortcuts** and **joystick bindings** for quicker control at the machine, as well as **macro support** for repeatable setup and operating tasks. Those macros can range from simple convenience actions to more advanced Python-based logic, giving users a way to build repeatable workflows into their day-to-day operation.
 

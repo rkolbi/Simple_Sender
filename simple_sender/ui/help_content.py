@@ -299,7 +299,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Idle noise is not written into the console, but it is still processed by the runtime.",
                     "Worker threads post UI work through the app's UI queue helpers instead of touching Tk widgets directly.",
                     "Manual and immediate commands use a bounded queue. If it fills, new commands are dropped and the UI reports the cumulative dropped count.",
-                    "When Dry Run is enabled, job start requires an explicit operator choice before stream side effects begin.",
+                    "When Dry Run is enabled, fresh Run and resume-start paths such as Resume From require an explicit operator choice before stream side effects begin.",
                 ),
             ),
             _sub(
@@ -424,8 +424,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Dry Run is intended for motion and setup checking without real spindle activity. It is especially useful after changing workholding, zero location, post processor settings, or any other setup assumption.",
         ),
         bullets=(
-            "Dry run sanitize strips spindle, coolant, tool-change, S, and T commands while streaming.",
-            "When Dry Run is enabled, Run prompts you to continue in Dry Run, switch back to Normal Run and start, or cancel.",
+            "Dry run sanitize strips spindle, coolant, M6, S, and T commands while streaming.",
+            "When Dry Run is enabled, fresh Run and resume-start paths such as Resume From prompt you to continue in Dry Run, switch back to Normal Run and continue, or cancel.",
             "Sender-side TC:<tool name> directives still use the built-in Tool Change workflow even when Dry Run sanitizing is on.",
             "Use Dry Run in the air and watch the first moves carefully so you can pause immediately if the machine heads the wrong direction.",
         ),
