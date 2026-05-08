@@ -31,6 +31,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+_SYSTEM_INFO_COMMAND_TIMEOUT_S = 2.0
+_SYSTEM_INFO_COMMAND_MAX_CHARS = 16_000
+
+
 def json_dump(obj: Any, *, log_suppressed: Callable[[str, BaseException], None]) -> str:
     def _default(value: Any):
         return str(value)
@@ -92,6 +96,140 @@ def collect_build_info(
     return info
 
 
+def _run_system_snapshot_command(
+    args: list[str],
+    *,
+    timeout_s: float = _SYSTEM_INFO_COMMAND_TIMEOUT_S,
+    max_chars: int = _SYSTEM_INFO_COMMAND_MAX_CHARS,
+) -> str:
+    executable = str(args[0] if args else "").strip()
+    if not executable:
+        return "skipped: empty command"
+    if shutil.which(executable) is None:
+        return "unavailable"
+    try:
+        proc = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=max(0.1, float(timeout_s)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception as exc:
+        return f"error: {type(exc).__name__}: {exc}"
+    output = str(proc.stdout or "").strip()
+    if len(output) > int(max_chars):
+        output = f"{output[: max(0, int(max_chars) - 80)]}\n... [truncated]"
+    if proc.returncode == 0:
+        return output or "ok"
+    prefix = f"exit={proc.returncode}"
+    return f"{prefix}\n{output}" if output else prefix
+
+
+def _append_command_snapshot(
+    lines: list[str],
+    title: str,
+    args: list[str],
+    *,
+    timeout_s: float = _SYSTEM_INFO_COMMAND_TIMEOUT_S,
+    max_chars: int = _SYSTEM_INFO_COMMAND_MAX_CHARS,
+) -> None:
+    lines.append("")
+    lines.append(f"--- {title} ---")
+    lines.append(f"$ {' '.join(args)}")
+    lines.append(
+        _run_system_snapshot_command(
+            args,
+            timeout_s=timeout_s,
+            max_chars=max_chars,
+        )
+    )
+
+
+def _append_file_snapshot(
+    lines: list[str],
+    title: str,
+    path: Path,
+    *,
+    max_chars: int = 8_000,
+) -> None:
+    lines.append("")
+    lines.append(f"--- {title} ---")
+    lines.append(str(path))
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        lines.append(f"error: {type(exc).__name__}: {exc}")
+        return
+    if len(text) > int(max_chars):
+        text = f"{text[: max(0, int(max_chars) - 80)]}\n... [truncated]"
+    lines.append(text.strip() or "empty")
+
+
+def _append_linux_network_snapshot(lines: list[str]) -> None:
+    lines.append("")
+    lines.append("Linux/Raspberry Pi network diagnostics")
+    if platform.system().lower() != "linux":
+        lines.append(f"Skipped: platform is {platform.system() or 'unknown'}, not Linux.")
+        return
+
+    command_specs: list[tuple[str, list[str], float, int]] = [
+        ("hostname", ["hostname"], 1.0, 2_000),
+        ("hostname -I", ["hostname", "-I"], 1.0, 2_000),
+        ("ip addr", ["ip", "addr"], 2.0, 16_000),
+        ("ip route", ["ip", "route"], 2.0, 8_000),
+        ("resolvectl status", ["resolvectl", "status"], 2.0, 16_000),
+        ("ssh service active", ["systemctl", "is-active", "ssh"], 1.0, 2_000),
+        ("ssh service status", ["systemctl", "status", "ssh", "--no-pager"], 2.0, 12_000),
+        ("ssh journal tail", ["journalctl", "-u", "ssh", "--no-pager", "-n", "100"], 2.0, 16_000),
+        ("kernel journal tail", ["journalctl", "-k", "--no-pager", "-n", "200"], 2.0, 24_000),
+        ("dmesg tail", ["dmesg"], 2.0, 24_000),
+        ("iw dev", ["iw", "dev"], 1.5, 8_000),
+        ("iwconfig", ["iwconfig"], 1.5, 8_000),
+        ("rfkill list", ["rfkill", "list"], 1.5, 8_000),
+        ("networking status", ["systemctl", "status", "networking", "--no-pager"], 2.0, 12_000),
+        ("NetworkManager status", ["systemctl", "status", "NetworkManager", "--no-pager"], 2.0, 12_000),
+        ("systemd-networkd status", ["systemctl", "status", "systemd-networkd", "--no-pager"], 2.0, 12_000),
+        ("uptime", ["uptime"], 1.0, 2_000),
+        ("memory summary", ["free", "-h"], 1.0, 4_000),
+        ("load average", ["cat", "/proc/loadavg"], 1.0, 2_000),
+        (
+            "Simple Sender process state",
+            ["ps", "-o", "pid,ppid,stat,nlwp,pcpu,pmem,comm", "-p", str(os.getpid())],
+            1.0,
+            4_000,
+        ),
+    ]
+    for title, args, timeout_s, max_chars in command_specs:
+        if title == "dmesg tail":
+            lines.append("")
+            lines.append("--- dmesg tail ---")
+            lines.append("$ dmesg | tail -n 200")
+            output = _run_system_snapshot_command(
+                args,
+                timeout_s=timeout_s,
+                max_chars=64_000,
+            )
+            dmesg_lines = output.splitlines()
+            if len(dmesg_lines) > 200:
+                output = "\n".join(dmesg_lines[-200:])
+            lines.append(output)
+            continue
+        _append_command_snapshot(
+            lines,
+            title,
+            args,
+            timeout_s=timeout_s,
+            max_chars=max_chars,
+        )
+
+    if shutil.which("resolvectl") is None:
+        _append_file_snapshot(lines, "/etc/resolv.conf", Path("/etc/resolv.conf"))
+
+
 def build_system_info_text(
     app: Any,
     *,
@@ -137,6 +275,7 @@ def build_system_info_text(
         value = str(env.get(key, "") or "").strip()
         if value:
             lines.append(f"{key}: {value}")
+    _append_linux_network_snapshot(lines)
     return "\n".join(lines) + "\n"
 
 

@@ -25,10 +25,15 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import ipaddress
 import logging
+import platform
 import queue
 import re
+import shutil
+import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -41,6 +46,8 @@ _KASA_COMMAND_RETRY_MAX_ATTEMPTS = 3
 _KASA_COMMAND_RETRY_BASE_DELAY_S = 0.2
 _KASA_COMMAND_RETRY_MAX_DELAY_S = 1.0
 _KASA_DUPLICATE_REQUEST_WINDOW_S = 1.0
+_KASA_CONNECTIVITY_TIMEOUT_S = 0.75
+_KASA_CONNECTIVITY_MAX_TEXT = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +79,16 @@ class OutletCommandResult:
     success: bool
     source: str
     error: str | None = None
+    device_identifier: str | None = None
+    device_ip: str | None = None
+    line_index: int | None = None
+    attempts: int | None = None
+    max_attempts: int | None = None
+    timeout_s: float | None = None
+    elapsed_s: float | None = None
+    final_state: bool | None = None
+    failure_kind: str | None = None
+    connectivity: Mapping[str, str] | None = None
 
 
 class KasaController(Protocol):
@@ -114,6 +131,121 @@ def _build_identifier(host: str, device_id: str | None) -> str:
     if id_text:
         return f"{id_text}@{host_text}"
     return host_text
+
+
+def _format_mapping(mapping: Mapping[str, str] | None) -> str:
+    if not mapping:
+        return ""
+    parts: list[str] = []
+    for key in sorted(mapping):
+        value = str(mapping.get(key, "") or "").strip()
+        if not value:
+            continue
+        safe = value.replace("\n", " | ")
+        if len(safe) > 180:
+            safe = f"{safe[:177]}..."
+        parts.append(f"{key}={safe}")
+    return " ".join(parts)
+
+
+def _classify_kasa_exception(exc: BaseException) -> str:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(exc, socket.gaierror):
+        return "dns_resolution"
+    if isinstance(exc, ConnectionRefusedError):
+        return "connection_refused"
+    if isinstance(exc, OSError):
+        err_no = getattr(exc, "errno", None)
+        if err_no in {errno.EHOSTUNREACH, errno.ENETUNREACH}:
+            return "host_unreachable"
+        if err_no == errno.ECONNREFUSED:
+            return "connection_refused"
+        if err_no == errno.ETIMEDOUT:
+            return "timeout"
+
+    text = str(exc or "").lower()
+    if "timed out" in text or "timeout" in text:
+        return "timeout"
+    if (
+        "name or service not known" in text
+        or "temporary failure in name resolution" in text
+        or "nodename nor servname" in text
+        or "getaddrinfo failed" in text
+        or "dns" in text
+    ):
+        return "dns_resolution"
+    if "connection refused" in text:
+        return "connection_refused"
+    if "no route to host" in text or "host is unreachable" in text or "network is unreachable" in text:
+        return "host_unreachable"
+    if "unable to find kasa device" in text:
+        return "discovery_failed"
+    if "dependency unavailable" in text or "not installed" in text:
+        return "dependency_unavailable"
+    return "api_or_device_error"
+
+
+def _run_short_command(args: list[str], *, timeout_s: float = 0.75) -> str:
+    executable = str(args[0] if args else "").strip()
+    if not executable:
+        return "skipped: empty command"
+    if shutil.which(executable) is None:
+        return "unavailable"
+    try:
+        proc = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=max(0.1, float(timeout_s)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception as exc:
+        return f"error: {type(exc).__name__}: {exc}"
+    output = str(proc.stdout or "").strip()
+    if len(output) > _KASA_CONNECTIVITY_MAX_TEXT:
+        output = f"{output[:_KASA_CONNECTIVITY_MAX_TEXT - 3]}..."
+    if proc.returncode == 0:
+        return output or "ok"
+    return f"exit={proc.returncode}: {output}" if output else f"exit={proc.returncode}"
+
+
+def collect_kasa_connectivity_snapshot(device_identifier: str) -> dict[str, str]:
+    """Collect a small, bounded local-network snapshot after a Kasa failure."""
+
+    _device_id, host = _split_identifier(device_identifier)
+    host = str(host or "").strip()
+    snapshot: dict[str, str] = {
+        "configured_host": host or "unknown",
+        "local_hostname": _run_short_command(["hostname"], timeout_s=0.5),
+        "local_ip_addresses": _run_short_command(["hostname", "-I"], timeout_s=0.5),
+        "default_route": _run_short_command(
+            ["ip", "route", "show", "default"],
+            timeout_s=0.5,
+        ),
+    }
+
+    if host:
+        if platform.system().lower().startswith("windows"):
+            ping_args = ["ping", "-n", "1", "-w", "1000", host]
+        else:
+            ping_args = ["ping", "-c", "1", "-W", "1", host]
+        snapshot["ping"] = _run_short_command(ping_args, timeout_s=1.3)
+        try:
+            with socket.create_connection(
+                (host, 9999),
+                timeout=max(0.1, float(_KASA_CONNECTIVITY_TIMEOUT_S)),
+            ):
+                snapshot["tcp_9999"] = "open"
+        except Exception as exc:
+            snapshot["tcp_9999"] = f"{_classify_kasa_exception(exc)}: {exc}"
+    else:
+        snapshot["ping"] = "skipped: no configured host"
+        snapshot["tcp_9999"] = "skipped: no configured host"
+    return snapshot
 
 
 def _coerce_outlet_id(value: Any, *, default: int) -> int:
@@ -269,10 +401,21 @@ class PythonKasaController:
             raise RuntimeError("Kasa device identifier is empty.")
 
         candidate = None
+        direct_error: Exception | None = None
         if _is_ip_address(host):
-            candidate = await discover_cls.discover_single(host)
+            try:
+                candidate = await discover_cls.discover_single(host)
+            except Exception as exc:
+                direct_error = exc
+                if not device_id:
+                    raise
         if candidate is None:
-            found = await discover_cls.discover()
+            try:
+                found = await discover_cls.discover()
+            except Exception:
+                if direct_error is not None:
+                    raise direct_error
+                raise
             for device in found.values():
                 dev_host = str(getattr(device, "host", "") or "")
                 dev_id = str(getattr(device, "device_id", "") or "").strip()
@@ -283,6 +426,11 @@ class PythonKasaController:
                     candidate = device
                     break
         if candidate is None:
+            if direct_error is not None:
+                raise RuntimeError(
+                    f"Unable to find Kasa device '{identifier}' after direct-IP "
+                    f"lookup failed and discovery fallback found no matching device."
+                ) from direct_error
             raise RuntimeError(f"Unable to find Kasa device '{identifier}'.")
         await candidate.update()
         return candidate
@@ -399,11 +547,13 @@ class AccessoryRouter:
         settings_provider: Callable[[], Mapping[str, Any]],
         log: Callable[[str], None] | None = None,
         command_result_callback: Callable[[OutletCommandResult], None] | None = None,
+        connectivity_probe: Callable[[str], Mapping[str, str]] | None = None,
     ) -> None:
         self._controller = controller
         self._settings_provider = settings_provider
         self._log = log
         self._command_result_callback = command_result_callback
+        self._connectivity_probe = connectivity_probe or collect_kasa_connectivity_snapshot
         self._task_q: queue.Queue[_WorkerTask | None] = queue.Queue(maxsize=KASA_TASK_QUEUE_MAXSIZE)
         self._stop_evt = threading.Event()
         self._state_lock = threading.Lock()
@@ -417,6 +567,13 @@ class AccessoryRouter:
     def _retry_delay_s(self, attempt_index: int) -> float:
         delay = _KASA_COMMAND_RETRY_BASE_DELAY_S * (2**max(0, int(attempt_index)))
         return min(_KASA_COMMAND_RETRY_MAX_DELAY_S, max(0.0, float(delay)))
+
+    def _controller_timeout_s(self) -> float | None:
+        try:
+            timeout = float(getattr(self._controller, "_request_timeout_s"))
+        except (TypeError, ValueError, AttributeError):
+            return None
+        return timeout if timeout > 0 else None
 
     def _log_warning(self, message: str) -> None:
         if self._log is not None:
@@ -539,17 +696,25 @@ class AccessoryRouter:
             self._cached_device_handle = None
 
     def _device_handle_for_identifier(self, device_identifier: str) -> DeviceHandle:
+        handle, _cache_status = self._device_handle_for_identifier_with_cache_status(
+            device_identifier
+        )
+        return handle
+
+    def _device_handle_for_identifier_with_cache_status(
+        self, device_identifier: str
+    ) -> tuple[DeviceHandle, str]:
         with self._state_lock:
             if (
                 self._cached_device_identifier == device_identifier
                 and self._cached_device_handle is not None
             ):
-                return self._cached_device_handle
+                return self._cached_device_handle, "cached"
         handle = self._controller.connect(device_identifier)
         with self._state_lock:
             self._cached_device_identifier = device_identifier
             self._cached_device_handle = handle
-        return handle
+        return handle, "reconnected"
 
     def discover(
         self,
@@ -599,6 +764,7 @@ class AccessoryRouter:
         on: bool,
         *,
         source: str,
+        line_index: int | None = None,
     ) -> bool:
         settings = self._read_settings()
         if not settings["kasa_enabled"]:
@@ -614,6 +780,12 @@ class AccessoryRouter:
         desired = bool(on)
         state_key = (device_identifier, outlet)
         request_ts = time.monotonic()
+        timeout_s = self._controller_timeout_s()
+        max_attempts = max(1, int(_KASA_COMMAND_RETRY_MAX_ATTEMPTS))
+        command_text = "ON" if desired else "OFF"
+        _configured_device_id, configured_host = _split_identifier(device_identifier)
+        line_text = f" line_index={int(line_index)}" if line_index is not None else ""
+        timeout_text = f" timeout={timeout_s:.1f}s" if timeout_s is not None else ""
         with self._state_lock:
             last_request = self._last_requested_by_outlet.get(state_key)
             if last_request is not None:
@@ -624,29 +796,90 @@ class AccessoryRouter:
                 ):
                     return False
 
-        def _task() -> None:
+        logger.info(
+            "Kasa outlet command requested: outlet=%d command=%s source=%s device=%s host=%s%s attempts=%d%s",
+            int(outlet),
+            command_text,
+            str(source),
+            device_identifier,
+            str(configured_host or "unknown"),
+            line_text,
+            int(max_attempts),
+            timeout_text,
+        )
+
+        task_started_s = time.monotonic()
+        task_attempts = 0
+        task_device_ip: str | None = None
+        task_failure_kind: str | None = None
+
+        def _task() -> dict[str, Any]:
+            nonlocal task_attempts, task_device_ip, task_failure_kind
             last_error: Exception | None = None
-            max_attempts = max(1, int(_KASA_COMMAND_RETRY_MAX_ATTEMPTS))
             for attempt in range(max_attempts):
+                task_attempts = int(attempt + 1)
+                attempt_started_s = time.monotonic()
                 try:
-                    handle = self._device_handle_for_identifier(device_identifier)
+                    handle, cache_status = self._device_handle_for_identifier_with_cache_status(
+                        device_identifier
+                    )
+                    task_device_ip = str(handle.ip or "") or None
+                    logger.info(
+                        "Kasa outlet command attempt: outlet=%d command=%s source=%s device=%s host=%s ip=%s device_cache=%s attempt=%d/%d%s%s",
+                        int(outlet),
+                        command_text,
+                        str(source),
+                        device_identifier,
+                        str(configured_host or "unknown"),
+                        str(task_device_ip or "unknown"),
+                        str(cache_status),
+                        int(attempt + 1),
+                        int(max_attempts),
+                        line_text,
+                        timeout_text,
+                    )
                     self._controller.set_outlet_state(handle, outlet, desired)
-                    return
+                    elapsed_s = time.monotonic() - task_started_s
+                    attempt_elapsed_s = time.monotonic() - attempt_started_s
+                    logger.info(
+                        "Kasa outlet command succeeded: outlet=%d command=%s source=%s device=%s ip=%s attempt=%d/%d elapsed=%.3fs attempt_elapsed=%.3fs final_state=unconfirmed%s",
+                        int(outlet),
+                        command_text,
+                        str(source),
+                        device_identifier,
+                        str(task_device_ip or "unknown"),
+                        int(attempt + 1),
+                        int(max_attempts),
+                        float(elapsed_s),
+                        float(attempt_elapsed_s),
+                        line_text,
+                    )
+                    return {
+                        "attempts": int(attempt + 1),
+                        "device_ip": task_device_ip,
+                        "elapsed_s": float(elapsed_s),
+                    }
                 except Exception as exc:
                     last_error = exc
+                    task_failure_kind = _classify_kasa_exception(exc)
                     self._clear_device_cache()
                     if attempt >= (max_attempts - 1):
                         break
                     retry_delay_s = self._retry_delay_s(attempt)
+                    attempt_elapsed_s = time.monotonic() - attempt_started_s
                     logger.debug(
-                        "Kasa outlet command retry scheduled: outlet=%d on=%s source=%s attempt=%d/%d delay=%.2fs err=%s",
+                        "Kasa outlet command retry scheduled: outlet=%d command=%s source=%s attempt=%d/%d delay=%.2fs attempt_elapsed=%.3fs failure_kind=%s exception=%s err=%s%s",
                         int(outlet),
-                        bool(desired),
+                        command_text,
                         str(source),
                         int(attempt + 1),
                         int(max_attempts),
                         float(retry_delay_s),
+                        float(attempt_elapsed_s),
+                        str(task_failure_kind),
+                        type(exc).__name__,
                         str(exc),
+                        line_text,
                     )
                     time.sleep(retry_delay_s)
             with self._state_lock:
@@ -655,7 +888,8 @@ class AccessoryRouter:
                 raise RuntimeError("Kasa outlet command failed with unknown error.")
             raise last_error
 
-        def _on_success(_: Any) -> None:
+        def _on_success(info: Any) -> None:
+            info_map = info if isinstance(info, dict) else {}
             with self._state_lock:
                 self._last_requested_by_outlet[state_key] = (desired, time.monotonic())
             self._emit_command_result(
@@ -665,13 +899,39 @@ class AccessoryRouter:
                     success=True,
                     source=source,
                     error=None,
+                    device_identifier=device_identifier,
+                    device_ip=str(info_map.get("device_ip") or task_device_ip or "") or None,
+                    line_index=line_index,
+                    attempts=int(info_map.get("attempts") or task_attempts or 1),
+                    max_attempts=max_attempts,
+                    timeout_s=timeout_s,
+                    elapsed_s=float(info_map.get("elapsed_s") or (time.monotonic() - task_started_s)),
+                    final_state=None,
+                    failure_kind=None,
+                    connectivity=None,
                 )
             )
 
         def _on_error(exc: Exception) -> None:
+            elapsed_s = time.monotonic() - task_started_s
+            failure_kind = task_failure_kind or _classify_kasa_exception(exc)
+            try:
+                connectivity = dict(self._connectivity_probe(device_identifier) or {})
+            except Exception as probe_exc:
+                connectivity = {
+                    "probe_error": f"{type(probe_exc).__name__}: {probe_exc}"
+                }
+            connectivity_text = _format_mapping(connectivity)
             with self._state_lock:
                 self._last_requested_by_outlet.pop(state_key, None)
-            self._log_warning(f"Kasa outlet {outlet} command failed ({source}): {exc}")
+            self._log_warning(
+                f"Kasa outlet {outlet} command failed ({source}): {exc} "
+                f"(command={command_text}, attempts={task_attempts or 0}/{max_attempts}, "
+                f"elapsed={elapsed_s:.3f}s, failure_kind={failure_kind}, "
+                f"exception={type(exc).__name__}, device={device_identifier}, "
+                f"host={configured_host or 'unknown'}, ip={task_device_ip or 'unknown'}"
+                f"{line_text}, connectivity={connectivity_text or 'unavailable'})"
+            )
             self._emit_command_result(
                 OutletCommandResult(
                     outlet_id=outlet,
@@ -679,6 +939,16 @@ class AccessoryRouter:
                     success=False,
                     source=source,
                     error=str(exc),
+                    device_identifier=device_identifier,
+                    device_ip=task_device_ip,
+                    line_index=line_index,
+                    attempts=task_attempts or 0,
+                    max_attempts=max_attempts,
+                    timeout_s=timeout_s,
+                    elapsed_s=float(elapsed_s),
+                    final_state=None,
+                    failure_kind=failure_kind,
+                    connectivity=connectivity,
                 )
             )
 

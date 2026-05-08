@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from simple_sender.utils.grbl_errors import GRBL_ALARM_CODES, GRBL_ERROR_CODES
 
-HELP_ABOUT_TITLE = "Simple Sender About"
+HELP_ABOUT_TITLE = "Simple Sender About v3.14"
 
 
 @dataclass(frozen=True)
@@ -795,6 +795,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Enabled outlets can turn on at job start and turn off when a job finishes, stops, alarms, or is canceled.",
             "Exact trimmed VACUUM_ON and VACUUM_OFF lines in streamed files toggle the configured vacuum outlet immediately and are never sent to GRBL.",
             "Device operations use bounded request timeouts so a stalled Kasa call does not block the accessory worker indefinitely.",
+            "If a Kasa command fails, the app retries through reconnect/discovery, logs a failure classification and local network context where available, and warns that dust collection state was not confirmed.",
             "The Kasa section lives in App Settings > Kasa Plug. Use Discover, choose the device, refresh the outlet list, map Vacuum and Spindle Light, and use the built-in outlet test buttons before cutting.",
             "If the device exposes only one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.",
         ),
@@ -833,6 +834,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Manual queue full: stop sending rapid repeated manual or jog commands and wait for the queue to drain.",
             "Load fails due to 80-byte limit: repost with shorter lines or simpler motion output, especially for long arcs or unsupported axes.",
             "Raspberry Pi feels sluggish: keep Performance mode enabled, avoid extra background tasks, and prefer faster local storage.",
+            "Kasa fails and SSH is unavailable: before rebooting, ping the Pi by hostname and IP, try SSH by IP, check the router client list, check the Kasa mobile app, confirm whether the Pi touchscreen still responds, and export a diagnostics bundle if Simple Sender is reachable.",
             "Large-file handling feels slow: let the initial prepare path finish and expect some diagnostics work to be sampled or deferred on ultra-large jobs.",
             "Macro behavior is unexpected: inspect the macro in Macro Manager or the sample view and re-test with the spindle off.",
             "Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle or Export session diagnostics.",

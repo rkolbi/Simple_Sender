@@ -574,6 +574,15 @@ def _append_stream_progress_metrics(
         0,
         int(completion_acked_index) + 1,
     )
+    raw_completion_send_index = getattr(app, "_stream_completion_send_index", -1)
+    try:
+        completion_send_index = int(raw_completion_send_index)
+    except Exception:
+        completion_send_index = -1
+    metrics["stream_completion_send_index"] = int(completion_send_index)
+    metrics["stream_completion_evidence_authoritative"] = bool(
+        getattr(app, "_stream_completion_evidence_authoritative", False)
+    )
     metrics["stream_completion_shortfall_lines"] = int(
         getattr(app, "_stream_completion_shortfall_lines", 0) or 0
     )

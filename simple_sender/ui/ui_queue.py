@@ -51,6 +51,7 @@ from simple_sender.types import (
     ReadyEvent,
     SettingsDumpDoneEvent,
     StatusEvent,
+    StreamCompletionEofEvent,
     StreamErrorEvent,
     StreamInterruptedEvent,
     StreamPauseReasonEvent,
@@ -366,6 +367,8 @@ def _ui_event_kind(item: UiEvent | object) -> str:
         return "progress"
     if isinstance(item, ProgressBytesEvent):
         return "progress_bytes"
+    if isinstance(item, StreamCompletionEofEvent):
+        return "stream_completion_eof"
     if isinstance(item, StreamStateEvent):
         return "stream_state"
     if isinstance(item, StreamInterruptedEvent):
@@ -717,6 +720,7 @@ class UiEventQueue:
         "stream_tool_change",
         "stream_vacuum_directive",
         "spindle_state",
+        "stream_completion_eof",
         "stream_state",
         "ui_call",
         "ui_post",
@@ -1389,4 +1393,3 @@ def drain_ui_queue(app: AppProtocol) -> None:
             setattr(app, "_ui_queue_drain_running", False)
         except Exception:
             pass
-

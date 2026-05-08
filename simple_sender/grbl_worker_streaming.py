@@ -38,6 +38,7 @@ from simple_sender.types import (
     ManualPendingItem,
     ProgressBytesEvent,
     ProgressEvent,
+    StreamCompletionEofEvent,
     StreamErrorEvent,
     StreamPendingItem,
     StreamPauseReasonEvent,
@@ -1104,8 +1105,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 continue
             if handled_item is not None:
                 # Handle vacuum directives in sender space and never transmit to GRBL.
+                handled_idx = handled_item.idx
                 self._ack_handled_stream_line(handled_item)
-                self.ui_q.put(("stream_vacuum_directive", handled_vacuum_on))
+                self.ui_q.put(("stream_vacuum_directive", handled_vacuum_on, handled_idx))
                 continue
             if directive_deferred or tool_change_started:
                 break
@@ -1176,11 +1178,24 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     ProgressBytesEvent(int(stream_file_size), int(stream_file_size))
                 )
             self._streaming = False
+            self.ui_q.put(
+                StreamCompletionEofEvent(
+                    bool(completion_verified),
+                    int(total_lines),
+                    bool(line_count_known),
+                    int(ack_index),
+                    int(send_index),
+                )
+            )
             self.ui_q.put(StreamStateEvent("done", None))
             logger.info(
-                "Streaming complete (verified_eof=%s, total_lines=%d)",
-                bool(line_count_known),
+                "Streaming complete (verified_eof=%s, total_lines=%d, "
+                "last_acked_index=%d, send_index=%d, total_known=%s)",
+                bool(completion_verified),
                 int(total_lines),
+                int(ack_index),
+                int(send_index),
+                bool(line_count_known),
             )
 
     def _purge_pending_jogs(self) -> None:

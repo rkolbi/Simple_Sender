@@ -3,14 +3,15 @@
 All notable changes to this project are documented in this file.
 Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
-## [Unreleased]
+## [3.14] - 2026-05-08
 
 ### Changed
-- Runtime package metadata now reports `3.12`.
-- Current release-facing docs now identify the active application baseline as `3.12`.
+- Runtime package metadata now reports `3.14`.
+- Current release-facing docs now identify the active application baseline as `3.14`.
+- Diagnostics bundles now include a best-effort Linux/Raspberry Pi network snapshot for Kasa/SSH reliability investigations, including local IP/routing/DNS, SSH service/journal, kernel network messages, Wi-Fi status commands when available, uptime, memory/load, and process state.
 
 ### Documentation
-- Release-note/About filenames now identify the `3.12` baseline.
+- Release-note/About filenames now identify the `3.14` baseline.
 - Raspberry Pi image guidance now reflects that no Raspberry Pi image artifact is checked into the repository; build or attach a release asset separately when needed.
 - Update-safety docs now note that the Windows share sync helper stages to a sibling pending-update folder when the runtime marker exists instead of hot-overwriting the live install.
 - Current validation/testing docs now use the repo `.venv` Python path for copy-paste-safe Windows validation and tooling commands.
@@ -18,6 +19,9 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README/current-release validation notes now reflect the latest rerun explicit repo-supported gate instead of older `pytest -q` / wrapper counts that were not rerun for the current revision snapshot.
 - Dry Run docs/help text now distinguish fresh Run from resume-start paths (`Resume From` / reconnect resume) instead of implying that every resume action prompts.
 - Kasa operator help text now reflects the current single-outlet fallback instead of implying that every supported device must expose two outlets.
+- README mypy-manifest wording now matches the release-gate checker's expected `mypy against <N> source files` phrasing while preserving the same current `141`-file count.
+- README, release notes, and this changelog now reflect the `2026-05-08` local validation rerun, including `run_tests.bat` clean and the coverage pytest gate (`1935 passed, 3 skipped`).
+- README Kasa troubleshooting now includes a short before-reboot field checklist for separating Pi network loss, hostname/IP/DNS/DHCP issues, Kasa plug LAN loss, and app-level Kasa failures.
 
 ### Fixed
 - Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:
@@ -31,6 +35,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - EOF-completion diagnostics are now more truthful:
   - completion dialogs and diagnostics now include explicit EOF-verification evidence
   - a falsey `0` final acknowledged-line index no longer degrades into `-1` in the EOF evidence path
+  - final worker EOF evidence is now carried into completion/session diagnostics before the `done` state is handled, avoiding stale UI ack snapshots and false one-line shortfall warnings after fully acknowledged jobs
 - Manual-command completion state is now more truthful:
   - queued-but-not-yet-sent manual commands now keep the manual-busy state active
   - `wait_for_manual_completion()` no longer reports success while commands still remain queued for send
@@ -39,6 +44,8 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - App Settings activation/deactivation and lazy section build failures now log instead of disappearing silently
   - settings save now logs when a Tk variable read fails and the previous persisted value is kept
   - Kasa command results now fall back to `ui_q` when `_post_ui_thread` fails, and an explicit warning is logged if a result still drops before UI reconciliation
+  - Kasa stream directives now log explicit ignored/failure reasons with command source, stream line, device, retry, timeout, and elapsed-time context where available
+  - Kasa command failures now clear cached device handles, retry through reconnect/discovery, classify timeout/DNS/refused/unreachable/API-style failures where possible, record bounded local-network reachability context, and warn that dust collection state was not confirmed
   - popup raise/focus failures now surface an operator-visible log message instead of failing silently
   - auto-level modal restore now logs incomplete restore commands even when the failure path returns `False` instead of throwing
   - connection timeline details now include reconnect/session context such as user-disconnect vs unexpected drop, resume-pending state, restore-failure state, and pending modal-sync state
@@ -50,15 +57,16 @@ Historical entries may reference pre-lean features (for example legacy pathview/
   - About text now reflects the current verified-EOF and post-job safety behavior
 
 ### Validation
-- Current local repository validation snapshot for the current repository revision in the verified local Windows / Python `3.12.1` environment as of `2026-04-23`:
-  - import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"`): clean
+- Current local repository validation snapshot for the current repository revision in the verified local Windows / Python `3.12.1` environment as of `2026-05-08`:
+  - canonical wrapper (`run_tests.bat`): clean
+  - import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
   - repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
-  - compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools`): clean
+  - compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat`): clean
   - mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
   - repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
-  - repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`): `1921 passed, 2 skipped`
+  - repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1935 passed, 3 skipped`
   - critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
-- `run_tests.bat`, direct `pytest -q`, and direct `mypy main.py simple_sender` were not rerun for this specific snapshot, so older counts from those commands remain historical rather than being presented as current.
+- Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for this specific snapshot, so older counts from those commands remain historical rather than being presented as current.
 - This local validation snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## [3.11] - 2026-04-20

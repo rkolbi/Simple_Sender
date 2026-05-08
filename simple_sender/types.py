@@ -527,6 +527,25 @@ class StreamStateEvent(_TupleCompatibleUiEvent):
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class StreamCompletionEofEvent(_TupleCompatibleUiEvent):
+    verified_eof: bool
+    total_lines: int
+    total_lines_known: bool
+    last_acked_index: int
+    send_index: int
+
+    def as_tuple(self) -> tuple[str, bool, int, bool, int, int]:
+        return (
+            "stream_completion_eof",
+            self.verified_eof,
+            self.total_lines,
+            self.total_lines_known,
+            self.last_acked_index,
+            self.send_index,
+        )
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class StreamInterruptedEvent(_TupleCompatibleUiEvent):
     was_streaming: bool
     reason: str | None = None
@@ -577,6 +596,7 @@ UiStreamingProgressEvent: TypeAlias = (
 
 UiStreamingControlEvent: TypeAlias = (
     StreamStateEvent
+    | StreamCompletionEofEvent
     | StreamInterruptedEvent
     | StreamErrorEvent
     | StreamPauseReasonEvent
@@ -653,10 +673,12 @@ UiEvent = (
     | tuple[Literal["buffer_fill"], int, int, int]
     | tuple[Literal["throughput"], float]
     | tuple[Literal["stream_state"], str, Any | None]
+    | tuple[Literal["stream_completion_eof"], bool, int, bool, int, int]
     | tuple[Literal["stream_interrupted"], bool, str | None]
     | tuple[Literal["stream_error"], str, int | None, str | None, str | None]
     | tuple[Literal["stream_pause_reason"], str]
     | tuple[Literal["stream_vacuum_directive"], bool]
+    | tuple[Literal["stream_vacuum_directive"], bool, int | None]
     | tuple[Literal["stream_tool_change"], int | None, str]
     | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]

@@ -172,11 +172,94 @@ def _reset_stream_completion_evidence(app) -> None:
     app._stream_completion_total_lines = 0
     app._stream_completion_total_lines_known = False
     app._stream_completion_last_acked_index = -1
+    app._stream_completion_send_index = -1
     app._stream_completion_shortfall_lines = 0
     app._stream_completion_warning = ""
+    app._stream_completion_evidence_authoritative = False
+
+
+def _apply_stream_completion_evidence(
+    app,
+    *,
+    verified_eof: bool,
+    total_lines: int,
+    total_lines_known: bool,
+    last_acked_index: int,
+    send_index: int = -1,
+    authoritative: bool = False,
+) -> None:
+    try:
+        total = max(0, int(total_lines))
+    except Exception:
+        total = 0
+    known = bool(total_lines_known)
+    try:
+        ack_index = int(last_acked_index)
+    except Exception:
+        ack_index = -1
+    try:
+        send_idx = int(send_index)
+    except Exception:
+        send_idx = -1
+    shortfall_lines = 0
+    if known and total > 0:
+        shortfall_lines = max(0, total - max(0, ack_index + 1))
+    verified = bool(verified_eof and known and shortfall_lines == 0)
+
+    app._stream_completion_verified_eof = verified
+    app._stream_completion_total_lines = int(total)
+    app._stream_completion_total_lines_known = known
+    app._stream_completion_last_acked_index = int(ack_index)
+    app._stream_completion_send_index = int(send_idx)
+    app._stream_completion_shortfall_lines = int(shortfall_lines)
+    app._stream_completion_evidence_authoritative = bool(authoritative)
+
+    try:
+        if ack_index > int(getattr(app, "_last_acked_index", -1) or -1):
+            app._last_acked_index = int(ack_index)
+    except Exception:
+        app._last_acked_index = int(ack_index)
+
+    if known and total > 0:
+        app._gcode_source_line_count_known = True
+        app._gcode_executable_lines = int(total)
+        app._gcode_executable_lines_known = True
+    if verified:
+        app._stream_completion_warning = ""
+    elif known:
+        app._stream_completion_warning = (
+            f"True EOF was not verified: acked={max(0, ack_index + 1)} "
+            f"of {max(0, total)} executable lines."
+        )
+    else:
+        app._stream_completion_warning = (
+            "True EOF was not verified: the final executable line count was not resolved."
+        )
+
+
+def handle_stream_completion_eof_event(
+    app,
+    *,
+    verified_eof: bool,
+    total_lines: int,
+    total_lines_known: bool,
+    last_acked_index: int,
+    send_index: int,
+) -> None:
+    _apply_stream_completion_evidence(
+        app,
+        verified_eof=verified_eof,
+        total_lines=total_lines,
+        total_lines_known=total_lines_known,
+        last_acked_index=last_acked_index,
+        send_index=send_index,
+        authoritative=True,
+    )
 
 
 def _sync_stream_completion_evidence(app) -> None:
+    if bool(getattr(app, "_stream_completion_evidence_authoritative", False)):
+        return
     raw_ack_index = getattr(app, "_last_acked_index", -1)
     try:
         ack_index = int(raw_ack_index)
@@ -218,29 +301,15 @@ def _sync_stream_completion_evidence(app) -> None:
         if total_lines > 0 and not total_lines_known:
             total_lines_known = bool(getattr(app, "_gcode_total_lines_known", False))
     verified_eof = bool(total_lines_known and ack_index >= (total_lines - 1))
-    shortfall_lines = 0
-    if total_lines_known and total_lines > 0:
-        shortfall_lines = max(0, total_lines - max(0, ack_index + 1))
-    app._stream_completion_verified_eof = bool(verified_eof)
-    app._stream_completion_total_lines = int(total_lines)
-    app._stream_completion_total_lines_known = bool(total_lines_known)
-    app._stream_completion_last_acked_index = int(ack_index)
-    app._stream_completion_shortfall_lines = int(shortfall_lines)
-    if source is not None and total_lines_known and total_lines > 0:
-        app._gcode_source_line_count_known = True
-        app._gcode_executable_lines = int(total_lines)
-        app._gcode_executable_lines_known = True
-    if verified_eof:
-        app._stream_completion_warning = ""
-    elif total_lines_known:
-        app._stream_completion_warning = (
-            f"True EOF was not verified: acked={max(0, ack_index + 1)} "
-            f"of {max(0, total_lines)} executable lines."
-        )
-    else:
-        app._stream_completion_warning = (
-            "True EOF was not verified: the final executable line count was not resolved."
-        )
+    _apply_stream_completion_evidence(
+        app,
+        verified_eof=verified_eof,
+        total_lines=total_lines,
+        total_lines_known=total_lines_known,
+        last_acked_index=ack_index,
+        send_index=getattr(app, "_stream_completion_send_index", -1),
+        authoritative=False,
+    )
 
 
 def _stream_busy_from_state(state: str | None, done_pending_idle: bool) -> bool:

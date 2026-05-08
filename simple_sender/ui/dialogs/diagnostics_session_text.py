@@ -211,8 +211,22 @@ def build_session_diagnostics_lines(
     completion_total_lines_known = bool(
         getattr(app, "_stream_completion_total_lines_known", False)
     )
-    completion_last_acked_index = int(
-        getattr(app, "_stream_completion_last_acked_index", -1) or -1
+    raw_completion_last_acked_index = getattr(
+        app,
+        "_stream_completion_last_acked_index",
+        -1,
+    )
+    try:
+        completion_last_acked_index = int(raw_completion_last_acked_index)
+    except Exception:
+        completion_last_acked_index = -1
+    raw_completion_send_index = getattr(app, "_stream_completion_send_index", -1)
+    try:
+        completion_send_index = int(raw_completion_send_index)
+    except Exception:
+        completion_send_index = -1
+    completion_authoritative = bool(
+        getattr(app, "_stream_completion_evidence_authoritative", False)
     )
     completion_shortfall_lines = int(
         getattr(app, "_stream_completion_shortfall_lines", 0) or 0
@@ -225,7 +239,10 @@ def build_session_diagnostics_lines(
         f"verified={completion_verified_eof}, "
         f"total_lines={completion_total_lines:,}, "
         f"total_known={completion_total_lines_known}, "
+        f"last_acked_index={completion_last_acked_index:,}, "
         f"last_acked_line={max(0, completion_last_acked_index + 1):,}, "
+        f"send_index={completion_send_index:,}, "
+        f"authoritative={completion_authoritative}, "
         f"shortfall_lines={completion_shortfall_lines:,}"
     )
     if completion_warning:

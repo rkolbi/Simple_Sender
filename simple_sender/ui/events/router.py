@@ -51,6 +51,7 @@ from simple_sender.types import (
     ReadyEvent,
     SettingsDumpDoneEvent,
     StatusEvent,
+    StreamCompletionEofEvent,
     StreamErrorEvent,
     StreamInterruptedEvent,
     StreamPauseReasonEvent,
@@ -824,6 +825,22 @@ def handle_event(app: Any, evt: UiEvent):
         case StreamStateEvent():
             handle_stream_state_event(app, evt)
             return
+        case StreamCompletionEofEvent(
+            verified_eof=verified_eof,
+            total_lines=total_lines,
+            total_lines_known=total_lines_known,
+            last_acked_index=last_acked_index,
+            send_index=send_index,
+        ):
+            _event_router_streaming.handle_stream_completion_eof_event(
+                app,
+                verified_eof=bool(verified_eof),
+                total_lines=int(total_lines),
+                total_lines_known=bool(total_lines_known),
+                last_acked_index=int(last_acked_index),
+                send_index=int(send_index),
+            )
+            return
         case StreamInterruptedEvent():
             handle_stream_interrupted(app, evt)
             return
@@ -968,6 +985,23 @@ def handle_event(app: Any, evt: UiEvent):
         case ("stream_state", *_):
             handle_stream_state_event(app, evt)
             return
+        case (
+            "stream_completion_eof",
+            verified_eof,
+            total_lines,
+            total_lines_known,
+            last_acked_index,
+            send_index,
+        ):
+            _event_router_streaming.handle_stream_completion_eof_event(
+                app,
+                verified_eof=bool(cast(bool, verified_eof)),
+                total_lines=int(cast(int, total_lines)),
+                total_lines_known=bool(cast(bool, total_lines_known)),
+                last_acked_index=int(cast(int, last_acked_index)),
+                send_index=int(cast(int, send_index)),
+            )
+            return
         case ("stream_interrupted", *_):
             handle_stream_interrupted(app, evt)
             return
@@ -981,6 +1015,16 @@ def handle_event(app: Any, evt: UiEvent):
             try:
                 if hasattr(app, "_handle_stream_vacuum_directive"):
                     app._handle_stream_vacuum_directive(bool(cast(bool, is_on)))
+            except Exception as exc:
+                _log_suppressed("Failed handling streamed vacuum directive", exc)
+            return
+        case ("stream_vacuum_directive", is_on, line_index):
+            try:
+                if hasattr(app, "_handle_stream_vacuum_directive"):
+                    app._handle_stream_vacuum_directive(
+                        bool(cast(bool, is_on)),
+                        line_index=cast(int | None, line_index),
+                    )
             except Exception as exc:
                 _log_suppressed("Failed handling streamed vacuum directive", exc)
             return
@@ -1266,4 +1310,3 @@ def _clear_autolevel_restore(app) -> None:
     app._auto_level_leveled_path = None
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
-

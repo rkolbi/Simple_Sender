@@ -195,8 +195,13 @@ class ActionsMixin:
     def _handle_stream_spindle_state(self, is_on: bool) -> None:
         handle_stream_spindle_state(self, is_on)
 
-    def _handle_stream_vacuum_directive(self, is_on: bool) -> None:
-        handle_stream_vacuum_directive(self, is_on)
+    def _handle_stream_vacuum_directive(
+        self,
+        is_on: bool,
+        *,
+        line_index: int | None = None,
+    ) -> None:
+        handle_stream_vacuum_directive(self, is_on, line_index=line_index)
 
     def _handle_stream_tool_change(
         self,

@@ -1,22 +1,23 @@
 ﻿# Simple Sender - Full Manual
-![Release: 3.12](https://img.shields.io/badge/release-3.12-blue)
+![Release: 3.14](https://img.shields.io/badge/release-3.14-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.12`. This is the current release-ready baseline.
+Current stable release: `3.14`. This is the current release-ready baseline.
 
-Current local validation snapshot for the current repository revision as of `2026-04-23` in the verified local Windows / Python `3.12.1` environment:
-- Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"`): clean
+Current local validation snapshot for the current repository revision as of `2026-05-08` in the verified local Windows / Python `3.12.1` environment:
+- Canonical wrapper (`run_tests.bat`): clean
+- Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
-- Compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools`): clean
+- Compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat`): clean
 - Mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
 - Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
-- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`): `1921 passed, 2 skipped`
+- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1935 passed, 3 skipped`
 - Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
 
-`run_tests.bat` remains the recommended local convenience wrapper, but it was not rerun for this snapshot. The direct `.\.venv\Scripts\python.exe -m pytest -q` path and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were also not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+The direct `.\.venv\Scripts\python.exe -m pytest -q` path, direct `.\.venv\Scripts\python.exe -m pytest` path, direct `.\.venv\Scripts\python.exe -m ruff check .` path, and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
 ## Design Objectives and Key Features
 
@@ -833,6 +834,8 @@ Use this when you want job lifecycle events to control smart outlets, such as a 
 - Stream directives: exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines in streamed files toggle the configured Vacuum outlet immediately; these lines are consumed by the sender and are never sent to GRBL.
 - Safety: keep a physical e-stop/power cutoff available. Kasa control is convenience automation, not a safety system.
 - Reliability: Kasa device operations use bounded request timeouts (default 15s). If a device call stalls, the action fails with a logged timeout instead of blocking the accessory worker indefinitely.
+- Failure handling: Kasa command failures clear the cached device handle, retry through a bounded reconnect/discovery path, classify the failure when possible, and warn that dust collection state was not confirmed while the CNC job may continue.
+- Diagnostics: Linux/Raspberry Pi diagnostics bundles include a best-effort local network snapshot for Kasa/SSH troubleshooting, including hostname/IP, routes, DNS, SSH status/journal, kernel network logs, Wi-Fi status commands when available, uptime, memory/load, and the Simple Sender process state.
 
 The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the master toggle, discover your device on the LAN, and pick it from the dropdown. Then map **Vacuum** and **Spindle Light** to outlet numbers and use the built-in outlet test buttons to confirm each mapping before cutting. If the selected Kasa device only exposes one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.
 
@@ -844,6 +847,17 @@ The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the m
 5) Enable **Vacuum** and/or **Spindle Light**, then choose an outlet for each one.
 6) Use **Test Outlets** (`ON`/`OFF`) to verify each outlet responds correctly.
 7) Start a short job and confirm mapped outlets turn on at job start and off at job end/stop.
+
+### Kasa/network troubleshooting before reboot
+If Kasa control fails after a long run or the Raspberry Pi stops accepting SSH, capture evidence before rebooting when it is safe to do so.
+
+1) From Windows, run `ping <pi-hostname>` and `ping <pi-ip-address>`.
+2) Try `ssh <user>@<pi-ip-address>` instead of SSH by hostname.
+3) Check the router client list for the Pi and the Kasa plug.
+4) Check whether the Kasa plug still responds in the Kasa mobile app.
+5) Look at the Pi touchscreen: confirm Simple Sender is still visible and whether local touchscreen input works.
+6) If the Pi UI or terminal is accessible, check `hostname -I`, `ip addr`, `ip route`, `systemctl is-active ssh`, and `journalctl -k --no-pager -n 200`.
+7) In Simple Sender, export a diagnostics bundle before restarting the app or rebooting the Pi.
 
 ## Logs & Filters
 - Console filters cover ALL/ERRORS/ALARMS plus the combined Pos/Status switch that omits those reports entirely when disabled; idle status spam stays muted. GUI button logging toggle remains, and performance mode (toggled from App Settings > Interface) batches console output and suppresses RX logs while streaming.
@@ -867,9 +881,9 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-04-23`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing`: `1921 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: clean (aggregate critical coverage `90.4%`). `run_tests.bat`, direct `pytest -q`, and direct `mypy main.py simple_sender` were not rerun for this snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-05-08`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1935 passed, 3 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for this snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
-The current `mypy.ini` manifest runs mypy against 141 explicitly configured source files. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
+The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
 Run a subset:
 ```powershell
@@ -923,7 +937,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
-- v3.12 release notes: `RELEASE_NOTES_v3.12.md`.
+- v3.14 release notes: `RELEASE_NOTES_v3.14.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
@@ -1378,7 +1392,7 @@ Macro UI is included below along with the rest of the interface.
 - Preflight check (Run check): evaluates the loaded job for readiness, bounds availability, and machine-travel overruns using the current `$130/$131/$132` travel settings when available.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Runtime telemetry (Open telemetry): opens a live telemetry window for worker queue depth and TX/runtime counters.
-- Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, and manifest.
+- Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, Linux/Raspberry Pi network diagnostics when available, and manifest.
 - Hardware-only validation support: use the repo-root `MACHINE_VALIDATION_CHECKLIST.md` when you need a disciplined manual pass for reconnect, probing/modal-restore, Kasa reconciliation, popup stacking/focus, or Pi/Openbox/Tcl-Tk behavior that the automated suite cannot fully prove.
 - Save final performance report (Save to Logs): writes a timestamped performance report text file to the app Logs directory.
 - Apply perf-test preset: enables the low-overhead diagnostics profiling preset intended for repeatable performance capture, and it forces `Logging Mode = Standard`.

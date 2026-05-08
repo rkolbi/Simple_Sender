@@ -534,8 +534,10 @@ def _init_gcode_and_autolevel_state(
     app._stream_completion_total_lines = 0
     app._stream_completion_total_lines_known = False
     app._stream_completion_last_acked_index = -1
+    app._stream_completion_send_index = -1
     app._stream_completion_shortfall_lines = 0
     app._stream_completion_warning = ""
+    app._stream_completion_evidence_authoritative = False
     app._gcode_stats_compute_mode = ""
     app._gcode_stats_sample_scale = 1.0
     app._gcode_stats_sample_line_count = 0

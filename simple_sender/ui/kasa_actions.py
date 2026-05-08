@@ -363,15 +363,62 @@ def _set_outlet_status(app, result: OutletCommandResult) -> None:
         app.kasa_outlet_2_status.set(text)
 
 
+def _set_kasa_failure_status(app, result: OutletCommandResult) -> None:
+    status = getattr(app, "status", None)
+    if status is None:
+        return
+    command = "ON" if bool(result.on) else "OFF"
+    source = str(result.source or "kasa")
+    text = f"Kasa {command} failed ({source}); dust collection state not confirmed"
+    if result.line_index is not None:
+        text += f" at stream line {int(result.line_index) + 1}"
+    config = getattr(status, "config", None)
+    if callable(config):
+        try:
+            config(text=text)
+            return
+        except Exception as exc:
+            _log_suppressed("Failed updating status after Kasa command failure", exc)
+    setter = getattr(status, "set", None)
+    if callable(setter):
+        try:
+            setter(text)
+        except Exception as exc:
+            _log_suppressed("Failed setting status after Kasa command failure", exc)
+
+
 def on_kasa_command_result(app, result: OutletCommandResult) -> None:
     def _apply() -> None:
         _set_outlet_status(app, result)
         _sync_kasa_quick_state_from_result(app, result)
         if not result.success:
-            detail = f" outlet={result.outlet_id} command={'ON' if result.on else 'OFF'} source={result.source}"
+            detail = (
+                " dust collection state not confirmed; CNC job may continue."
+                f" outlet={result.outlet_id} command={'ON' if result.on else 'OFF'} source={result.source}"
+            )
+            if result.line_index is not None:
+                detail += f" line_index={int(result.line_index)}"
+            if result.device_identifier:
+                detail += f" device={result.device_identifier}"
+            if result.device_ip:
+                detail += f" ip={result.device_ip}"
+            if result.failure_kind:
+                detail += f" failure_kind={result.failure_kind}"
+            if result.attempts is not None and result.max_attempts is not None:
+                detail += f" attempts={int(result.attempts)}/{int(result.max_attempts)}"
+            if result.timeout_s is not None:
+                detail += f" timeout={float(result.timeout_s):.1f}s"
+            if result.elapsed_s is not None:
+                detail += f" elapsed={float(result.elapsed_s):.3f}s"
+            connectivity = dict(result.connectivity or {})
+            for key in sorted(connectivity):
+                value = str(connectivity.get(key, "") or "").strip()
+                if value:
+                    detail += f" {key}={value.replace(chr(10), ' | ')}"
             if result.error:
                 detail += f" error={result.error}"
             log_kasa_message(app, f"Warning:{detail}")
+            _set_kasa_failure_status(app, result)
 
     posted = _post_kasa_ui_callback(
         app,
@@ -705,14 +752,18 @@ def handle_outgoing_gcode_line(
     _ = line_index
 
 
-def handle_stream_vacuum_directive(app, is_on: bool) -> None:
+def handle_stream_vacuum_directive(app, is_on: bool, *, line_index: int | None = None) -> None:
     if not _kasa_supported():
+        command = "VACUUM_ON" if bool(is_on) else "VACUUM_OFF"
+        line_text = f" at stream line {int(line_index) + 1}" if line_index is not None else ""
+        log_kasa_message(app, f"{command}{line_text} ignored: Kasa control is available on Linux only.")
         return
     _kasa_runtime.handle_stream_vacuum_directive(
         app,
         bool(is_on),
         settings_snapshot=kasa_settings_snapshot,
         log_message=log_kasa_message,
+        line_index=line_index,
     )
     # Do not mutate UI state here; wait for AccessoryRouter command-result callback
     # so stream directives use worker execution + final UI reconciliation only.
