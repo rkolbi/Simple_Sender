@@ -47,6 +47,12 @@ _RESUME_G92_WARNING_BODY = (
     "G92 offsets were detected before the selected resume line. Confirm work zero and "
     "controller state before resuming.\n\nResume anyway?"
 )
+_RESUME_UNSUPPORTED_TLO_TITLE = "Resume blocked"
+_RESUME_UNSUPPORTED_TLO_BODY = (
+    "A dynamic tool length offset command (G43.1) was detected before the selected "
+    "resume line, but its Z value could not be reconstructed safely. Resume From was "
+    "canceled to avoid an unknown Z relationship."
+)
 # Keep only a few recent line sources cached so repeated dialog use stays fast
 # without retaining many full job references.
 _RESUME_CACHE_MAX = 8
@@ -74,6 +80,8 @@ class _ResumeModalState:
     coolant: int | None = None
     feed: float | None = None
     spindle_speed: float | None = None
+    dynamic_tlo_z: float | None = None
+    unsupported_dynamic_tlo: bool = False
     has_g92: bool = False
 
     def copy(self) -> "_ResumeModalState":
@@ -88,6 +96,8 @@ class _ResumeModalState:
             coolant=self.coolant,
             feed=self.feed,
             spindle_speed=self.spindle_speed,
+            dynamic_tlo_z=self.dynamic_tlo_z,
+            unsupported_dynamic_tlo=self.unsupported_dynamic_tlo,
             has_g92=self.has_g92,
         )
 
@@ -103,6 +113,8 @@ class _ResumeModalState:
         ):
             if item:
                 preamble.append(item)
+        if self.dynamic_tlo_z is not None:
+            preamble.append(f"G43.1 Z{self.dynamic_tlo_z:g}")
         if self.feed is not None:
             preamble.append(f"F{self.feed:g}")
         if self.spindle is not None:
@@ -168,6 +180,29 @@ class _ResumePreambleCache:
             self._checkpoints[target] = state.copy()
             return state.to_preamble(), state.has_g92
 
+    def get_details(self, stop_index: int) -> tuple[list[str], bool, bool]:
+        """Return modal preamble plus warning flags up to ``stop_index``."""
+
+        target = max(0, int(stop_index))
+        with self._lock:
+            self._reset_if_size_changed()
+            checkpoint = 0
+            for idx in self._checkpoints.keys():
+                if idx <= target and idx >= checkpoint:
+                    checkpoint = idx
+            state = self._checkpoints[checkpoint].copy()
+            for idx in range(checkpoint, target):
+                try:
+                    raw = self._lines[idx]
+                except Exception:
+                    break
+                _apply_line_to_state(state, raw)
+                next_idx = idx + 1
+                if next_idx % _RESUME_CHECKPOINT_STRIDE == 0:
+                    self._checkpoints[next_idx] = state.copy()
+            self._checkpoints[target] = state.copy()
+            return state.to_preamble(), state.has_g92, state.unsupported_dynamic_tlo
+
 
 def _get_resume_cache(lines: LineSource) -> _ResumePreambleCache | None:
     try:
@@ -207,7 +242,17 @@ def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
     def is_code(code: float, target: float) -> bool:
         return abs(code - target) < 1e-3
 
-    for w, val in WORD_PAT.findall(s):
+    words = WORD_PAT.findall(s)
+    z_value: float | None = None
+    for w, val in words:
+        if w != "Z":
+            continue
+        try:
+            z_value = float(val)
+        except Exception as exc:
+            _log_suppressed("Failed parsing G43.1 Z value while building resume preamble", exc)
+
+    for w, val in words:
         if w == "G":
             try:
                 code = float(val)
@@ -244,6 +289,16 @@ def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
                 or is_code(code, 59.3)
             ):
                 state.coord = gstr
+            elif is_code(code, 43.1):
+                if z_value is None:
+                    state.dynamic_tlo_z = None
+                    state.unsupported_dynamic_tlo = True
+                else:
+                    state.dynamic_tlo_z = z_value
+                    state.unsupported_dynamic_tlo = False
+            elif is_code(code, 49):
+                state.dynamic_tlo_z = None
+                state.unsupported_dynamic_tlo = False
         elif w == "M":
             try:
                 code = int(float(val))
@@ -281,6 +336,19 @@ def _build_resume_preamble_fallback(lines: LineSource, stop_index: int) -> tuple
     return state.to_preamble(), state.has_g92
 
 
+def _build_resume_preamble_details_fallback(lines: LineSource, stop_index: int) -> tuple[list[str], bool, bool]:
+    state = _ResumeModalState()
+    max_index = max(0, int(stop_index))
+    for idx, raw in enumerate(lines):
+        if idx >= max_index:
+            break
+        try:
+            _apply_line_to_state(state, raw)
+        except Exception:
+            continue
+    return state.to_preamble(), state.has_g92, state.unsupported_dynamic_tlo
+
+
 def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
     """Build a best-effort modal restore preamble for resume-from-line."""
 
@@ -291,6 +359,18 @@ def build_resume_preamble(lines: LineSource, stop_index: int) -> tuple[list[str]
         except Exception as exc:
             _log_suppressed("Failed using resume preamble cache; falling back", exc)
     return _build_resume_preamble_fallback(lines, stop_index)
+
+
+def build_resume_preamble_details(lines: LineSource, stop_index: int) -> tuple[list[str], bool, bool]:
+    """Build modal restore preamble plus warning flags for resume-from-line."""
+
+    cache = _get_resume_cache(lines)
+    if cache is not None:
+        try:
+            return cache.get_details(stop_index)
+        except Exception as exc:
+            _log_suppressed("Failed using detailed resume preamble cache; falling back", exc)
+    return _build_resume_preamble_details_fallback(lines, stop_index)
 
 
 def _report_resume_failure(app, message: str) -> None:
@@ -396,7 +476,28 @@ def _confirm_resume_g92_state(app, *, has_g92: bool) -> bool:
     return False
 
 
-def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: bool = False):
+def _confirm_resume_dynamic_tlo_state(app, *, unsupported_dynamic_tlo: bool) -> bool:
+    if not bool(unsupported_dynamic_tlo):
+        return True
+    try:
+        messagebox.showwarning(_RESUME_UNSUPPORTED_TLO_TITLE, _RESUME_UNSUPPORTED_TLO_BODY)
+    except Exception as exc:
+        _log_suppressed("Failed showing unsupported G43.1 warning before Resume From", exc)
+    _report_resume_message(
+        app,
+        "Resume canceled because G43.1 tool length offset state could not be reconstructed.",
+    )
+    return False
+
+
+def resume_from_line(
+    app,
+    start_index: int,
+    preamble: list[str],
+    *,
+    has_g92: bool = False,
+    unsupported_dynamic_tlo: bool = False,
+):
     """Restart streaming from a specific line after UI-side safety checks."""
 
     if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
@@ -429,6 +530,11 @@ def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: boo
     if not _confirm_resume_setup_state(app):
         return
     if not run_preflight_gate(app, action_label="Resume", messagebox_module=messagebox):
+        return
+    if not _confirm_resume_dynamic_tlo_state(
+        app,
+        unsupported_dynamic_tlo=unsupported_dynamic_tlo,
+    ):
         return
     if not _confirm_resume_g92_state(app, has_g92=has_g92):
         return
@@ -500,4 +606,3 @@ def resume_from_line(app, start_index: int, preamble: list[str], *, has_g92: boo
             app._start_job_accessories("job_resume")
     except Exception as exc:
         _log_suppressed("Failed starting Kasa job accessories on Resume From", exc)
-

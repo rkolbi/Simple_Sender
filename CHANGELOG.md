@@ -3,6 +3,21 @@
 All notable changes to this project are documented in this file.
 Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
+## [3.16] - 2026-05-24
+
+### Changed
+- Runtime package metadata now reports `3.16`.
+- Current release-facing docs and the in-app About title now identify the active application baseline as `3.16`.
+
+### Documentation
+- Release-note/About filenames now identify the `3.16` baseline.
+- Current validation wording now keeps the `2026-05-08` full-suite snapshot tied to the earlier validated baseline instead of presenting it as newly rerun for this version-label update.
+
+### Validation
+- Targeted version/import assertion passed.
+- `.\.venv\Scripts\python.exe -m pytest tests\unit\test_application.py -q`: `22 passed`.
+- Full `run_tests.bat` release gate was not rerun for this version-label update.
+
 ## [3.14] - 2026-05-08
 
 ### Changed
@@ -24,6 +39,10 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - README Kasa troubleshooting now includes a short before-reboot field checklist for separating Pi network loss, hostname/IP/DNS/DHCP issues, Kasa plug LAN loss, and app-level Kasa failures.
 
 ### Fixed
+- Application close now requests the same Stop Job/reset path before shutdown/disconnect when a job may still be running, paused, completion-pending-idle, or GRBL still reports streaming. If that stop request is unavailable or not accepted, shutdown is canceled instead of silently disconnecting.
+- Resume From now reconstructs dynamic tool length offset state more conservatively: active `G43.1 Z...` is included in the resume preamble, `G49` clears the tracked offset, and unsupported `G43.1` reconstruction blocks Resume From instead of resuming with an unknown Z relationship.
+- The bundled Simple-Sender Vectric post processors now emit a redundant `M5` before the initial header `TC:[TOOLNAME]`, matching the already safer tool-change block sequence.
+- Bundled Vectric post contract tests now verify the intended `TC:` sequence around `VACUUM_OFF`, `M5`, `[S]M3`, dwell, and `VACUUM_ON`.
 - Estimated-length file-backed streams no longer stop at a false EOF before the real cleaned end of the file:
   - file-backed streaming now keeps reading until true cleaned EOF is reached
   - normal stream `done` now requires verified EOF plus final-line acknowledgement instead of trusting an estimate

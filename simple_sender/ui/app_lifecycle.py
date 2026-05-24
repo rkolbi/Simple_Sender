@@ -29,6 +29,7 @@ import traceback
 from tkinter import messagebox
 
 from simple_sender.ui.dialogs.error_dialogs_ui import close_grbl_code_popup
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -149,7 +150,10 @@ def _confirm_application_close(app) -> bool:
     reasons = _lifecycle_risk_reasons(app)
     if reasons:
         title = "Close Application"
-        consequence = "Closing now will interrupt the current session, disconnect from the controller, and stop any in-progress job or recovery activity."
+        consequence = (
+            "Closing now will first request Stop Job for any active or paused job, "
+            "then disconnect after that stop request is accepted."
+        )
         prompt = "Close Simple Sender anyway?"
         message = "\n".join(
             ["Simple Sender is currently busy:"]
@@ -164,6 +168,68 @@ def _confirm_application_close(app) -> bool:
     except Exception as exc:
         _log_suppressed("Failed showing application lifecycle confirmation dialog", exc)
         return False
+
+
+def _shutdown_needs_job_stop(app) -> bool:
+    stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    if stream_state in {"running", "paused"}:
+        return True
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    grbl = getattr(app, "grbl", None)
+    checker = getattr(grbl, "is_streaming", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception as exc:
+            _log_suppressed("Failed checking GRBL streaming state before shutdown stop", exc)
+    return False
+
+
+def _request_job_stop_before_shutdown(app) -> bool:
+    if not _shutdown_needs_job_stop(app):
+        return True
+    grbl = getattr(app, "grbl", None)
+    stop_stream = getattr(grbl, "stop_stream", None)
+    if not callable(stop_stream):
+        _report_shutdown_stop_failure(app, "Stop Job is not available; shutdown canceled.")
+        return False
+    try:
+        stop_result = stop_stream()
+    except Exception as exc:
+        _report_shutdown_failure(app, "Failed requesting Stop Job before shutdown", exc)
+        _report_shutdown_stop_failure(app, "Stop Job failed; shutdown canceled.")
+        return False
+    if stop_result is not True:
+        _report_shutdown_stop_failure(app, "Stop Job was not accepted; shutdown canceled.")
+        return False
+    try:
+        if hasattr(app, "_stop_job_accessories"):
+            app._stop_job_accessories("job_stop")
+    except Exception as exc:
+        _log_suppressed("Failed stopping Kasa job accessories after shutdown Stop Job", exc)
+    try:
+        invalidate_job_setup_state(app)
+    except Exception as exc:
+        _log_suppressed("Failed invalidating Job Setup after shutdown Stop Job", exc)
+    return True
+
+
+def _report_shutdown_stop_failure(app, message: str) -> None:
+    try:
+        status = getattr(app, "status", None)
+        if status is not None and hasattr(status, "config"):
+            status.config(text=message)
+    except Exception as exc:
+        _log_suppressed("Failed updating shutdown stop-failure status", exc)
+    try:
+        app.streaming_controller.handle_log(f"[shutdown] {message}")
+    except Exception as exc:
+        _log_suppressed("Failed logging shutdown stop-failure message", exc)
+    try:
+        messagebox.showerror("Close canceled", message)
+    except Exception as exc:
+        _log_suppressed("Failed showing shutdown stop-failure dialog", exc)
 
 
 def tk_report_callback_exception(app, exc, val, tb):
@@ -210,6 +276,9 @@ def on_close(app):
                 break
             if choice is None:
                 return False
+    if not _request_job_stop_before_shutdown(app):
+        return False
+
     def _set_shutdown_status(text: str) -> None:
         try:
             status = getattr(app, "status", None)
@@ -410,4 +479,3 @@ def close_application(app) -> bool:
     if not _confirm_application_close(app):
         return False
     return bool(on_close(app))
-

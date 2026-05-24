@@ -106,7 +106,7 @@ def show_resume_dialog(app):
         frm, textvariable=warning_var, foreground="#b00020", wraplength=460, justify="left"
     )
     warning_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
-    preview_cache: dict[int, tuple[list[str], bool]] = {}
+    preview_cache: dict[int, tuple[list[str], bool, bool]] = {}
     preview_after_id: dict[str, str | None] = {"value": None}
     preview_seq = {"value": 0}
     pending_resume_line: dict[str, int | None] = {"value": None}
@@ -152,8 +152,17 @@ def show_resume_dialog(app):
 
     sync_var.trace_add("write", _sync_trace)
 
-    def _render_preview(line_no: int, preamble: list[str], has_g92: bool) -> None:
-        preview_cache[int(line_no)] = (list(preamble), bool(has_g92))
+    def _render_preview(
+        line_no: int,
+        preamble: list[str],
+        has_g92: bool,
+        unsupported_dynamic_tlo: bool = False,
+    ) -> None:
+        preview_cache[int(line_no)] = (
+            list(preamble),
+            bool(has_g92),
+            bool(unsupported_dynamic_tlo),
+        )
         try:
             current_line = int(line_var.get())
         except Exception:
@@ -167,7 +176,11 @@ def show_resume_dialog(app):
                 sample_var.set("Modal re-sync: (none)")
         else:
             sample_var.set("Modal re-sync: disabled")
-        if has_g92:
+        if unsupported_dynamic_tlo:
+            warning_var.set(
+                "Resume blocked: G43.1 tool length offset state before this line cannot be reconstructed safely."
+            )
+        elif has_g92:
             warning_var.set(
                 "Warning: G92 offsets appear before this line. Confirm work zero before resuming."
             )
@@ -178,7 +191,12 @@ def show_resume_dialog(app):
             _restore_start_button()
             current_sync_enabled = _sync_enabled()
             resume_preamble = list(preamble) if current_sync_enabled else []
-            app._resume_from_line(int(line_no) - 1, resume_preamble, has_g92=bool(has_g92))
+            app._resume_from_line(
+                int(line_no) - 1,
+                resume_preamble,
+                has_g92=bool(has_g92),
+                unsupported_dynamic_tlo=bool(unsupported_dynamic_tlo),
+            )
             if bool(dlg.winfo_exists()):
                 dlg.destroy()
 
@@ -196,14 +214,19 @@ def show_resume_dialog(app):
             preview_after_id["value"] = None
             cached = preview_cache.get(int(line_no))
             if cached is not None:
-                _render_preview(int(line_no), cached[0], cached[1])
+                _render_preview(int(line_no), cached[0], cached[1], cached[2])
                 return
 
             def worker() -> None:
                 try:
-                    preamble, has_g92 = app._build_resume_preamble(
+                    result = app._build_resume_preamble(
                         app._last_gcode_lines, int(line_no) - 1
                     )
+                    if len(result) >= 3:
+                        preamble, has_g92, unsupported_dynamic_tlo = result[:3]
+                    else:
+                        preamble, has_g92 = result
+                        unsupported_dynamic_tlo = False
                 except Exception as exc:
                     error_text = str(exc)
 
@@ -230,9 +253,18 @@ def show_resume_dialog(app):
                     if not bool(dlg.winfo_exists()):
                         return
                     if int(preview_seq["value"]) != int(request_seq):
-                        preview_cache[int(line_no)] = (list(preamble), bool(has_g92))
+                        preview_cache[int(line_no)] = (
+                            list(preamble),
+                            bool(has_g92),
+                            bool(unsupported_dynamic_tlo),
+                        )
                         return
-                    _render_preview(int(line_no), preamble, has_g92)
+                    _render_preview(
+                        int(line_no),
+                        preamble,
+                        has_g92,
+                        unsupported_dynamic_tlo,
+                    )
 
                 _post_ui(apply_preview)
 
@@ -258,7 +290,7 @@ def show_resume_dialog(app):
             _clear_pending_resume_start()
         cached = preview_cache.get(int(line_no))
         if cached is not None:
-            _render_preview(int(line_no), cached[0], cached[1])
+            _render_preview(int(line_no), cached[0], cached[1], cached[2])
             return
         current_sync_enabled = _sync_enabled()
         if pending_line is not None and not current_sync_enabled:
@@ -283,11 +315,13 @@ def show_resume_dialog(app):
             return
         preamble = []
         has_g92 = False
+        unsupported_dynamic_tlo = False
         cached = preview_cache.get(int(line_no))
         if cached is not None:
             if _sync_enabled():
                 preamble = list(cached[0])
             has_g92 = bool(cached[1])
+            unsupported_dynamic_tlo = bool(cached[2])
         else:
             pending_resume_line["value"] = int(line_no)
             start_btn = start_btn_holder["widget"]
@@ -300,7 +334,12 @@ def show_resume_dialog(app):
             warning_var.set("Resume will start after the safety checks are ready.")
             _schedule_preview(int(line_no))
             return
-        app._resume_from_line(line_no - 1, preamble, has_g92=has_g92)
+        app._resume_from_line(
+            line_no - 1,
+            preamble,
+            has_g92=has_g92,
+            unsupported_dynamic_tlo=unsupported_dynamic_tlo,
+        )
         dlg.destroy()
 
     def _on_sync_toggle() -> None:

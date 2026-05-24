@@ -232,7 +232,12 @@ def _schedule_reconnect_resume(app, *, start_index: int) -> None:
         pass
 
     def worker() -> None:
-        preamble, has_g92 = app._build_resume_preamble(app._last_gcode_lines, int(start_index))
+        result = app._build_resume_preamble(app._last_gcode_lines, int(start_index))
+        if len(result) >= 3:
+            preamble, has_g92, unsupported_dynamic_tlo = result[:3]
+        else:
+            preamble, has_g92 = result
+            unsupported_dynamic_tlo = False
 
         def apply_resume() -> None:
             if bool(getattr(app, "_closing", False)):
@@ -242,7 +247,12 @@ def _schedule_reconnect_resume(app, *, start_index: int) -> None:
                     return
             except Exception:
                 return
-            app._resume_from_line(int(start_index), preamble, has_g92=bool(has_g92))
+            app._resume_from_line(
+                int(start_index),
+                preamble,
+                has_g92=bool(has_g92),
+                unsupported_dynamic_tlo=bool(unsupported_dynamic_tlo),
+            )
 
         _post_ui(app, apply_resume)
 

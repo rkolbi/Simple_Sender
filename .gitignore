@@ -13,6 +13,7 @@ scripts/
 coverage.xml
 htmlcov/
 *.log
+ref/simple_sender_diagnostics_bundle_*.zip
 .DS_Store
 *.sqlite3
 .env

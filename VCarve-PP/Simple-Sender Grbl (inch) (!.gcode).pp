@@ -104,6 +104,7 @@ begin HEADER
 "(SSMETA notes=[FILE_NOTES])"
 
 "VACUUM_OFF"
+"M5"
 "TC:[TOOLNAME]"
 "G17"
 "G20"

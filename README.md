@@ -1,13 +1,13 @@
 ﻿# Simple Sender - Full Manual
-![Release: 3.14](https://img.shields.io/badge/release-3.14-blue)
+![Release: 3.16](https://img.shields.io/badge/release-3.16-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.14`. This is the current release-ready baseline.
+Current stable release: `3.16`. This is the current release-ready baseline.
 
-Current local validation snapshot for the current repository revision as of `2026-05-08` in the verified local Windows / Python `3.12.1` environment:
+Most recent recorded full local validation snapshot, from the earlier `3.14` baseline as of `2026-05-08` in the verified local Windows / Python `3.12.1` environment:
 - Canonical wrapper (`run_tests.bat`): clean
 - Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
@@ -16,6 +16,8 @@ Current local validation snapshot for the current repository revision as of `202
 - Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
 - Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1935 passed, 3 skipped`
 - Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
+
+For the `3.16` version-label update, targeted validation was rerun with a `.venv` Python import assertion that confirmed `simple_sender.__version__ == "3.16"` and `HELP_ABOUT_TITLE` ends with `v3.16`, plus `.\.venv\Scripts\python.exe -m pytest tests\unit\test_application.py -q`; both passed. The full release gate was not rerun for this version-label update.
 
 The direct `.\.venv\Scripts\python.exe -m pytest -q` path, direct `.\.venv\Scripts\python.exe -m pytest` path, direct `.\.venv\Scripts\python.exe -m ruff check .` path, and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
@@ -379,6 +381,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Job Setup run gate:** Run checks the current Job Setup tool-reference state used by Tool Change, not just the Tool Ref display text. If the stored reference is missing, non-numeric, or missing the current `TOOL_REFERENCE_FORMAT`, it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
 - **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that actually reset assumptions (including accepted ALL STOP reset modes), and GRBL reset/banner reinitialization.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both a fresh Run and resume-start paths such as Resume From and reconnect resume require an explicit operator choice before stream side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
+- **Resume TLO guard:** Resume From tracks dynamic `G43.1 Z...` tool length offset state, clears it on `G49`, includes a safe active TLO in the resume preamble, and blocks Resume From if that TLO state cannot be reconstructed safely.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads.
@@ -389,7 +392,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Prepare/apply failure cleanup:** If a later load/apply step fails after the `Preparing Job` popup opens, the load now fails cleanly instead of leaving the popup stuck at an early progress value.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
-- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
+- **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. The supported streamed `TC:` workflow assumes files generated by the bundled Simple-Sender Vectric posts, including their stop-before-`TC:` and restart-after-segment contract. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (live window + sampled metadata).
 - **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
@@ -645,10 +648,12 @@ VCarve Pro `.pp` files are shipped in `VCarve-PP/` at the repository root to pro
 
 ### How these posts enable the semi-automatic workflow
 1) They emit `SSMETA ...` header lines in the job file, which Simple Sender uses for dimensions, units, and estimate context.
-2) The Simple-Sender posts emit `TC:[TOOLNAME]` in the header and `begin TOOLCHANGE` blocks.
+2) The Simple-Sender posts emit `VACUUM_OFF`, redundant `M5`, and `TC:[TOOLNAME]` in the header and emit the same stop-before-`TC:` contract in `begin TOOLCHANGE` blocks.
 3) Simple Sender intercepts `TC:` lines before GRBL send, pauses streaming, runs the guided built-in Tool Change workflow, then resumes streaming.
-4) The Simple-Sender posts emit `VACUUM_OFF` before tool-change boundaries and `VACUUM_ON` at segment/spindle start, allowing sender-managed accessory control around the same workflow points.
+4) New segments restart with `[S]M3`, dwell, then `VACUUM_ON`, allowing sender-managed accessory control around the same workflow points.
 5) This avoids relying on raw `M6` behavior in GRBL and keeps the operator flow consistent for multi-tool jobs.
+
+The supported semi-automatic `TC:` safety contract is the bundled Simple-Sender Vectric post contract above. Hand-written or custom `TC:` files are not fully validated for equivalent spindle, vacuum, and restart sequencing.
 
 ### Recommended use
 1) Use `Simple-Sender Grbl (mm|inch)` for normal cutting jobs that include tool changes and accessory automation.
@@ -881,7 +886,7 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-05-08`, the current repository revision validates clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1935 passed, 3 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for this snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-05-08`, the earlier `3.14` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1935 passed, 3 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). For the `3.16` version-label update, targeted version/import and application-unit checks passed, but the full release gate was not rerun. Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
 The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
@@ -937,7 +942,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
-- v3.14 release notes: `RELEASE_NOTES_v3.14.md`.
+- v3.16 release notes: `RELEASE_NOTES_v3.16.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).
@@ -1424,7 +1429,7 @@ Macro UI is included below along with the rest of the interface.
 - Recommendation: keep Training Wheels on for new machines or operators.
 
 ### App Settings: System
-- Close Application: closes Simple Sender through the normal app shutdown path. The settings button and the titlebar/window close both use the same confirmation flow, and active/risky states warn before closing because this affects the application session, not machine power.
+- Close Application: closes Simple Sender through the normal app shutdown path. The settings button and the titlebar/window close both use the same confirmation flow. If a job may still be active, paused, completion-pending-idle, or still reported as streaming, close first requests Stop Job and cancels shutdown if that stop request is unavailable or not accepted.
 - Restart workflow: there is no separate in-app `Restart Application` button in the current build; close the app, then relaunch it when you need a restart.
 - Shutdown (Linux only): powers off the system after confirmation.
 - Reboot (Linux only): reboots the system after confirmation.

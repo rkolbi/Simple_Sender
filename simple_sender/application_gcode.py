@@ -32,7 +32,7 @@ from simple_sender.ui.dialogs import (
     show_resume_dialog,
     show_spoilboard_generator_dialog,
 )
-from simple_sender.ui.dialogs.resume_from import build_resume_preamble, resume_from_line
+from simple_sender.ui.dialogs.resume_from import build_resume_preamble_details, resume_from_line
 from simple_sender.ui.dialogs.streaming_metrics import (
     format_throughput,
     maybe_notify_job_completion,
@@ -80,14 +80,27 @@ class GcodeMixin:
     def _show_spoilboard_generator_dialog(self):
         show_spoilboard_generator_dialog(self)
 
-    def _build_resume_preamble(self, lines: LineSource, stop_index: int) -> tuple[list[str], bool]:
+    def _build_resume_preamble(self, lines: LineSource, stop_index: int) -> tuple[list[str], bool, bool]:
         source = lines
         if self._gcode_streaming_mode and self._gcode_source is not None:
             source = self._gcode_source
-        return cast(tuple[list[str], bool], build_resume_preamble(source, stop_index))
+        return cast(tuple[list[str], bool, bool], build_resume_preamble_details(source, stop_index))
 
-    def _resume_from_line(self, start_index: int, preamble: list[str], *, has_g92: bool = False):
-        resume_from_line(self, start_index, preamble, has_g92=has_g92)
+    def _resume_from_line(
+        self,
+        start_index: int,
+        preamble: list[str],
+        *,
+        has_g92: bool = False,
+        unsupported_dynamic_tlo: bool = False,
+    ):
+        resume_from_line(
+            self,
+            start_index,
+            preamble,
+            has_g92=has_g92,
+            unsupported_dynamic_tlo=unsupported_dynamic_tlo,
+        )
 
     def _reset_gcode_view_for_run(self):
         reset_gcode_view_for_run(self)
