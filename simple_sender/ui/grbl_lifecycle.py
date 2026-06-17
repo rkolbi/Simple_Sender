@@ -58,6 +58,7 @@ _STATUS_POLL_PERF_RUNNING = 0.35
 _STATUS_POLL_MANUAL_ACTIVE = 0.1
 _STATUS_POLL_MANUAL_IDLE_READY = STATUS_POLL_RUNNING
 _STATUS_POLL_PROBE_INDICATOR = 0.02
+_STATUS_POLL_PROBE_INDICATOR_IDLE = 0.5
 _STATUS_POLL_MACRO_ACTIVE = 0.1
 _STATUS_POLL_MACRO_CRITICAL = 0.05
 _STATUS_POLL_MANUAL_GRACE_S = 2.0
@@ -324,6 +325,8 @@ def _status_poll_should_use_running_profile(app) -> bool:
         return True
     if state.startswith("hold"):
         return True
+    if state.startswith("alarm") or bool(getattr(app, "_alarm_locked", False)):
+        return True
     if state.startswith("jog"):
         return True
     return False
@@ -416,6 +419,12 @@ def _probe_indicator_fast_poll_active(app) -> bool:
         except Exception:
             return False
     return False
+
+
+def _probe_workflow_fast_poll_active(app) -> bool:
+    if not _probe_indicator_fast_poll_active(app):
+        return False
+    return _macro_fast_poll_active(app) or _macro_critical_fast_poll_active(app)
 
 
 def _macro_fast_poll_active(app) -> bool:
@@ -1013,30 +1022,77 @@ def handle_auto_reconnect_failure(app, exc: Exception):
     app._auto_reconnect_pending = True
 
 
-def effective_status_poll_interval(app) -> float:
+def status_poll_profile(app) -> tuple[str, float, str]:
     try:
         base = float(app.status_poll_interval.get())
     except Exception:
         base = STATUS_POLL_DEFAULT
     if base <= 0:
         base = STATUS_POLL_DEFAULT
-    if _probe_indicator_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_PROBE_INDICATOR))
+    if _probe_workflow_fast_poll_active(app):
+        return (
+            "probing_fast",
+            min(base, float(_STATUS_POLL_PROBE_INDICATOR)),
+            "probe indicator visible during macro/probe workflow",
+        )
     if _macro_critical_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_MACRO_CRITICAL))
+        return (
+            "macro_critical_fast",
+            min(base, float(_STATUS_POLL_MACRO_CRITICAL)),
+            "macro critical wait active",
+        )
     if _macro_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_MACRO_ACTIVE))
+        return (
+            "macro_active_fast",
+            min(base, float(_STATUS_POLL_MACRO_ACTIVE)),
+            "macro command wait active",
+        )
     if _manual_motion_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_MANUAL_ACTIVE))
+        return (
+            "manual_motion_fast",
+            min(base, float(_STATUS_POLL_MANUAL_ACTIVE)),
+            "manual motion or responsive window active",
+        )
+    if _probe_indicator_fast_poll_active(app):
+        return (
+            "probe_indicator_idle",
+            min(base, float(_STATUS_POLL_PROBE_INDICATOR_IDLE)),
+            "probe indicator visible while idle",
+        )
     if _manual_ready_fast_poll_active(app):
-        return min(base, float(_STATUS_POLL_MANUAL_IDLE_READY))
+        return (
+            "connected_idle_ready",
+            min(base, float(_STATUS_POLL_MANUAL_IDLE_READY)),
+            "connected idle ready state",
+        )
     if _status_poll_should_use_running_profile(app):
+        state = _normalize_status_state(app)
+        if _stream_running_or_paused(app):
+            profile = "streaming"
+            reason = "streaming running or paused"
+        elif (
+            state.startswith("hold")
+            or state.startswith("alarm")
+            or bool(getattr(app, "_alarm_locked", False))
+        ):
+            profile = "alarm_hold"
+            reason = "alarm or hold state"
+        elif bool(getattr(app, "connected", False)) and not bool(
+            getattr(app, "_grbl_ready", False)
+        ):
+            profile = "connecting"
+            reason = "connected before ready"
+        else:
+            profile = "machine_running"
+            reason = "machine state requires running poll rate"
         running_floor = float(STATUS_POLL_RUNNING)
         if _performance_mode_enabled(app):
             running_floor = max(running_floor, float(_STATUS_POLL_PERF_RUNNING))
-        return min(base, running_floor)
+        return (profile, min(base, running_floor), reason)
     if _performance_mode_enabled(app):
         idle_floor = float(_STATUS_POLL_PERF_IDLE_FLOOR)
+        profile = "connected_idle_perf"
+        reason = "performance mode idle floor"
         try:
             last_non_idle_ts = float(getattr(app, "_status_last_non_idle_ts", 0.0) or 0.0)
         except Exception:
@@ -1052,6 +1108,8 @@ def effective_status_poll_interval(app) -> float:
             and quiet_idle_elapsed_s >= float(_STATUS_POLL_QUIET_IDLE_MIN_SECONDS)
         ):
             idle_floor = max(idle_floor, float(_STATUS_POLL_PERF_QUIET_IDLE_FLOOR))
+            profile = "connected_idle_quiet"
+            reason = "performance mode quiet idle floor"
         if (
             bool(getattr(app, "connected", False))
             and bool(getattr(app, "_grbl_ready", False))
@@ -1060,10 +1118,38 @@ def effective_status_poll_interval(app) -> float:
             and quiet_idle_elapsed_s >= float(_STATUS_POLL_ULTRA_QUIET_IDLE_MIN_SECONDS)
         ):
             idle_floor = max(idle_floor, float(_STATUS_POLL_PERF_ULTRA_QUIET_IDLE_FLOOR))
+            profile = "connected_idle_ultra_quiet"
+            reason = "performance mode long-idle floor"
         base = max(base, idle_floor)
-    return max(base, float(STATUS_POLL_IDLE))
+        return (profile, base, reason)
+    return (
+        "connected_idle",
+        max(base, float(STATUS_POLL_IDLE)),
+        "default connected idle floor",
+    )
+
+
+def effective_status_poll_interval(app) -> float:
+    return status_poll_profile(app)[1]
 
 
 def apply_status_poll_profile(app):
-    interval = effective_status_poll_interval(app)
+    profile, interval, reason = status_poll_profile(app)
     app.grbl.set_status_poll_interval(interval)
+    previous_profile = str(getattr(app, "_status_poll_profile", "") or "")
+    try:
+        previous_interval = float(
+            getattr(app, "_status_poll_interval_effective_s", 0.0) or 0.0
+        )
+    except Exception:
+        previous_interval = 0.0
+    app._status_poll_profile = profile
+    app._status_poll_profile_reason = reason
+    app._status_poll_interval_effective_s = float(interval)
+    if previous_profile != profile or abs(previous_interval - float(interval)) > 1e-9:
+        logger.info(
+            "Status poll profile changed: poll_profile=%s interval=%.3fs reason=%s",
+            profile,
+            float(interval),
+            reason,
+        )

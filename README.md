@@ -7,17 +7,15 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.16`. This is the current release-ready baseline.
 
-Most recent recorded full local validation snapshot, from the earlier `3.14` baseline as of `2026-05-08` in the verified local Windows / Python `3.12.1` environment:
+Most recent recorded full local validation snapshot, from the current `3.16` baseline as of `2026-06-08` in the verified local Windows / Python `3.12.1` environment:
 - Canonical wrapper (`run_tests.bat`): clean
 - Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
 - Compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat`): clean
 - Mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
 - Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
-- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1935 passed, 3 skipped`
+- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1952 passed, 2 skipped`
 - Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
-
-For the `3.16` version-label update, targeted validation was rerun with a `.venv` Python import assertion that confirmed `simple_sender.__version__ == "3.16"` and `HELP_ABOUT_TITLE` ends with `v3.16`, plus `.\.venv\Scripts\python.exe -m pytest tests\unit\test_application.py -q`; both passed. The full release gate was not rerun for this version-label update.
 
 The direct `.\.venv\Scripts\python.exe -m pytest -q` path, direct `.\.venv\Scripts\python.exe -m pytest` path, direct `.\.venv\Scripts\python.exe -m ruff check .` path, and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
 
@@ -886,7 +884,7 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-05-08`, the earlier `3.14` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1935 passed, 3 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). For the `3.16` version-label update, targeted version/import and application-unit checks passed, but the full release gate was not rerun. Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-06-08`, the current `3.16` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1952 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
 The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
@@ -1248,7 +1246,7 @@ Macro UI is included below along with the rest of the interface.
 - Spindle ON: turns the spindle on at the default RPM (`M3 S<default>`).
 - Spindle OFF: turns the spindle off (M5).
 - Current spindle speed: read-only display of the current spindle RPM tracked by the app.
-- Spindle RPM / Apply RPM: saves the default RPM used by `Spindle ON`, and can also re-issue the RPM to a running spindle after resetting spindle override to 100%.
+- Spindle RPM / Apply RPM: saves the default RPM used by `Spindle ON`. When no job is streaming, Apply RPM can re-issue the RPM to a running spindle after resetting spindle override to 100%. During a streaming job, use Spindle Override for in-job speed changes.
 - Spoilboard: opens the Spoilboard Generator dialog for surfacing program creation.
 
 ### Spoilboard Generator Dialog

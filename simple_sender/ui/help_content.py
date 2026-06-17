@@ -994,7 +994,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Spindle ON: starts the spindle at the saved default RPM.",
                     "Spindle OFF: stops the spindle.",
                     "Current spindle speed: read-only display of the tracked spindle RPM.",
-                    "Spindle RPM / Apply RPM: saves the default RPM and can also re-issue the RPM to a running spindle after resetting spindle override to 100 percent.",
+                    "Spindle RPM / Apply RPM: saves the default RPM used by Spindle ON. When no job is streaming, Apply RPM can re-issue the RPM to a running spindle after resetting spindle override to 100 percent. During a streaming job, use Spindle Override for in-job speed changes.",
                     "Spoilboard: opens the Spoilboard Generator dialog.",
                 ),
             ),

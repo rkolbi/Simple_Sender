@@ -3,6 +3,17 @@
 All notable changes to this project are documented in this file.
 Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
+## Unreleased
+
+### Fixed
+- `Apply RPM` now saves the requested spindle default but refuses to send a normal spindle-speed command while a job is streaming, avoiding a misleading confirmation path where the worker would block the command and the controller RPM would stay unchanged.
+- Passive Probe indicator visibility no longer forces continuous 20 ms idle status polling; diagnostics now report the effective status-poll profile alongside configured/effective intervals.
+- Updated the public GitHub sync workflow to copy the current `v3.16` About and release-note files instead of obsolete `v3.14` filenames.
+- Updated stale About/help truthfulness tests that still expected the removed `v3.14` title and reference filename.
+
+### Validation
+- Current `3.16` local release gate on Windows / Python `3.12.1`: `1952 passed, 2 skipped`; Ruff, compileall, mypy manifest, critical-path coverage, and mypy passed.
+
 ## [3.16] - 2026-05-24
 
 ### Changed

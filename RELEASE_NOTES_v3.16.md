@@ -61,7 +61,7 @@ These notes describe the current stable, release-ready `3.16` baseline. This ver
 
 ## Recorded Full Validation Snapshot
 
-As of `2026-05-08`, the earlier `3.14` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
+As of `2026-06-08`, the current `3.16` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
 
 - `run_tests.bat`: clean
 - `.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`: clean
@@ -69,16 +69,7 @@ As of `2026-05-08`, the earlier `3.14` baseline validated clean in the verified 
 - `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat`: clean
 - `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`: clean
 - `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: clean (`141` configured source files)
-- `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1935 passed, 3 skipped`
+- `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1952 passed, 2 skipped`
 - `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: clean (aggregate critical coverage `90.4%`)
 
 Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for that snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local validation snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
-
-## 3.16 Targeted Validation
-
-For the `3.16` version-label update, targeted validation passed:
-
-- A `.venv` Python import assertion confirmed runtime metadata and the in-app About title report `3.16`.
-- `.\.venv\Scripts\python.exe -m pytest tests\unit\test_application.py -q`: `22 passed`.
-
-The full `run_tests.bat` release gate was not rerun for this version-label update.

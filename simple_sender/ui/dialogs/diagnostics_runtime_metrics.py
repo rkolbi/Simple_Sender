@@ -701,6 +701,20 @@ def build_runtime_metrics(
     configured_poll = _safe_float_var_get(app, "status_poll_interval")
     if configured_poll > 0.0:
         metrics["status_poll_interval_configured_s"] = float(configured_poll)
+    profile = str(getattr(app, "_status_poll_profile", "") or "").strip()
+    if profile:
+        metrics["status_poll_effective_profile"] = profile
+    reason = str(getattr(app, "_status_poll_profile_reason", "") or "").strip()
+    if reason:
+        metrics["status_poll_profile_reason"] = reason
+    try:
+        effective_poll = float(
+            getattr(app, "_status_poll_interval_effective_s", 0.0) or 0.0
+        )
+    except Exception:
+        effective_poll = 0.0
+    if effective_poll > 0.0:
+        metrics.setdefault("status_poll_interval_effective_s", effective_poll)
     _append_kasa_metrics(
         app,
         metrics,

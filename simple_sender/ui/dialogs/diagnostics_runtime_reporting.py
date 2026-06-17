@@ -143,12 +143,19 @@ def _append_worker_runtime_metrics(
             or 0.0
         )
         if configured_poll > 0.0 and effective_poll > 0.0:
-            lines.append(
+            poll_line = (
                 "- Status poll interval s: "
                 f"configured={configured_poll:.3f}, effective={effective_poll:.3f}"
             )
         elif effective_poll > 0.0:
-            lines.append(f"- Status poll interval s: {effective_poll:.3f}")
+            poll_line = f"- Status poll interval s: {effective_poll:.3f}"
+        else:
+            poll_line = ""
+        poll_profile = str(metrics.get("status_poll_effective_profile", "") or "").strip()
+        if poll_line and poll_profile:
+            poll_line = f"{poll_line}, profile={poll_profile}"
+        if poll_line:
+            lines.append(poll_line)
         tx_loop_cycles = int(metrics.get("tx_loop_cycles", 0) or 0)
         tx_loop_idle_cycles = int(metrics.get("tx_loop_idle_cycles", 0) or 0)
         tx_loop_active_cycles = int(metrics.get("tx_loop_active_cycles", 0) or 0)

@@ -99,10 +99,47 @@ def _running_spindle_command_modal(app) -> str | None:
     return "M3"
 
 
+def _stream_busy(app) -> bool:
+    if bool(getattr(app, "_stream_done_pending_idle", False)):
+        return True
+    state = str(getattr(app, "_stream_state", "") or "").strip().lower()
+    if state in {"running", "paused"}:
+        return True
+    grbl = getattr(app, "grbl", None)
+    checker = getattr(grbl, "is_streaming", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+    return False
+
+
+def _report_spindle_rpm_blocked_while_streaming(app, rpm: int) -> None:
+    status_text = f"Spindle RPM saved: {rpm} RPM; Apply RPM is blocked while streaming."
+    try:
+        app.status.config(text=status_text)
+    except Exception:
+        pass
+    ui_q = getattr(app, "ui_q", None)
+    if ui_q is not None:
+        try:
+            ui_q.put((
+                "log",
+                "[spindle] Apply RPM saved the default RPM but did not send a speed command "
+                "because a job is streaming. Use Spindle Override for in-job speed changes.",
+            ))
+        except Exception:
+            pass
+
+
 def _apply_spindle_rpm(app) -> None:
     rpm = _save_spindle_control_rpm_setting(app)
     modal = _running_spindle_command_modal(app)
     if modal is None:
+        return
+    if _stream_busy(app):
+        _report_spindle_rpm_blocked_while_streaming(app, rpm)
         return
 
     command = f"{modal} S{rpm}"
@@ -294,7 +331,7 @@ def build_overdrive_tab(app, parent):
     )
     apply_tooltip(
         app.btn_spindle_rpm_apply,
-        "Apply the RPM to a running spindle, or save it for Spindle ON.",
+        "Apply the RPM when not streaming, or save it for Spindle ON.",
     )
 
     tools_frame = ttk.Labelframe(content, text="Tools", padding=8)
@@ -312,4 +349,3 @@ def build_overdrive_tab(app, parent):
 
     app._set_feed_override_slider_value(100)
     app._set_spindle_override_slider_value(100)
-
