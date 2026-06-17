@@ -7,7 +7,7 @@ Simple Sender is designed to be a dependable, operator-friendly GRBL sender that
 
 Current stable release: `3.16`. This is the current release-ready baseline.
 
-Most recent recorded full local validation snapshot, from the current `3.16` baseline as of `2026-06-08` in the verified local Windows / Python `3.12.1` environment:
+Most recent recorded full local release-gate snapshot, from the `3.16` baseline state under review as of `2026-06-08` in the verified local Windows / Python `3.12.1` environment:
 - Canonical wrapper (`run_tests.bat`): clean
 - Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
@@ -18,6 +18,8 @@ Most recent recorded full local validation snapshot, from the current `3.16` bas
 - Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
 
 The direct `.\.venv\Scripts\python.exe -m pytest -q` path, direct `.\.venv\Scripts\python.exe -m pytest` path, direct `.\.venv\Scripts\python.exe -m ruff check .` path, and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+
+Post-stabilization direct validation as of `2026-06-17`: `.\.venv\Scripts\python.exe -m pytest -q` passed with `1958 passed, 3 skipped`; `.\.venv\Scripts\python.exe tools\run_ruff.py check .` passed; `git diff --check` passed. This direct validation does not replace the broader `2026-06-08` full release-gate snapshot.
 
 ## Design Objectives and Key Features
 
@@ -331,7 +333,7 @@ This is a practical end-to-end flow, with rationale for the key options.
   
   The lower display is a persistent split view instead of a tab strip. The left column has a popup/access button row above **Console**, and the right column has the always-visible override/control pane. **Job Info**, **Checklists**, **Logs**, **Raw $$**, **GRBL Settings**, **App Settings**, and **About** appear on the left in that order when available. The popups stay large, dark-themed, and reusable.
   
-  **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and separate `Toolpaths` / `Tools` lists when the metadata provides them). If metadata is already available from the load pipeline, the first popup open renders it immediately without requiring a reload or reopen.
+  **Job Info:** Read-only, scrollable job/metadata summary opened in a large popup. Shows `SSMETA` header fields (when present) plus quick-scan metrics (file size, line counters, estimate/confidence, dimensions/confidence, and separate `Toolpaths` / `Tools Required` lists when the metadata provides them). If metadata is already available from the load pipeline, the first popup open renders it immediately without requiring a reload or reopen.
   
   **Console:** Persistent log of GRBL traffic, filter buttons, and a manual command entry row with a Pos/Status view toggle for focused troubleshooting.
   
@@ -384,6 +386,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
+- **Arc bounds truthfulness:** When quick-scan bounds are based only on observed endpoints and the file contains `G2`/`G3` arcs without complete `SSMETA` extents, dimensions are treated as rough rather than confident. This does not calculate true arc extents; it prevents endpoint-only scan bounds from being overstated.
 - **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools Required` as separate lists in Job Info and in the Start Job confirmation. The required-tools display removes repeated identical entries while preserving first-seen order. The app does not guess pairings that are not present in the file.
 - **Metadata sources:** Diagnostics and runtime metrics record whether dimensions/units came from `ssmeta` or `scan` (`dimensions_source`, `units_source`) and whether quick-scan line scanning was reduced due to complete metadata (`ssmeta_scan_reduced`).
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
@@ -665,6 +668,7 @@ The supported semi-automatic `TC:` safety contract is the bundled Simple-Sender 
   - `Job Dimensions: X,Y,Z mm / X,Y,Z in [CONFIDENT|ROUGH]`
 - Confidence is derived from available machine settings and scan coverage. Estimate confidence now preserves the useful distinction between fully confident, provisional, and rough paths instead of flattening every non-confident case together.
 - If header `SSMETA` includes complete extents and units, dimensions are sourced from metadata and reported as confident; estimate confidence still depends on machine settings/live observations.
+- When endpoint-only quick-scan bounds include `G2`/`G3` arc moves without complete `SSMETA` extents, dimensions are reported as rough because true arc extents were not calculated.
 - No Top View/Spatial render stage runs during load in the lean sender runtime.
 
 ## Spoilboard Generator
@@ -884,7 +888,7 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-06-08`, the current `3.16` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1952 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local snapshot does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-06-08`, the `3.16` baseline state then under review validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1952 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. Post-stabilization direct validation as of `2026-06-17` passed with `.\.venv\Scripts\python.exe -m pytest -q`: `1958 passed, 3 skipped`, `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean, and `git diff --check`: clean. This local validation does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
 The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
@@ -1427,7 +1431,7 @@ Macro UI is included below along with the rest of the interface.
 - Recommendation: keep Training Wheels on for new machines or operators.
 
 ### App Settings: System
-- Close Application: closes Simple Sender through the normal app shutdown path. The settings button and the titlebar/window close both use the same confirmation flow. If a job may still be active, paused, completion-pending-idle, or still reported as streaming, close first requests Stop Job and cancels shutdown if that stop request is unavailable or not accepted.
+- Close Application: closes Simple Sender through the normal app shutdown path. The settings button and the titlebar/window close both use the same confirmation flow. If a job may still be active, paused, completion-pending-idle, or still reported as streaming, close first requests Stop Job and cancels shutdown if that stop request is unavailable or not accepted. If shutdown later times out and forces close, the status/log message includes the last reported cleanup step, which is diagnostic context rather than a proven root cause.
 - Restart workflow: there is no separate in-app `Restart Application` button in the current build; close the app, then relaunch it when you need a restart.
 - Shutdown (Linux only): powers off the system after confirmation.
 - Reboot (Linux only): reboots the system after confirmation.

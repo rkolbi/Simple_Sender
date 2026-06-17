@@ -6,13 +6,21 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 ## Unreleased
 
 ### Fixed
+- Auto-level probing now accepts a valid `[PRB:...]` report that arrives during the probe command/idle wait, avoiding a false probe failure without changing the commanded probing motion.
+- File-backed quick-load preparation now preserves bounded sample lines for the loaded-job preview/event payload while leaving streaming delivery unchanged.
+- Quick-scan bounds confidence is downgraded to rough when endpoint-only scan bounds include `G2`/`G3` arcs without richer `SSMETA` extents, avoiding overconfident dimensions for arc-heavy files.
+- Shutdown timeout status/log output now includes the last reported cleanup step before forced close; this is reporting-only and does not identify a proven root cause.
 - `Apply RPM` now saves the requested spindle default but refuses to send a normal spindle-speed command while a job is streaming, avoiding a misleading confirmation path where the worker would block the command and the controller RPM would stay unchanged.
 - Passive Probe indicator visibility no longer forces continuous 20 ms idle status polling; diagnostics now report the effective status-poll profile alongside configured/effective intervals.
 - Updated the public GitHub sync workflow to copy the current `v3.16` About and release-note files instead of obsolete `v3.14` filenames.
 - Updated stale About/help truthfulness tests that still expected the removed `v3.14` title and reference filename.
 
+### Maintenance
+- Removed unreachable legacy runtime-metrics formatting code after the diagnostics dialog delegated that behavior to the shared diagnostics runtime-reporting implementation.
+
 ### Validation
-- Current `3.16` local release gate on Windows / Python `3.12.1`: `1952 passed, 2 skipped`; Ruff, compileall, mypy manifest, critical-path coverage, and mypy passed.
+- Current `3.16` stabilization validation on Windows / Python `3.12.1` as of `2026-06-17`: direct `.\.venv\Scripts\python.exe -m pytest -q` passed with `1958 passed, 3 skipped`; `.\.venv\Scripts\python.exe tools\run_ruff.py check .` passed; `git diff --check` passed.
+- The most recent full release-gate snapshot remains the `2026-06-08` `run_tests.bat` gate: `1952 passed, 2 skipped`; Ruff, compileall, mypy manifest, critical-path coverage, and mypy passed.
 
 ## [3.16] - 2026-05-24
 

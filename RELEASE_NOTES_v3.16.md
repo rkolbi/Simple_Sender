@@ -14,13 +14,17 @@ These notes describe the current stable, release-ready `3.16` baseline. This ver
   - corrected fine retract / fine re-probe mismatch that caused a confirmed `ALARM:5`
   - Tool Change one-time slower retry when clustering is too loose
 - Workflow truthfulness improvements:
+  - auto-level probing now accepts a valid `[PRB:...]` report that arrives during the probe command/idle wait, reducing false probe failures without changing the physical probing command sequence
   - Run / Job Setup validity now matches the real Tool Change prerequisites
   - alarm and warning dialogs now match the dark UI consistently
   - file/job summary surfaces keep tool metadata truthful
+  - file-backed quick-load preview/event payloads preserve the bounded sample lines captured during quick scan while leaving streaming delivery unchanged
+  - quick-scan bounds confidence is downgraded to rough when endpoint-only scan bounds include `G2`/`G3` arcs without richer `SSMETA` extents; this does not calculate true arc extents
   - normal successful completion now requires verified cleaned EOF before clean success
   - real-job completion now enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow, warning instead of silently claiming clean completion when that safer end state cannot be achieved
   - EOF-completion diagnostics now carry explicit EOF-verification evidence into completion/session diagnostics
   - app close now requests Stop Job before shutdown/disconnect when a job may still be active, paused, completion-pending-idle, or still reported as streaming
+  - shutdown timeout status/log output now reports the last reported cleanup step before forced close, without claiming that step is the proven root cause
   - Resume From now preserves safe active `G43.1 Z...` dynamic tool length offset state, clears it on `G49`, and blocks unsupported TLO reconstruction
 - Kasa/network reliability diagnostics:
   - Kasa command failures now clear cached device handles, retry through reconnect/discovery, and classify timeout/DNS/refused/unreachable/API-style failures where possible
@@ -61,7 +65,7 @@ These notes describe the current stable, release-ready `3.16` baseline. This ver
 
 ## Recorded Full Validation Snapshot
 
-As of `2026-06-08`, the current `3.16` baseline validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
+As of `2026-06-08`, the `3.16` baseline state then under review validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
 
 - `run_tests.bat`: clean
 - `.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`: clean
@@ -73,3 +77,13 @@ As of `2026-06-08`, the current `3.16` baseline validated clean in the verified 
 - `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`: clean (aggregate critical coverage `90.4%`)
 
 Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for that snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. This local validation snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
+
+## Post-Stabilization Validation Update
+
+As of `2026-06-17`, after the later narrow stabilization commits listed in the changelog, direct local validation on Windows / Python `3.12.1` passed with:
+
+- `.\.venv\Scripts\python.exe -m pytest -q`: `1958 passed, 3 skipped`
+- `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean
+- `git diff --check`: clean
+
+This later direct validation does not replace the broader `2026-06-08` full release-gate snapshot, and it still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.

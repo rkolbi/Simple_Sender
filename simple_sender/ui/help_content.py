@@ -307,6 +307,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 bullets=(
                     "Simple Sender uses a file-backed load and stream path so jobs of any size can use the same general runtime model.",
                     "The quick assessment scans the job header for SSMETA key=value metadata and uses that metadata for dimensions and units when it is complete enough to be trusted.",
+                    "If endpoint-only quick-scan bounds include G2/G3 arcs without complete SSMETA extents, dimensions are treated as rough because true arc extents were not calculated.",
                     "Diagnostics and runtime metrics record whether dimensions and units came from SSMETA or from a file scan.",
                     "Starting a new Read Job cancels the previous loader so stale background work does not overwrite the current results.",
                     "Streaming uses character-counting flow control, Bf feedback for the RX window, and stops on errors or alarms.",
@@ -676,6 +677,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Loaded jobs report Estimated Job Time as HH:MM with a CONFIDENT, PROVISIONAL, or ROUGH confidence label based on the data available.",
             "Loaded jobs also report Job Dimensions in both millimeters and inches with a CONFIDENT or ROUGH label.",
             "If SSMETA includes complete extents and units, dimensions are reported from metadata and marked confident.",
+            "Endpoint-only quick-scan bounds that include G2/G3 arcs are reported as rough unless complete SSMETA extents provide richer bounds.",
             "Estimate confidence still depends on machine settings and observed data, even when dimensions come from metadata.",
             "No Top View or spatial rendering stage runs during load in the current lean sender runtime.",
         ),

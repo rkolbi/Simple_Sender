@@ -337,26 +337,43 @@ def on_close(app):
         shutdown_timeout_s = _SHUTDOWN_TIMEOUT_S
     shutdown_started_at = time.monotonic()
 
+    def _set_shutdown_cleanup_step(step: str) -> None:
+        try:
+            app._shutdown_cleanup_step = str(step or "").strip()
+        except Exception as exc:
+            _log_suppressed("Failed updating shutdown cleanup step", exc)
+
+    def _shutdown_cleanup_step_text() -> str:
+        try:
+            step = str(getattr(app, "_shutdown_cleanup_step", "") or "").strip()
+        except Exception:
+            step = ""
+        return step or "not reported"
+
     def _shutdown_worker() -> None:
         try:
             accessory_router = getattr(app, "accessory_router", None)
             if accessory_router is not None:
                 try:
                     if hasattr(app, "_stop_job_accessories"):
+                        _set_shutdown_cleanup_step("requesting accessory cleanup")
                         app._stop_job_accessories("app_exit")
                 except Exception as exc:
                     _log_suppressed("Failed issuing Kasa OFF command during app close", exc)
                 try:
                     wait_for_idle = getattr(accessory_router, "wait_for_idle", None)
                     if callable(wait_for_idle):
+                        _set_shutdown_cleanup_step("waiting for accessory idle")
                         wait_for_idle(timeout=1.0)
                 except Exception as exc:
                     _log_suppressed("Failed waiting for Kasa worker drain during app close", exc)
                 try:
+                    _set_shutdown_cleanup_step("shutting down accessory router")
                     accessory_router.shutdown(timeout=1.0)
                 except Exception as exc:
                     _log_suppressed("Failed shutting down accessory router during app close", exc)
             try:
+                _set_shutdown_cleanup_step("disconnecting GRBL")
                 disconnect_fn = getattr(app.grbl, "disconnect")
                 try:
                     disconnect_fn(requested_by="shutdown", reason="Application close")
@@ -368,11 +385,13 @@ def on_close(app):
             if source is not None:
                 cleanup_path = getattr(source, "_cleanup_path", None)
                 try:
+                    _set_shutdown_cleanup_step("closing G-code source")
                     source.close()
                 except Exception as exc:
                     _log_suppressed("Failed closing streaming G-code source during shutdown", exc)
                 if cleanup_path:
                     try:
+                        _set_shutdown_cleanup_step("removing temporary cleanup file")
                         os.remove(cleanup_path)
                     except OSError as exc:
                         _log_suppressed("Failed deleting temporary G-code cleanup file during shutdown", exc)
@@ -380,12 +399,14 @@ def on_close(app):
             py = app._get_pygame_module()
             if py is not None:
                 try:
+                    _set_shutdown_cleanup_step("shutting down pygame")
                     py.quit()
                 except Exception as exc:
                     _log_suppressed("Failed quitting pygame during shutdown", exc)
             perf_monitor = getattr(app, "_perf_monitor", None)
             if perf_monitor is not None:
                 try:
+                    _set_shutdown_cleanup_step("writing performance exit report")
                     perf_monitor.emit_exit_report()
                 except Exception as exc:
                     _log_suppressed("Failed emitting performance report during shutdown", exc)
@@ -395,6 +416,7 @@ def on_close(app):
             except Exception as log_exc:
                 _log_suppressed("Failed logging unexpected shutdown worker failure", log_exc)
         finally:
+            _set_shutdown_cleanup_step("completed")
             shutdown_complete.set()
 
     def _finalize_shutdown() -> bool:
@@ -438,9 +460,16 @@ def on_close(app):
         elapsed_s = max(0.0, time.monotonic() - shutdown_started_at)
         if elapsed_s >= shutdown_timeout_s:
             app._shutdown_timed_out = True
+            cleanup_step = _shutdown_cleanup_step_text()
             _escalate_shutdown(
-                status_text="Shutdown timed out; forcing close...",
-                log_message=f"[shutdown] Shutdown timed out after {shutdown_timeout_s:.1f}s; forcing close.",
+                status_text=(
+                    "Shutdown timed out; last reported cleanup step: "
+                    f"{cleanup_step}; forcing close..."
+                ),
+                log_message=(
+                    f"[shutdown] Shutdown timed out after {shutdown_timeout_s:.1f}s; "
+                    f"last reported cleanup step: {cleanup_step}; forcing close."
+                ),
                 context="Failed logging shutdown-timeout message",
             )
             return

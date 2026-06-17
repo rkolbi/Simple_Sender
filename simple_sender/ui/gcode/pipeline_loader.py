@@ -347,6 +347,7 @@ def _quick_scan_bounds_and_estimate(
     sample_rapid_distance_mm = 0.0
     sample_motion_time_min = 0.0
     sample_rapid_time_min = 0.0
+    has_arc_move = False
 
     for raw_line in sampled_lines:
         line = str(raw_line or "").strip().upper()
@@ -367,8 +368,10 @@ def _quick_scan_bounds_and_estimate(
             motion_mode = 1
         elif _G2_PAT.search(line):
             motion_mode = 2
+            has_arc_move = True
         elif _G3_PAT.search(line):
             motion_mode = 3
+            has_arc_move = True
 
         words: dict[str, float] = {}
         for word, value in _WORD_PAT.findall(line):
@@ -448,12 +451,15 @@ def _quick_scan_bounds_and_estimate(
             "height": float(max(0.0, max_y - min_y)),
         }
     bounds_confidence = (
-        "confident" if (cleaned_lines_known and have_bounds) else "rough"
+        "confident"
+        if (cleaned_lines_known and have_bounds and not has_arc_move)
+        else "rough"
     )
     dimensions_confidence_reasons = {
         "sampled_scan": not bool(cleaned_lines_known),
         "scan_incomplete": not bool(cleaned_lines_known),
         "no_motion_lines_found": not bool(have_bounds),
+        "arc_endpoint_bounds": bool(has_arc_move),
     }
 
     sample_scale = 1.0
@@ -852,7 +858,7 @@ def _prepare_stream_source_fast(
         autolevel_prereq_snapshot["source_hash"] = lines_hash_quick
         success = True
         result = _FastPrepareData(
-            sample_lines=sample_lines,
+            sample_lines=list(sample_lines),
             sampled_head_lines=sampled_head_limit,
             sampled_tail_lines=sampled_tail_limit,
             sampled_interval_lines=sampled_interval,

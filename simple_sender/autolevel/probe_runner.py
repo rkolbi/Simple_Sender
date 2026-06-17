@@ -238,12 +238,13 @@ class AutoLevelProbeRunner:
         if depth <= 0:
             return False
         self.app.probe_controller.clear()
+        probe_seq = self._probe_report_sequence()
         if not self._send_and_wait(
             f"G38.2 Z-{depth:.3f} F{settings.probe_feed:.3f}",
             settings.probe_timeout,
         ):
             return False
-        report = self._wait_for_probe_report(settings.probe_timeout)
+        report = self._wait_for_probe_report(settings.probe_timeout, seq=probe_seq)
         if report is None or not report.ok:
             return False
         if not height_map.set_point(x, y, report.z):
@@ -254,17 +255,23 @@ class AutoLevelProbeRunner:
             return False
         return True
 
-    def _wait_for_probe_report(self, timeout_s: float) -> ProbeReport | None:
+    def _probe_report_sequence(self) -> int:
+        controller = getattr(self.app, "probe_controller", None)
+        sequence = getattr(controller, "sequence", None)
+        if callable(sequence):
+            try:
+                return int(sequence())
+            except Exception:
+                return 0
+        return 0
+
+    def _wait_for_probe_report(self, timeout_s: float, *, seq: int | None = None) -> ProbeReport | None:
         controller = getattr(self.app, "probe_controller", None)
         if controller is not None and hasattr(controller, "wait_for_report_change"):
-            seq = 0
-            try:
-                seq = int(controller.sequence())
-            except Exception:
-                seq = 0
+            wait_seq = self._probe_report_sequence() if seq is None else int(seq)
             try:
                 report = controller.wait_for_report_change(
-                    seq,
+                    wait_seq,
                     timeout_s,
                     cancel_event=self._cancel,
                 )

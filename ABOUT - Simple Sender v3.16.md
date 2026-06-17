@@ -18,6 +18,8 @@ That same safety posture now extends to end-of-job handling. For real jobs, the 
 
 Application close now follows the same safety posture. If a job may still be active, paused, completion-pending-idle, or still reported as streaming, Simple Sender requests Stop Job before shutdown/disconnect and cancels close if that stop request is unavailable or not accepted.
 
+Recent `3.16` stabilization work also tightened truthfulness around edge cases without changing the main operator workflow: auto-level probing accepts valid probe reports that arrive during the command/idle wait, quick-scan dimensions for arc-containing files are not labeled confident unless richer metadata supports that confidence, and shutdown timeout reporting includes the last reported cleanup step without claiming it is the proven root cause.
+
 Resume From also preserves more of the Z-critical modal state. It tracks active `G43.1 Z...` dynamic tool length offsets, clears them on `G49`, includes safe active TLO in the resume preamble, and blocks Resume From when that state cannot be reconstructed safely.
 
 The `3.16` release label carries forward the top toolbar's practical, deployment-friendly icon path. Toolbar assets live in `simple_sender/ui/icons`, the normal runtime path prefers app-local raster icons for consistent Windows and Raspberry Pi / Linux rendering, and the app still preserves safe fallback icons if those assets cannot be loaded.
