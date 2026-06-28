@@ -266,6 +266,7 @@ def _init_kasa_runtime_state(app, tk) -> None:
     app._kasa_last_valid_outlets = (vacuum_outlet, light_outlet)
     app._kasa_last_stream_line_index = -1
     app._kasa_job_active_outlets = set()
+    app._kasa_job_pending_off_outlets = set()
     app._kasa_job_running = False
     app._kasa_vacuum_quick_on = False
     app._kasa_light_quick_on = False
@@ -307,6 +308,7 @@ def _init_error_dialog_runtime_state(app, setting, tk) -> None:
     app._pending_force_g90 = False
     app._homing_in_progress = False
     app._homing_state_seen = False
+    app._machine_coordinates_trusted = False
     app._homing_start_ts = 0.0
     app._homing_timeout_s = 30.0
 

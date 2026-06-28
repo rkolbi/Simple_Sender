@@ -179,6 +179,7 @@ def _emit_alarm_recovery_log(app, message: str | None) -> None:
 def mark_alarm_clear_requested(app) -> None:
     try:
         app._alarm_clear_requested = True
+        app._machine_coordinates_trusted = False
     except Exception as exc:
         _log_suppressed("Failed marking alarm-clear request", exc)
 
@@ -188,6 +189,7 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         app._alarm_locked = True
         app._alarm_latched = True
         app._alarm_clear_requested = False
+        app._machine_coordinates_trusted = False
         if message:
             app._alarm_message = message
         disable_job_controls(app)
@@ -241,4 +243,3 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
     app.machine_state.set(app._machine_state_text)
     app._update_state_highlight(app._machine_state_text)
     app._apply_status_poll_profile()
-

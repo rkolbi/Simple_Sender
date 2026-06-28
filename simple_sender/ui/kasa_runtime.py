@@ -271,23 +271,23 @@ def handle_stream_vacuum_directive(
     settings_snapshot: SettingsSnapshot,
     log_message: LogMessage,
     line_index: int | None = None,
-) -> None:
+) -> bool:
     command = "VACUUM_ON" if bool(is_on) else "VACUUM_OFF"
     line_text = f" at stream line {int(line_index) + 1}" if line_index is not None else ""
     if not hasattr(app, "accessory_router"):
         log_message(app, f"{command}{line_text} ignored: Kasa accessory router is unavailable.")
-        return
+        return False
     settings = settings_snapshot(app)
     if not bool(settings.get("kasa_enabled", False)):
         log_message(app, f"{command}{line_text} ignored: Kasa control is disabled.")
-        return
+        return False
     if not bool(settings.get("vacuum_enabled", False)):
         log_message(app, f"{command}{line_text} ignored: vacuum control is disabled.")
-        return
+        return False
     device_identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
     if not device_identifier:
         log_message(app, f"{command}{line_text} ignored: no Kasa device is selected.")
-        return
+        return False
     outlet_count = _outlet_count(settings)
     outlet_id = _selected_outlet(settings, "vacuum_outlet", 1)
     if outlet_id > outlet_count:
@@ -295,10 +295,10 @@ def handle_stream_vacuum_directive(
             app,
             f"VACUUM_{'ON' if is_on else 'OFF'} ignored: outlet {outlet_id} unavailable.",
         )
-        return
+        return False
     if bool(is_on):
         cancel_pending_vacuum_off_delay(app)
-        _request_vacuum_state(
+        return _request_vacuum_state(
             app,
             outlet_id=int(outlet_id),
             is_on=True,
@@ -306,8 +306,7 @@ def handle_stream_vacuum_directive(
             line_index=line_index,
             log_message=log_message,
         )
-        return
-    _request_vacuum_off_with_delay(
+    return _request_vacuum_off_with_delay(
         app,
         outlet_id=int(outlet_id),
         source="stream_vacuum_off",
@@ -396,6 +395,7 @@ def start_job_accessories(
         ):
             active_outlets.add(int(outlet_id))
     app._kasa_job_active_outlets = active_outlets
+    app._kasa_job_pending_off_outlets = set()
     app._kasa_job_running = bool(active_outlets)
 
 
@@ -418,6 +418,9 @@ def stop_job_accessories(
     vacuum_outlet = _selected_outlet(settings, "vacuum_outlet", 1)
     vacuum_off_delay_s = max(0.0, float(settings.get("vacuum_off_delay_sec", 0.0) or 0.0))
     remaining_active = set(int(outlet_id) for outlet_id in outlet_ids)
+    pending_off = set(
+        int(outlet) for outlet in getattr(app, "_kasa_job_pending_off_outlets", set()) or set()
+    )
     for outlet_id in outlet_ids:
         if vacuum_enabled and int(outlet_id) == int(vacuum_outlet):
             accepted = _request_vacuum_off_with_delay(
@@ -438,6 +441,7 @@ def stop_job_accessories(
                 log_message=log_message,
             )
         if accepted:
-            remaining_active.discard(int(outlet_id))
+            pending_off.add(int(outlet_id))
     app._kasa_job_active_outlets = remaining_active
+    app._kasa_job_pending_off_outlets = pending_off
     app._kasa_job_running = bool(remaining_active)

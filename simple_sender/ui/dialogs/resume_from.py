@@ -569,6 +569,11 @@ def resume_from_line(
             except Exception as exc:
                 _log_suppressed("Failed resetting Kasa debounce state before resume-from", exc)
     app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
+    setter = getattr(app.grbl, "set_stream_vacuum_confirmation_required", None)
+    if callable(setter):
+        setting = getattr(app, "kasa_confirm_stream_directives", False)
+        getter = getattr(setting, "get", None)
+        setter(bool(getter()) if callable(getter) else bool(setting))
     app.grbl.start_stream_from(start_index, preamble)
     started = False
     try:

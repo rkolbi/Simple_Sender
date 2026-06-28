@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from simple_sender.utils.grbl_errors import GRBL_ALARM_CODES, GRBL_ERROR_CODES
 
-HELP_ABOUT_TITLE = "Simple Sender About v3.16"
+HELP_ABOUT_TITLE = "Simple Sender About v3.18"
 
 
 @dataclass(frozen=True)
@@ -300,6 +300,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Worker threads post UI work through the app's UI queue helpers instead of touching Tk widgets directly.",
                     "Manual and immediate commands use a bounded queue. If it fills, new commands are dropped and the UI reports the cumulative dropped count.",
                     "When Dry Run is enabled, fresh Run and resume-start paths such as Resume From require an explicit operator choice before stream side effects begin.",
+                    "Resume From reconstructs modal state where possible, but it cannot prove the cutter is physically safe at the selected restart line. Verify work zero, tool, Z clearance, spindle state, and physical position before resuming.",
                 ),
             ),
             _sub(
@@ -310,9 +311,11 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "If endpoint-only quick-scan bounds include G2/G3 arcs without complete SSMETA extents, dimensions are treated as rough because true arc extents were not calculated.",
                     "Diagnostics and runtime metrics record whether dimensions and units came from SSMETA or from a file scan.",
                     "Starting a new Read Job cancels the previous loader so stale background work does not overwrite the current results.",
-                    "Streaming uses character-counting flow control, Bf feedback for the RX window, and stops on errors or alarms.",
+                    "Streaming uses character-counting flow control and Bf feedback for the RX window. During an active job, a GRBL error response enters a protective error-hold: the sender stops dispatching more job lines, requests realtime feed hold when appropriate, reports the failed source line when available, and requires restart or Resume From instead of normal Resume.",
+                    "Send-time validation failures such as $ job lines, non-ASCII text, or lines that still exceed 80 bytes are terminal stream errors rather than normally resumable pauses.",
+                    "ALARM:x, reset/reboot, and Reset to continue paths remain terminal alarm/reset handling rather than normal resumable pauses.",
                     "Each outbound line counts its trailing newline for buffer accounting, and non-ASCII or over-80-byte lines are rejected.",
-                    "Exact trimmed VACUUM_ON and VACUUM_OFF lines are intercepted by the sender and never sent to GRBL.",
+                    "Exact trimmed VACUUM_ON and VACUUM_OFF lines are intercepted by the sender and never sent to GRBL. The optional Kasa confirmation setting holds the stream at those directives until success or failure is known.",
                     "Lines that start with TC: are intercepted and routed through the built-in Tool Change workflow, then the paused stream resumes when the operator finishes the tool change.",
                     "System commands that start with $ are rejected in job files. Use the UI or a macro for those instead.",
                     "Run progress is byte-offset based and final completion waits for GRBL to reach Idle after the last acknowledged line.",
@@ -351,7 +354,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "When Pos/Status is off, those reports and their carriage-return behavior are omitted from the live console and from saved console exports.",
                     "Performance mode reduces console churn and suppresses per-line RX logs during streaming while still keeping alarms and errors visible.",
                     "Manual command errors update the status bar with a source label and do not alter the stream state.",
-                    "Streaming errors report the file name, line number, and line text in the error status.",
+                    "Streaming errors report the file name, line number, and line text in the error status and do not silently skip the rejected command.",
                     "Program pauses such as M0, M1, and tool changes such as M6 pause the stream after the line is acknowledged.",
                     "Console Save pre-fills a timestamped filename so exporting logs is touch-friendly.",
                 ),
@@ -796,9 +799,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
         ),
         bullets=(
             "Enabled outlets can turn on at job start and turn off when a job finishes, stops, alarms, or is canceled.",
-            "Exact trimmed VACUUM_ON and VACUUM_OFF lines in streamed files toggle the configured vacuum outlet immediately and are never sent to GRBL.",
+            "Exact trimmed VACUUM_ON and VACUUM_OFF lines in streamed files toggle the configured vacuum outlet and are never sent to GRBL. By default the stream continues after the command is queued; if Require Kasa directive confirmation during jobs is enabled, the stream holds until the command result succeeds or fails.",
             "Device operations use bounded request timeouts so a stalled Kasa call does not block the accessory worker indefinitely.",
-            "If a Kasa command fails, the app retries through reconnect/discovery, logs a failure classification and local network context where available, and warns that dust collection state was not confirmed.",
+            "If a Kasa command fails, the app retries through reconnect/discovery, logs a failure classification and local network context where available, and warns that dust collection state was not confirmed. Accepted job-accessory OFF requests stay tracked until a confirmed OFF succeeds.",
             "The Kasa section lives in App Settings > Kasa Plug. Use Discover, choose the device, refresh the outlet list, map Vacuum and Spindle Light, and use the built-in outlet test buttons before cutting.",
             "If the device exposes only one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.",
         ),

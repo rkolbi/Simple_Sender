@@ -35,6 +35,7 @@ def _resolve_display_state(
         if getattr(app, "_homing_state_seen", False) or timed_out or grace_elapsed:
             app._homing_in_progress = False
             app._homing_state_seen = False
+            app._machine_coordinates_trusted = not timed_out
             try:
                 app.grbl.clear_watchdog_ignore("homing")
             except Exception as exc:
@@ -44,6 +45,7 @@ def _resolve_display_state(
 
     app._homing_in_progress = False
     app._homing_state_seen = False
+    app._machine_coordinates_trusted = False
     try:
         app.grbl.clear_watchdog_ignore("homing")
     except Exception as exc:

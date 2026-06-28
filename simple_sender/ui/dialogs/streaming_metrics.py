@@ -324,6 +324,31 @@ def _start_job_completion_cleanup(app, context: _JobCompletionContext) -> None:
         )
 
 
+def _stop_job_accessories_after_completion(app, result: _JobCompletionSafetyResult) -> None:
+    stopper = getattr(app, "_stop_job_accessories", None)
+    if not callable(stopper):
+        return
+    source = "job_done" if bool(result.safe) else "job_done_warning"
+    try:
+        stopper(source)
+        if result.safe:
+            _job_completion_log(
+                app,
+                "[job] Job accessories OFF requested after post-job cleanup completed.",
+            )
+        else:
+            _job_completion_log(
+                app,
+                "[job] Job accessories OFF requested after post-job cleanup warning; verify accessory state manually.",
+            )
+    except Exception as exc:
+        _log_suppressed("Failed stopping job accessories after job-completion cleanup", exc)
+        _job_completion_log(
+            app,
+            f"[job] Job accessory shutdown failed after completion cleanup: {exc}",
+        )
+
+
 def _run_job_completion_cleanup(app) -> _JobCompletionSafetyResult:
     _job_completion_log(app, "[job] Enforcing post-job safety cleanup: spindle off + Park safe-Z.")
     spindle_ok, spindle_error = _send_job_completion_command(app, "M5")
@@ -398,6 +423,8 @@ def _motion_block_reason(app) -> str | None:
         return "controller disconnected before the safe-Z raise could run."
     if bool(getattr(app, "_alarm_locked", False)):
         return "controller is in alarm, so motion was not attempted."
+    if not bool(getattr(app, "_machine_coordinates_trusted", False)):
+        return "machine coordinates are not trusted; home the machine before automatic G53 safe-Z."
     return None
 
 
@@ -509,6 +536,7 @@ def _finalize_job_completion_notification(
     except Exception as exc:
         _log_suppressed("Failed logging EOF verification summary", exc)
     result = _merge_eof_verification_result(context, result)
+    _stop_job_accessories_after_completion(app, result)
     message = _build_job_completion_message(context, result)
     popup_var = getattr(app, "job_completion_popup", False)
     popup_getter = getattr(popup_var, "get", None)
@@ -733,4 +761,3 @@ def _show_job_completion_dialog(
     except Exception as exc:
         _log_suppressed("Failed setting job completion dialog grab", exc)
     center_window(dialog, app)
-

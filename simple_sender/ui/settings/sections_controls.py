@@ -861,8 +861,31 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
         "Delay VACUUM_OFF by this many seconds so dust collection can clear remaining debris.",
     )
 
+    kasa_confirm_stream_directives = getattr(
+        app, "kasa_confirm_stream_directives", None
+    )
+    if kasa_confirm_stream_directives is None:
+        kasa_confirm_stream_directives = tk.BooleanVar(master=kasa_frame, value=False)
+        app.kasa_confirm_stream_directives = kasa_confirm_stream_directives
+    app.kasa_confirm_stream_directives_check = ttk.Checkbutton(
+        kasa_frame,
+        text="Require Kasa directive confirmation during jobs",
+        variable=kasa_confirm_stream_directives,
+    )
+    app.kasa_confirm_stream_directives_check.grid(
+        row=5,
+        column=0,
+        columnspan=2,
+        sticky="w",
+        pady=(0, 4),
+    )
+    apply_tooltip(
+        app.kasa_confirm_stream_directives_check,
+        "When enabled, streamed VACUUM_ON/OFF directives hold the job until the Kasa command result is known.",
+    )
+
     light_row = ttk.Frame(kasa_frame)
-    light_row.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+    light_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 4))
     light_row.grid_columnconfigure(2, weight=1)
     app.light_check = ttk.Checkbutton(
         light_row,
@@ -968,4 +991,3 @@ def build_kasa_plug_section(app, parent: ttk.Frame, row: int) -> int:
     app._on_kasa_mapping_change(None)
     app._refresh_kasa_controls_state()
     return row + 1
-

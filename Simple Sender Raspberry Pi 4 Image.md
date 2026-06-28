@@ -1,6 +1,6 @@
 # Simple Sender Raspberry Pi 4 Image
 
-This repository does not currently include a checked-in Raspberry Pi 4 image artifact. The application baseline is now **Simple Sender 3.16**. If you need a Raspberry Pi image for this release line, rebuild it from the current repo state and publish it separately, for example as a release asset.
+This repository does not currently include a checked-in Raspberry Pi 4 image artifact. The application baseline is now **Simple Sender 3.18**. If you need a Raspberry Pi image for this release line, rebuild it from the current repo state and publish it separately, for example as a release asset.
 
 Simple Sender was built to run well on affordable hardware such as a **Raspberry Pi 4**, remain easy to use from a touchscreen, and stream very large G-code files reliably. It emphasizes clarity, dependability, and practical shop usability instead of trying to become an overloaded all-in-one platform.
 
@@ -18,7 +18,7 @@ Key workflow-oriented features of the current app baseline include:
 
 > **Safety notice:** Always test "in the air" with the spindle off before cutting material.
 
-For the full application manual and feature documentation, see `README.md`. For a higher-level project summary, see `ABOUT - Simple Sender v3.16.md`.
+For the full application manual and feature documentation, see `README.md`. For a higher-level project summary, see `ABOUT - Simple Sender v3.18.md`.
 
 ## Equipment Used / Recommended Hardware
 
@@ -80,5 +80,5 @@ Samba is installed and openly accessible on this image for simple file transfer 
 - Do not sync or overwrite the Simple Sender install while the app is running. Close the application first, or reboot/shutdown the Pi before updating runtime files.
 - The runtime marker/duplicate-instance guard exists to block overlapping runtime/live-overwrite conditions; it is a safety measure, not a live-update workflow.
 - The Windows share sync helper stages into a sibling pending-update folder when it detects the runtime marker; it does not hot-overwrite the live install while the app is still running.
-- No Raspberry Pi image artifact is currently checked into this repository. If you need strict build provenance or a version-aligned distributable image, rebuild it from the current `3.16` baseline and publish it separately before distribution.
+- No Raspberry Pi image artifact is currently checked into this repository. If you need strict build provenance or a version-aligned distributable image, rebuild it from the current `3.18` baseline and publish it separately before distribution.
 - If you keep this image on a shared or less-trusted network, change default passwords and review Samba exposure before regular use.

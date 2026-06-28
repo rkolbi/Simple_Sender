@@ -641,6 +641,7 @@ def handle_connection_event(app, is_on: bool, port):
     sync_connection_runtime_state_to_app(app, runtime)
     app._homing_in_progress = False
     app._homing_state_seen = False
+    app._machine_coordinates_trusted = False
     invalidate_job_setup_state(app)
     alarm_latched = bool(getattr(app, "_alarm_latched", False))
     alarm_message = str(getattr(app, "_alarm_message", "") or "")

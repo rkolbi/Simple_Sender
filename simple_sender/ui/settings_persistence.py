@@ -812,6 +812,12 @@ def _build_kasa_settings(app) -> dict[str, object]:
             "vacuum_enabled": bool(
                 existing.get("vacuum_enabled", DEFAULT_SETTINGS["vacuum_enabled"])
             ),
+            "kasa_confirm_stream_directives": bool(
+                existing.get(
+                    "kasa_confirm_stream_directives",
+                    DEFAULT_SETTINGS["kasa_confirm_stream_directives"],
+                )
+            ),
             "vacuum_off_delay_sec": max(
                 0.0,
                 _coerce_nonnegative_float_setting(
@@ -848,6 +854,10 @@ def _build_kasa_settings(app) -> dict[str, object]:
     vacuum_enabled_var = getattr(app, "vacuum_enabled", None)
     vacuum_enabled = (
         bool(vacuum_enabled_var.get()) if vacuum_enabled_var is not None else False
+    )
+    kasa_confirm_var = getattr(app, "kasa_confirm_stream_directives", None)
+    kasa_confirm_stream_directives = (
+        bool(kasa_confirm_var.get()) if kasa_confirm_var is not None else False
     )
     vacuum_off_delay_sec = _read_nonnegative_float_setting(
         app,
@@ -892,6 +902,7 @@ def _build_kasa_settings(app) -> dict[str, object]:
         "kasa_enabled": kasa_enabled,
         "kasa_device_identifier": device_identifier,
         "vacuum_enabled": vacuum_enabled,
+        "kasa_confirm_stream_directives": kasa_confirm_stream_directives,
         "vacuum_off_delay_sec": float(vacuum_off_delay_sec),
         "vacuum_outlet": vacuum_outlet,
         "light_enabled": light_enabled,

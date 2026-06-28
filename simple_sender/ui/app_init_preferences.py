@@ -260,6 +260,9 @@ def _init_behavior_preferences(
         value=str(setting("kasa_device_identifier", "") or "").strip()
     )
     app.vacuum_enabled = tk.BooleanVar(value=setting("vacuum_enabled", False))
+    app.kasa_confirm_stream_directives = tk.BooleanVar(
+        value=setting("kasa_confirm_stream_directives", False)
+    )
     app.vacuum_off_delay_sec = tk.DoubleVar(
         value=setting(
             "vacuum_off_delay_sec",
@@ -654,4 +657,3 @@ def init_basic_preferences(app, app_version: str, module):
     except Exception as exc:
         _log_suppressed("Failed applying configured scrollbar width during app init preferences", exc)
     _init_visibility_preferences(app, setting=setting, app_version=app_version, tk=tk)
-

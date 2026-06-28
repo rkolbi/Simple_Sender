@@ -279,6 +279,9 @@ class GrblWorker(
         self._stream_tool_change_pending: StreamPendingItem | None = None
         self._stream_tool_change_name: str = ""
         self._stream_tool_change_active = False
+        self._stream_vacuum_confirmation_required = False
+        self._stream_vacuum_pending: Optional[StreamPendingItem] = None
+        self._stream_vacuum_pending_on = False
         self._resume_preamble: deque[str] = deque()
         self._rx_window = RX_BUFFER_SIZE
         self._stream_token = 0
@@ -1284,4 +1287,3 @@ class GrblWorker(
         finally:
             logger.debug("RX thread stopped")
     
-

@@ -679,6 +679,7 @@ UiEvent = (
     | tuple[Literal["stream_pause_reason"], str]
     | tuple[Literal["stream_vacuum_directive"], bool]
     | tuple[Literal["stream_vacuum_directive"], bool, int | None]
+    | tuple[Literal["stream_vacuum_directive"], bool, int | None, bool]
     | tuple[Literal["stream_tool_change"], int | None, str]
     | tuple[Literal["spindle_state"], bool, int | None]
     | tuple[Literal["gcode_sent"], int, str]

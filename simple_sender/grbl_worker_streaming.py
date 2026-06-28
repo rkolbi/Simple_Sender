@@ -87,6 +87,10 @@ class _StreamSourceReadError(RuntimeError):
 
 
 class GrblWorkerStreamingMixin(GrblWorkerState):
+    _stream_vacuum_confirmation_required: bool
+    _stream_vacuum_pending: StreamPendingItem | None
+    _stream_vacuum_pending_on: bool
+
     if TYPE_CHECKING:
         def manual_queue_busy(self) -> bool: ...
 
@@ -427,6 +431,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         """Resume paused stream (cycle start)."""
         if not self._streaming:
             return None
+        if self._stream_vacuum_pending is not None:
+            self.ui_q.put(
+                (
+                    "log",
+                    "[resume blocked] Accessory confirmation is still pending; use Cancel/Reset or wait for the Kasa result.",
+                )
+            )
+            return False
         try:
             accepted = self.resume()
         except SerialWriteError as exc:
@@ -441,6 +453,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self.ui_q.put(StreamStateEvent("running", None))
         logger.info("Stream resumed")
         return True
+
+    def set_stream_vacuum_confirmation_required(self, required: bool) -> None:
+        self._stream_vacuum_confirmation_required = bool(required)
 
     def _pause_stream(self, reason: str | None = None) -> bool | None:
         if not self._streaming:
@@ -826,6 +841,65 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._paused = True
         return idx, self._stream_tool_change_name
 
+    def _start_stream_vacuum_confirmation_locked(
+        self,
+        item: StreamPendingItem,
+        *,
+        is_on: bool,
+    ) -> int | None:
+        idx = item.idx if item.idx is not None else self._send_index
+        self._stream_pending_item = None
+        self._stream_vacuum_pending = StreamPendingItem(
+            line=item.line,
+            is_gcode=True,
+            idx=idx,
+            file_end_offset=item.file_end_offset,
+        )
+        self._stream_vacuum_pending_on = bool(is_on)
+        self._paused = True
+        return idx
+
+    def complete_stream_vacuum_directive(
+        self,
+        success: bool,
+        reason: str | None = None,
+    ) -> None:
+        pending_item: StreamPendingItem | None = None
+        pending_on = False
+        still_streaming = False
+        with self._stream_lock:
+            pending_item = self._stream_vacuum_pending
+            pending_on = bool(self._stream_vacuum_pending_on)
+            self._stream_vacuum_pending = None
+            self._stream_vacuum_pending_on = False
+            still_streaming = bool(self._streaming)
+            self._paused = False
+        if pending_item is None:
+            return
+        if not still_streaming:
+            return
+        if success:
+            self._ack_handled_stream_line(pending_item)
+            self.ui_q.put(StreamStateEvent("running", None))
+            self._signal_tx_activity()
+            return
+        detail = str(reason or "").strip() or (
+            "VACUUM_ON confirmation failed."
+            if pending_on
+            else "VACUUM_OFF confirmation failed."
+        )
+        idx = pending_item.idx
+        line_text = pending_item.line
+        msg = self._format_stream_error(detail, idx, line_text)
+        with self._stream_lock:
+            self._streaming = False
+            self._paused = False
+            self._stream_pending_item = None
+            self._resume_preamble.clear()
+        self.ui_q.put(StreamErrorEvent(msg, idx, line_text, self._gcode_name))
+        self.ui_q.put(("log", f"[stream error] {msg}"))
+        self.ui_q.put(StreamStateEvent("error", detail))
+
     def complete_stream_tool_change(self, success: bool, reason: str | None = None) -> None:
         pending_item: StreamPendingItem | None = None
         still_streaming = False
@@ -886,6 +960,26 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self.ui_q.put(("log", f"[stream error] {message}"))
         self.ui_q.put(StreamStateEvent("error", "File read failed"))
 
+    def _terminal_stream_validation_error_locked(
+        self,
+        *,
+        message: str,
+        idx: int | None,
+        line: str | None,
+        detail: str,
+    ) -> None:
+        self._streaming = False
+        self._paused = False
+        self._stream_pending_item = None
+        self._resume_preamble.clear()
+        self._pause_after_idx = None
+        self._pause_after_reason = None
+        self._stream_vacuum_pending = None
+        self._stream_vacuum_pending_on = False
+        self.ui_q.put(StreamErrorEvent(message, idx, line, self._gcode_name))
+        self.ui_q.put(("log", f"[stream error] {message}"))
+        self.ui_q.put(StreamStateEvent("error", detail))
+
     def _validate_stream_item_locked(
         self,
         item: StreamPendingItem,
@@ -921,9 +1015,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 item.idx,
                 line,
             )
-            self._pause_stream(reason="invalid system command")
-            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
-            self.ui_q.put(("log", f"[stream error] {msg}"))
+            self._terminal_stream_validation_error_locked(
+                message=msg,
+                idx=item.idx,
+                line=line,
+                detail="Invalid job line",
+            )
             return None
         item = StreamPendingItem(
             line=line,
@@ -942,9 +1039,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         payload = cached_payload if use_cached_payload else self._build_line_payload(line)
         if payload is None:
             msg = self._format_stream_error("Non-ASCII characters in line", item.idx, line)
-            self._pause_stream(reason="invalid characters")
-            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
-            self.ui_q.put(("log", f"[stream error] {msg}"))
+            self._terminal_stream_validation_error_locked(
+                message=msg,
+                idx=item.idx,
+                line=line,
+                detail="Invalid job line",
+            )
             return None
 
         line_len = len(payload)
@@ -954,9 +1054,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 item.idx,
                 line,
             )
-            self._pause_stream(reason="line too long")
-            self.ui_q.put(StreamErrorEvent(msg, item.idx, line, self._gcode_name))
-            self.ui_q.put(("log", f"[stream error] {msg}"))
+            self._terminal_stream_validation_error_locked(
+                message=msg,
+                idx=item.idx,
+                line=line,
+                detail="Invalid job line",
+            )
             return None
 
         usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
@@ -1090,6 +1193,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                             self.ui_q.put(StreamStateEvent("paused", None))
                             self.ui_q.put(StreamPauseReasonEvent("tool change"))
                             self.ui_q.put(("stream_tool_change", idx, tool_name))
+                            tool_change_started = True
+                        elif self._stream_vacuum_confirmation_required:
+                            idx = self._start_stream_vacuum_confirmation_locked(
+                                item,
+                                is_on=(kind == "vacuum_on"),
+                            )
+                            self.ui_q.put(StreamStateEvent("paused", None))
+                            self.ui_q.put(StreamPauseReasonEvent("accessory confirmation"))
+                            self.ui_q.put(
+                                (
+                                    "stream_vacuum_directive",
+                                    kind == "vacuum_on",
+                                    idx,
+                                    True,
+                                )
+                            )
                             tool_change_started = True
                         else:
                             self._stream_pending_item = None

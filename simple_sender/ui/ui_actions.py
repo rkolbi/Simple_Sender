@@ -802,6 +802,7 @@ def start_homing(app):
         app._homing_in_progress = False
         app._homing_state_seen = False
         return False
+    app._machine_coordinates_trusted = False
     app._homing_in_progress = True
     app._homing_state_seen = False
     app._homing_start_ts = time.time()
@@ -1044,4 +1045,3 @@ def send_manual(app, command: str, source: str) -> bool:
     if accepted and (upper.startswith("$X") or upper.startswith("$H")):
         mark_alarm_clear_requested(app)
     return accepted
-

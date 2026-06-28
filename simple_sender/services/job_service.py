@@ -146,6 +146,11 @@ class JobService:
 
     def _apply_stream_start_settings(self, app: Any) -> None:
         app.grbl.set_dry_run_sanitize(bool(app.dry_run_sanitize_stream.get()))
+        setter = getattr(app.grbl, "set_stream_vacuum_confirmation_required", None)
+        if callable(setter):
+            setting = getattr(app, "kasa_confirm_stream_directives", False)
+            getter = getattr(setting, "get", None)
+            setter(bool(getter()) if callable(getter) else bool(setting))
 
     def _resolve_dry_run_start_guard(self, app: Any) -> JobStartResult | None:
         if not self._is_dry_run_enabled(app):

@@ -1,25 +1,20 @@
-﻿# Simple Sender - Full Manual
-![Release: 3.16](https://img.shields.io/badge/release-3.16-blue)
+# Simple Sender - Full Manual
+![Release: 3.18](https://img.shields.io/badge/release-3.18-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.16`. This is the current release-ready baseline.
+Current stable release: `3.18`. This is the current release-ready baseline.
 
-Most recent recorded full local release-gate snapshot, from the `3.16` baseline state under review as of `2026-06-08` in the verified local Windows / Python `3.12.1` environment:
-- Canonical wrapper (`run_tests.bat`): clean
-- Import gate (`.\.venv\Scripts\python.exe -c "import simple_sender.ui.settings"` via `run_tests.bat`): clean
-- Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools/run_ruff.py check .`): clean
-- Compile check (`.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat`): clean
-- Mypy manifest gate (`.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141`): clean
+Current `3.18` local validation as of `2026-06-28` in the verified local Windows / Python `3.12.1` environment:
+- Direct pytest (`.\.venv\Scripts\python.exe -m pytest`): `1970 passed, 2 skipped`
+- Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools\run_ruff.py check .`): clean
+- Compile check (`.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`): clean
+- Mypy manifest gate (`.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`): clean
 - Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
-- Repo-supported pytest + coverage gate (`.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`): `1952 passed, 2 skipped`
-- Critical-path coverage gate (`.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml`): clean (aggregate critical coverage `90.4%`)
 
-The direct `.\.venv\Scripts\python.exe -m pytest -q` path, direct `.\.venv\Scripts\python.exe -m pytest` path, direct `.\.venv\Scripts\python.exe -m ruff check .` path, and direct `.\.venv\Scripts\python.exe -m mypy main.py simple_sender` path were not rerun in this snapshot, so older counts from those commands are kept only in release history instead of being presented as current. This local snapshot still does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation.
-
-Post-stabilization direct validation as of `2026-06-17`: `.\.venv\Scripts\python.exe -m pytest -q` passed with `1958 passed, 3 skipped`; `.\.venv\Scripts\python.exe tools\run_ruff.py check .` passed; `git diff --check` passed. This direct validation does not replace the broader `2026-06-08` full release-gate snapshot.
+The `run_tests.bat` wrapper, pytest coverage gate, critical-path coverage check, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.18` release work. Historical wrapper/coverage snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 ## Design Objectives and Key Features
 
@@ -97,7 +92,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 - The repository now also includes a hardware-focused operator checklist in `MACHINE_VALIDATION_CHECKLIST.md` for the remaining machine-only validation steps that automated tests cannot fully prove.
 - Macros: protected built-in workflow buttons stay fixed, while the 5 user-macro slots can be edited/duplicated/reordered in the in-app Macro Manager.
 - Directives in streamed files (`VACUUM_ON`, `VACUUM_OFF`, `TC:<tool name>`) are handled internally and never forwarded to GRBL.
-- Real-job completion now requires verified cleaned EOF before clean success, then enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow; if EOF verification or safer completion cleanup cannot be completed, the operator gets a warning instead of a silent clean-complete claim.
+- Real-job completion now requires verified cleaned EOF before clean success, then enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow when machine coordinates are trusted; if EOF verification, spindle-off, or safe-Z cleanup cannot be completed, the operator gets a warning instead of a silent clean-complete claim.
 - Auto-reconnect (configurable) to last port after unexpected disconnect.
 
 ## Requirements & Installation
@@ -305,8 +300,9 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
-   - On ALARM or error, streaming stops, queues clear, controls lock except Unlock/Home/ALL STOP.
-   - Clear with $X/$H, re-home if needed, and resume or reload if appropriate.
+   - On `ALARM:`, reset/reboot, or `Reset to continue`, streaming stops through the hard alarm/reset path, queues clear, and controls lock except Unlock/Home/ALL STOP.
+   - During an active job, a GRBL `error:` response enters a protective stream error-hold: the sender stops dispatching more job lines, requests feed hold when appropriate, reports the failed source line when available, and requires restart or **Resume From** instead of normal Resume.
+   - Clear alarms with `$X`/`$H`, re-home if needed, and resume/reload only when the machine state is understood.
    - When enabled, non-blocking GRBL popups show timestamp, code number, and definition for known `ALARM:x` / `error:x` responses. Duplicate popups are deduped by code for the configured interval.
 9) **Settings and tuning**
    - Use the GRBL Settings popup to view the last captured `$$` snapshot or refresh `$$` (idle, not alarmed); pending edits highlight yellow until saved.
@@ -367,6 +363,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Training Wheels:** Confirms risky top-bar actions (connect/run/pause/resume/stop/spindle/clear/unlock) when enabled; debounced.
 - **Auto-reconnect:** When not user-disconnected, retries last port with backoff; respects "Reconnect to last port on open".
 - **Alarms:** ALARM:x, "[MSG:Reset to continue]", or status Alarm stop/clear queues, lock controls except Unlock/Home/ALL STOP.
+- **Active-stream errors:** A GRBL `error:` response while a job is streaming enters a protective error-hold, requests feed hold when appropriate, preserves the failed source-line context, and prevents normal Resume from silently continuing past the rejected command. Send-time validation failures such as `$` job lines, non-ASCII text, or lines that still exceed 80 bytes are also terminal stream errors rather than normally resumable pauses.
 - **GRBL popups:** Optional non-blocking alarm/error popup includes code definitions. Duplicate popups are deduped by the configured interval, and current alarm/error popups stay visible until the operator dismisses them.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates now use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness.
@@ -381,7 +378,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Job Setup run gate:** Run checks the current Job Setup tool-reference state used by Tool Change, not just the Tool Ref display text. If the stored reference is missing, non-numeric, or missing the current `TOOL_REFERENCE_FORMAT`, it shows **Job Setup Not Completed** with **Start Anyway** / **Cancel**.
 - **Job Setup invalidation:** Tool-reference setup state is cleared on connect/disconnect transitions, ready-loss, Stop/Reset paths that actually reset assumptions (including accepted ALL STOP reset modes), and GRBL reset/banner reinitialization.
 - **Dry Run confirmation guard:** When Dry Run is enabled, both a fresh Run and resume-start paths such as Resume From and reconnect resume require an explicit operator choice before stream side effects begin: continue in Dry Run, switch to Normal Run and continue, or cancel.
-- **Resume TLO guard:** Resume From tracks dynamic `G43.1 Z...` tool length offset state, clears it on `G49`, includes a safe active TLO in the resume preamble, and blocks Resume From if that TLO state cannot be reconstructed safely.
+- **Resume TLO guard:** Resume From tracks dynamic `G43.1 Z...` tool length offset state, clears it on `G49`, includes a safe active TLO in the resume preamble, and blocks Resume From if that TLO state cannot be reconstructed safely. Modal reconstruction does not prove the cutter is physically safe at the selected restart line; the operator must verify work zero, tool, Z clearance, spindle state, and physical position before resuming.
 
 ## Jobs, Files, and Streaming
 - **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads.
@@ -392,7 +389,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Load cancellation:** Starting a new Read Job cancels the previous loader worker quickly (scan and validation loops are token-cancellable) so stale workers do not overwrite current results.
 - **Prepare/apply failure cleanup:** If a later load/apply step fails after the `Preparing Job` popup opens, the load now fails cleanly instead of leaving the popup stuck at an early progress value.
 - **Streaming:** Character-counting; uses Bf feedback to size the RX window; stops on error/alarm; buffer fill and TX throughput shown. Each line is counted with the trailing newline for buffer accounting, and outbound lines are rejected if they exceed 80 bytes or contain non-ASCII characters.
-- **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL.
+- **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL. By default Kasa control remains convenience automation; App Settings can optionally require Kasa directive confirmation during active jobs, holding the stream until the command result is known.
 - **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. The supported streamed `TC:` workflow assumes files generated by the bundled Simple-Sender Vectric posts, including their stop-before-`TC:` and restart-after-segment contract. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
 - **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (live window + sampled metadata).
@@ -404,7 +401,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
 - **Progress:** Byte-offset based run progress (`acked_byte_offset / file_size_bytes`) with `Run: XX%` display; headless live-state updates are throttled/coalesced; during deferred completion the top-right progress bar/label stay in sync and finalize at `100.0%` when GRBL reaches the final `Idle`.
 - **Logging Mode:** App Settings > Diagnostics now includes `Logging Mode` with `Standard` and `Verbose`. `Standard` is the default and reduces routine TX file logging while still keeping recent serial activity available for diagnostics. `Verbose` preserves fuller detailed TX logging for troubleshooting.
-- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Clean completion now requires verified cleaned EOF, waits for GRBL to report `Idle` after the final line is acknowledged, and for real jobs enforces sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow before reporting clean success.
+- **Completion alert:** When enabled, the job-complete dialog summarizes the start/finish/elapsed wallclock and flashes the progress bar until acknowledged; you can also enable a completion beep. Clean completion now requires verified cleaned EOF, waits for GRBL to report `Idle` after the final line is acknowledged, and for real jobs attempts sender-side spindle-off plus the same Park safe-Z raise used by the built-in Park workflow before reporting clean success. The automatic `G53` safe-Z raise runs only when machine coordinates are trusted, normally after a successful homing cycle in the current session. Job accessories are not turned off on raw stream `done`; clean-completion accessory shutdown is requested only after the final completion cleanup result is known.
 - **Deferred completion guard:** While a stream is in its final acknowledged-but-not-yet-idle tail, macros, probing entry points, and GRBL settings refresh stay blocked/queued until the final `Idle` arrives so post-run actions do not cut across completion handling.
 - **UI queue wake-up:** When the UI queue is idle and new work arrives, the first posted UI event now wakes the drain loop promptly instead of waiting for the next normal periodic drain tick. Ongoing queue draining still uses the existing bounded timer/backoff model.
 
@@ -838,10 +835,10 @@ Use this when you want job lifecycle events to control smart outlets, such as a 
 
 - Linux only: this section is hidden on non-Linux platforms.
 - Trigger behavior: enabled outlets turn on when a job starts and turn off when a job finishes, stops, alarms, or is canceled/aborted.
-- Stream directives: exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines in streamed files toggle the configured Vacuum outlet immediately; these lines are consumed by the sender and are never sent to GRBL.
+- Stream directives: exact trimmed `VACUUM_ON` / `VACUUM_OFF` lines in streamed files toggle the configured Vacuum outlet; these lines are consumed by the sender and are never sent to GRBL. By default the stream continues after the command is queued. If **Require Kasa directive confirmation during jobs** is enabled, the stream holds at the directive until the Kasa command result succeeds or fails.
 - Safety: keep a physical e-stop/power cutoff available. Kasa control is convenience automation, not a safety system.
 - Reliability: Kasa device operations use bounded request timeouts (default 15s). If a device call stalls, the action fails with a logged timeout instead of blocking the accessory worker indefinitely.
-- Failure handling: Kasa command failures clear the cached device handle, retry through a bounded reconnect/discovery path, classify the failure when possible, and warn that dust collection state was not confirmed while the CNC job may continue.
+- Failure handling: Kasa command failures clear the cached device handle, retry through a bounded reconnect/discovery path, classify the failure when possible, and warn that dust collection state was not confirmed while the CNC job may continue. Accepted job-accessory OFF requests remain tracked until a confirmed OFF succeeds, so a queued command that later fails does not falsely clear the active accessory state.
 - Diagnostics: Linux/Raspberry Pi diagnostics bundles include a best-effort local network snapshot for Kasa/SSH troubleshooting, including hostname/IP, routes, DNS, SSH status/journal, kernel network logs, Wi-Fi status commands when available, uptime, memory/load, and the Simple Sender process state.
 
 The Kasa section lives in **App Settings -> Kasa Plug**. Start by enabling the master toggle, discover your device on the LAN, and pick it from the dropdown. Then map **Vacuum** and **Spindle Light** to outlet numbers and use the built-in outlet test buttons to confirm each mapping before cutting. If the selected Kasa device only exposes one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.
@@ -888,7 +885,7 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the authoritative local release gate. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. As of `2026-06-08`, the `3.16` baseline state then under review validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun: `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/run_ruff.py check .` clean, `.\.venv\Scripts\python.exe -m compileall simple_sender tests tools` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe tools/check_mypy_targets.py --expected-count 141` via `run_tests.bat` clean, `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` via `run_tests.bat` clean (`141` configured source files), `.\.venv\Scripts\python.exe -m pytest tests --cov=simple_sender --cov-report=xml --cov-report=term-missing` via `run_tests.bat`: `1952 passed, 2 skipped`, and `.\.venv\Scripts\python.exe tools/check_core_coverage.py coverage.xml` via `run_tests.bat`: clean (aggregate critical coverage `90.4%`). Direct `pytest -q`, direct `.\.venv\Scripts\python.exe -m pytest`, direct `.\.venv\Scripts\python.exe -m ruff check .`, and direct `mypy main.py simple_sender` were not rerun for the full-gate snapshot, so older counts from those commands are intentionally left in release history instead of being presented as current. Post-stabilization direct validation as of `2026-06-17` passed with `.\.venv\Scripts\python.exe -m pytest -q`: `1958 passed, 3 skipped`, `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean, and `git diff --check`: clean. This local validation does not by itself confirm cross-platform CI, hardware-in-the-loop behavior, or Raspberry Pi image provenance/build validation. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the broader local release gate when a wrapper/coverage gate is required. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. For the `3.18` release work, the direct local validation rerun as of `2026-06-28` passed with `.\.venv\Scripts\python.exe -m pytest`: `1970 passed, 2 skipped`, `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean, `.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`: clean, `.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`: clean, and `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: clean. The wrapper/coverage gate, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.18` release work. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
 The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
@@ -944,7 +941,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
-- v3.16 release notes: `RELEASE_NOTES_v3.16.md`.
+- v3.18 release notes: `RELEASE_NOTES_v3.18.md`.
 
 ## Module Layout
 - `simple_sender/application.py`: main `App` class (`tk.Tk`) plus startup wiring (settings, serial availability metadata, and explicit installation of methods from `application_*.py` helper modules).

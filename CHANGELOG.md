@@ -1,26 +1,41 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project are documented in this file.
 Historical entries may reference pre-lean features (for example legacy pathview/Spatial work) that are no longer active in the current runtime.
 
-## Unreleased
+## [3.18] - 2026-06-28
+
+### Changed
+- Runtime package metadata now reports `3.18`.
+- Current release-facing docs and the in-app About title now identify the active application baseline as `3.18`.
 
 ### Fixed
+- Completion accessory shutdown is now deferred until after the final post-job spindle-off / completion-cleanup result is known instead of running on raw stream `done`.
+- Send-time validation failures for `$` job lines, non-ASCII text, and overlong lines now enter terminal stream-error handling rather than a normally resumable pause.
+- Kasa job-accessory OFF tracking now waits for confirmed OFF success before clearing active job accessory state; accepted-then-failed OFF commands keep/recover active tracking.
+- Optional Kasa directive confirmation can hold streamed `VACUUM_ON` / `VACUUM_OFF` directives until the command result succeeds or fails.
+- Automatic completion `G53` safe-Z is now skipped with a warning when machine coordinates are not trusted.
+- Resume From operator guidance now states that modal reconstruction does not prove physical cutter position and that the operator must verify work zero, tool, Z clearance, spindle state, and physical position before resuming.
+- Active-job `error:` responses from GRBL now enter a protective stream error-hold instead of a normal resumable pause: the worker invalidates the stream, requests realtime feed hold when appropriate, preserves the failed source line in the error event/log, and prevents normal completion or silent resume past the rejected command.
 - Auto-level probing now accepts a valid `[PRB:...]` report that arrives during the probe command/idle wait, avoiding a false probe failure without changing the commanded probing motion.
 - File-backed quick-load preparation now preserves bounded sample lines for the loaded-job preview/event payload while leaving streaming delivery unchanged.
 - Quick-scan bounds confidence is downgraded to rough when endpoint-only scan bounds include `G2`/`G3` arcs without richer `SSMETA` extents, avoiding overconfident dimensions for arc-heavy files.
 - Shutdown timeout status/log output now includes the last reported cleanup step before forced close; this is reporting-only and does not identify a proven root cause.
 - `Apply RPM` now saves the requested spindle default but refuses to send a normal spindle-speed command while a job is streaming, avoiding a misleading confirmation path where the worker would block the command and the controller RPM would stay unchanged.
 - Passive Probe indicator visibility no longer forces continuous 20 ms idle status polling; diagnostics now report the effective status-poll profile alongside configured/effective intervals.
-- Updated the public GitHub sync workflow to copy the current `v3.16` About and release-note files instead of obsolete `v3.14` filenames.
+- Updated the public GitHub sync workflow to copy the current `v3.18` About and release-note files instead of obsolete `v3.14` filenames.
 - Updated stale About/help truthfulness tests that still expected the removed `v3.14` title and reference filename.
 
 ### Maintenance
 - Removed unreachable legacy runtime-metrics formatting code after the diagnostics dialog delegated that behavior to the shared diagnostics runtime-reporting implementation.
 
 ### Validation
-- Current `3.16` stabilization validation on Windows / Python `3.12.1` as of `2026-06-17`: direct `.\.venv\Scripts\python.exe -m pytest -q` passed with `1958 passed, 3 skipped`; `.\.venv\Scripts\python.exe tools\run_ruff.py check .` passed; `git diff --check` passed.
-- The most recent full release-gate snapshot remains the `2026-06-08` `run_tests.bat` gate: `1952 passed, 2 skipped`; Ruff, compileall, mypy manifest, critical-path coverage, and mypy passed.
+- Current `3.18` direct validation on Windows / Python `3.12.1` as of `2026-06-28`: `.\.venv\Scripts\python.exe -m pytest` passed with `1970 passed, 2 skipped`; `.\.venv\Scripts\python.exe tools\run_ruff.py check .` passed; `.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools` passed; `.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141` passed; `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` passed.
+- The `run_tests.bat` wrapper, pytest coverage gate, critical-path coverage check, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.18` release work.
+
+### Documentation
+- Release-note/About filenames now identify the `3.18` baseline.
+- README, About, release notes, and in-app help now describe the new Kasa confirmation, completion cleanup, machine-coordinate trust, terminal validation-error, and Resume From caveats.
 
 ## [3.16] - 2026-05-24
 

@@ -174,6 +174,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "training_wheels": True,
     "unit_mode": "mm",
     "vacuum_enabled": False,
+    "kasa_confirm_stream_directives": False,
     "vacuum_off_delay_sec": 0.0,
     "vacuum_outlet": 1,
     "streaming_line_threshold": GCODE_STREAMING_LINE_THRESHOLD,

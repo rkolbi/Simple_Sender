@@ -636,6 +636,8 @@ class GrblWorkerStatusMixin(GrblWorkerState):
             err_line = None
             err_source = None
             manual_tracker = None
+            stream_error_active = False
+            stream_error_was_paused = False
 
             with self._stream_lock:
                 if self._stream_line_queue:
@@ -647,8 +649,18 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                     if line_lower.startswith("error"):
                         err_source = getattr(queued_item, "manual_source", None)
                     manual_tracker = getattr(queued_item, "manual_tracker", None)
-                    
-                    if queued_item.is_gcode and self._streaming:
+
+                    if line_lower.startswith("error"):
+                        err_idx = queued_item.idx
+                        err_line = queued_item.line
+                        stream_error_active = bool(self._streaming or self._paused)
+                        stream_error_was_paused = bool(self._paused)
+                        if stream_error_active:
+                            self._abort_writes.set()
+                            self._stream_token += 1
+                            self._streaming = False
+                            self._paused = False
+                    elif queued_item.is_gcode and self._streaming:
                         self._ack_index += 1
                         ack_index = self._ack_index
                         ack_line_idx = queued_item.idx
@@ -665,9 +677,6 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                             stream_file_size_bytes = int(
                                 getattr(self, "_stream_file_size_bytes", 0) or 0
                             )
-                        if line_lower.startswith("error"):
-                            err_idx = queued_item.idx
-                            err_line = queued_item.line
             
             self._emit_buffer_fill()
             if manual_tracker is not None:
@@ -711,17 +720,49 @@ class GrblWorkerStatusMixin(GrblWorkerState):
                 if ack_line_idx is not None:
                     self._maybe_pause_after_ack(ack_line_idx)
 
-            # Pause stream on error (gSender-style) with context.
+            # Treat active-stream errors as terminal error-holds so a rejected
+            # command cannot be silently skipped by normal Resume.
             if line_lower.startswith("error"):
                 logger.error(f"GRBL error: {line}")
-                if self._streaming or self._paused:
+                if stream_error_active:
                     if err_idx == self._pause_after_idx:
                         self._pause_after_idx = None
                         self._pause_after_reason = None
                     msg = self._format_stream_error(line, err_idx, err_line)
-                    self._pause_stream(reason="error")
+                    hold_requested = False
+                    hold_failed = False
+                    if (
+                        self.is_connected()
+                        and not getattr(self, "_alarm_active", False)
+                        and not stream_error_was_paused
+                    ):
+                        try:
+                            accepted = self.hold()
+                            hold_requested = bool(accepted)
+                            hold_failed = accepted is False
+                        except Exception as exc:
+                            hold_failed = True
+                            logger.error(f"Protective feed hold failed after GRBL error: {exc}")
+                            self.ui_q.put(("log", f"[stream error] Feed hold failed: {exc}"))
+                    self._reset_stream_buffer()
+                    self._emit_buffer_fill()
                     self.ui_q.put(StreamErrorEvent(msg, err_idx, err_line, self._gcode_name))
-                    self.ui_q.put(("log", f"[stream error] {msg}"))
+                    hold_note = (
+                        " Feed hold was requested."
+                        if hold_requested
+                        else (
+                            " Feed hold was not accepted."
+                            if hold_failed
+                            else " Feed hold was not needed."
+                        )
+                    )
+                    detail = (
+                        f"Job paused: GRBL reported {line} while streaming. "
+                        "Review the failed line before restarting or using Resume From."
+                        f"{hold_note}"
+                    )
+                    self.ui_q.put(("log", f"[stream error] {detail} {msg}"))
+                    self.ui_q.put(StreamStateEvent("error", detail))
                 else:
                     source = err_source if err_source else self._last_manual_source
                     self.ui_q.put(("manual_error", line, source))
@@ -954,4 +995,3 @@ class GrblWorkerStatusMixin(GrblWorkerState):
         
         finally:
             logger.debug("Status thread stopped")
-

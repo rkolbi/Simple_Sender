@@ -962,7 +962,8 @@ def handle_stream_state_event(app, evt):
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
     elif st in ("done", "stopped"):
         _stop_job_lifecycle_logging(app)
-        _stop_job_accessories_for_state(app, st)
+        if st == "stopped":
+            _stop_job_accessories_for_state(app, st)
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = False
             macro_vars["paused"] = False

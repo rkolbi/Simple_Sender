@@ -109,6 +109,10 @@ def show_alarm_recovery(app) -> None:
         accepted = bool(app.grbl.reset())
         if not accepted:
             return False
+        try:
+            app._machine_coordinates_trusted = False
+        except Exception:
+            logger.exception("Failed marking machine-coordinate trust unknown after alarm reset")
         invalidate_job_setup_state(app)
         return True
 

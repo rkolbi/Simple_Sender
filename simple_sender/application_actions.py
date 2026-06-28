@@ -200,8 +200,16 @@ class ActionsMixin:
         is_on: bool,
         *,
         line_index: int | None = None,
-    ) -> None:
-        handle_stream_vacuum_directive(self, is_on, line_index=line_index)
+        requires_confirmation: bool = False,
+    ) -> bool:
+        return bool(
+            handle_stream_vacuum_directive(
+                self,
+                is_on,
+                line_index=line_index,
+                requires_confirmation=requires_confirmation,
+            )
+        )
 
     def _handle_stream_tool_change(
         self,

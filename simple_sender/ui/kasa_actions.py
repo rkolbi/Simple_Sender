@@ -188,6 +188,60 @@ def _sync_kasa_quick_state_from_result(app, result: OutletCommandResult) -> None
         _refresh_kasa_quick_ui(app)
 
 
+def _sync_kasa_job_state_from_result(app, result: OutletCommandResult) -> None:
+    source = str(getattr(result, "source", "") or "").strip().lower()
+    if not source.startswith("job_"):
+        return
+    try:
+        outlet = int(result.outlet_id)
+    except Exception:
+        return
+    active = set(int(value) for value in getattr(app, "_kasa_job_active_outlets", set()) or set())
+    pending_off = set(
+        int(value) for value in getattr(app, "_kasa_job_pending_off_outlets", set()) or set()
+    )
+    if bool(result.on):
+        if bool(result.success):
+            active.add(outlet)
+        else:
+            active.discard(outlet)
+        pending_off.discard(outlet)
+    else:
+        pending_off.discard(outlet)
+        if bool(result.success):
+            active.discard(outlet)
+        else:
+            active.add(outlet)
+            log_kasa_message(
+                app,
+                f"Job accessory OFF failed for outlet {outlet}; tracking remains active until a confirmed OFF succeeds.",
+            )
+    app._kasa_job_active_outlets = active
+    app._kasa_job_pending_off_outlets = pending_off
+    app._kasa_job_running = bool(active)
+
+
+def _complete_confirmed_stream_vacuum_directive(app, result: OutletCommandResult) -> None:
+    source = str(getattr(result, "source", "") or "").strip().lower()
+    if source not in {"stream_vacuum_on", "stream_vacuum_off", "stream_vacuum_off_delayed"}:
+        return
+    setting = getattr(app, "kasa_confirm_stream_directives", False)
+    getter = getattr(setting, "get", None)
+    required = bool(getter()) if callable(getter) else bool(setting)
+    if not required:
+        return
+    grbl = getattr(app, "grbl", None)
+    completer = getattr(grbl, "complete_stream_vacuum_directive", None)
+    if not callable(completer):
+        return
+    if bool(result.success):
+        completer(True, None)
+        return
+    command = "VACUUM_ON" if bool(result.on) else "VACUUM_OFF"
+    detail = str(result.error or "").strip()
+    completer(False, f"{command} failed: {detail}" if detail else f"{command} failed.")
+
+
 def _quick_toggle_request(app, *, channel: str) -> None:
     if not _kasa_supported():
         refresh_kasa_controls_state(app)
@@ -390,7 +444,9 @@ def _set_kasa_failure_status(app, result: OutletCommandResult) -> None:
 def on_kasa_command_result(app, result: OutletCommandResult) -> None:
     def _apply() -> None:
         _set_outlet_status(app, result)
+        _sync_kasa_job_state_from_result(app, result)
         _sync_kasa_quick_state_from_result(app, result)
+        _complete_confirmed_stream_vacuum_directive(app, result)
         if not result.success:
             detail = (
                 " dust collection state not confirmed; CNC job may continue."
@@ -448,6 +504,7 @@ def refresh_kasa_controls_state(app) -> None:
             "btn_kasa_discover",
             "kasa_device_combo",
             "vacuum_check",
+            "kasa_confirm_stream_directives_check",
             "light_check",
             "vacuum_outlet_combo",
             "light_outlet_combo",
@@ -474,6 +531,10 @@ def refresh_kasa_controls_state(app) -> None:
         combo_state = "readonly" if enabled and bool(app.kasa_device_combo["values"]) else "disabled"
         _set_widget_state(app.kasa_device_combo, combo_state)
     _set_widget_state(getattr(app, "vacuum_check", None), "normal" if enabled else "disabled")
+    _set_widget_state(
+        getattr(app, "kasa_confirm_stream_directives_check", None),
+        "normal" if enabled and vacuum_enabled else "disabled",
+    )
     _set_widget_state(
         getattr(app, "light_check", None),
         "normal" if enabled and has_dual_outlet else "disabled",
@@ -752,13 +813,19 @@ def handle_outgoing_gcode_line(
     _ = line_index
 
 
-def handle_stream_vacuum_directive(app, is_on: bool, *, line_index: int | None = None) -> None:
+def handle_stream_vacuum_directive(
+    app,
+    is_on: bool,
+    *,
+    line_index: int | None = None,
+    requires_confirmation: bool = False,
+) -> bool:
     if not _kasa_supported():
         command = "VACUUM_ON" if bool(is_on) else "VACUUM_OFF"
         line_text = f" at stream line {int(line_index) + 1}" if line_index is not None else ""
         log_kasa_message(app, f"{command}{line_text} ignored: Kasa control is available on Linux only.")
-        return
-    _kasa_runtime.handle_stream_vacuum_directive(
+        return False
+    accepted = _kasa_runtime.handle_stream_vacuum_directive(
         app,
         bool(is_on),
         settings_snapshot=kasa_settings_snapshot,
@@ -767,6 +834,12 @@ def handle_stream_vacuum_directive(app, is_on: bool, *, line_index: int | None =
     )
     # Do not mutate UI state here; wait for AccessoryRouter command-result callback
     # so stream directives use worker execution + final UI reconciliation only.
+    if bool(requires_confirmation) and not bool(accepted):
+        log_kasa_message(
+            app,
+            "Stream is held because the Kasa directive could not be queued for confirmation.",
+        )
+    return bool(accepted)
 
 
 def start_job_accessories(app, *, source: str = "job_run") -> None:

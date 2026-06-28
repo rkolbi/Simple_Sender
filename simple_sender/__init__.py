@@ -25,7 +25,7 @@
 A minimal, reliable GRBL sender for 3-axis CNC machines with Python + Tkinter.
 """
 
-__version__ = "3.16"
+__version__ = "3.18"
 __author__ = "Bob Kolbasowski"
 
 from .grbl_worker import GrblWorker

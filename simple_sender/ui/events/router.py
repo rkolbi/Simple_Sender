@@ -1028,6 +1028,25 @@ def handle_event(app: Any, evt: UiEvent):
             except Exception as exc:
                 _log_suppressed("Failed handling streamed vacuum directive", exc)
             return
+        case ("stream_vacuum_directive", is_on, line_index, requires_confirmation):
+            try:
+                accepted = True
+                if hasattr(app, "_handle_stream_vacuum_directive"):
+                    accepted = bool(
+                        app._handle_stream_vacuum_directive(
+                            bool(cast(bool, is_on)),
+                            line_index=cast(int | None, line_index),
+                            requires_confirmation=bool(cast(bool, requires_confirmation)),
+                        )
+                    )
+                if bool(cast(bool, requires_confirmation)) and not accepted:
+                    grbl = getattr(app, "grbl", None)
+                    completer = getattr(grbl, "complete_stream_vacuum_directive", None)
+                    if callable(completer):
+                        completer(False, "Kasa directive command was not accepted.")
+            except Exception as exc:
+                _log_suppressed("Failed handling confirmed streamed vacuum directive", exc)
+            return
         case ("stream_tool_change", line_idx, tool_name):
             try:
                 if hasattr(app, "_handle_stream_tool_change"):
