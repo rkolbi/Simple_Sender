@@ -310,7 +310,14 @@ def bind_ui_queue_wake_callback(app: AppProtocol) -> None:
 def _stream_ui_busy(app: AppProtocol) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return True
-    return str(getattr(app, "_stream_state", "") or "").strip().lower() in {"running", "paused"}
+    return str(getattr(app, "_stream_state", "") or "").strip().lower() in {
+        "running",
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+    }
 
 
 def _connected_quiet_idle(app: AppProtocol) -> bool:

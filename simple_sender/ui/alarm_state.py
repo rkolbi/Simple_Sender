@@ -227,7 +227,18 @@ def set_alarm_lock(app, locked: bool, message: str | None = None):
         and app._stream_state not in ("running", "paused")
         and not bool(getattr(app, "_stream_done_pending_idle", False))
     ):
-        app._set_manual_controls_enabled(True)
+        normal_checker = getattr(
+            getattr(app, "grbl", None),
+            "normal_session_initialization_required",
+            None,
+        )
+        try:
+            normal_required = (
+                bool(normal_checker()) if callable(normal_checker) else False
+            )
+        except Exception:
+            normal_required = True
+        app._set_manual_controls_enabled(not normal_required)
         if job_controls_ready(app):
             set_run_resume_from(app, True)
     status_text = ""

@@ -210,7 +210,10 @@ def _init_connection_runtime_state(app) -> None:
     app._disconnect_thread = None
     app._connection_state_event = threading.Event()
     app._status_update_event = threading.Event()
+    app._status_coords_update_event = threading.Event()
     app._modal_update_event = threading.Event()
+    app._status_installed_coordinate_signature = None
+    app._status_last_installed_coordinate_ts = 0.0
     sync_connection_runtime_state_to_app(app, ConnectionRuntimeState())
 
 
@@ -306,6 +309,7 @@ def _init_error_dialog_runtime_state(app, setting, tk) -> None:
     app._grbl_code_popup_last_ts_by_code = {}
     app._grbl_code_popup_last_suppressed_log_ts_by_code = {}
     app._pending_force_g90 = False
+    app._pending_force_g90_snapshot = None
     app._homing_in_progress = False
     app._homing_state_seen = False
     app._machine_coordinates_trusted = False
@@ -412,6 +416,17 @@ def _init_worker_and_runtime_controllers(
         log=getattr(app, "_log_kasa_message", None),
         command_result_callback=getattr(app, "_on_kasa_command_result", None),
     )
+    recovery_hook_setter = getattr(app.grbl, "set_recovery_safety_hook", None)
+    if callable(recovery_hook_setter):
+        def _submit_recovery_accessory_off(_state, work_identity, source_identity) -> None:
+            app.accessory_router.request_recovery_safety_off(
+                connection_generation=int(work_identity.connection_generation),
+                stream_epoch=int(work_identity.stream_epoch),
+                recovery_epoch=int(work_identity.recovery_epoch),
+                source_id=int(source_identity.source_id),
+            )
+
+        recovery_hook_setter(_submit_recovery_accessory_off)
     app._install_dialog_loggers()
     app.report_callback_exception = app._tk_report_callback_exception
     app._apply_status_poll_profile()
@@ -556,6 +571,8 @@ def _init_gcode_and_autolevel_state(
 
     app._auto_level_grid = None
     app._auto_level_height_map = None
+    app._auto_level_map_provenance = None
+    app._auto_level_dialog_controller = None
     app._auto_level_bounds = None
     app._auto_level_prereq_snapshot = {}
     app._auto_level_job_source_path = None
@@ -571,6 +588,8 @@ def _init_gcode_and_autolevel_state(
     app._auto_level_leveled_temp = False
     app._auto_level_leveled_name = None
     app._auto_level_restore = None
+    app._stream_tool_change_thread = None
+    app._stream_tool_change_thread_identity = None
     app.auto_level_settings = dict(
         app.settings.get(
             "auto_level_settings", default_settings.get("auto_level_settings", {})
@@ -668,6 +687,8 @@ def _init_stream_and_override_state(
     app._status_spindle_rpm_after_id = None
     app._status_positions_coalesce_after_id = None
     app._status_positions_coalesce_pending_fields = None
+    app._status_positions_coalesce_current_id = None
+    app._status_positions_coalesce_sequence = 0
     app._status_positions_last_apply_ts = 0.0
     app._status_stream_position_coalesce_ms = 80.0
     app._status_stream_position_pressure_coalesce_ms = 140.0

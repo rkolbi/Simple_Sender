@@ -22,7 +22,7 @@
 
 """Status-event motion/DRO helpers extracted from the main status module."""
 
-from .status_parsing import _StatusFields
+from .status_parsing import StatusCoordinateApplication, _StatusFields
 
 
 def xyz_tuple_changed(
@@ -576,13 +576,86 @@ def update_positions_and_macro_state(
     performance_mode_enabled,
     schedule_status_ui_callback,
     with_macro_vars_nonblocking,
-    mark_status_coordinates_fresh,
+    signal_thread_event,
     flash_wpos_labels,
-) -> None:
+) -> StatusCoordinateApplication:
+    if not fields.coordinates_valid:
+        return StatusCoordinateApplication.INVALID
     stream_busy_for_noncritical = stream_active_or_finishing(app)
-    reported_wco_vals = parse_xyz_triplet(fields.wco) if fields.wco else None
-    mpos_vals = parse_xyz_triplet(fields.mpos) if fields.mpos else None
-    reported_wpos_vals = parse_xyz_triplet(fields.wpos) if fields.wpos else None
+    coordinate_evidence = getattr(fields, "coordinate_evidence", None)
+    if coordinate_evidence is not None and bool(coordinate_evidence.valid):
+        reported_wco_vals = (
+            list(coordinate_evidence.wco)
+            if coordinate_evidence.wco is not None
+            else None
+        )
+        mpos_vals = (
+            list(coordinate_evidence.mpos)
+            if coordinate_evidence.mpos is not None
+            else None
+        )
+        reported_wpos_vals = (
+            list(coordinate_evidence.wpos)
+            if coordinate_evidence.wpos is not None
+            else None
+        )
+        coordinate_signature = coordinate_evidence.signature
+    else:
+        reported_wco_vals = parse_xyz_triplet(fields.wco) if fields.wco else None
+        mpos_vals = parse_xyz_triplet(fields.mpos) if fields.mpos else None
+        reported_wpos_vals = parse_xyz_triplet(fields.wpos) if fields.wpos else None
+        coordinate_signature = fields.coordinate_signature
+        if coordinate_signature is None and any(
+            values is not None
+            for values in (mpos_vals, reported_wpos_vals, reported_wco_vals)
+        ):
+            coordinate_signature = (
+                tuple(mpos_vals) if mpos_vals is not None else None,
+                tuple(reported_wpos_vals) if reported_wpos_vals is not None else None,
+                tuple(reported_wco_vals) if reported_wco_vals is not None else None,
+            )
+    coordinate_snapshot: dict[str, object] | None = None
+    if coordinate_signature is not None:
+        dro_vars = (
+            "mpos_x",
+            "mpos_y",
+            "mpos_z",
+            "wpos_x",
+            "wpos_y",
+            "wpos_z",
+        )
+        dro_values: dict[str, object] = {}
+        for attr in dro_vars:
+            var = getattr(app, attr, None)
+            getter = getattr(var, "get", None)
+            if callable(getter):
+                try:
+                    dro_values[attr] = getter()
+                except Exception:
+                    pass
+        coordinate_snapshot = {
+            "_mpos_raw": getattr(app, "_mpos_raw", None),
+            "_wpos_raw": getattr(app, "_wpos_raw", None),
+            "_wco_raw": getattr(app, "_wco_raw", None),
+            "_zero_all_pending_active": getattr(app, "_zero_all_pending_active", False),
+            "_zero_all_pending_expected_wco_raw": getattr(
+                app,
+                "_zero_all_pending_expected_wco_raw",
+                None,
+            ),
+            "_zero_all_pending_until_ts": getattr(app, "_zero_all_pending_until_ts", 0.0),
+            "_zero_all_pending_hard_until_ts": getattr(
+                app,
+                "_zero_all_pending_hard_until_ts",
+                0.0,
+            ),
+            "_zero_all_pending_post_timeout_wco_seen": getattr(
+                app,
+                "_zero_all_pending_post_timeout_wco_seen",
+                False,
+            ),
+            "_dro_values": dro_values,
+        }
     wco_vals = list(reported_wco_vals) if reported_wco_vals else None
     wpos_vals = list(reported_wpos_vals) if reported_wpos_vals else None
     if wco_vals:
@@ -861,16 +934,51 @@ def update_positions_and_macro_state(
             macro_updates["_OvChanged"] = bool(changed)
         if macro_updates:
             macro_vars.update(macro_updates)
+        if coordinate_signature is not None:
+            macro_vars["_status_coords_seq"] = int(
+                macro_vars.get("_status_coords_seq", 0) or 0
+            ) + 1
 
-    with_macro_vars_nonblocking(
+    macro_values_installed = with_macro_vars_nonblocking(
         app,
         _apply_macro_status_updates,
         context="Failed updating macro status values",
     )
-    mark_status_coordinates_fresh(
-        app,
-        context="Failed marking status coordinates fresh after position update",
-    )
+    if coordinate_signature is not None and not macro_values_installed:
+        if coordinate_snapshot is not None:
+            for attr in (
+                "_mpos_raw",
+                "_wpos_raw",
+                "_wco_raw",
+                "_zero_all_pending_active",
+                "_zero_all_pending_expected_wco_raw",
+                "_zero_all_pending_until_ts",
+                "_zero_all_pending_hard_until_ts",
+                "_zero_all_pending_post_timeout_wco_seen",
+            ):
+                setattr(app, attr, coordinate_snapshot.get(attr))
+            dro_snapshot = coordinate_snapshot.get("_dro_values", {})
+            if not isinstance(dro_snapshot, dict):
+                dro_snapshot = {}
+            for attr, value in dro_snapshot.items():
+                var = getattr(app, attr, None)
+                setter = getattr(var, "set", None)
+                if callable(setter):
+                    try:
+                        setter(value)
+                    except Exception as exc:
+                        log_suppressed(
+                            "Failed restoring DRO after coordinate install rejection",
+                            exc,
+                        )
+        log_suppressed(
+            "Rejected status-coordinate freshness because macro cache install did not complete",
+            RuntimeError("coordinate macro cache lock unavailable"),
+        )
+    if coordinate_signature is not None and macro_values_installed:
+        app._status_installed_coordinate_signature = coordinate_signature
+        app._status_last_installed_coordinate_ts = float(time_module.monotonic())
+        signal_thread_event(app, "_status_coords_update_event")
     probe_active = bool(pin_state & {"P"})
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
 
@@ -889,3 +997,6 @@ def update_positions_and_macro_state(
             _apply_led_panel_state()
         except Exception as exc:
             log_suppressed("Failed updating LED panel from status", exc)
+    if coordinate_signature is not None and macro_values_installed:
+        return StatusCoordinateApplication.VALID_INSTALLED
+    return StatusCoordinateApplication.VALID_UNCHANGED

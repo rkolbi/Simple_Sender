@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+import math
 import queue
 import logging
 from simple_sender.utils.log_suppressed import log_suppressed_exception
@@ -35,20 +36,39 @@ from .status import (
 )
 from . import streaming as _event_router_streaming
 from simple_sender.ui.grbl_lifecycle import handle_connection_event, handle_ready_event
+from simple_sender.ui.autolevel_state import (
+    clear_active_auto_level_map,
+    clear_active_auto_level_map_if_owned,
+)
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
-from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
+from simple_sender.ui.job_controls import (
+    disable_job_controls,
+    job_controls_ready,
+    set_run_resume_from,
+)
 from simple_sender.ui.dialogs.error_dialogs_ui import show_grbl_code_popup
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 from simple_sender.utils.grbl_errors import annotate_grbl_alarm, annotate_grbl_error
 from simple_sender.types import (
     AlarmEvent,
+    AutoLevelMapProvenance,
+    ConnectionScopedEvent,
     ConnectionEvent,
+    ExecutionRecoveryState,
     GcodeAckedEvent,
     GcodeSentEvent,
+    NormalSessionInitializationEvent,
+    NormalSessionInitializationState,
+    NormalSessionPhase,
     ProgressBytesEvent,
     ProgressEvent,
     ReadyEvent,
+    RecoveryCompleteEvent,
+    RecoveryFinalizationIdentity,
+    RecoveryPhase,
+    RecoveryRequiredEvent,
+    RecoveryStateSnapshot,
     SettingsDumpDoneEvent,
     StatusEvent,
     StreamCompletionEofEvent,
@@ -56,6 +76,7 @@ from simple_sender.types import (
     StreamInterruptedEvent,
     StreamPauseReasonEvent,
     StreamStateEvent,
+    StreamToolChangeIdentity,
     UiEvent,
 )
 
@@ -69,6 +90,532 @@ _STREAM_ERROR_33_HINT = (
     "Likely arc precision/tolerance issue (error:33). "
     "Increase VCarve inch-post X/Y and I/J precision (1.4-1.5) or output arcs as segments."
 )
+
+
+def _worker_recovery_required(app: Any) -> bool:
+    checker = getattr(getattr(app, "grbl", None), "recovery_required", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return True
+
+
+def _invalidate_machine_snapshot_caches(app: Any) -> None:
+    """Make a partial or retired snapshot unusable by UI workflows."""
+    invalidate_job_setup_state(app)
+    app._recovery_snapshot = None
+    app._wco_raw = None
+    app._mpos_raw = None
+    app._wpos_raw = None
+    app._status_installed_coordinate_signature = None
+    app._status_last_installed_coordinate_ts = 0.0
+    status_coords_event = getattr(app, "_status_coords_update_event", None)
+    if status_coords_event is not None:
+        try:
+            status_coords_event.clear()
+        except Exception:
+            pass
+    app._wcs_offsets_snapshot = ()
+    app._g92_raw = None
+    app._tlo_value = None
+    app._tlo_mode = None
+    for attr in (
+        "_machine_coordinates_trusted",
+        "_modal_state_trusted",
+        "_work_offsets_trusted",
+        "_g92_trusted",
+        "_tool_length_offset_trusted",
+        "_spindle_state_trusted",
+        "_coolant_state_trusted",
+    ):
+        setattr(app, attr, False)
+    macro_executor = getattr(app, "macro_executor", None)
+    macro_vars_context = getattr(macro_executor, "macro_vars", None)
+    if callable(macro_vars_context):
+        try:
+            with macro_vars_context() as macro_vars:
+                for key in (
+                    "_position_trusted",
+                    "_modal_trusted",
+                    "_wcs_trusted",
+                    "_g92_trusted",
+                    "_tlo_trusted",
+                    "_spindle_trusted",
+                    "_coolant_trusted",
+                ):
+                    macro_vars[key] = False
+                for key in (
+                    "units",
+                    "distance",
+                    "plane",
+                    "feedmode",
+                    "arc",
+                    "motion",
+                    "WCS",
+                    "wcs_offsets",
+                    "spindle",
+                    "coolant",
+                    "feed",
+                    "curfeed",
+                    "spindle_speed",
+                    "curspindle",
+                    "tool",
+                    "selected_tool",
+                    "g92x",
+                    "g92y",
+                    "g92z",
+                    "mx",
+                    "my",
+                    "mz",
+                    "wcox",
+                    "wcoy",
+                    "wcoz",
+                    "wx",
+                    "wy",
+                    "wz",
+                    "tlo",
+                    "tlo_mode",
+                ):
+                    macro_vars[key] = ""
+        except Exception as exc:
+            _log_suppressed("Failed clearing retired macro snapshot cache", exc)
+
+
+def _install_machine_snapshot_caches(
+    app: Any,
+    snapshot: RecoveryStateSnapshot,
+) -> None:
+    """Install one immutable worker-approved machine-state snapshot."""
+    trust = snapshot.to_trust_state(setup_tool_reference=False)
+    if trust.missing_for_new_job():
+        raise RuntimeError("Approved machine-state snapshot is incomplete")
+    machine_position = snapshot.machine_position
+    work_coordinate_offset = snapshot.work_coordinate_offset
+    g92 = snapshot.g92
+    if machine_position is None or work_coordinate_offset is None or g92 is None:
+        raise RuntimeError("Approved machine-state snapshot lacks coordinate values")
+    derived_work_position = tuple(
+        float(machine_position[idx]) - float(work_coordinate_offset[idx])
+        for idx in range(3)
+    )
+    if not all(math.isfinite(value) for value in derived_work_position):
+        raise RuntimeError("Approved snapshot derives a non-finite work position")
+
+    modal_units = "inch" if snapshot.modal_units == "G20" else "mm"
+    app._modal_units = modal_units
+    app._set_unit_mode(modal_units)
+    app._recovery_snapshot = snapshot
+    app._wcs_offsets_snapshot = tuple(snapshot.wcs_offsets)
+    app._g92_raw = tuple(g92)
+    app._tlo_value = snapshot.tlo
+    app._tlo_mode = snapshot.tlo_mode
+    app._wco_raw = work_coordinate_offset
+    app._mpos_raw = machine_position
+    app._wpos_raw = derived_work_position
+    macro_values: dict[str, object] = {
+        "units": snapshot.modal_units,
+        "distance": snapshot.distance_mode,
+        "plane": snapshot.plane,
+        "feedmode": snapshot.feed_mode,
+        "arc": snapshot.arc_distance_mode or "",
+        "motion": snapshot.motion_mode or "",
+        "WCS": snapshot.active_wcs,
+        "wcs_offsets": tuple(snapshot.wcs_offsets),
+        "spindle": snapshot.spindle_mode,
+        "coolant": "+".join(snapshot.coolant_modes),
+        "feed": snapshot.feed_rate,
+        "curfeed": snapshot.feed_rate,
+        "spindle_speed": snapshot.spindle_speed,
+        "curspindle": snapshot.spindle_speed,
+        "tool": str(snapshot.current_tool_number),
+        "selected_tool": str(snapshot.selected_tool_number),
+        "tlo": snapshot.tlo,
+        "tlo_mode": snapshot.tlo_mode,
+        "g92x": g92[0],
+        "g92y": g92[1],
+        "g92z": g92[2],
+        "mx": machine_position[0],
+        "my": machine_position[1],
+        "mz": machine_position[2],
+        "wcox": work_coordinate_offset[0],
+        "wcoy": work_coordinate_offset[1],
+        "wcoz": work_coordinate_offset[2],
+        "wx": derived_work_position[0],
+        "wy": derived_work_position[1],
+        "wz": derived_work_position[2],
+    }
+    with app.macro_executor.macro_vars() as macro_vars:
+        macro_vars.update(macro_values)
+        macro_vars["_position_trusted"] = bool(trust.machine_position)
+        macro_vars["_modal_trusted"] = bool(trust.modal_state)
+        macro_vars["_wcs_trusted"] = bool(trust.work_coordinates)
+        macro_vars["_g92_trusted"] = bool(trust.g92)
+        macro_vars["_tlo_trusted"] = bool(trust.tool_length_offset)
+        macro_vars["_spindle_trusted"] = bool(trust.spindle_state)
+        macro_vars["_coolant_trusted"] = bool(trust.coolant_state)
+    app._machine_coordinates_trusted = bool(trust.machine_position)
+    app._modal_state_trusted = bool(trust.modal_state)
+    app._work_offsets_trusted = bool(trust.work_coordinates)
+    app._g92_trusted = bool(trust.g92)
+    app._tool_length_offset_trusted = bool(trust.tool_length_offset)
+    app._spindle_state_trusted = bool(trust.spindle_state)
+    app._coolant_state_trusted = bool(trust.coolant_state)
+    refresher = getattr(app, "_refresh_dro_display", None)
+    if callable(refresher):
+        refresher()
+
+
+def _settings_snapshot_available(app: Any) -> bool:
+    controller = getattr(app, "settings_controller", None)
+    data = getattr(controller, "_settings_data", None)
+    return bool(data)
+
+
+def _settings_capture_active(app: Any) -> bool:
+    controller = getattr(app, "settings_controller", None)
+    return bool(getattr(controller, "_settings_capture", False))
+
+
+def _normal_session_readiness_prompt_acknowledged(
+    app: Any,
+    state: NormalSessionInitializationState,
+) -> bool:
+    return getattr(
+        app,
+        "_normal_session_initialization_acknowledged_identity",
+        None,
+    ) == state.action_identity
+
+
+def _normal_session_readiness_prompt_allowed(
+    app: Any,
+    state: NormalSessionInitializationState,
+) -> bool:
+    return (
+        state.phase is NormalSessionPhase.POSITION_REQUIRED
+        and not bool(getattr(state, "homing_started", False))
+        and not _normal_session_readiness_prompt_acknowledged(app, state)
+    )
+
+
+def _request_normal_session_settings_snapshot(app: Any) -> None:
+    if _settings_snapshot_available(app) or _settings_capture_active(app):
+        return
+    app._pending_settings_refresh = True
+    requester = getattr(app, "_request_settings_dump", None)
+    if not callable(requester):
+        return
+    try:
+        accepted = requester()
+    except Exception as exc:
+        _log_suppressed("Failed requesting startup GRBL settings snapshot", exc)
+        return
+    if accepted is False:
+        app._pending_settings_refresh = True
+    elif accepted is True:
+        app._pending_settings_refresh = False
+
+
+def _show_deferred_normal_session_initialization_if_ready(app: Any) -> None:
+    if not bool(
+        getattr(app, "_normal_session_readiness_prompt_deferred_for_settings", False)
+    ):
+        return
+    state = getattr(app, "_normal_session_initialization_state", None)
+    if state is None:
+        return
+    try:
+        if app.grbl.normal_session_state() != state:
+            return
+    except Exception:
+        return
+    if not _normal_session_readiness_prompt_allowed(app, state):
+        app._normal_session_readiness_prompt_deferred_for_settings = False
+        return
+    if not _settings_snapshot_available(app):
+        return
+    if getattr(app, "_normal_session_initialization_dialog", None) is not None:
+        return
+    app._normal_session_readiness_prompt_deferred_for_settings = False
+    try:
+        app.status.config(
+            text="Connected. Machine information obtained. Use Home to complete Job Ready."
+        )
+    except Exception as exc:
+        _log_suppressed("Failed updating normal-session settings-ready status", exc)
+    try:
+        from simple_sender.ui.dialogs.normal_session_initialization_dialog import (
+            show_normal_session_initialization,
+        )
+
+        show_normal_session_initialization(app)
+    except Exception as exc:
+        _log_suppressed("Failed presenting normal-session initialization", exc)
+
+
+def _handle_normal_session_initialization_event(
+    app: Any,
+    state: NormalSessionInitializationState,
+    snapshot: RecoveryStateSnapshot | None,
+) -> None:
+    """Project worker-owned Communication Ready versus Job Ready state."""
+    try:
+        if app.grbl.normal_session_state() != state:
+            return
+    except Exception:
+        return
+    app._normal_session_initialization_state = state
+    dialog = getattr(app, "_normal_session_initialization_dialog", None)
+    dialog_identity = getattr(
+        app, "_normal_session_initialization_dialog_identity", None
+    )
+    dialog_phase = getattr(app, "_normal_session_initialization_dialog_phase", None)
+    if dialog is not None and (
+        dialog_identity != state.action_identity or dialog_phase != state.phase
+    ):
+        try:
+            dialog.destroy()
+        except Exception as exc:
+            _log_suppressed("Failed retiring stale normal-session dialog", exc)
+        app._normal_session_initialization_dialog = None
+        app._normal_session_initialization_dialog_identity = None
+        app._normal_session_initialization_dialog_phase = None
+    app._pending_modal_sync = False
+    app._modal_sync_inflight = False
+    app._modal_sync_inflight_started_ts = 0.0
+    if state.phase is NormalSessionPhase.SNAPSHOT_INSTALL_PENDING:
+        disable_job_controls(app)
+        app._set_manual_controls_enabled(False)
+        identity = state.action_identity
+        try:
+            if snapshot is None:
+                raise RuntimeError("Worker did not publish an approved snapshot")
+            if (
+                int(snapshot.connection_generation) != int(state.connection_generation)
+                or int(snapshot.recovery_epoch) != int(state.recovery_epoch)
+            ):
+                raise RuntimeError("Normal-session snapshot provenance is stale")
+            logger.info(
+                "Installing normal-session snapshot in UI: generation=%s "
+                "recovery_epoch=%s snapshot_id=0x%x",
+                snapshot.connection_generation,
+                snapshot.recovery_epoch,
+                id(snapshot),
+            )
+            _invalidate_machine_snapshot_caches(app)
+            _install_machine_snapshot_caches(app, snapshot)
+            app.status.config(
+                text=(
+                    "Current-session state installed; waiting for worker Job Ready "
+                    "confirmation."
+                )
+            )
+            finalizer = getattr(
+                app.grbl, "finalize_normal_session_snapshot_install", None
+            )
+            if not callable(finalizer) or not bool(finalizer(identity, snapshot)):
+                raise RuntimeError("Worker rejected the snapshot installation acknowledgement")
+            logger.info(
+                "Normal-session snapshot installation acknowledged: generation=%s "
+                "recovery_epoch=%s snapshot_id=0x%x",
+                snapshot.connection_generation,
+                snapshot.recovery_epoch,
+                id(snapshot),
+            )
+        except Exception as exc:
+            _invalidate_machine_snapshot_caches(app)
+            failer = getattr(app.grbl, "fail_normal_session_snapshot_install", None)
+            if snapshot is not None and callable(failer):
+                try:
+                    failer(
+                        identity,
+                        snapshot,
+                        reason=(
+                            "Current-session snapshot installation failed; synchronize "
+                            "again before Job Ready."
+                        ),
+                    )
+                except Exception as fail_exc:
+                    _log_suppressed(
+                        "Failed retiring rejected normal-session snapshot", fail_exc
+                    )
+            try:
+                app.status.config(
+                    text=(
+                        "Job Ready blocked: current-session state installation failed; "
+                        "synchronize again."
+                    )
+                )
+            except Exception as status_exc:
+                _log_suppressed(
+                    "Failed displaying normal-session snapshot rejection", status_exc
+                )
+            _log_suppressed("Normal-session snapshot installation failed", exc)
+        return
+    if state.phase is NormalSessionPhase.READY:
+        try:
+            from simple_sender.ui.dialogs.startup_connection_dialog import (
+                close_startup_connection_dialog,
+            )
+
+            close_startup_connection_dialog(app)
+        except Exception as exc:
+            _log_suppressed("Failed retiring startup connection dialog", exc)
+        app.status.config(text="Job Ready: current-session machine state is established.")
+        app._set_manual_controls_enabled(True)
+        set_run_resume_from(app, job_controls_ready(app))
+        if bool(getattr(app, "_normal_session_home_requested_from_dialog", False)):
+            app._normal_session_home_requested_from_dialog = False
+            try:
+                messagebox.showinfo("Job Ready", "Machine homed. Job Ready.", parent=app)
+            except Exception as exc:
+                _log_suppressed("Failed displaying Job Ready confirmation", exc)
+        try:
+            app._update_recover_button_visibility()
+            if not bool(getattr(app, "_alarm_locked", False)):
+                app.btn_alarm_recover.config(state="disabled")
+        except Exception as exc:
+            _log_suppressed("Failed retiring normal-session initialization action", exc)
+        return
+    disable_job_controls(app)
+    app._set_manual_controls_enabled(False)
+    if state.phase is NormalSessionPhase.POSITION_REQUIRED:
+        if _settings_snapshot_available(app):
+            app._normal_session_readiness_prompt_deferred_for_settings = False
+            app.status.config(
+                text="Connected. Machine information obtained. Use Home to complete Job Ready."
+            )
+        else:
+            app._normal_session_readiness_prompt_deferred_for_settings = True
+            app.status.config(
+                text="Connected. Retrieving GRBL settings before readiness prompt."
+            )
+            _request_normal_session_settings_snapshot(app)
+    else:
+        app._normal_session_readiness_prompt_deferred_for_settings = False
+        app.status.config(text=str(state.reason or "Communication Ready; Job Ready is pending."))
+    try:
+        machine_text = "COMMUNICATION READY - JOB INITIALIZATION REQUIRED"
+        app.machine_state.set(machine_text)
+        app._machine_state_text = machine_text
+    except Exception as exc:
+        _log_suppressed("Failed setting normal-session machine-state label", exc)
+    try:
+        app._update_recover_button_visibility()
+        app.btn_alarm_recover.config(state="normal")
+    except Exception as exc:
+        _log_suppressed("Failed exposing normal-session initialization action", exc)
+    if (
+        _normal_session_readiness_prompt_allowed(app, state)
+        and _settings_snapshot_available(app)
+        and getattr(app, "_normal_session_initialization_dialog", None) is None
+    ):
+        try:
+            from simple_sender.ui.dialogs.normal_session_initialization_dialog import (
+                show_normal_session_initialization,
+            )
+
+            show_normal_session_initialization(app)
+        except Exception as exc:
+            _log_suppressed("Failed presenting normal-session initialization", exc)
+
+
+def _event_is_from_stale_connection(app: Any, evt: UiEvent) -> bool:
+    generation = getattr(evt, "generation", None)
+    if generation is None:
+        return False
+    getter = getattr(getattr(app, "grbl", None), "connection_generation", None)
+    if not callable(getter):
+        return False
+    try:
+        if int(generation) != int(getter()):
+            return True
+        worker = getattr(app, "grbl", None)
+        recovery_epoch = getattr(evt, "recovery_epoch", None)
+        recovery_getter = getattr(worker, "recovery_epoch", None)
+        if recovery_epoch is not None and callable(recovery_getter):
+            if int(recovery_epoch) != int(recovery_getter()):
+                return True
+        stream_epoch = getattr(evt, "stream_epoch", None)
+        stream_getter = getattr(worker, "stream_epoch", None)
+        if stream_epoch is not None and callable(stream_getter):
+            if int(stream_epoch) != int(stream_getter()):
+                return True
+        reset_attempt_id = getattr(evt, "reset_attempt_id", None)
+        if reset_attempt_id is not None:
+            state_getter = getattr(worker, "recovery_state", None)
+            if callable(state_getter):
+                if state_getter().reset_attempt_id != reset_attempt_id:
+                    return True
+        if isinstance(evt, RecoveryRequiredEvent) and not _worker_recovery_required(app):
+            return True
+        if isinstance(evt, RecoveryRequiredEvent):
+            state_getter = getattr(worker, "recovery_state", None)
+            if callable(state_getter):
+                current_state = state_getter()
+                if (
+                    current_state.phase != evt.state.phase
+                    or current_state.reset_attempt_id != evt.state.reset_attempt_id
+                ):
+                    return True
+        if (
+            isinstance(evt, StreamStateEvent)
+            and str(evt.state).strip().lower() == "recovery_required"
+            and not _worker_recovery_required(app)
+        ):
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def _event_blocked_by_recovery(app: Any, evt: UiEvent) -> bool:
+    if not _worker_recovery_required(app):
+        return False
+    if isinstance(evt, ConnectionScopedEvent):
+        return _event_blocked_by_recovery(app, cast(UiEvent, evt.payload))
+    if isinstance(evt, (RecoveryRequiredEvent, RecoveryCompleteEvent)):
+        return False
+    if isinstance(evt, ReadyEvent):
+        return bool(evt.is_ready)
+    if isinstance(evt, StreamStateEvent):
+        return str(evt.state).strip().lower() != "recovery_required"
+    if isinstance(
+        evt,
+        (
+            StatusEvent,
+            GcodeSentEvent,
+            GcodeAckedEvent,
+            ProgressEvent,
+            ProgressBytesEvent,
+            StreamCompletionEofEvent,
+            StreamPauseReasonEvent,
+        ),
+    ):
+        return True
+    if isinstance(evt, tuple) and evt:
+        kind = str(evt[0])
+        if kind == "recovery_complete":
+            return False
+        if kind == "ready":
+            return len(evt) > 1 and bool(evt[1])
+        if kind == "stream_state":
+            return len(evt) < 2 or str(evt[1]).strip().lower() != "recovery_required"
+        return kind in {
+            "status",
+            "gcode_sent",
+            "gcode_acked",
+            "progress",
+            "progress_bytes",
+            "stream_completion_eof",
+            "stream_pause_reason",
+            "stream_vacuum_directive",
+            "stream_tool_change",
+            "spindle_state",
+        }
+    return False
 
 
 _JOG_LIMIT_ERROR_HINT = (
@@ -500,6 +1047,10 @@ def _handle_log_rx_event(app: Any, raw: str) -> None:
     try:
         if str(raw).lstrip().upper().startswith("GRBL"):
             invalidate_job_setup_state(app)
+            clear_active_auto_level_map(
+                app,
+                "Auto-Level map invalidated by controller reset.",
+            )
     except Exception as exc:
         _log_suppressed("Failed invalidating job setup on GRBL reset banner", exc)
     _parse_modal_units(app, raw)
@@ -654,6 +1205,7 @@ def _handle_manual_queue_drop_event(app: Any, dropped: int, total: int) -> None:
 
 def _handle_alarm_event(app: Any, message: str) -> None:
     msg = annotate_grbl_alarm(str(message))
+    clear_active_auto_level_map(app, "Auto-Level map invalidated by controller alarm.")
     _clear_homing_watchdog(app, "Failed clearing homing watchdog ignore after alarm")
     app._set_alarm_lock(True, msg)
     app.macro_executor.notify_alarm(msg)
@@ -784,25 +1336,217 @@ def set_streaming_lock(app: Any, locked: bool, *, defer_toolbar_refresh: bool = 
             _log_suppressed("Failed refreshing toolbar action focus after streaming lock change", exc)
 
 
+def _report_recovery_finalization_failure(app: Any, message: str) -> None:
+    """Keep the exact approved handoff reachable while admission remains closed."""
+    app._grbl_ready = False
+    for attr in (
+        "_machine_coordinates_trusted",
+        "_modal_state_trusted",
+        "_work_offsets_trusted",
+        "_g92_trusted",
+        "_tool_length_offset_trusted",
+        "_spindle_state_trusted",
+        "_coolant_state_trusted",
+    ):
+        setattr(app, attr, False)
+    try:
+        macro_executor = getattr(app, "macro_executor", None)
+        macro_vars_context = getattr(macro_executor, "macro_vars", None)
+        if callable(macro_vars_context):
+            with macro_vars_context() as macro_vars:
+                for key in (
+                    "_position_trusted",
+                    "_modal_trusted",
+                    "_wcs_trusted",
+                    "_g92_trusted",
+                    "_tlo_trusted",
+                    "_spindle_trusted",
+                    "_coolant_trusted",
+                ):
+                    macro_vars[key] = False
+    except Exception as exc:
+        _log_suppressed("Failed invalidating recovery-finalization macro trust", exc)
+    try:
+        disable_job_controls(app)
+    except Exception as exc:
+        _log_suppressed("Failed disabling controls after recovery-finalization failure", exc)
+    try:
+        app._set_manual_controls_enabled(False)
+    except Exception as exc:
+        _log_suppressed("Failed disabling manual controls after recovery-finalization failure", exc)
+    try:
+        app.status.config(text=message)
+    except Exception as exc:
+        _log_suppressed("Failed reporting recovery-finalization failure", exc)
+    try:
+        app._update_recover_button_visibility()
+        app.btn_alarm_recover.config(state="normal")
+    except Exception as exc:
+        _log_suppressed("Failed exposing recovery-finalization retry", exc)
+
+
+def _handle_recovery_complete_event(
+    app: Any,
+    completed_state: ExecutionRecoveryState,
+    snapshot: RecoveryStateSnapshot,
+    finalization_identity: RecoveryFinalizationIdentity,
+) -> None:
+    worker = app.grbl
+    try:
+        current_state = worker.recovery_state()
+        authoritative_snapshot = worker.recovery_snapshot()
+    except Exception as exc:
+        logger.warning("Recovery completion preflight failed: %s", exc)
+        return
+    if (
+        current_state.phase is not RecoveryPhase.RECOVERY_COMPLETE
+        or not current_state.required
+        or authoritative_snapshot is not snapshot
+    ):
+        logger.warning("Ignoring recovery completion outside its authoritative handoff")
+        return
+    if (
+        int(snapshot.connection_generation) != int(completed_state.connection_generation)
+        or int(snapshot.recovery_epoch) != int(completed_state.recovery_epoch)
+    ):
+        logger.warning("Ignoring recovery completion with mismatched snapshot provenance")
+        return
+    trust = snapshot.to_trust_state(setup_tool_reference=False)
+    if trust.missing_for_new_job():
+        logger.warning("Ignoring incomplete recovery snapshot")
+        return
+    machine_position = snapshot.machine_position
+    work_coordinate_offset = snapshot.work_coordinate_offset
+    g92 = snapshot.g92
+    if machine_position is None or work_coordinate_offset is None or g92 is None:
+        logger.warning("Ignoring recovery snapshot without required coordinate values")
+        return
+    derived_work_position = tuple(
+        float(machine_position[idx]) - float(work_coordinate_offset[idx])
+        for idx in range(3)
+    )
+    if not all(math.isfinite(value) for value in derived_work_position):
+        logger.warning("Ignoring recovery snapshot with non-finite derived work position")
+        return
+
+    # Ordinary worker admission remains closed throughout this UI/cache
+    # transaction. Any installation failure leaves RECOVERY_COMPLETE latched.
+    try:
+        clear_fn = getattr(app, "_clear_gcode", None)
+        if not callable(clear_fn):
+            raise RuntimeError("Interrupted-job clear operation is unavailable")
+        if clear_fn() is False:
+            raise RuntimeError("Interrupted-job clear transaction did not commit")
+        _install_machine_snapshot_caches(app, snapshot)
+        app._stream_state = "stopped"
+        app._stream_done_pending_idle = False
+        app._grbl_ready = True
+        app._auto_reconnect_blocked = False
+        app._set_manual_controls_enabled(True)
+    except Exception as exc:
+        logger.error("Recovery snapshot installation failed; admission remains locked: %s", exc)
+        _report_recovery_finalization_failure(
+            app,
+            "Recovery snapshot installation failed; use Retry Recovery Finalization.",
+        )
+        return
+    finalizer = getattr(app.grbl, "finalize_recovery_snapshot_install", None)
+    if not callable(finalizer) or not bool(
+        finalizer(
+            snapshot,
+            finalization_identity,
+            connection_generation=int(getattr(app.grbl, "connection_generation")()),
+            recovery_epoch=int(getattr(app.grbl, "recovery_epoch")()),
+        )
+    ):
+        _report_recovery_finalization_failure(
+            app,
+            "Recovery snapshot could not be committed; use Retry Recovery Finalization.",
+        )
+        return
+    try:
+        accessory_router = getattr(app, "accessory_router", None)
+        retire_recovery_off = getattr(
+            accessory_router,
+            "retire_confirmed_recovery_safety_off",
+            None,
+        )
+        if callable(retire_recovery_off):
+            retire_recovery_off(
+                connection_generation=int(completed_state.connection_generation),
+                recovery_epoch=int(completed_state.recovery_epoch),
+            )
+    except Exception as exc:
+        _log_suppressed("Failed retiring confirmed Kasa recovery OFF tombstone", exc)
+    app.status.config(text="Recovery complete. Interrupted job was closed.")
+    dialog = getattr(app, "_execution_recovery_dialog", None)
+    if dialog is not None:
+        try:
+            dialog.destroy()
+        except Exception as exc:
+            _log_suppressed("Failed retiring completed recovery dialog", exc)
+        app._execution_recovery_dialog = None
+        app._execution_recovery_dialog_identity = None
+        app._execution_recovery_dialog_phase = None
+    try:
+        app.btn_alarm_recover.config(state="disabled")
+        app._update_recover_button_visibility()
+    except Exception as exc:
+        _log_suppressed("Failed retiring completed recovery toolbar action", exc)
+
+
 def handle_event(app: Any, evt: UiEvent):
+    if _event_is_from_stale_connection(app, evt):
+        logger.warning("Ignoring UI event from stale GRBL connection generation: %r", evt)
+        return
+    if _event_blocked_by_recovery(app, evt):
+        logger.warning("Ignoring machine-state UI event while recovery is required: %r", evt)
+        return
     match evt:
+        case ConnectionScopedEvent(payload=payload):
+            handle_event(app, cast(UiEvent, payload))
+            return
         case ConnectionEvent(connected=connected, port=port):
             handle_connection_event(app, bool(connected), cast(str | None, port))
             return
         case ReadyEvent(is_ready=is_ready):
             handle_ready_event(app, bool(is_ready))
             return
+        case RecoveryRequiredEvent(state=state):
+            _event_router_streaming.handle_recovery_required_event(app, state)
+            return
+        case RecoveryCompleteEvent(
+            completed_state=state,
+            snapshot=snapshot,
+            finalization_identity=finalization_identity,
+        ):
+            _handle_recovery_complete_event(
+                app,
+                state,
+                snapshot,
+                finalization_identity,
+            )
+            return
+        case NormalSessionInitializationEvent(state=state, snapshot=snapshot):
+            _handle_normal_session_initialization_event(app, state, snapshot)
+            return
         case AlarmEvent(message=msg):
             _handle_alarm_event(app, cast(str, msg))
             return
         case StatusEvent(line=line):
-            handle_status_event(app, cast(str, line))
+            handle_status_event(
+                app,
+                cast(str, line),
+                generation=evt.generation,
+                recovery_epoch=evt.recovery_epoch,
+            )
             return
         case SettingsDumpDoneEvent():
             try:
                 app.settings_controller.handle_line("ok")
             except (AttributeError, RuntimeError, TclError) as exc:
                 _log_suppressed("Failed to process settings dump completion", exc)
+            _show_deferred_normal_session_initialization_if_ready(app)
             return
         case GcodeSentEvent(idx=idx, line=_line):
             app.streaming_controller.handle_gcode_sent(int(cast(int, idx)))
@@ -821,6 +1565,30 @@ def handle_event(app: Any, evt: UiEvent):
                 int(cast(int, acked_offset)),
                 int(cast(int, file_size_bytes)),
             )
+            return
+        case StreamStateEvent(
+            state="done",
+            generation=generation,
+            stream_epoch=stream_epoch,
+            recovery_epoch=recovery_epoch,
+        ):
+            finalizer = getattr(app.grbl, "finalize_execution_completion", None)
+            if (
+                generation is None
+                or stream_epoch is None
+                or recovery_epoch is None
+                or not callable(finalizer)
+                or not bool(
+                finalizer(
+                    connection_generation=int(generation),
+                    stream_epoch=int(stream_epoch),
+                    recovery_epoch=int(recovery_epoch),
+                )
+                )
+            ):
+                logger.warning("Ignoring unowned or retired stream completion event")
+                return
+            handle_stream_state_event(app, evt)
             return
         case StreamStateEvent():
             handle_stream_state_event(app, evt)
@@ -959,6 +1727,7 @@ def handle_event(app: Any, evt: UiEvent):
                 app.settings_controller.handle_line("ok")
             except (AttributeError, RuntimeError, TclError) as exc:
                 _log_suppressed("Failed to process settings dump completion", exc)
+            _show_deferred_normal_session_initialization_if_ready(app)
             return
         case ("manual_error", msg, source):
             _handle_manual_error_event(
@@ -969,6 +1738,36 @@ def handle_event(app: Any, evt: UiEvent):
             return
         case ("ready", is_ready):
             handle_ready_event(app, is_ready)
+            return
+        case ("recovery_required", state):
+            _event_router_streaming.handle_recovery_required_event(
+                app, cast(ExecutionRecoveryState, state)
+            )
+            return
+        case ("auto_level_map_invalidated", provenance, reason):
+            if isinstance(provenance, AutoLevelMapProvenance):
+                clear_active_auto_level_map_if_owned(
+                    app,
+                    provenance,
+                    cast(str, reason),
+                )
+            return
+        case ("recovery_complete", _state, snapshot):
+            logger.warning(
+                "Ignoring legacy recovery completion without exact finalization identity"
+            )
+            return
+        case ("normal_session_initialization", state, snapshot):
+            _handle_normal_session_initialization_event(
+                app,
+                cast(NormalSessionInitializationState, state),
+                cast(RecoveryStateSnapshot | None, snapshot),
+            )
+            return
+        case ("recovery_complete", _state):
+            # Compatibility-only shape. It must not reopen admission because it
+            # carries no value-bound authoritative snapshot.
+            logger.warning("Ignoring recovery completion without an authoritative snapshot")
             return
         case ("alarm", msg):
             _handle_alarm_event(app, cast(str, msg))
@@ -1047,11 +1846,12 @@ def handle_event(app: Any, evt: UiEvent):
             except Exception as exc:
                 _log_suppressed("Failed handling confirmed streamed vacuum directive", exc)
             return
-        case ("stream_tool_change", line_idx, tool_name):
+        case ("stream_tool_change", line_idx, tool_name, identity):
             try:
                 if hasattr(app, "_handle_stream_tool_change"):
                     app._handle_stream_tool_change(
                         cast(str, tool_name),
+                        cast(StreamToolChangeIdentity, identity),
                         line_index=cast(int | None, line_idx),
                     )
             except Exception as exc:

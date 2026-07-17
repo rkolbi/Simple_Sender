@@ -38,6 +38,34 @@ _ALARM_RECOVERY_BUTTON_PAD_X = (0, 6)
 def show_alarm_recovery(app) -> None:
     """Open the alarm recovery dialog when an alarm lock is active."""
 
+    recovery_checker = getattr(app.grbl, "recovery_required", None)
+    if callable(recovery_checker):
+        try:
+            recovery_required = bool(recovery_checker())
+        except Exception:
+            recovery_required = False
+        if recovery_required:
+            from simple_sender.ui.dialogs.execution_recovery_dialog import (
+                show_execution_recovery,
+            )
+
+            show_execution_recovery(app)
+            return
+
+    normal_checker = getattr(app.grbl, "normal_session_initialization_required", None)
+    if callable(normal_checker):
+        try:
+            normal_required = bool(normal_checker())
+        except Exception:
+            normal_required = False
+        if normal_required:
+            from simple_sender.ui.dialogs.normal_session_initialization_dialog import (
+                show_normal_session_initialization,
+            )
+
+            show_normal_session_initialization(app)
+            return
+
     if not app._alarm_locked:
         messagebox.showinfo("Alarm recovery", "No active alarm.")
         return

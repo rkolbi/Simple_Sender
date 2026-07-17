@@ -785,7 +785,15 @@ def start_homing(app):
             _log_suppressed("Failed updating status text when homing blocked", exc)
         return False
     try:
-        accepted = bool(app.grbl.home())
+        normal_required = bool(app.grbl.normal_session_initialization_required())
+    except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
+        normal_required = False
+    try:
+        if normal_required:
+            identity = app.grbl.normal_session_action_identity()
+            accepted = bool(app.grbl.start_normal_session_homing(identity))
+        else:
+            accepted = bool(app.grbl.home())
     except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError, OSError):
         accepted = False
     if not accepted:

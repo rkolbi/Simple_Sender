@@ -44,6 +44,7 @@ from simple_sender.gcode_parser import (
 )
 from simple_sender.gcode_validator import validate_gcode_lines
 from simple_sender.gcode_source import FileGcodeSource
+from simple_sender.ui.autolevel_state import clear_active_auto_level_map
 from simple_sender.utils.hashing import hash_lines
 from simple_sender.utils.task_timing import record_task_timing
 from simple_sender.utils.constants import (
@@ -73,6 +74,11 @@ from simple_sender.utils.constants import (
 )
 from simple_sender.utils.temp_paths import get_preferred_temp_dir
 from simple_sender.ui.job_controls import disable_job_controls
+from .source_transaction import (
+    abort_source_transaction,
+    commit_source_transaction,
+    reserve_source_transaction,
+)
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
 from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
 
@@ -285,7 +291,7 @@ def apply_loaded_gcode(
     sample_only: bool = False,
     defer_viewer_stage_apply: bool = False,
 ):
-    _apply_loaded_gcode(
+    return _apply_loaded_gcode(
         app,
         path,
         lines,
@@ -386,14 +392,12 @@ def schedule_gcode_parse(app, lines: list[str], lines_hash: str | None):
     threading.Thread(target=_worker_wrapper, daemon=True).start()
 
 
-def clear_gcode(app):
-    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
-        messagebox.showwarning(
-            DialogTitles.BUSY,
-            BusyMessages.STOP_STREAM_BEFORE_CLEARING_GCODE,
-        )
-        return
-    macro_state_snapshot = _snapshot_macro_state(app)
+def _install_cleared_gcode_ui(
+    app,
+    *,
+    macro_state_snapshot,
+    keep_safety_lock: bool = False,
+) -> None:
     app._gcode_load_token += 1
     app._gcode_loading = False
     try:
@@ -404,12 +408,6 @@ def clear_gcode(app):
         app._clear_pending_ui_updates()
     except Exception as exc:
         _log_suppressed("Failed clearing pending UI updates while clearing G-code", exc)
-    try:
-        app.grbl._clear_outgoing()
-    except Exception as exc:
-        _log_suppressed(
-            "Failed clearing pending GRBL outgoing queue while clearing G-code", exc
-        )
     existing_source = getattr(app, "_gcode_source", None)
     if existing_source is not None:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
@@ -445,7 +443,6 @@ def clear_gcode(app):
     app._stats_pending_request = None
     app._stats_token += 1
     app._stats_cache.clear()
-    app.grbl.load_gcode([])
     app.gview.clear()
     app._live_gcode_past_count = 0
     app._live_gcode_current_count = 0
@@ -484,8 +481,8 @@ def clear_gcode(app):
             and app._status_seen
             and not app._alarm_locked
         )
-        app._set_manual_controls_enabled(ready)
-        app._set_streaming_lock(False)
+        app._set_manual_controls_enabled(bool(ready and not keep_safety_lock))
+        app._set_streaming_lock(bool(keep_safety_lock))
     except Exception as exc:
         _log_suppressed(
             "Failed restoring control-state lock after clearing G-code", exc
@@ -504,6 +501,56 @@ def clear_gcode(app):
             file_info_refresher()
         except Exception as exc:
             _log_suppressed("Failed refreshing Job Info after clearing G-code", exc)
+    return None
+
+
+def clear_gcode(app):
+    if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
+        messagebox.showwarning(
+            DialogTitles.BUSY,
+            BusyMessages.STOP_STREAM_BEFORE_CLEARING_GCODE,
+        )
+        return False
+    macro_state_snapshot = _snapshot_macro_state(app)
+    identity = None
+    ui_generation = 0
+    try:
+        recovery_checker = getattr(app.grbl, "recovery_required", None)
+        keep_safety_lock = bool(
+            callable(recovery_checker) and recovery_checker()
+        )
+        ui_generation, admission = reserve_source_transaction(app, [], name=None)
+        if not bool(getattr(admission, "accepted", False)):
+            app.status.config(
+                text="Clear blocked; the worker still owns the displayed G-code source."
+            )
+            return False
+        identity = admission.identity
+        _install_cleared_gcode_ui(
+            app,
+            macro_state_snapshot=macro_state_snapshot,
+            keep_safety_lock=keep_safety_lock,
+        )
+        if not commit_source_transaction(app, identity, ui_generation):
+            raise RuntimeError("Worker rejected the cleared-source commit")
+        return True
+    except Exception as exc:
+        if identity is not None:
+            abort_source_transaction(
+                app,
+                identity,
+                ui_generation,
+                reason=f"clear UI installation failed: {exc}",
+            )
+        try:
+            disable_job_controls(app)
+            app.status.config(
+                text="G-code clear failed closed; no worker source is runnable."
+            )
+        except Exception as ui_exc:
+            _log_suppressed("Failed reporting fail-closed G-code clear", ui_exc)
+        logger.exception("G-code clear transaction failed")
+        return False
 
 
 def _reset_autolevel_state(app) -> None:
@@ -529,9 +576,10 @@ def _reset_autolevel_state(app) -> None:
             _log_suppressed(
                 "Failed removing temporary auto-level output during reset", exc
             )
-    app._auto_level_grid = None
-    app._auto_level_height_map = None
-    app._auto_level_bounds = None
+    clear_active_auto_level_map(
+        app,
+        "Auto-Level map invalidated by G-code source replacement.",
+    )
     app._auto_level_prereq_snapshot = {}
     app._auto_level_original_lines = None
     app._auto_level_original_path = None
@@ -565,4 +613,3 @@ def _find_overlong_lines(
         first_idx = fallback_index
         first_len = fallback_len
     return too_long, first_idx, first_len
-

@@ -196,7 +196,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "retract_z": 2.0,
         "settle_time": 0.0,
         "path_order": "serpentine",
-        "interpolation": "bicubic",
+        "interpolation": "bilinear",
+        "max_abs_correction": 2.0,
+        "max_z_span": 3.0,
         "avoidance_areas": [
             {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
             {"enabled": False, "x": 0.0, "y": 0.0, "radius": 20.0, "note": ""},
@@ -211,9 +213,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_level_job_prefs": {
         "small_max_area": 2500.0,
         "large_min_area": 10000.0,
-        "small": {"spacing": 3.0, "interpolation": "bicubic"},
+        "small": {"spacing": 3.0, "interpolation": "bilinear"},
         "large": {"spacing": 8.0, "interpolation": "bilinear"},
-        "custom": {"spacing": 5.0, "interpolation": "bicubic"},
+        "custom": {"spacing": 5.0, "interpolation": "bilinear"},
     },
     "auto_level_presets": {},
 }

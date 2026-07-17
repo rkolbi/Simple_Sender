@@ -28,6 +28,7 @@ import threading
 import time
 
 from simple_sender.ui.threading_utils import UI_CALL_DISPATCHED, UI_CALL_HANDOFF_FAILED
+from simple_sender.types import StreamToolChangeIdentity
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -134,13 +135,20 @@ def _tool_change_workflow_prompt_cancelled(app) -> bool:
         return False
 
 
-def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) -> None:
+def _run_stream_tool_change_worker(
+    app,
+    tool_name: str,
+    line_index: int | None,
+    identity: StreamToolChangeIdentity,
+) -> None:
     _ = line_index
     try:
         saved_timeouts = _disable_macro_timeouts_for_tool_change(app)
     except Exception as exc:
         _log_suppressed("Failed preparing tool-change workflow timeout state", exc)
-        app.grbl.complete_stream_tool_change(False, "Tool-change workflow setup failed.")
+        app.grbl.complete_stream_tool_change(
+            identity, False, "Tool-change workflow setup failed."
+        )
         return
     started = False
     succeeded = False
@@ -163,6 +171,7 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
             app.macro_executor.run_builtin_workflow,
             "tool_change",
             True,
+            identity,
             timeout=None,
             return_on_handoff=True,
         )
@@ -186,7 +195,7 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
         except Exception as exc:
             _log_suppressed("Failed restoring tool-change workflow timeout state", exc)
     if started and succeeded:
-        app.grbl.complete_stream_tool_change(True)
+        app.grbl.complete_stream_tool_change(identity, True)
         return
     reason = "Tool-change workflow failed."
     if _all_stop_cancel_requested(app):
@@ -203,22 +212,97 @@ def _run_stream_tool_change_worker(app, tool_name: str, line_index: int | None) 
         reason = "Tool-change workflow timed out."
     elif _tool_change_workflow_prompt_cancelled(app):
         reason = "Tool change canceled by user."
-    app.grbl.complete_stream_tool_change(False, reason)
+    app.grbl.complete_stream_tool_change(identity, False, reason)
 
 
-def handle_stream_tool_change(app, tool_name: str, *, line_index: int | None = None) -> None:
+def _stream_tool_change_identity_current(
+    app,
+    identity: StreamToolChangeIdentity,
+) -> bool:
+    checker = getattr(getattr(app, "grbl", None), "stream_tool_change_identity_current", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker(identity))
+    except Exception as exc:
+        _log_suppressed("Failed checking stream Tool Change identity", exc)
+        return False
+
+
+def _report_stale_tool_change_dispatch(app, reason: str) -> None:
+    logger.error(reason)
+    status = getattr(app, "status", None)
+    configure = getattr(status, "config", None)
+    if callable(configure):
+        try:
+            configure(text=reason)
+        except Exception as exc:
+            _log_suppressed("Failed reporting stale Tool Change dispatch", exc)
+
+
+def _run_owned_stream_tool_change_worker(
+    app,
+    tool_name: str,
+    line_index: int | None,
+    identity: StreamToolChangeIdentity,
+) -> None:
+    current_thread = threading.current_thread()
+    try:
+        _run_stream_tool_change_worker(app, tool_name, line_index, identity)
+    finally:
+        if (
+            getattr(app, "_stream_tool_change_thread", None) is current_thread
+            and getattr(app, "_stream_tool_change_thread_identity", None) is identity
+        ):
+            app._stream_tool_change_thread = None
+            app._stream_tool_change_thread_identity = None
+
+
+def handle_stream_tool_change(
+    app,
+    tool_name: str,
+    identity: StreamToolChangeIdentity,
+    *,
+    line_index: int | None = None,
+) -> None:
     existing = getattr(app, "_stream_tool_change_thread", None)
+    existing_identity = getattr(app, "_stream_tool_change_thread_identity", None)
     if isinstance(existing, threading.Thread) and existing.is_alive():
+        if existing_identity is identity:
+            return
+        if not _stream_tool_change_identity_current(app, identity):
+            logger.warning("Ignoring stale Tool Change UI event for a non-current identity.")
+            return
+        cancel_macro = getattr(getattr(app, "macro_executor", None), "cancel_macro", None)
+        if callable(cancel_macro):
+            try:
+                cancel_macro("A stale Tool Change thread overlapped a replacement request.")
+            except Exception as exc:
+                _log_suppressed("Failed signaling stale Tool Change workflow", exc)
+        old_token = getattr(existing_identity, "request_token", "unknown")
+        new_token = getattr(identity, "request_token", "unknown")
+        reason = (
+            "Tool Change blocked safely: stale workflow "
+            f"{old_token} was still active when replacement {new_token} arrived. "
+            "Use Stop and restart the job after verifying machine state."
+        )
+        completed = bool(app.grbl.complete_stream_tool_change(identity, False, reason))
+        if not completed and _stream_tool_change_identity_current(app, identity):
+            reason = (
+                "Tool Change replacement could not be retired while a stale workflow thread "
+                "remained active. Stop the job before further machine use."
+            )
+        _report_stale_tool_change_dispatch(app, reason)
         return
     worker = threading.Thread(
-        target=_run_stream_tool_change_worker,
-        args=(app, str(tool_name or ""), line_index),
+        target=_run_owned_stream_tool_change_worker,
+        args=(app, str(tool_name or ""), line_index, identity),
         daemon=True,
         name="tool-change-workflow",
     )
     app._stream_tool_change_thread = worker
+    app._stream_tool_change_thread_identity = identity
     worker.start()
 
 
 __all__ = ["handle_stream_tool_change"]
-

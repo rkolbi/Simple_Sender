@@ -59,6 +59,8 @@ def _level_from_source_lines(
     height_map: HeightMap,
     arc_step_rad: float,
     interpolation: str,
+    max_abs_correction: float | None,
+    max_z_span: float | None,
     header_lines: list[str] | None,
     log_fn: Callable[[str], None] | None,
     level_gcode_lines_fn: Callable[..., LevelResult],
@@ -70,6 +72,8 @@ def _level_from_source_lines(
         height_map,
         arc_step_rad=arc_step_rad,
         interpolation=interpolation,
+        max_abs_correction=max_abs_correction,
+        max_z_span=max_z_span,
     )
     if level_result.error:
         return LevelFileResult(None, 0, level_result.error, False)
@@ -98,8 +102,10 @@ def _level_and_write_auto_level_output(
     height_map: HeightMap,
     arc_step_rad: float,
     interpolation: str,
-    header_lines: list[str] | None,
-    streaming_mode: bool,
+    max_abs_correction: float | None = None,
+    max_z_span: float | None = None,
+    header_lines: list[str] | None = None,
+    streaming_mode: bool = False,
     log_fn: Callable[[str], None] | None = None,
     level_gcode_lines_fn: Callable[..., LevelResult] = level_gcode_lines,
     level_gcode_file_fn: Callable[..., LevelFileResult] = level_gcode_file,
@@ -119,6 +125,8 @@ def _level_and_write_auto_level_output(
             height_map=height_map,
             arc_step_rad=arc_step_rad,
             interpolation=interpolation,
+            max_abs_correction=max_abs_correction,
+            max_z_span=max_z_span,
             header_lines=header_lines,
             log_fn=log_fn,
             level_gcode_lines_fn=level_gcode_lines_fn,
@@ -132,6 +140,8 @@ def _level_and_write_auto_level_output(
         height_map,
         arc_step_rad=arc_step_rad,
         interpolation=interpolation,
+        max_abs_correction=max_abs_correction,
+        max_z_span=max_z_span,
         header_lines=header_lines,
     )
     if result.error:
@@ -303,8 +313,10 @@ def _apply_auto_level_to_path(
     height_map: HeightMap,
     arc_step_rad: float,
     interpolation: str,
-    header_lines: list[str] | None,
-    streaming_mode: bool,
+    max_abs_correction: float | None = None,
+    max_z_span: float | None = None,
+    header_lines: list[str] | None = None,
+    streaming_mode: bool = False,
     log_fn: Callable[[str], None] | None = None,
     level_gcode_lines_fn: Callable[..., LevelResult] = level_gcode_lines,
     level_gcode_file_fn: Callable[..., LevelFileResult] = level_gcode_file,
@@ -321,6 +333,8 @@ def _apply_auto_level_to_path(
         height_map=height_map,
         arc_step_rad=arc_step_rad,
         interpolation=interpolation,
+        max_abs_correction=max_abs_correction,
+        max_z_span=max_z_span,
         header_lines=header_lines,
         streaming_mode=streaming_mode,
         log_fn=log_fn,
@@ -343,6 +357,8 @@ def _apply_auto_level_to_path(
             height_map=height_map,
             arc_step_rad=arc_step_rad,
             interpolation=interpolation,
+            max_abs_correction=max_abs_correction,
+            max_z_span=max_z_span,
             header_lines=header_lines,
             streaming_mode=streaming_mode,
             log_fn=log_fn,
@@ -364,4 +380,3 @@ def _apply_auto_level_to_path(
         else:
             result = fallback
     return result, is_temp, fallback_warning
-

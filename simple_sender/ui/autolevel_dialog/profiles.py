@@ -23,8 +23,6 @@
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sender.ui.dialogs.popup_utils import center_window
-
 
 def _merge_auto_level_job_prefs(defaults: dict, overrides: object) -> dict:
     merged = dict(defaults) if isinstance(defaults, dict) else {}
@@ -104,6 +102,8 @@ def _prompt_auto_level_profile_choice(app, base_bounds, chosen_profile: str) -> 
     ).pack(side="left", padx=(0, 6))
     ttk.Button(btn_row, text="Cancel", command=lambda: choose(None)).pack(side="left")
     dlg.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+    from simple_sender.ui.dialogs.popup_utils import center_window
+
     center_window(dlg, app)
     dlg.wait_window()
     return profile_choice

@@ -1,6 +1,6 @@
-# Simple Sender v3.18
+# Simple Sender v3.19
 
-These notes describe the current stable, release-ready `3.18` baseline. This version-label update carries forward the current split-layout/popup workflow model, the current probing and tool-measurement safeguards, and the current toolbar asset pipeline without intentionally changing operator workflow behavior.
+These notes describe the current stable, release-ready `3.19` baseline. This release carries forward the current split-layout/popup workflow model, the current probing and tool-measurement safeguards, and the current toolbar asset pipeline while tightening Auto-Level apply safety behavior.
 
 ## Highlights
 
@@ -15,6 +15,8 @@ These notes describe the current stable, release-ready `3.18` baseline. This ver
   - Tool Change one-time slower retry when clustering is too loose
 - Workflow truthfulness improvements:
   - auto-level probing now accepts a valid `[PRB:...]` report that arrives during the probe command/idle wait, reducing false probe failures without changing the physical probing command sequence
+  - auto-level apply now fails closed for `G53` machine-coordinate motion, outside-map motion, excessive height-map correction/span, and skipped/missing-node interpolation cells; `G43` / `G43.1` / `G49` TLO commands are preserved unchanged
+  - auto-level interpolation now defaults to conservative bilinear compensation, with bicubic kept as an advanced option
   - Run / Job Setup validity now matches the real Tool Change prerequisites
   - alarm and warning dialogs now match the dark UI consistently
   - file/job summary surfaces keep tool metadata truthful
@@ -51,32 +53,32 @@ These notes describe the current stable, release-ready `3.18` baseline. This ver
   - live job-view bookkeeping now uses a headless runtime state object instead of a visible lower G-code widget
   - aligned tests, docs, and runtime naming with the current split-layout/popup model
 - Current release alignment:
-  - runtime package metadata now reports `3.18`
-  - release-facing docs now consistently describe the `3.18` baseline
+  - runtime package metadata now reports `3.19`
+  - release-facing docs now consistently describe the `3.19` baseline
   - the repository now includes `MACHINE_VALIDATION_CHECKLIST.md` for the remaining on-machine validation work that automation alone cannot fully prove
   - no Raspberry Pi image artifact is checked into this repository
-  - if you need strict image provenance or a version-aligned distributable image for `3.18`, rebuild it and publish it separately, for example as a release asset, before shipping it
+  - if you need strict image provenance or a version-aligned distributable image for `3.19`, rebuild it and publish it separately, for example as a release asset, before shipping it
 
 ## Practical Notes
 
-- These notes cover the stable `3.18` release line for the present workflow architecture.
-- The current stable baseline is `3.18`, with docs aligned to the shipped Job Setup, Tool Change, controller safety, progress/completion, current Kasa/network diagnostics, current queue-responsiveness behavior, current logging-mode / low-overhead preset behavior, and the current cross-platform toolbar icon pipeline.
+- These notes cover the stable `3.19` release line for the present workflow architecture.
+- The current stable baseline is `3.19`, with docs aligned to the shipped Job Setup, Tool Change, controller safety, progress/completion, current Kasa/network diagnostics, current queue-responsiveness behavior, current logging-mode / low-overhead preset behavior, and the current cross-platform toolbar icon pipeline.
 - The intended audience is operators who want the current stronger workflow baseline with stable-release truthfulness around the current runtime and docs.
 - Older lower-UI visibility fallback keys from the notebook-era model have been removed; the current popup/button model is now the only supported runtime architecture.
 - In the current baseline, toolbar icon assets live under `simple_sender/ui/icons`, the normal runtime path prefers app-local raster assets for Windows/Linux consistency, and SVG/drawn icons remain compatibility fallbacks instead of the primary deployment path.
 
 ## Release Focus
 
-`3.18` is the current release-ready packaging of that workflow direction for the runtime and release-facing docs. No Raspberry Pi image artifact is checked into this repository; rebuild and publish one separately if you need a version-aligned distributable image.
+`3.19` is the current release-ready packaging of that workflow direction for the runtime and release-facing docs. No Raspberry Pi image artifact is checked into this repository; rebuild and publish one separately if you need a version-aligned distributable image.
 
 ## Current Validation
 
-As of `2026-06-28`, the `3.18` release work validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
+As of `2026-07-04`, the `3.19` release work validated clean in the verified local Windows / Python `3.12.1` environment with the explicit repo-supported commands that were actually rerun:
 
-- `.\.venv\Scripts\python.exe -m pytest`: `1970 passed, 2 skipped`
+- `.\.venv\Scripts\python.exe -m pytest`: `1981 passed, 2 skipped`
 - `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean
 - `.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`: clean
 - `.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`: clean
 - `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: clean (`141` configured source files)
 
-The `run_tests.bat` wrapper, pytest coverage gate, critical-path coverage check, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.18` release work. Historical wrapper/coverage snapshots remain in the changelog instead of being presented as newly rerun for this release.
+The `run_tests.bat` wrapper, pytest coverage gate, critical-path coverage check, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.19` release work. Historical wrapper/coverage snapshots remain in the changelog instead of being presented as newly rerun for this release.

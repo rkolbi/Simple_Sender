@@ -1,4 +1,24 @@
 from dataclasses import dataclass
+from enum import Enum
+
+from simple_sender.status_coordinates import (
+    CoordinateTuple,
+    StatusCoordinateEvidence,
+    parse_exact_status_xyz,
+    parse_status_coordinate_fields,
+)
+
+CoordinateSignature = tuple[
+    CoordinateTuple | None,
+    CoordinateTuple | None,
+    CoordinateTuple | None,
+]
+
+
+class StatusCoordinateApplication(Enum):
+    INVALID = "invalid"
+    VALID_UNCHANGED = "valid_unchanged"
+    VALID_INSTALLED = "valid_installed"
 
 
 @dataclass(slots=True)
@@ -13,6 +33,13 @@ class _StatusFields:
     wco: str | None = None
     ov: str | None = None
     pins: str | None = None
+    coordinates_valid: bool = True
+    coordinate_error: str = ""
+    coordinate_signature: CoordinateSignature | None = None
+    coordinate_evidence: StatusCoordinateEvidence | None = None
+    coordinate_unchanged: bool = False
+    event_generation: int | None = None
+    event_recovery_epoch: int | None = None
 
 
 def _status_state_token(raw: str) -> str:
@@ -61,18 +88,36 @@ def _clone_status_fields(fields: _StatusFields) -> _StatusFields:
         wco=None if fields.wco is None else str(fields.wco),
         ov=None if fields.ov is None else str(fields.ov),
         pins=None if fields.pins is None else str(fields.pins),
+        coordinates_valid=bool(fields.coordinates_valid),
+        coordinate_error=str(fields.coordinate_error or ""),
+        coordinate_signature=fields.coordinate_signature,
+        coordinate_evidence=fields.coordinate_evidence,
+        coordinate_unchanged=bool(fields.coordinate_unchanged),
+        event_generation=fields.event_generation,
+        event_recovery_epoch=fields.event_recovery_epoch,
     )
 
 
-def _parse_status_fields(raw: str, *, log_suppressed=None) -> _StatusFields:
+def _format_coordinate_tuple(value: CoordinateTuple | None) -> str | None:
+    if value is None:
+        return None
+    return ",".join(f"{float(component):.12g}" for component in value)
+
+
+def _parse_status_fields(
+    raw: str,
+    *,
+    log_suppressed=None,
+    warn_invalid_coordinates=None,
+) -> _StatusFields:
     parts = raw.strip("<>").split("|")
     fields = _StatusFields(state=parts[0] if parts else "?")
     for part in parts:
-        if part.startswith("WPos:"):
-            fields.wpos = part[5:]
-        elif part.startswith("MPos:"):
-            fields.mpos = part[5:]
-        elif part.startswith("FS:"):
+        name = part.partition(":")[0]
+        name_upper = name.strip().upper()
+        if name_upper in {"WPOS", "MPOS", "WCO"}:
+            continue
+        if part.startswith("FS:"):
             try:
                 feed_str, spindle_str = part[3:].split(",", 1)
                 fields.feed = float(feed_str)
@@ -86,24 +131,48 @@ def _parse_status_fields(raw: str, *, log_suppressed=None) -> _StatusFields:
                 fields.rxbytes = int(rx_str)
             except ValueError as exc:
                 _maybe_log(log_suppressed, "Failed parsing Bf field from status line", exc)
-        elif part.startswith("WCO:"):
-            fields.wco = part[4:]
         elif part.startswith("Ov:"):
             fields.ov = part[3:]
         elif part.startswith("Pn:"):
             fields.pins = part[3:]
+    evidence = parse_status_coordinate_fields(parts[1:])
+    fields.coordinate_evidence = evidence
+    fields.coordinates_valid = bool(evidence.valid)
+    fields.coordinate_error = str(evidence.error or "")
+    fields.coordinate_signature = evidence.signature
+    if evidence.valid:
+        fields.mpos = _format_coordinate_tuple(evidence.mpos)
+        fields.wpos = _format_coordinate_tuple(evidence.wpos)
+        fields.wco = _format_coordinate_tuple(evidence.wco)
+    if not evidence.valid:
+        fields.mpos = None
+        fields.wpos = None
+        fields.wco = None
+        warning = ValueError(fields.coordinate_error or "invalid coordinate evidence")
+        if callable(warn_invalid_coordinates):
+            warn_invalid_coordinates(
+                "Ignored malformed status-coordinate telemetry",
+                warning,
+            )
+        else:
+            _maybe_log(
+                log_suppressed,
+                "Ignored malformed status-coordinate telemetry",
+                warning,
+            )
     return fields
 
 
 def _parse_xyz_triplet(text: str, *, log_suppressed=None) -> list[float] | None:
-    parts = text.split(",")
-    if len(parts) < 3:
+    parsed = parse_exact_status_xyz(text)
+    if parsed is None:
+        _maybe_log(
+            log_suppressed,
+            "Failed parsing XYZ triplet",
+            ValueError("expected exactly three finite coordinate values"),
+        )
         return None
-    try:
-        return [float(parts[0]), float(parts[1]), float(parts[2])]
-    except ValueError as exc:
-        _maybe_log(log_suppressed, "Failed parsing XYZ triplet", exc)
-        return None
+    return [parsed[0], parsed[1], parsed[2]]
 
 
 def _unit_scale_cached(unit_mode: str) -> float:

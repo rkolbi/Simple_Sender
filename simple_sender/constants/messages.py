@@ -43,6 +43,9 @@ class MachineStateMessages:
     """Machine-state label text."""
 
     DISCONNECTED = "DISCONNECTED"
+    RECOVERY_REQUIRED = "RECOVERY REQUIRED - STATE UNKNOWN"
+    RESET_AWAITING = "RESET SENT - AWAITING GRBL"
+    RESET_CONFIRMED_UNTRUSTED = "RESET CONFIRMED - RECOVERY INCOMPLETE"
 
     @staticmethod
     def connected(port: str) -> str:
@@ -55,6 +58,15 @@ class StatusMessages:
     DISCONNECTED = "Disconnected"
     GCODE_CLEARED = "G-code cleared"
     STREAMING = "Streaming..."
+    RECOVERY_REQUIRED = (
+        "Recovery required: controller execution state is uncertain. "
+        "Reset/reconnect and re-establish machine position, setup, and offsets before continuing."
+    )
+    RESET_AWAITING = "Recovery reset sent; waiting for the matching GRBL startup banner."
+    RESET_CONFIRMED_UNTRUSTED = (
+        "GRBL reset confirmed, but machine position, offsets, setup, spindle, and coolant "
+        "state remain untrusted. Open Recovery and complete the operator checklist."
+    )
 
     @staticmethod
     def connected(port: str) -> str:

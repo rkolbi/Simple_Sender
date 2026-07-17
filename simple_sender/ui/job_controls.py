@@ -29,7 +29,7 @@ def job_controls_ready(app: Any, has_job: bool | None = None) -> bool:
             has_job = bool(app.gview.lines_count)
         except Exception:
             has_job = False
-    return bool(
+    base_ready = bool(
         app.connected
         and has_job
         and app._grbl_ready
@@ -37,6 +37,37 @@ def job_controls_ready(app: Any, has_job: bool | None = None) -> bool:
         and not app._alarm_locked
         and not bool(getattr(app, "_gcode_restore_failed", False))
     )
+    if not base_ready:
+        return False
+    if getattr(app, "_pending_gcode_source_transaction", None) is not None:
+        return False
+    grbl = getattr(app, "grbl", None)
+    eligibility = getattr(grbl, "job_start_eligibility", None)
+    if callable(eligibility):
+        identity = getattr(app, "_worker_gcode_source_identity", None)
+        try:
+            ready, _missing = eligibility(identity)
+        except Exception:
+            return False
+        return bool(ready)
+    return True
+
+
+def job_controls_missing(app: Any) -> tuple[str, ...]:
+    """Return worker-authoritative Job Ready prerequisites for operator feedback."""
+    missing: list[str] = []
+    if getattr(app, "_pending_gcode_source_transaction", None) is not None:
+        missing.append("G-code source installation is still pending")
+    grbl = getattr(app, "grbl", None)
+    eligibility = getattr(grbl, "job_start_eligibility", None)
+    if callable(eligibility):
+        identity = getattr(app, "_worker_gcode_source_identity", None)
+        try:
+            _ready, worker_missing = eligibility(identity)
+            missing.extend(str(item) for item in worker_missing)
+        except Exception:
+            missing.append("worker Job Ready state is unavailable")
+    return tuple(dict.fromkeys(missing))
 
 
 def set_run_resume_from(app: Any, enabled: bool) -> None:

@@ -112,6 +112,42 @@ class HeightMap:
                     return False
         return True
 
+    def contains_xy(self, x: float, y: float, *, eps: float = 1e-9) -> bool:
+        return (
+            self.xs[0] - eps <= float(x) <= self.xs[-1] + eps
+            and self.ys[0] - eps <= float(y) <= self.ys[-1] + eps
+        )
+
+    def validate_limits(
+        self,
+        *,
+        max_abs_correction: float | None = None,
+        max_z_span: float | None = None,
+    ) -> str | None:
+        values = [
+            abs(float(val))
+            for row in self._rows
+            for val in row
+            if val is not None
+        ]
+        if not values:
+            return "Height map has no valid probe points."
+        if max_abs_correction is not None and max_abs_correction > 0:
+            max_abs = max(values)
+            if max_abs > max_abs_correction:
+                return (
+                    "Height map maximum correction "
+                    f"{max_abs:.4f} mm exceeds limit {max_abs_correction:.4f} mm."
+                )
+        if max_z_span is not None and max_z_span > 0:
+            stats = self.stats()
+            if stats is not None and stats.span() > max_z_span:
+                return (
+                    "Height map Z span "
+                    f"{stats.span():.4f} mm exceeds limit {max_z_span:.4f} mm."
+                )
+        return None
+
     def stats(self) -> HeightMapStats | None:
         """Summarize the currently collected valid probe points."""
 
@@ -187,16 +223,14 @@ class HeightMap:
 
         if not self.is_complete():
             return None
-        x = self._clamp(x, self.xs[0], self.xs[-1])
-        y = self._clamp(y, self.ys[0], self.ys[-1])
+        if not self.contains_xy(x, y):
+            return None
         ix0, ix1, tx = self._find_segment(self.xs, x)
         iy0, iy1, ty = self._find_segment(self.ys, y)
         if method.lower() == "bicubic":
             value = self._interpolate_bicubic(ix0, ix1, tx, iy0, iy1, ty)
         else:
             value = self._interpolate_bilinear(ix0, ix1, tx, iy0, iy1, ty)
-        if value is None:
-            return self._interpolate_sparse(x, y, ix0, ix1, iy0, iy1)
         return value
 
     def _interpolate_bilinear(

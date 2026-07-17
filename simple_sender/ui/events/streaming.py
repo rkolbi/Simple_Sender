@@ -26,7 +26,10 @@ import logging
 import tkinter as tk
 from typing import Callable
 
-from simple_sender.constants.messages import StatusMessages
+from simple_sender.constants.messages import MachineStateMessages, StatusMessages
+from simple_sender.types import ExecutionRecoveryState, RecoveryPhase
+from simple_sender.ui.job_setup_state import invalidate_job_setup_state
+from simple_sender.ui.autolevel_state import clear_active_auto_level_map
 from simple_sender.ui.job_controls import job_controls_ready, set_run_resume_from
 from simple_sender.ui.stream_completion import (
     begin_deferred_completion_wait,
@@ -316,7 +319,161 @@ def _stream_busy_from_state(state: str | None, done_pending_idle: bool) -> bool:
     if bool(done_pending_idle):
         return True
     normalized = str(state or "").strip().lower()
-    return normalized in ("running", "paused")
+    return normalized in (
+        "running",
+        "paused",
+        "execution_pending_idle",
+        "recovery_required",
+        "reset_required",
+        "reset_sent_awaiting_banner",
+        "reset_confirmed_state_untrusted",
+    )
+
+
+def handle_recovery_required_event(app, state: ExecutionRecoveryState) -> None:
+    """Project the worker-owned recovery latch into fail-closed UI state."""
+    reason = str(state.reason or "Controller execution state became uncertain.")
+    clear_active_auto_level_map(
+        app,
+        "Auto-Level map invalidated: controller recovery is required.",
+    )
+    normal_dialog = getattr(app, "_normal_session_initialization_dialog", None)
+    if normal_dialog is not None:
+        try:
+            normal_dialog.destroy()
+        except Exception as exc:
+            _log_stream_ui_issue(
+                "Failed retiring normal-session dialog during recovery", exc
+            )
+        app._normal_session_initialization_dialog = None
+        app._normal_session_initialization_dialog_identity = None
+        app._normal_session_initialization_dialog_phase = None
+    dialog = getattr(app, "_execution_recovery_dialog", None)
+    dialog_identity = getattr(app, "_execution_recovery_dialog_identity", None)
+    dialog_phase = getattr(app, "_execution_recovery_dialog_phase", None)
+    if dialog is not None and (
+        dialog_identity != state.action_identity or dialog_phase != state.phase
+    ):
+        try:
+            dialog.destroy()
+        except Exception as exc:
+            _log_stream_ui_issue("Failed retiring stale execution-recovery dialog", exc)
+        app._execution_recovery_dialog = None
+        app._execution_recovery_dialog_identity = None
+        app._execution_recovery_dialog_phase = None
+    cancel_after = getattr(app, "after_cancel", None)
+    for callback_attr in (
+        "_status_manual_controls_after_id",
+        "_status_state_transition_ui_after_id",
+        "_status_machine_state_highlight_after_id",
+        "_status_positions_coalesce_after_id",
+        "_stream_state_post_apply_after_id",
+        "_stream_loaded_reconcile_after_id",
+        "_gcode_loaded_stream_apply_after_id",
+        "_gcode_load_settling_after_id",
+    ):
+        pending_after_id = getattr(app, callback_attr, None)
+        if pending_after_id is not None and callable(cancel_after):
+            try:
+                cancel_after(pending_after_id)
+            except Exception as exc:
+                _log_stream_ui_issue(
+                    f"Failed cancelling recovery-retired callback: {callback_attr}",
+                    exc,
+                )
+        setattr(app, callback_attr, None)
+    app._status_positions_coalesce_pending_fields = None
+    app._status_positions_coalesce_current_id = None
+    # Invalidate sliced callbacks even if Tk cancellation raced with dispatch.
+    app._stream_loaded_reconcile_generation = (
+        int(getattr(app, "_stream_loaded_reconcile_generation", 0) or 0) + 1
+    )
+    app._gcode_loaded_stream_apply_generation = (
+        int(getattr(app, "_gcode_loaded_stream_apply_generation", 0) or 0) + 1
+    )
+    app._gcode_load_settling_generation = 0
+    app._gcode_load_settling = False
+    app._resume_after_disconnect = False
+    app._resume_from_index = None
+    app._resume_job_name = None
+    app._auto_reconnect_pending = False
+    app._auto_reconnect_blocked = True
+    app._machine_coordinates_trusted = False
+    for attr in (
+        "_modal_state_trusted",
+        "_work_offsets_trusted",
+        "_g92_trusted",
+        "_tool_length_offset_trusted",
+        "_spindle_state_trusted",
+        "_coolant_state_trusted",
+    ):
+        setattr(app, attr, False)
+    invalidate_job_setup_state(app)
+    macro_executor = getattr(app, "macro_executor", None)
+    cancel_macro = getattr(macro_executor, "cancel_macro", None)
+    if callable(cancel_macro):
+        try:
+            cancel_macro("Controller recovery is required.")
+        except Exception as exc:
+            _log_stream_ui_issue("Failed cancelling macro during recovery transition", exc)
+    auto_level_runner = getattr(app, "auto_level_runner", None)
+    cancel_probe = getattr(auto_level_runner, "cancel", None)
+    if callable(cancel_probe):
+        try:
+            cancel_probe()
+        except Exception as exc:
+            _log_stream_ui_issue("Failed cancelling probing during recovery transition", exc)
+    app._stream_state = state.phase.value
+    app._stream_done_pending_idle = False
+    app._grbl_ready = False
+    with app.macro_executor.macro_vars() as macro_vars:
+        macro_vars["running"] = False
+        macro_vars["paused"] = False
+        macro_vars["_position_trusted"] = False
+        macro_vars["_modal_trusted"] = False
+        macro_vars["_wcs_trusted"] = False
+        macro_vars["_g92_trusted"] = False
+        macro_vars["_tlo_trusted"] = False
+        macro_vars["_spindle_trusted"] = False
+        macro_vars["_coolant_trusted"] = False
+    _stop_job_lifecycle_logging(app)
+    _stop_job_accessories_for_state(app, "recovery_required")
+    app.btn_run.config(state="disabled")
+    app.btn_pause.config(state="disabled")
+    app.btn_resume.config(state="disabled")
+    app.btn_resume_from.config(state="disabled")
+    app._set_manual_controls_enabled(False)
+    _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+    try:
+        app._update_recover_button_visibility()
+        app.btn_alarm_recover.config(state="normal")
+    except Exception as exc:
+        _log_stream_ui_issue(
+            "Failed exposing identity-bound execution recovery action",
+            exc,
+        )
+    try:
+        machine_text = MachineStateMessages.RECOVERY_REQUIRED
+        if state.phase is RecoveryPhase.RESET_SENT_AWAITING_BANNER:
+            machine_text = MachineStateMessages.RESET_AWAITING
+        elif state.phase is RecoveryPhase.RESET_CONFIRMED_STATE_UNTRUSTED:
+            machine_text = MachineStateMessages.RESET_CONFIRMED_UNTRUSTED
+        app.machine_state.set(machine_text)
+        app._machine_state_text = machine_text
+    except Exception as exc:
+        _log_stream_ui_issue("Failed setting recovery machine-state label", exc)
+    warning = StatusMessages.RECOVERY_REQUIRED
+    if state.phase is RecoveryPhase.RESET_SENT_AWAITING_BANNER:
+        warning = StatusMessages.RESET_AWAITING
+    elif state.phase is RecoveryPhase.RESET_CONFIRMED_STATE_UNTRUSTED:
+        warning = StatusMessages.RESET_CONFIRMED_UNTRUSTED
+    if state.machine_may_be_executing:
+        warning = (
+            "Recovery required: the reset could not be confirmed and the machine may still "
+            "be executing buffered motion. Use the physical emergency stop if needed."
+        )
+    app.status.config(text=warning)
+    logger.error("[recovery] %s", reason)
 
 
 def _set_stream_progress_ui(
@@ -829,8 +986,15 @@ def handle_stream_state_event(app, evt):
             signature=next_loaded_sig,
         )
         return
+    suspended_states = {
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+    }
     if st == "running":
-        if prev == "paused":
+        if prev in suspended_states:
             if app._stream_paused_at is not None:
                 app._stream_pause_total += max(0.0, now - app._stream_paused_at)
                 app._stream_paused_at = None
@@ -850,7 +1014,7 @@ def handle_stream_state_event(app, evt):
                 context="Failed refreshing G-code stats after running-state transition",
             )
             app.throughput_var.set("TX: 0 B/s")
-        if prev != "paused":
+        if prev not in suspended_states:
             try:
                 last_acked_idx = int(getattr(app, "_last_acked_index", -1) or -1)
             except Exception:
@@ -881,7 +1045,9 @@ def handle_stream_state_event(app, evt):
             status_text = app.status.cget("text")
         except (AttributeError, tk.TclError):
             status_text = ""
-        if status_text.startswith(("Stream error", "Paused", "Resuming")):
+        if status_text.startswith(
+            ("Stream error", "Pause", "Paused", "External Hold", "Safety Door", "Resume")
+        ):
             try:
                 name = ""
                 path = getattr(app, "_last_gcode_path", None)
@@ -897,10 +1063,10 @@ def handle_stream_state_event(app, evt):
                 app.status.config(text=label)
             except (AttributeError, tk.TclError, TypeError) as exc:
                 logger.debug("Failed updating streaming status label: %s", exc)
-    elif st == "paused":
+    elif st in suspended_states:
         if app._stream_paused_at is None:
             app._stream_paused_at = now
-    elif st in ("done", "stopped", "error", "alarm", "loaded"):
+    elif st in ("done", "stopped", "error", "alarm", "loaded", "recovery_required"):
         app._stream_start_ts = None
         app._stream_pause_total = 0.0
         app._stream_paused_at = None
@@ -908,7 +1074,7 @@ def handle_stream_state_event(app, evt):
         app._live_estimate_observed_total_min = None
         app._live_estimate_display_min = None
         app._live_estimate_display_ts = 0.0
-        if st in ("error", "alarm", "loaded"):
+        if st in ("error", "alarm", "loaded", "recovery_required"):
             app._live_estimate_total_min = None
         _schedule_stream_ui_callback(
             app,
@@ -948,6 +1114,18 @@ def handle_stream_state_event(app, evt):
         app.btn_resume_from.config(state="disabled")
         app._set_manual_controls_enabled(False)
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+    elif st == "execution_pending_idle":
+        app._stream_done_pending_idle = True
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_vars["running"] = True
+            macro_vars["paused"] = False
+        app.btn_run.config(state="disabled")
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(text="All lines acknowledged; waiting for controller Idle...")
     elif st == "paused":
         _reset_stream_completion_evidence(app)
         app._stream_done_pending_idle = False
@@ -955,11 +1133,77 @@ def handle_stream_state_event(app, evt):
         with app.macro_executor.macro_vars() as macro_vars:
             macro_vars["running"] = True
             macro_vars["paused"] = True
+        pause_detail = str(evt[2] if len(evt) > 2 else "").strip().lower()
+        workflow_pause = pause_detail in {"tool change", "accessory confirmation"}
         app.btn_pause.config(state="disabled")
-        app.btn_resume.config(state="normal")
+        app.btn_resume.config(state="disabled" if workflow_pause else "normal")
         app.btn_resume_from.config(state="disabled")
         app._set_manual_controls_enabled(False)
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(
+            text=(
+                "Tool Change paused; workflow controls remain active"
+                if pause_detail == "tool change"
+                else (
+                    "Accessory confirmation pending"
+                    if pause_detail == "accessory confirmation"
+                    else "Feed hold confirmed"
+                )
+            )
+        )
+    elif st == "pause_requested":
+        _reset_stream_completion_evidence(app)
+        app._stream_done_pending_idle = False
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_vars["running"] = True
+            macro_vars["paused"] = False
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(text="Pause requested; waiting for controller Hold...")
+    elif st in {"external_hold", "door_suspended"}:
+        _reset_stream_completion_evidence(app)
+        app._stream_done_pending_idle = False
+        suspension_detail = str(evt[2] if len(evt) > 2 else "").strip()
+        door_ready = bool(
+            st == "door_suspended"
+            and suspension_detail.lower().startswith("door:0")
+        )
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_vars["running"] = True
+            macro_vars["paused"] = True
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(
+            state="normal" if st == "external_hold" or door_ready else "disabled"
+        )
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(
+            text=(
+                "External Hold; explicit Resume required"
+                if st == "external_hold"
+                else (
+                    "Safety Door closed; explicit Resume required"
+                    if door_ready
+                    else "Safety Door suspension; close the door before Resume"
+                )
+            )
+        )
+    elif st == "resume_requested":
+        _reset_stream_completion_evidence(app)
+        app._stream_done_pending_idle = False
+        with app.macro_executor.macro_vars() as macro_vars:
+            macro_vars["running"] = True
+            macro_vars["paused"] = True
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(text="Resume requested; waiting for controller confirmation...")
     elif st in ("done", "stopped"):
         _stop_job_lifecycle_logging(app)
         if st == "stopped":
@@ -1042,7 +1286,29 @@ def handle_stream_state_event(app, evt):
         app.btn_resume_from.config(state="disabled")
         app._set_alarm_lock(True, evt[2] if len(evt) > 2 else None)
         _set_streaming_lock_safe(app, False)
-    stream_busy = st in ("running", "paused") or bool(
+    elif st == "recovery_required":
+        # The dedicated recovery event performs trust invalidation. Keep this
+        # state transition idempotently fail-closed if event delivery is split.
+        app.btn_run.config(state="disabled")
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(text=StatusMessages.RECOVERY_REQUIRED)
+    stream_busy = st in (
+        "running",
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+        "execution_pending_idle",
+        "recovery_required",
+        "reset_required",
+        "reset_sent_awaiting_banner",
+        "reset_confirmed_state_untrusted",
+    ) or bool(
         getattr(app, "_stream_done_pending_idle", False)
     )
     apply_stream_busy_state(app, stream_busy, log_hook=_log_stream_ui_issue)
@@ -1059,7 +1325,7 @@ def handle_stream_state_event(app, evt):
                     "Failed updating joystick polling state after stream-state transition",
                     exc,
                 )
-        if stream_busy != prev_stream_busy or st in ("alarm", "error"):
+        if stream_busy != prev_stream_busy or st in ("alarm", "error", "recovery_required"):
             try:
                 app._apply_status_poll_profile()
             except Exception as exc:
@@ -1083,6 +1349,8 @@ def handle_stream_interrupted(app, evt):
     if getattr(app, "_user_disconnect", False):
         return
     _stop_job_lifecycle_logging(app)
-    app._resume_after_disconnect = True
-    app._resume_from_index = max(0, app._last_acked_index + 1)
-    app._resume_job_name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
+    app._resume_after_disconnect = False
+    app._resume_from_index = None
+    app._resume_job_name = None
+    app._auto_reconnect_pending = False
+    app._auto_reconnect_blocked = True

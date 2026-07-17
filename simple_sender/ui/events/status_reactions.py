@@ -88,6 +88,24 @@ def maybe_restore_pending_g90(
 ) -> None:
     if not getattr(app, "_pending_force_g90", False):
         return
+    snapshot = getattr(app, "_pending_force_g90_snapshot", None)
+    snapshot_checker = getattr(app.grbl, "workflow_admission_snapshot_current", None)
+    if snapshot is None or not callable(snapshot_checker):
+        app._pending_force_g90 = False
+        app._pending_force_g90_snapshot = None
+        return
+    try:
+        snapshot_current = bool(snapshot_checker(snapshot))
+    except Exception:
+        snapshot_current = False
+    if not snapshot_current:
+        app._pending_force_g90 = False
+        app._pending_force_g90_snapshot = None
+        try:
+            app.ui_q.put(("log", "[autolevel] Discarded pending G90 restore for a retired controller session."))
+        except Exception as exc:
+            log_suppressed("Failed to log retired pending G90 restore", exc)
+        return
     if not app.grbl.is_connected():
         return
     if getattr(app, "_alarm_locked", False):
@@ -95,13 +113,18 @@ def maybe_restore_pending_g90(
     if app.grbl.is_streaming() or stream_active_or_finishing(app):
         return
     try:
-        accepted = app.grbl.send_immediate("G90", source="autolevel")
+        accepted = app.grbl.send_immediate(
+            "G90",
+            source="autolevel",
+            expected_workflow_snapshot=snapshot,
+        )
     except Exception as exc:
         log_suppressed("Failed to restore pending G90", exc)
         return
     if accepted is False:
         return
     app._pending_force_g90 = False
+    app._pending_force_g90_snapshot = None
     try:
         app.ui_q.put(("log", "[autolevel] Requested pending G90 restore after alarm clear."))
     except Exception as exc:

@@ -95,6 +95,11 @@ RUNTIME_MODAL_DIALOG_POLICIES: dict[str, RuntimeModalDialogPolicy] = {
         classification=RUNTIME_RECOVERY_NOT_NEEDED,
         reason="Alarm recovery is an explicit operator action rather than an asynchronous popup raised during lock.",
     ),
+    "simple_sender.ui.dialogs.execution_recovery_dialog.show_execution_recovery": RuntimeModalDialogPolicy(
+        dialog_id="simple_sender.ui.dialogs.execution_recovery_dialog.show_execution_recovery",
+        classification=RUNTIME_RECOVERY_NOT_NEEDED,
+        reason="Execution recovery is an explicit operator action opened from the recovery control.",
+    ),
     "simple_sender.ui.dialogs.macro_prompt_dialog.show_macro_prompt": RuntimeModalDialogPolicy(
         dialog_id="simple_sender.ui.dialogs.macro_prompt_dialog.show_macro_prompt",
         classification=RUNTIME_RECOVERY_REQUIRED,

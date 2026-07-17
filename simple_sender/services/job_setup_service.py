@@ -31,6 +31,10 @@ class JobSetupService:
         self._log_suppressed = log_suppressed
 
     def has_valid_setup_state(self, app: Any) -> bool:
+        trust_getter = getattr(getattr(app, "grbl", None), "machine_trust_state", None)
+        trust = trust_getter() if callable(trust_getter) else None
+        if trust is not None and not bool(trust.setup_tool_reference):
+            return False
         state = self._read_tool_reference_state_from_macro_state(app, blocking=False)
         if not isinstance(state, tuple) or len(state) != 2:
             return False

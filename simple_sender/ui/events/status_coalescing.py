@@ -22,10 +22,46 @@
 
 """Streaming-time status position coalescing helpers."""
 
+from dataclasses import dataclass
+from typing import Any, cast
+
+from simple_sender.status_coordinates import StatusCoordinateEvidence
+
+from .status_parsing import StatusCoordinateApplication
+
+
+@dataclass(frozen=True, slots=True)
+class CoalescedStatusCoordinateUpdate:
+    """Identity-bound coordinate evidence awaiting deferred installation."""
+
+    request_id: int
+    fields: Any
+    coordinate_evidence: StatusCoordinateEvidence
+    coordinate_signature: object
+    connection_generation: int | None
+    recovery_epoch: int | None
+    event_generation: int | None
+    event_recovery_epoch: int | None
+    worker_identity: int | None
+    serial_port: object | None
+    serial_identity: int | None
+    normal_session_required: bool
+    normal_session_identity: object | None
+    recovery_required: bool
+    connected: bool
+    closing: bool
+
 
 def stream_status_positions_coalesce_active(app) -> bool:
     stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    if stream_state not in {"running", "paused"}:
+    if stream_state not in {
+        "running",
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+    }:
         return False
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return False
@@ -158,6 +194,195 @@ def clear_coalesced_status_positions_state(app, *, log_suppressed) -> None:
                 log_suppressed("Failed canceling coalesced status-positions callback", exc)
     setattr(app, "_status_positions_coalesce_after_id", None)
     setattr(app, "_status_positions_coalesce_pending_fields", None)
+    setattr(app, "_status_positions_coalesce_current_id", None)
+
+
+def _safe_int_call(obj: object, attr_name: str) -> int | None:
+    getter = getattr(obj, attr_name, None)
+    if not callable(getter):
+        return None
+    try:
+        return int(getter())
+    except Exception:
+        return None
+
+
+def _safe_bool_call(obj: object, attr_name: str, *, default: bool) -> bool:
+    getter = getattr(obj, attr_name, None)
+    if not callable(getter):
+        return bool(default)
+    try:
+        return bool(getter())
+    except Exception:
+        return True
+
+
+def _safe_normal_session_identity(worker: object) -> object | None:
+    getter = getattr(worker, "normal_session_action_identity", None)
+    if not callable(getter):
+        return None
+    try:
+        return cast(object, getter())
+    except Exception:
+        return object()
+
+
+def _worker_session_current(
+    worker: object,
+    *,
+    generation: int | None,
+    serial_port: object | None,
+) -> bool:
+    checker = getattr(worker, "_session_is_current", None)
+    if callable(checker) and generation is not None:
+        try:
+            return bool(checker(int(generation), serial_port))
+        except Exception:
+            return False
+    getter = getattr(worker, "connection_generation", None)
+    if callable(getter) and generation is not None:
+        try:
+            if int(getter()) != int(generation):
+                return False
+        except Exception:
+            return False
+    if serial_port is not None:
+        try:
+            if getattr(worker, "ser", None) is not serial_port:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _coalesced_update_current(app, update: CoalescedStatusCoordinateUpdate) -> bool:
+    if bool(getattr(app, "_closing", False)) or bool(
+        getattr(app, "_shutdown_in_progress", False)
+    ):
+        return False
+    if not bool(getattr(app, "connected", False)):
+        return False
+    if not bool(update.connected) or bool(update.closing):
+        return False
+    worker = getattr(app, "grbl", None)
+    if worker is None:
+        if update.worker_identity is not None:
+            return False
+    elif update.worker_identity is not None and id(worker) != int(
+        update.worker_identity
+    ):
+        return False
+    current_generation = _safe_int_call(worker, "connection_generation")
+    if update.connection_generation is not None and current_generation != int(
+        update.connection_generation
+    ):
+        return False
+    if update.event_generation is not None and current_generation != int(
+        update.event_generation
+    ):
+        return False
+    current_recovery_epoch = _safe_int_call(worker, "recovery_epoch")
+    if update.recovery_epoch is not None and current_recovery_epoch != int(
+        update.recovery_epoch
+    ):
+        return False
+    if update.event_recovery_epoch is not None and current_recovery_epoch != int(
+        update.event_recovery_epoch
+    ):
+        return False
+    if update.serial_identity is not None:
+        current_serial = getattr(worker, "ser", None)
+        if current_serial is not update.serial_port:
+            return False
+        if id(current_serial) != int(update.serial_identity):
+            return False
+    if not _worker_session_current(
+        worker,
+        generation=update.connection_generation,
+        serial_port=update.serial_port,
+    ):
+        return False
+    if _safe_bool_call(worker, "recovery_required", default=False):
+        return False
+    if _safe_int_call(worker, "recovery_epoch") != update.recovery_epoch:
+        return False
+    normal_required = _safe_bool_call(
+        worker,
+        "normal_session_initialization_required",
+        default=bool(update.normal_session_required),
+    )
+    if normal_required != bool(update.normal_session_required):
+        return False
+    current_normal_identity = _safe_normal_session_identity(worker)
+    if update.normal_session_identity is not None and (
+        current_normal_identity != update.normal_session_identity
+    ):
+        return False
+    return True
+
+
+def _capture_coalesced_status_coordinate_update(
+    app,
+    fields,
+    *,
+    request_id: int,
+    clone_status_fields,
+) -> CoalescedStatusCoordinateUpdate | None:
+    evidence = getattr(fields, "coordinate_evidence", None)
+    signature = getattr(fields, "coordinate_signature", None)
+    if not isinstance(evidence, StatusCoordinateEvidence):
+        return None
+    if not bool(evidence.valid) or signature is None:
+        return None
+    worker = getattr(app, "grbl", None)
+    connection_generation = _safe_int_call(worker, "connection_generation")
+    recovery_epoch = _safe_int_call(worker, "recovery_epoch")
+    event_generation = getattr(fields, "event_generation", None)
+    event_recovery_epoch = getattr(fields, "event_recovery_epoch", None)
+    try:
+        event_generation = None if event_generation is None else int(event_generation)
+    except Exception:
+        return None
+    try:
+        event_recovery_epoch = (
+            None if event_recovery_epoch is None else int(event_recovery_epoch)
+        )
+    except Exception:
+        return None
+    if event_generation is not None and connection_generation != event_generation:
+        return None
+    if event_recovery_epoch is not None and recovery_epoch != event_recovery_epoch:
+        return None
+    serial_port = getattr(worker, "ser", None)
+    serial_identity = id(serial_port) if serial_port is not None else None
+    update = CoalescedStatusCoordinateUpdate(
+        request_id=int(request_id),
+        fields=clone_status_fields(fields),
+        coordinate_evidence=evidence,
+        coordinate_signature=signature,
+        connection_generation=connection_generation,
+        recovery_epoch=recovery_epoch,
+        event_generation=event_generation,
+        event_recovery_epoch=event_recovery_epoch,
+        worker_identity=id(worker) if worker is not None else None,
+        serial_port=serial_port,
+        serial_identity=serial_identity,
+        normal_session_required=_safe_bool_call(
+            worker,
+            "normal_session_initialization_required",
+            default=False,
+        ),
+        normal_session_identity=_safe_normal_session_identity(worker),
+        recovery_required=_safe_bool_call(worker, "recovery_required", default=False),
+        connected=bool(getattr(app, "connected", False)),
+        closing=bool(getattr(app, "_closing", False))
+        or bool(getattr(app, "_shutdown_in_progress", False)),
+    )
+    if bool(update.recovery_required):
+        return None
+    if not _coalesced_update_current(app, update):
+        return None
+    return update
 
 
 def flush_coalesced_status_positions(
@@ -169,23 +394,54 @@ def flush_coalesced_status_positions(
     sync_manual_jog_prediction_with_status,
     record_status_perf_metric,
     noncritical_budget_ms: float,
+    request_id: int | None = None,
 ) -> None:
-    setattr(app, "_status_positions_coalesce_after_id", None)
-    fields = getattr(app, "_status_positions_coalesce_pending_fields", None)
-    setattr(app, "_status_positions_coalesce_pending_fields", None)
-    if not isinstance(fields, status_fields_type):
+    current_request_id = getattr(app, "_status_positions_coalesce_current_id", None)
+    if request_id is not None and current_request_id != int(request_id):
         return
+    pending = getattr(app, "_status_positions_coalesce_pending_fields", None)
+    if not isinstance(pending, CoalescedStatusCoordinateUpdate):
+        if request_id is None or current_request_id == request_id:
+            setattr(app, "_status_positions_coalesce_after_id", None)
+            setattr(app, "_status_positions_coalesce_pending_fields", None)
+            setattr(app, "_status_positions_coalesce_current_id", None)
+        return
+    if request_id is not None and int(pending.request_id) != int(request_id):
+        return
+    if pending is not getattr(app, "_status_positions_coalesce_pending_fields", None):
+        return
+    if not _coalesced_update_current(app, pending):
+        if pending is getattr(app, "_status_positions_coalesce_pending_fields", None):
+            setattr(app, "_status_positions_coalesce_after_id", None)
+            setattr(app, "_status_positions_coalesce_pending_fields", None)
+            setattr(app, "_status_positions_coalesce_current_id", None)
+        return
+    fields = pending.fields
+    if not isinstance(fields, status_fields_type):
+        if pending is getattr(app, "_status_positions_coalesce_pending_fields", None):
+            setattr(app, "_status_positions_coalesce_after_id", None)
+            setattr(app, "_status_positions_coalesce_pending_fields", None)
+            setattr(app, "_status_positions_coalesce_current_id", None)
+        return
+    setattr(app, "_status_positions_coalesce_after_id", None)
+    setattr(app, "_status_positions_coalesce_pending_fields", None)
+    setattr(app, "_status_positions_coalesce_current_id", None)
     started = time_module.perf_counter()
     try:
-        update_positions_and_macro_state(
+        coordinate_application = update_positions_and_macro_state(
             app,
             fields,
             event_started_perf=None,
             noncritical_budget_ms=noncritical_budget_ms,
         )
-        sync_manual_jog_prediction_with_status(app)
+        if coordinate_application is StatusCoordinateApplication.VALID_INSTALLED:
+            sync_manual_jog_prediction_with_status(app)
+            setattr(
+                app,
+                "_status_positions_last_apply_ts",
+                float(time_module.monotonic()),
+            )
     finally:
-        setattr(app, "_status_positions_last_apply_ts", float(time_module.monotonic()))
         record_status_perf_metric(
             app,
             "positions_coalesced_apply",
@@ -218,9 +474,23 @@ def queue_coalesced_status_positions_update(
         and (last_apply_ts <= 0.0 or (now_mono - last_apply_ts) >= interval_s)
     )
 
-    setattr(app, "_status_positions_coalesce_pending_fields", clone_status_fields(fields))
+    request_id = int(getattr(app, "_status_positions_coalesce_sequence", 0) or 0) + 1
+    setattr(app, "_status_positions_coalesce_sequence", request_id)
+    update = _capture_coalesced_status_coordinate_update(
+        app,
+        fields,
+        request_id=request_id,
+        clone_status_fields=clone_status_fields,
+    )
+    if update is None:
+        return False
     if pending_after_id is not None:
-        return True
+        after_cancel = getattr(app, "after_cancel", None)
+        if callable(after_cancel):
+            try:
+                after_cancel(pending_after_id)
+            except Exception as exc:
+                log_suppressed("Failed replacing coalesced status-positions callback", exc)
 
     remaining_s = (
         0.0
@@ -243,15 +513,21 @@ def queue_coalesced_status_positions_update(
     )
     after_fn = getattr(app, "after", None)
     if not callable(after_fn):
-        setattr(app, "_status_positions_coalesce_pending_fields", None)
         return False
 
     try:
-        callback_id = after_fn(delay_ms, lambda: flush_coalesced_status_positions(app))
+        callback_id = after_fn(
+            delay_ms,
+            lambda request_id=request_id: flush_coalesced_status_positions(
+                app,
+                request_id=request_id,
+            ),
+        )
     except Exception as exc:
-        setattr(app, "_status_positions_coalesce_pending_fields", None)
         log_suppressed("Failed scheduling coalesced status-positions callback", exc)
         return False
+    setattr(app, "_status_positions_coalesce_pending_fields", update)
+    setattr(app, "_status_positions_coalesce_current_id", request_id)
     setattr(app, "_status_positions_coalesce_after_id", callback_id)
     record_status_perf_metric(app, "positions_coalesced_defer", 0.0)
     if force_defer:

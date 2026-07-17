@@ -57,14 +57,44 @@ def _manual_control_state(app, widget, enabled: bool, connected: bool) -> str:
     if not connected:
         return "normal" if widget in app._offline_controls else "disabled"
     if not enabled:
+        auto_level_checker = getattr(
+            getattr(app, "grbl", None), "auto_level_lease_blocks_ordinary", None
+        )
+        try:
+            auto_level_active = bool(auto_level_checker()) if callable(auto_level_checker) else False
+        except Exception:
+            auto_level_active = True
+        if auto_level_active:
+            return "normal" if widget is getattr(app, "btn_all_stop", None) else "disabled"
         stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
         stream_busy = bool(getattr(app, "_stream_done_pending_idle", False)) or stream_state in {
             "running",
+            "pause_requested",
             "paused",
+            "external_hold",
+            "door_suspended",
+            "resume_requested",
         }
         if widget is getattr(app, "btn_all_stop", None):
             return "normal"
         if widget in app._override_controls:
+            return "normal"
+        normal_checker = getattr(
+            getattr(app, "grbl", None),
+            "normal_session_initialization_required",
+            None,
+        )
+        try:
+            normal_initialization_required = (
+                bool(normal_checker()) if callable(normal_checker) else False
+            )
+        except Exception:
+            normal_initialization_required = True
+        if (
+            normal_initialization_required
+            and not stream_busy
+            and widget is getattr(app, "btn_home_mpos", None)
+        ):
             return "normal"
         if (
             not stream_busy
@@ -103,6 +133,14 @@ def _set_widget_state_if_needed(app, widget, state: str) -> None:
 
 
 def set_manual_controls_enabled(app, enabled: bool):
+    auto_level_checker = getattr(
+        getattr(app, "grbl", None), "auto_level_lease_blocks_ordinary", None
+    )
+    if enabled and callable(auto_level_checker):
+        try:
+            enabled = not bool(auto_level_checker())
+        except Exception:
+            enabled = False
     was_enabled = bool(getattr(app, "_manual_controls_last_enabled", False))
     if getattr(app, "_alarm_locked", False):
         for w in app._manual_controls:
@@ -135,4 +173,3 @@ def set_manual_controls_enabled(app, enabled: bool):
         app._set_unit_mode(app.unit_mode.get())
         app._set_step_xy(app.step_xy.get())
         app._set_step_z(app.step_z.get())
-

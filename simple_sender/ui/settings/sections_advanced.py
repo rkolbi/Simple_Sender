@@ -479,7 +479,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
         value=str(pref_float(small_vals.get("spacing"), small_defaults.get("spacing", 3.0)))
     )
     small_interp_var = tk.StringVar(
-        value=pref_interp(small_vals.get("interpolation"), small_defaults.get("interpolation", "bicubic"))
+        value=pref_interp(small_vals.get("interpolation"), small_defaults.get("interpolation", "bilinear"))
     )
     large_spacing_var = tk.StringVar(
         value=str(pref_float(large_vals.get("spacing"), large_defaults.get("spacing", 8.0)))
@@ -491,7 +491,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
         value=str(pref_float(custom_vals.get("spacing"), custom_defaults.get("spacing", 5.0)))
     )
     custom_interp_var = tk.StringVar(
-        value=pref_interp(custom_vals.get("interpolation"), custom_defaults.get("interpolation", "bicubic"))
+        value=pref_interp(custom_vals.get("interpolation"), custom_defaults.get("interpolation", "bilinear"))
     )
 
     def _save_autolevel_job_prefs(_event=None) -> None:
@@ -525,9 +525,9 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
             custom_spacing_var.get(),
             pref_float(current_custom_vals.get("spacing"), custom_defaults.get("spacing", 5.0)),
         )
-        small_interp = pref_interp(small_interp_var.get(), "bicubic")
+        small_interp = pref_interp(small_interp_var.get(), "bilinear")
         large_interp = pref_interp(large_interp_var.get(), "bilinear")
-        custom_interp = pref_interp(custom_interp_var.get(), "bicubic")
+        custom_interp = pref_interp(custom_interp_var.get(), "bilinear")
         prefs = {
             "small_max_area": small_max_area,
             "large_min_area": large_min_area,
@@ -582,7 +582,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         small_interp_combo,
-        "Interpolation method for Small jobs.",
+        "Interpolation method for Small jobs. Bilinear is the conservative default; bicubic is advanced.",
     )
 
     ttk.Label(auto_level_frame, text="Large").grid(row=5, column=0, sticky="w", pady=2)
@@ -601,7 +601,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         large_interp_combo,
-        "Interpolation method for Large jobs.",
+        "Interpolation method for Large jobs. Bilinear is the conservative default; bicubic is advanced.",
     )
 
     ttk.Label(auto_level_frame, text="Custom").grid(row=6, column=0, sticky="w", pady=2)
@@ -620,7 +620,7 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         custom_interp_combo,
-        "Interpolation method for Custom jobs.",
+        "Interpolation method for Custom jobs. Bilinear is the conservative default; bicubic is advanced.",
     )
 
     ttk.Label(
@@ -642,6 +642,5 @@ def build_auto_level_section(app, parent: ttk.Frame, row: int) -> int:
     for combo in (small_interp_combo, large_interp_combo, custom_interp_combo):
         combo.bind("<<ComboboxSelected>>", _save_autolevel_job_prefs)
     return row + 1
-
 
 

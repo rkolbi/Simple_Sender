@@ -27,7 +27,7 @@ import os
 from tkinter import filedialog, messagebox
 
 from simple_sender.autolevel.height_map import HeightMap
-from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+from simple_sender.ui.autolevel_state import active_auto_level_map_is_current
 from simple_sender.utils.atomic_files import atomic_copy_file, atomic_write_json, atomic_write_text
 from .helpers import update_stats_summary
 
@@ -37,6 +37,12 @@ _logged_suppressed: set[tuple[str, str]] = set()
 
 def _log_suppressed(context: str, exc: BaseException) -> None:
     log_suppressed_exception(logger, context, exc, suppressed=_logged_suppressed)
+
+
+def _run_file_dialog(app, dialog_fn, **kwargs):
+    from simple_sender.ui.dialogs.file_dialogs import run_file_dialog
+
+    return run_file_dialog(app, dialog_fn, **kwargs)
 
 
 def save_leveled(app, status_var) -> None:
@@ -52,7 +58,7 @@ def save_leveled(app, status_var) -> None:
         base, ext = os.path.splitext(os.path.basename(path))
         suffix = ext if ext else ".gcode"
         default_name = f"{base}-AL{suffix}"
-    save_path = run_file_dialog(
+    save_path = _run_file_dialog(
         app,
         filedialog.asksaveasfilename,
         title="Save leveled G-code",
@@ -83,6 +89,13 @@ def save_leveled(app, status_var) -> None:
 
 
 def save_height_map(app, status_var) -> None:
+    if not active_auto_level_map_is_current(app):
+        messagebox.showwarning(
+            "Auto-Level",
+            "The height map is inactive or no longer trusted for this controller session.",
+        )
+        return
+    provenance = getattr(app, "_auto_level_map_provenance", None)
     height_map = getattr(app, "_auto_level_height_map", None)
     if height_map is None or not height_map.is_complete():
         messagebox.showwarning("Auto-Level", "Probe a complete grid before saving.")
@@ -93,7 +106,7 @@ def save_height_map(app, status_var) -> None:
     if path:
         base, _ = os.path.splitext(os.path.basename(path))
         default_name = f"{base}_height_map.json"
-    save_path = run_file_dialog(
+    save_path = _run_file_dialog(
         app,
         filedialog.asksaveasfilename,
         title="Save height map",
@@ -103,6 +116,15 @@ def save_height_map(app, status_var) -> None:
         filetypes=[("Height map", "*.json"), ("All files", "*.*")],
     )
     if not save_path:
+        return
+    if (
+        getattr(app, "_auto_level_map_provenance", None) is not provenance
+        or not active_auto_level_map_is_current(app)
+    ):
+        messagebox.showwarning(
+            "Auto-Level",
+            "The height map changed or became untrusted before it could be saved.",
+        )
         return
     try:
         atomic_write_json(save_path, height_map.to_dict(), indent=2, ensure_ascii=True)
@@ -126,7 +148,7 @@ def load_height_map(
     save_btn,
 ) -> None:
     initial_dir = app.settings.get("last_gcode_dir", "")
-    load_path = run_file_dialog(
+    load_path = _run_file_dialog(
         app,
         filedialog.askopenfilename,
         title="Load height map",
@@ -142,27 +164,21 @@ def load_height_map(
     except Exception as exc:
         messagebox.showerror("Load height map", str(exc))
         return
-    app._auto_level_height_map = height_map
+    app._auto_level_height_map = None
     app._auto_level_grid = None
     app._auto_level_bounds = None
-    if not height_map.is_complete():
-        status_var.set("Loaded height map (incomplete).")
-    else:
-        stats = height_map.stats()
-        if stats:
-            status_var.set(
-                f"Loaded map. Min {stats.min_z:.4f} Max {stats.max_z:.4f} Span {stats.span():.4f} mm"
-            )
-        else:
-            status_var.set("Loaded height map.")
+    app._auto_level_map_provenance = None
+    status_var.set(
+        "Loaded historical map is inactive; run a new probe before Apply or Save Map."
+    )
     update_stats_summary(height_map, stats_var)
     try:
-        apply_btn.config(state="normal" if height_map.is_complete() else "disabled")
+        apply_btn.config(state="disabled")
     except Exception as exc:
         _log_suppressed("Failed toggling Apply button state after loading height map", exc)
     if save_map_btn is not None:
         try:
-            save_map_btn.config(state="normal" if height_map.is_complete() else "disabled")
+            save_map_btn.config(state="disabled")
         except Exception as exc:
             _log_suppressed("Failed toggling Save Map button state after loading height map", exc)
     if save_btn is not None and (
@@ -174,11 +190,10 @@ def load_height_map(
         except Exception as exc:
             _log_suppressed("Failed toggling Save Leveled button state after loading height map", exc)
     map_summary_var.set(
-        f"Loaded map: {len(height_map.xs)} x {len(height_map.ys)} "
+        f"Inactive historical map: {len(height_map.xs)} x {len(height_map.ys)} "
         f"({len(height_map.xs) * len(height_map.ys)} points)"
     )
     try:
         app.settings["last_gcode_dir"] = os.path.dirname(load_path)
     except Exception as exc:
         _log_suppressed("Failed saving last G-code directory after Load Height Map", exc)
-

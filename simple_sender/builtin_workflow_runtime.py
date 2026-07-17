@@ -399,6 +399,9 @@ def run_job_setup(executor) -> None:
     _set_state(executor, "TOOL_REFERENCE_WZ", tool_reference_wz)
     _set_state(executor, "TOOL_REFERENCE", tool_reference_wz)
     _set_state(executor, "TOOL_REFERENCE_FORMAT", tool_measurement.CURRENT_TOOL_REFERENCE_FORMAT)
+    marker = getattr(executor.grbl, "mark_setup_tool_reference_trusted", None)
+    if callable(marker):
+        marker()
     executor.ui_q.put(
         (
             "log",
@@ -549,6 +552,9 @@ def run_tool_change(executor) -> None:
             f"Tool change offset committed: G10 L20 applied; target_wz={target_wz} resulting_wz={_get_var(executor, 'wz')} mz={_get_var(executor, 'mz')}",
         )
     )
+    marker = getattr(executor.grbl, "mark_tool_length_offset_trusted", None)
+    if callable(marker):
+        marker()
     _return_from_fixed_sensor(executor)
     executor._workflow_restore_state()
 

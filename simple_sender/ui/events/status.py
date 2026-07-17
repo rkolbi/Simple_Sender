@@ -41,7 +41,7 @@ from simple_sender.utils.constants import (
     JOG_DRO_SMOOTHING_UI_JOG_ONLY,
     RT_STATUS,
 )
-from .status_parsing import _StatusFields
+from .status_parsing import StatusCoordinateApplication, _StatusFields
 from .status_parsing import _clone_status_fields as _clone_status_fields_impl
 from .status_parsing import _parse_status_fields as _parse_status_fields_impl
 from .status_parsing import _parse_xyz_triplet as _parse_xyz_triplet_impl
@@ -230,18 +230,20 @@ def _signal_thread_event(obj, attr_name: str) -> None:
             _log_suppressed(f"Failed signaling thread event {attr_name}", exc)
 
 
-def _mark_status_coordinates_fresh(app, *, context: str) -> None:
+def _mark_status_coordinates_fresh(app, *, context: str) -> bool:
     def _update_macro_status_coordinates_seq(macro_vars: dict) -> None:
         macro_vars["_status_coords_seq"] = int(
             macro_vars.get("_status_coords_seq", 0) or 0
         ) + 1
 
-    _with_macro_vars_nonblocking(
+    sequence_advanced = _with_macro_vars_nonblocking(
         app,
         _update_macro_status_coordinates_seq,
         context=context,
     )
-    _signal_thread_event(app, "_status_coords_update_event")
+    if sequence_advanced:
+        _signal_thread_event(app, "_status_coords_update_event")
+    return bool(sequence_advanced)
 
 
 def _status_state_token(raw: str) -> str:
@@ -376,7 +378,14 @@ def _log_slow_status_event(
 def _stream_active_or_finishing(app) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return True
-    return getattr(app, "_stream_state", None) in ("running", "paused")
+    return getattr(app, "_stream_state", None) in (
+        "running",
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+    )
 
 
 def _performance_mode_enabled(app) -> bool:
@@ -517,7 +526,11 @@ def _clear_coalesced_status_positions_state(app) -> None:
     )
 
 
-def _flush_coalesced_status_positions(app) -> None:
+def _flush_coalesced_status_positions(
+    app,
+    *,
+    request_id: int | None = None,
+) -> None:
     _flush_coalesced_status_positions_impl(
         app,
         time_module=time,
@@ -526,7 +539,41 @@ def _flush_coalesced_status_positions(app) -> None:
         sync_manual_jog_prediction_with_status=sync_manual_jog_prediction_with_status,
         record_status_perf_metric=_record_status_perf_metric,
         noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
+        request_id=request_id,
     )
+
+
+def _status_event_identity_current(
+    app,
+    *,
+    generation: int | None = None,
+    recovery_epoch: int | None = None,
+) -> bool:
+    worker = getattr(app, "grbl", None)
+    if generation is not None:
+        getter = getattr(worker, "connection_generation", None)
+        if callable(getter):
+            try:
+                if int(getter()) != int(generation):
+                    return False
+            except Exception:
+                return False
+    if recovery_epoch is not None:
+        getter = getattr(worker, "recovery_epoch", None)
+        if callable(getter):
+            try:
+                if int(getter()) != int(recovery_epoch):
+                    return False
+            except Exception:
+                return False
+    recovery_checker = getattr(worker, "recovery_required", None)
+    if callable(recovery_checker):
+        try:
+            if bool(recovery_checker()):
+                return False
+        except Exception:
+            return False
+    return True
 
 
 def _queue_coalesced_status_positions_update(
@@ -555,7 +602,11 @@ def _queue_coalesced_status_positions_update(
 def _parse_status_fields(raw: str) -> _StatusFields:
     return cast(
         _StatusFields,
-        _parse_status_fields_impl(raw, log_suppressed=_log_suppressed),
+        _parse_status_fields_impl(
+            raw,
+            log_suppressed=_log_suppressed,
+            warn_invalid_coordinates=_log_unexpected_status_warning,
+        ),
     )
 
 
@@ -925,7 +976,7 @@ def _is_joystick_jog_source(source: str | None) -> bool:
 
 
 def _normalized_jog_dro_smoothing_mode(app) -> str:
-    fallback = JOG_DRO_SMOOTHING_OFF
+    fallback: str = str(JOG_DRO_SMOOTHING_OFF)
     settings = getattr(app, "settings", None)
     if isinstance(settings, dict):
         raw = str(settings.get("jog_dro_smoothing_mode", fallback) or "").strip().lower()
@@ -969,7 +1020,14 @@ def _jog_prediction_should_run(app) -> bool:
     if bool(getattr(app, "_stream_done_pending_idle", False)):
         return False
     stream_state = str(getattr(app, "_stream_state", "") or "").strip().lower()
-    if stream_state in {"running", "paused"}:
+    if stream_state in {
+        "running",
+        "pause_requested",
+        "paused",
+        "external_hold",
+        "door_suspended",
+        "resume_requested",
+    }:
         return False
     state = str(getattr(app, "_machine_state_text", "") or "").strip().lower()
     if state.startswith(("jog", "hold")):
@@ -1108,8 +1166,8 @@ def _update_positions_and_macro_state(
     *,
     event_started_perf: float | None = None,
     noncritical_budget_ms: float = _STATUS_NONCRITICAL_BUDGET_MS,
-) -> None:
-    _update_positions_and_macro_state_impl(
+) -> StatusCoordinateApplication:
+    return _update_positions_and_macro_state_impl(
         app,
         fields,
         event_started_perf=event_started_perf,
@@ -1126,17 +1184,26 @@ def _update_positions_and_macro_state(
         performance_mode_enabled=_performance_mode_enabled,
         schedule_status_ui_callback=_schedule_status_ui_callback,
         with_macro_vars_nonblocking=_with_macro_vars_nonblocking,
-        mark_status_coordinates_fresh=_mark_status_coordinates_fresh,
+        signal_thread_event=_signal_thread_event,
         flash_wpos_labels=_flash_wpos_labels,
     )
 
 
-def handle_status_event(app, raw: str):
+def handle_status_event(
+    app,
+    raw: str,
+    *,
+    generation: int | None = None,
+    recovery_epoch: int | None = None,
+):
     """Parse one status frame and apply state, position, and completion sync."""
 
     _handle_status_event_impl(
         app,
         raw,
+        status_generation=generation,
+        status_recovery_epoch=recovery_epoch,
+        status_event_identity_current=_status_event_identity_current,
         time_module=time,
         deque_cls=deque,
         settling_active=_status_settling_active,
@@ -1163,6 +1230,3 @@ def handle_status_event(app, raw: str):
         noncritical_budget_ms=_STATUS_NONCRITICAL_BUDGET_MS,
         log_suppressed=_log_suppressed,
     )
-
-
-

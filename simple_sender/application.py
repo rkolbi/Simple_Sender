@@ -310,9 +310,11 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._close_application)
 
         self.refresh_ports(auto_connect=False)
+        startup_connection_dialog_port = ""
         if not self.connected and bool(self.reconnect_on_open.get()):
             last_port = (self.settings.get("last_port") or "").strip()
             if last_port:
+                startup_connection_dialog_port = last_port
                 self._auto_reconnect_last_port = last_port
                 self._auto_reconnect_pending = True
                 delay_s = 0.0
@@ -339,6 +341,22 @@ class App(tk.Tk):
                             )
                     except Exception as exc:
                         _log_suppressed("Failed recording startup auto-connect delay timeline event", exc)
+        if startup_connection_dialog_port:
+            try:
+                from simple_sender.ui.dialogs.startup_connection_dialog import (
+                    show_startup_connection_dialog,
+                )
+
+                self.after(
+                    100,
+                    partial(
+                        show_startup_connection_dialog,
+                        self,
+                        port=startup_connection_dialog_port,
+                    ),
+                )
+            except Exception as exc:
+                _log_suppressed("Failed scheduling startup connection dialog", exc)
         geometry = self.settings.get("window_geometry", "")
         if isinstance(geometry, str) and geometry:
             try:
@@ -395,5 +413,3 @@ class App(tk.Tk):
 
 
 _install_app_mixin_methods(App, _APP_MIXINS)
-
-

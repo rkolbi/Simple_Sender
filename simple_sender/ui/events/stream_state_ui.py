@@ -35,6 +35,21 @@ SetRunResumeHook = Callable[[Any, bool], None]
 
 
 def manual_controls_allowed(app: Any) -> bool:
+    worker = getattr(app, "grbl", None)
+    recovery_checker = getattr(worker, "recovery_required", None)
+    if callable(recovery_checker):
+        try:
+            if bool(recovery_checker()):
+                return False
+        except Exception:
+            return False
+    normal_checker = getattr(worker, "normal_session_initialization_required", None)
+    if callable(normal_checker):
+        try:
+            if bool(normal_checker()):
+                return False
+        except Exception:
+            return False
     return bool(
         app.connected and app._grbl_ready and app._status_seen and not app._alarm_locked
     )

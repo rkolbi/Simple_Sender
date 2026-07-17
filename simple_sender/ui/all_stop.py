@@ -44,6 +44,9 @@ def _cancel_machine_driving_tasks(app) -> None:
     try:
         grbl = getattr(app, "grbl", None)
         if grbl is not None:
+            current_tool_change = getattr(
+                grbl, "current_stream_tool_change_identity", lambda: None
+            )()
             jog_cancel = getattr(grbl, "jog_cancel", None)
             if callable(jog_cancel):
                 jog_cancel()
@@ -51,8 +54,8 @@ def _cancel_machine_driving_tasks(app) -> None:
             if callable(cancel_pending_jogs):
                 cancel_pending_jogs()
             complete_tool_change = getattr(grbl, "complete_stream_tool_change", None)
-            if callable(complete_tool_change):
-                complete_tool_change(False, reason)
+            if callable(complete_tool_change) and current_tool_change is not None:
+                complete_tool_change(current_tool_change, False, reason)
     except Exception as exc:
         _log_suppressed("Failed canceling GRBL queued motion/tool-change during ALL STOP", exc)
     try:
@@ -199,4 +202,3 @@ def position_all_stop_offset(app, event=None):
         btn.tk.call("raise", btn._w)
     except tk.TclError as exc:
         _log_suppressed("Failed raising ALL STOP button after placement", exc)
-

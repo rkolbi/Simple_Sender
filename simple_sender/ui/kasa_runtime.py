@@ -73,10 +73,49 @@ def _request_outlet_state(
     skipped_message: str,
     log_message: LogMessage,
     line_index: int | None = None,
+    work_identity=None,
+    source_identity=None,
+    safety_priority: bool = False,
 ) -> bool:
     accepted = False
     try:
         request_kwargs: dict[str, Any] = {"source": str(source or "kasa")}
+        grbl = getattr(app, "grbl", None)
+        if work_identity is None:
+            identity_getter = getattr(grbl, "current_work_identity", None)
+            if callable(identity_getter):
+                work_identity = identity_getter()
+        if source_identity is None:
+            source_getter = getattr(grbl, "current_gcode_source_identity", None)
+            if callable(source_getter):
+                source_identity = source_getter()
+        recovery_checker = getattr(grbl, "recovery_required", None)
+        recovery_required = bool(recovery_checker()) if callable(recovery_checker) else False
+        safety_off = bool(safety_priority and not is_on)
+        if recovery_required and not safety_off:
+            log_message(app, "Accessory command blocked while Recovery Required is active.")
+            return False
+        if work_identity is None:
+            return False
+        current_values = (
+            int(getattr(grbl, "connection_generation")()),
+            int(getattr(grbl, "stream_epoch")()),
+            int(getattr(grbl, "recovery_epoch")()),
+        )
+        captured_values = (
+            int(work_identity.connection_generation),
+            int(work_identity.stream_epoch),
+            int(work_identity.recovery_epoch),
+        )
+        if captured_values != current_values:
+            return False
+        request_kwargs.update(
+            connection_generation=captured_values[0],
+            stream_epoch=captured_values[1],
+            recovery_epoch=captured_values[2],
+            source_id=int(getattr(source_identity, "source_id", 0) or 0),
+            safety_priority=bool(safety_priority),
+        )
         if line_index is not None:
             request_kwargs["line_index"] = int(line_index)
         accepted = bool(
@@ -169,6 +208,9 @@ def _request_vacuum_state(
     source: str,
     line_index: int | None = None,
     log_message: LogMessage,
+    work_identity=None,
+    source_identity=None,
+    safety_priority: bool = False,
 ) -> bool:
     line_text = f" at stream line {int(line_index) + 1}" if line_index is not None else ""
     return _request_outlet_state(
@@ -182,6 +224,9 @@ def _request_vacuum_state(
             f"VACUUM_{'ON' if is_on else 'OFF'} request skipped for outlet {int(outlet_id)}{line_text}."
         ),
         log_message=log_message,
+        work_identity=work_identity,
+        source_identity=source_identity,
+        safety_priority=bool(safety_priority),
     )
 
 
@@ -196,7 +241,13 @@ def _request_vacuum_off_with_delay(
 ) -> bool:
     delay = max(0.0, float(delay_s))
     source_text = str(source or "stream_vacuum_off")
-    if delay <= 0.0 or source_text.startswith("app_"):
+    safety_source = source_text in {
+        "job_recovery_required",
+        "job_all_stop",
+        "job_reset",
+        "app_exit",
+    }
+    if delay <= 0.0 or source_text.startswith("app_") or safety_source:
         cancel_pending_vacuum_off_delay(app)
         return _request_vacuum_state(
             app,
@@ -205,6 +256,7 @@ def _request_vacuum_off_with_delay(
             source=source_text,
             line_index=line_index,
             log_message=log_message,
+            safety_priority=source_text == "job_recovery_required",
         )
     delay_ms = int(round(delay * 1000.0))
     if delay_ms <= 0:
@@ -218,6 +270,11 @@ def _request_vacuum_off_with_delay(
             log_message=log_message,
         )
     cancel_pending_vacuum_off_delay(app)
+    grbl = getattr(app, "grbl", None)
+    work_getter = getattr(grbl, "current_work_identity", None)
+    source_getter = getattr(grbl, "current_gcode_source_identity", None)
+    scheduled_work_identity = work_getter() if callable(work_getter) else None
+    scheduled_source_identity = source_getter() if callable(source_getter) else None
     after = getattr(app, "after", None)
     if not callable(after):
         cancel_pending_vacuum_off_delay(app)
@@ -239,6 +296,8 @@ def _request_vacuum_off_with_delay(
             source=f"{source_text}_delayed",
             line_index=line_index,
             log_message=log_message,
+            work_identity=scheduled_work_identity,
+            source_identity=scheduled_source_identity,
         )
 
     try:
@@ -356,6 +415,7 @@ def _request_job_outlet_state(
     *,
     source: str,
     log_message: LogMessage,
+    safety_priority: bool = False,
 ) -> bool:
     return _request_outlet_state(
         app,
@@ -367,6 +427,7 @@ def _request_job_outlet_state(
             f"Job accessory {'start' if on else 'stop'} rejected for outlet {int(outlet_id)}."
         ),
         log_message=log_message,
+        safety_priority=bool(safety_priority),
     )
 
 
@@ -439,6 +500,7 @@ def stop_job_accessories(
                 False,
                 source=source,
                 log_message=log_message,
+                safety_priority=str(source or "") == "job_recovery_required",
             )
         if accepted:
             pending_off.add(int(outlet_id))

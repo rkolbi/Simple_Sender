@@ -36,7 +36,7 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
 
 from simple_sender.utils.constants import KASA_TASK_QUEUE_MAXSIZE
@@ -48,6 +48,26 @@ _KASA_COMMAND_RETRY_MAX_DELAY_S = 1.0
 _KASA_DUPLICATE_REQUEST_WINDOW_S = 1.0
 _KASA_CONNECTIVITY_TIMEOUT_S = 0.75
 _KASA_CONNECTIVITY_MAX_TEXT = 500
+_PROVISIONAL_DEVICE_IDENTITY = "provisional:configured-device"
+_ROUTER_ID_LOCK = threading.Lock()
+_NEXT_ROUTER_INSTANCE_ID = 0
+_NEXT_ROUTER_SESSION_ID = 0
+
+OutletStateKey = tuple[str, int]
+
+
+def _next_router_instance_id() -> int:
+    global _NEXT_ROUTER_INSTANCE_ID
+    with _ROUTER_ID_LOCK:
+        _NEXT_ROUTER_INSTANCE_ID += 1
+        return int(_NEXT_ROUTER_INSTANCE_ID)
+
+
+def _next_router_session_id() -> int:
+    global _NEXT_ROUTER_SESSION_ID
+    with _ROUTER_ID_LOCK:
+        _NEXT_ROUTER_SESSION_ID += 1
+        return int(_NEXT_ROUTER_SESSION_ID)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +109,252 @@ class OutletCommandResult:
     final_state: bool | None = None
     failure_kind: str | None = None
     connectivity: Mapping[str, str] | None = None
+    connection_generation: int | None = None
+    stream_epoch: int | None = None
+    recovery_epoch: int | None = None
+    source_id: int | None = None
+    accessory_command_id: int | None = None
+    safety_priority: bool = False
+    superseded: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessoryCommandIdentity:
+    router_instance_id: int
+    router_session_id: int
+    connection_generation: int
+    stream_epoch: int
+    recovery_epoch: int
+    source_id: int
+    accessory_command_id: int
+    source: str
+    desired_on: bool
+    safety_priority: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _DispatchCommitment:
+    identity: _AccessoryCommandIdentity
+    device_identifier: str
+
+
+@dataclass(slots=True)
+class _SharedOutletDispatchEntry:
+    state_key: OutletStateKey
+    barrier: threading.Lock = field(default_factory=threading.Lock)
+    idle_event: threading.Event = field(default_factory=threading.Event)
+    active_operations: int = 0
+    active_commitment: _DispatchCommitment | None = None
+    registered_router_instances: set[int] = field(default_factory=set)
+    recovery_off_status: str | None = None
+    recovery_off_identity: tuple[int, int] | None = None
+
+    def __post_init__(self) -> None:
+        self.idle_event.set()
+
+
+class _PhysicalOutletDispatchRegistry:
+    """Process-level dispatch ordering for one physical outlet."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[OutletStateKey, _SharedOutletDispatchEntry] = {}
+
+    def entry_for(self, state_key: OutletStateKey) -> _SharedOutletDispatchEntry:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = _SharedOutletDispatchEntry(state_key=key)
+                self._entries[key] = entry
+            return entry
+
+    def register_router_instance(
+        self,
+        entry: _SharedOutletDispatchEntry,
+        router_instance_id: int,
+    ) -> None:
+        with self._lock:
+            key = (str(entry.state_key[0]), int(entry.state_key[1]))
+            current = self._entries.get(key)
+            if current is not entry:
+                if current is None:
+                    self._entries[key] = entry
+                else:
+                    entry = current
+            entry.registered_router_instances.add(int(router_instance_id))
+
+    def unregister_router_instance(self, router_instance_id: int) -> None:
+        with self._lock:
+            for key, entry in list(self._entries.items()):
+                entry.registered_router_instances.discard(int(router_instance_id))
+                self._maybe_cleanup_locked(key, entry)
+
+    def _maybe_cleanup_locked(
+        self,
+        key: OutletStateKey,
+        entry: _SharedOutletDispatchEntry,
+    ) -> None:
+        if int(entry.active_operations) > 0:
+            return
+        if entry.active_commitment is not None:
+            return
+        if entry.registered_router_instances:
+            return
+        if entry.recovery_off_status is not None:
+            return
+        if self._entries.get(key) is entry:
+            self._entries.pop(key, None)
+
+    def recovery_off_status(self, state_key: OutletStateKey) -> str | None:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            return None if entry is None else entry.recovery_off_status
+
+    def recovery_off_identity(
+        self,
+        state_key: OutletStateKey,
+    ) -> tuple[int, int] | None:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            return None if entry is None else entry.recovery_off_identity
+
+    def recovery_off_status_snapshot(self) -> dict[OutletStateKey, str]:
+        with self._lock:
+            return {
+                key: str(entry.recovery_off_status)
+                for key, entry in self._entries.items()
+                if entry.recovery_off_status is not None
+            }
+
+    def set_recovery_off_status(
+        self,
+        state_key: OutletStateKey,
+        *,
+        status: str,
+        recovery_identity: tuple[int, int],
+    ) -> None:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = _SharedOutletDispatchEntry(state_key=key)
+                self._entries[key] = entry
+            entry.recovery_off_status = str(status)
+            entry.recovery_off_identity = (
+                int(recovery_identity[0]),
+                int(recovery_identity[1]),
+            )
+
+    def retire_recovery_off_status(
+        self,
+        state_key: OutletStateKey,
+        *,
+        recovery_identity: tuple[int, int],
+    ) -> bool:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return False
+            if entry.recovery_off_status != "confirmed":
+                return False
+            if entry.recovery_off_identity != (
+                int(recovery_identity[0]),
+                int(recovery_identity[1]),
+            ):
+                return False
+            if int(entry.active_operations) > 0:
+                return False
+            entry.recovery_off_status = None
+            entry.recovery_off_identity = None
+            self._maybe_cleanup_locked(key, entry)
+            return True
+
+    def begin_committed(
+        self,
+        entry: _SharedOutletDispatchEntry,
+        commitment: _DispatchCommitment,
+    ) -> None:
+        with self._lock:
+            entry.active_operations += 1
+            entry.active_commitment = commitment
+            entry.idle_event.clear()
+
+    def finish_committed(
+        self,
+        entry: _SharedOutletDispatchEntry,
+        commitment: _DispatchCommitment,
+    ) -> None:
+        with self._lock:
+            entry.active_operations = max(0, int(entry.active_operations) - 1)
+            if entry.active_commitment == commitment:
+                entry.active_commitment = None
+            if entry.active_operations <= 0:
+                entry.idle_event.set()
+                self._maybe_cleanup_locked(entry.state_key, entry)
+
+    def entries_for_router_instance_session(
+        self,
+        router_instance_id: int,
+        router_session_id: int,
+    ) -> list[_SharedOutletDispatchEntry]:
+        with self._lock:
+            return [
+                entry
+                for entry in self._entries.values()
+                if entry.active_commitment is not None
+                and int(entry.active_commitment.identity.router_instance_id)
+                == int(router_instance_id)
+                and int(entry.active_commitment.identity.router_session_id)
+                == int(router_session_id)
+                and int(entry.active_operations) > 0
+            ]
+
+    def wait_for_router_instance_session(
+        self,
+        *,
+        router_instance_id: int,
+        router_session_id: int,
+        timeout: float,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            entries = self.entries_for_router_instance_session(
+                router_instance_id,
+                router_session_id,
+            )
+            if not entries:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return False
+            for entry in entries:
+                entry.idle_event.wait(min(remaining, 0.05))
+
+    def active_count(self, state_key: OutletStateKey) -> int:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            entry = self._entries.get(key)
+            return 0 if entry is None else int(entry.active_operations)
+
+    def entry_count(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+    def has_entry(self, state_key: OutletStateKey) -> bool:
+        key = (str(state_key[0]), int(state_key[1]))
+        with self._lock:
+            return key in self._entries
+
+    def clear_for_tests(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_PHYSICAL_OUTLET_DISPATCH_REGISTRY = _PhysicalOutletDispatchRegistry()
 
 
 class KasaController(Protocol):
@@ -557,12 +823,34 @@ class AccessoryRouter:
         self._task_q: queue.Queue[_WorkerTask | None] = queue.Queue(maxsize=KASA_TASK_QUEUE_MAXSIZE)
         self._stop_evt = threading.Event()
         self._state_lock = threading.Lock()
+        self._router_instance_id = _next_router_instance_id()
+        self._router_session_id = _next_router_session_id()
+        self._outlet_dispatch_barriers: dict[OutletStateKey, threading.Lock] = {}
+        self._alias_to_physical_device: dict[str, str] = {}
+        self._dispatch_commitment_by_outlet: dict[
+            OutletStateKey, _DispatchCommitment
+        ] = {}
         self._last_spindle_state: bool | None = None
-        self._last_requested_by_outlet: dict[tuple[str, int], tuple[bool, float]] = {}
+        self._last_requested_by_outlet: dict[OutletStateKey, tuple[bool, float]] = {}
+        self._accessory_command_seq = 0
+        self._latest_accessory_command_by_outlet: dict[OutletStateKey, int] = {}
+        self._latest_accessory_identity_by_outlet: dict[
+            OutletStateKey, _AccessoryCommandIdentity
+        ] = {}
+        self._dominant_accessory_command_by_outlet: dict[OutletStateKey, int] = {}
+        self._dominant_recovery_identity_by_outlet: dict[
+            OutletStateKey, tuple[int, int]
+        ] = {}
+        self._recovery_off_status_by_outlet: dict[OutletStateKey, str] = {}
+        self._cached_settings: dict[str, Any] = {}
         self._cached_device_identifier: str | None = None
         self._cached_device_handle: DeviceHandle | None = None
         self._worker = threading.Thread(target=self._worker_loop, name="kasa-worker", daemon=True)
         self._worker.start()
+        try:
+            self._cached_settings = dict(self._read_settings())
+        except Exception:
+            self._cached_settings = {}
 
     def _retry_delay_s(self, attempt_index: int) -> float:
         delay = _KASA_COMMAND_RETRY_BASE_DELAY_S * (2**max(0, int(attempt_index)))
@@ -588,13 +876,33 @@ class AccessoryRouter:
                 )
         logger.warning(message)
 
-    def shutdown(self, timeout: float = 1.0) -> None:
+    def shutdown(self, timeout: float = 1.0) -> bool:
+        with self._state_lock:
+            retiring_router_instance_id = int(self._router_instance_id)
+            retiring_session_id = int(self._router_session_id)
+            self._router_session_id = _next_router_session_id()
         self._stop_evt.set()
         try:
             queue.Queue.put_nowait(self._task_q, None)
         except queue.Full:
             self._log_warning("Kasa shutdown requested while task queue is full; waiting for worker to drain.")
-        self._worker.join(timeout=max(0.0, float(timeout)))
+        timeout_s = max(0.0, float(timeout))
+        started = time.monotonic()
+        dispatch_drained = (
+            _PHYSICAL_OUTLET_DISPATCH_REGISTRY.wait_for_router_instance_session(
+                router_instance_id=retiring_router_instance_id,
+                router_session_id=retiring_session_id,
+                timeout=timeout_s,
+            )
+        )
+        remaining = max(0.0, timeout_s - (time.monotonic() - started))
+        self._worker.join(timeout=remaining)
+        complete = bool(dispatch_drained and not self._worker.is_alive())
+        if not complete:
+            self._log_warning(
+                "Kasa shutdown incomplete; committed physical outlet work may still be in progress."
+            )
+        return complete
 
     def wait_for_idle(self, timeout: float = 2.0) -> bool:
         deadline = time.monotonic() + max(0.0, float(timeout))
@@ -608,6 +916,260 @@ class AccessoryRouter:
         with self._state_lock:
             self._last_spindle_state = None
             self._last_requested_by_outlet.clear()
+
+    @staticmethod
+    def _normalized_alias(identifier: str) -> str:
+        return str(identifier or "").strip().casefold()
+
+    @staticmethod
+    def _device_id_identity(device_id: str) -> str:
+        return f"device-id:{str(device_id or '').strip().casefold()}"
+
+    def _physical_device_identity_for_identifier_locked(
+        self,
+        identifier: str,
+    ) -> str:
+        alias = self._normalized_alias(identifier)
+        mapped = self._alias_to_physical_device.get(alias)
+        if mapped:
+            return mapped
+        device_id, _host = _split_identifier(identifier)
+        if device_id:
+            identity = self._device_id_identity(device_id)
+            self._alias_to_physical_device[alias] = identity
+            return identity
+        return _PROVISIONAL_DEVICE_IDENTITY
+
+    def _physical_device_identity_for_handle_locked(
+        self,
+        configured_identifier: str,
+        handle: DeviceHandle,
+    ) -> str:
+        handle_device_id = str(handle.device_id or "").strip()
+        identifier_device_id, _host = _split_identifier(handle.identifier)
+        stable_device_id = handle_device_id or str(identifier_device_id or "").strip()
+        if stable_device_id:
+            identity = self._device_id_identity(stable_device_id)
+        else:
+            # Controllers without a stable device ID retain a normalized
+            # resolved identifier. The provisional safety domain remains in
+            # the final authorization set so unresolved aliases fail closed.
+            identity = f"resolved:{self._normalized_alias(handle.identifier or handle.ip)}"
+        for alias in (configured_identifier, handle.identifier, handle.ip):
+            normalized = self._normalized_alias(alias)
+            if normalized:
+                self._alias_to_physical_device[normalized] = identity
+        return identity
+
+    @staticmethod
+    def _state_key(device_identity: str, outlet: int) -> OutletStateKey:
+        return (str(device_identity), int(outlet))
+
+    def _dispatch_barrier_for(self, state_key: OutletStateKey) -> threading.Lock:
+        entry = _PHYSICAL_OUTLET_DISPATCH_REGISTRY.entry_for(state_key)
+        _PHYSICAL_OUTLET_DISPATCH_REGISTRY.register_router_instance(
+            entry,
+            int(self._router_instance_id),
+        )
+        with self._state_lock:
+            barrier = self._outlet_dispatch_barriers.get(state_key)
+            if barrier is None:
+                barrier = entry.barrier
+                self._outlet_dispatch_barriers[state_key] = barrier
+            return barrier
+
+    def _dispatch_entry_for(
+        self,
+        state_key: OutletStateKey,
+    ) -> _SharedOutletDispatchEntry:
+        entry = _PHYSICAL_OUTLET_DISPATCH_REGISTRY.entry_for(state_key)
+        _PHYSICAL_OUTLET_DISPATCH_REGISTRY.register_router_instance(
+            entry,
+            int(self._router_instance_id),
+        )
+        with self._state_lock:
+            self._outlet_dispatch_barriers.setdefault(state_key, entry.barrier)
+        return entry
+
+    def _merge_resolved_command_ownership_locked(
+        self,
+        *,
+        provisional_key: OutletStateKey,
+        canonical_key: OutletStateKey,
+        identity: _AccessoryCommandIdentity,
+    ) -> None:
+        provisional_latest = self._latest_accessory_identity_by_outlet.get(
+            provisional_key
+        )
+        candidate = identity
+        if (
+            provisional_latest is not None
+            and int(provisional_latest.accessory_command_id)
+            > int(candidate.accessory_command_id)
+        ):
+            candidate = provisional_latest
+        current = self._latest_accessory_identity_by_outlet.get(canonical_key)
+        if current is None or int(candidate.accessory_command_id) >= int(
+            current.accessory_command_id
+        ):
+            self._latest_accessory_identity_by_outlet[canonical_key] = candidate
+            self._latest_accessory_command_by_outlet[canonical_key] = int(
+                candidate.accessory_command_id
+            )
+        if (
+            provisional_latest is not None
+            and int(provisional_latest.accessory_command_id)
+            == int(identity.accessory_command_id)
+        ):
+            last_request = self._last_requested_by_outlet.pop(provisional_key, None)
+            if last_request is not None:
+                self._last_requested_by_outlet[canonical_key] = last_request
+        provisional_dominant = self._dominant_accessory_command_by_outlet.get(
+            provisional_key
+        )
+        canonical_dominant = int(
+            self._dominant_accessory_command_by_outlet.get(canonical_key, 0)
+        )
+        if provisional_dominant is not None:
+            self._dominant_accessory_command_by_outlet[canonical_key] = max(
+                int(provisional_dominant),
+                canonical_dominant,
+            )
+        provisional_recovery = self._dominant_recovery_identity_by_outlet.get(
+            provisional_key
+        )
+        if provisional_recovery is not None:
+            current_recovery = self._dominant_recovery_identity_by_outlet.get(
+                canonical_key
+            )
+            if current_recovery is None or provisional_recovery >= current_recovery:
+                self._dominant_recovery_identity_by_outlet[canonical_key] = (
+                    provisional_recovery
+                )
+                provisional_status = self._recovery_off_status_by_outlet.get(
+                    provisional_key
+                )
+                if provisional_status and int(provisional_dominant or 0) >= int(
+                    canonical_dominant
+                ):
+                    self._set_recovery_off_status_locked(
+                        canonical_key,
+                        status=provisional_status,
+                        recovery_identity=provisional_recovery,
+                    )
+
+    def _set_recovery_off_status_locked(
+        self,
+        state_key: OutletStateKey,
+        *,
+        status: str,
+        recovery_identity: tuple[int, int],
+    ) -> None:
+        self._recovery_off_status_by_outlet[state_key] = str(status)
+        _PHYSICAL_OUTLET_DISPATCH_REGISTRY.set_recovery_off_status(
+            state_key,
+            status=str(status),
+            recovery_identity=(
+                int(recovery_identity[0]),
+                int(recovery_identity[1]),
+            ),
+        )
+
+    def _recovery_off_status_for_locked(self, state_key: OutletStateKey) -> str | None:
+        status = self._recovery_off_status_by_outlet.get(state_key)
+        if status:
+            return str(status)
+        return _PHYSICAL_OUTLET_DISPATCH_REGISTRY.recovery_off_status(state_key)
+
+    @staticmethod
+    def _work_scope_is_newer(
+        candidate: _AccessoryCommandIdentity,
+        current: _AccessoryCommandIdentity,
+    ) -> bool:
+        return (
+            int(candidate.connection_generation),
+            int(candidate.recovery_epoch),
+            int(candidate.stream_epoch),
+            int(candidate.source_id),
+        ) > (
+            int(current.connection_generation),
+            int(current.recovery_epoch),
+            int(current.stream_epoch),
+            int(current.source_id),
+        )
+
+    def _accessory_dispatch_authorized_locked(
+        self,
+        state_key: OutletStateKey,
+        identity: _AccessoryCommandIdentity,
+        *,
+        safety_keys: tuple[OutletStateKey, ...] = (),
+    ) -> bool:
+        if (
+            self._stop_evt.is_set()
+            or int(identity.router_instance_id) != int(self._router_instance_id)
+            or int(identity.router_session_id) != int(self._router_session_id)
+        ):
+            return False
+        keys = tuple(dict.fromkeys((state_key, *safety_keys)))
+        for key in keys:
+            dominant_command_id = self._dominant_accessory_command_by_outlet.get(
+                key, 0
+            )
+            if int(dominant_command_id) > int(identity.accessory_command_id):
+                return False
+            dominant_recovery = self._dominant_recovery_identity_by_outlet.get(key)
+            if identity.desired_on and (
+                dominant_recovery is not None
+                or self._recovery_off_status_for_locked(key) is not None
+            ):
+                return False
+        dominant_command_id = self._dominant_accessory_command_by_outlet.get(
+            state_key, 0
+        )
+        dominant_recovery = self._dominant_recovery_identity_by_outlet.get(state_key)
+        if identity.safety_priority:
+            if identity.desired_on:
+                return False
+            if int(dominant_command_id) != int(identity.accessory_command_id):
+                return False
+            if dominant_recovery != (
+                int(identity.connection_generation),
+                int(identity.recovery_epoch),
+            ):
+                return False
+        latest_identity = self._latest_accessory_identity_by_outlet.get(state_key)
+        if latest_identity is not None and self._work_scope_is_newer(
+            latest_identity, identity
+        ):
+            return False
+        return True
+
+    def _accessory_result_is_current_locked(
+        self,
+        state_key: OutletStateKey,
+        identity: _AccessoryCommandIdentity,
+        *,
+        alias_keys: tuple[OutletStateKey, ...] = (),
+    ) -> bool:
+        if not self._accessory_dispatch_authorized_locked(
+            state_key,
+            identity,
+            safety_keys=alias_keys,
+        ):
+            return False
+        for key in tuple(dict.fromkeys((state_key, *alias_keys))):
+            latest = self._latest_accessory_identity_by_outlet.get(key)
+            if (
+                latest is not None
+                and int(latest.accessory_command_id)
+                > int(identity.accessory_command_id)
+            ):
+                return False
+        return bool(
+            self._latest_accessory_command_by_outlet.get(state_key)
+            == int(identity.accessory_command_id)
+        )
 
     def _read_settings(self) -> dict[str, Any]:
         raw = self._settings_provider() or {}
@@ -643,16 +1205,23 @@ class AccessoryRouter:
             else:
                 self._log_warning(str(err))
             return False
-        task = _WorkerTask(
-            func=func,
-            on_success=on_success,
-            on_error=on_error,
-            description=description,
-        )
         try:
+            task = _WorkerTask(
+                func=func,
+                on_success=on_success,
+                on_error=on_error,
+                description=description,
+            )
             self._task_q.put_nowait(task)
         except queue.Full:
             err = RuntimeError(f"Kasa task queue full; dropping task '{description}'.")
+            if on_error is not None:
+                self._invoke_callback(on_error, err)
+            else:
+                self._log_warning(str(err))
+            return False
+        except Exception as exc:
+            err = RuntimeError(f"Kasa task submission failed for '{description}': {exc}")
             if on_error is not None:
                 self._invoke_callback(on_error, err)
             else:
@@ -667,28 +1236,35 @@ class AccessoryRouter:
             self._log_warning(f"Kasa callback failed: {exc}")
 
     def _worker_loop(self) -> None:
-        while True:
-            try:
-                task = self._task_q.get(timeout=0.1)
-            except queue.Empty:
-                if self._stop_evt.is_set():
-                    return
-                continue
-            try:
-                if task is None:
-                    return
+        try:
+            while True:
                 try:
-                    result = task.func()
-                except Exception as exc:
-                    if task.on_error is not None:
-                        self._invoke_callback(task.on_error, exc)
-                    else:
-                        self._log_warning(f"Kasa task '{task.description}' failed: {exc}")
+                    task = self._task_q.get(timeout=0.1)
+                except queue.Empty:
+                    if self._stop_evt.is_set():
+                        return
                     continue
-                if task.on_success is not None:
-                    self._invoke_callback(task.on_success, result)
-            finally:
-                self._task_q.task_done()
+                try:
+                    if task is None:
+                        return
+                    try:
+                        result = task.func()
+                    except Exception as exc:
+                        if task.on_error is not None:
+                            self._invoke_callback(task.on_error, exc)
+                        else:
+                            self._log_warning(
+                                f"Kasa task '{task.description}' failed: {exc}"
+                            )
+                        continue
+                    if task.on_success is not None:
+                        self._invoke_callback(task.on_success, result)
+                finally:
+                    self._task_q.task_done()
+        finally:
+            _PHYSICAL_OUTLET_DISPATCH_REGISTRY.unregister_router_instance(
+                int(self._router_instance_id)
+            )
 
     def _clear_device_cache(self) -> None:
         with self._state_lock:
@@ -765,8 +1341,20 @@ class AccessoryRouter:
         *,
         source: str,
         line_index: int | None = None,
+        connection_generation: int | None = None,
+        stream_epoch: int | None = None,
+        recovery_epoch: int | None = None,
+        source_id: int | None = None,
+        safety_priority: bool = False,
+        _settings_override: Mapping[str, Any] | None = None,
     ) -> bool:
-        settings = self._read_settings()
+        settings = (
+            dict(_settings_override)
+            if _settings_override is not None
+            else self._read_settings()
+        )
+        with self._state_lock:
+            self._cached_settings = dict(settings)
         if not settings["kasa_enabled"]:
             return False
         device_identifier = str(settings["kasa_device_identifier"] or "").strip()
@@ -778,7 +1366,30 @@ class AccessoryRouter:
         if outlet > outlet_count:
             return False
         desired = bool(on)
-        state_key = (device_identifier, outlet)
+        request_generation = int(connection_generation or 0)
+        request_stream_epoch = int(stream_epoch or 0)
+        request_recovery_epoch = int(recovery_epoch or 0)
+        request_source_id = int(source_id or 0)
+        request_recovery_identity = (
+            request_generation,
+            request_recovery_epoch,
+        )
+        with self._state_lock:
+            registration_device_identity = (
+                self._physical_device_identity_for_identifier_locked(
+                    device_identifier
+                )
+            )
+        registration_state_key = self._state_key(
+            registration_device_identity,
+            outlet,
+        )
+        provisional_state_key = self._state_key(
+            _PROVISIONAL_DEVICE_IDENTITY,
+            outlet,
+        )
+        registration_barrier = self._dispatch_barrier_for(registration_state_key)
+        resolved_state_key = [registration_state_key]
         request_ts = time.monotonic()
         timeout_s = self._controller_timeout_s()
         max_attempts = max(1, int(_KASA_COMMAND_RETRY_MAX_ATTEMPTS))
@@ -786,15 +1397,88 @@ class AccessoryRouter:
         _configured_device_id, configured_host = _split_identifier(device_identifier)
         line_text = f" line_index={int(line_index)}" if line_index is not None else ""
         timeout_text = f" timeout={timeout_s:.1f}s" if timeout_s is not None else ""
-        with self._state_lock:
-            last_request = self._last_requested_by_outlet.get(state_key)
-            if last_request is not None:
-                last_desired, last_ts = last_request
-                if (
-                    last_desired is desired
-                    and (request_ts - last_ts) < _KASA_DUPLICATE_REQUEST_WINDOW_S
+        source_key = str(source or "").strip().lower()
+        dominant_off = bool(
+            (not desired)
+            and (
+                bool(safety_priority)
+                or source_key
+                in {
+                    "job_recovery_required",
+                    "job_all_stop",
+                    "job_reset",
+                    "app_exit",
+                }
+            )
+        )
+        # A non-blocking acquire gives recovery a precise order without making
+        # CNC recovery wait for an already-dispatched network operation. If the
+        # barrier is busy, that operation crossed the physical-dispatch boundary
+        # first; the tombstone still commits immediately and suppresses all work
+        # that has not crossed that boundary.
+        registration_barrier_owned = bool(
+            dominant_off and registration_barrier.acquire(blocking=False)
+        )
+        try:
+            with self._state_lock:
+                dominant_identity = self._dominant_recovery_identity_by_outlet.get(
+                    registration_state_key
+                )
+                if desired and (
+                    dominant_identity is not None
+                    or self._recovery_off_status_for_locked(registration_state_key)
+                    is not None
                 ):
                     return False
+                last_request = self._last_requested_by_outlet.get(
+                    registration_state_key
+                )
+                if last_request is not None:
+                    last_desired, last_ts = last_request
+                    if (
+                        not bool(safety_priority)
+                        and last_desired is desired
+                        and (request_ts - last_ts) < _KASA_DUPLICATE_REQUEST_WINDOW_S
+                    ):
+                        return False
+                self._accessory_command_seq += 1
+                accessory_command_id = int(self._accessory_command_seq)
+                command_identity = _AccessoryCommandIdentity(
+                    router_instance_id=int(self._router_instance_id),
+                    router_session_id=int(self._router_session_id),
+                    connection_generation=request_generation,
+                    stream_epoch=request_stream_epoch,
+                    recovery_epoch=request_recovery_epoch,
+                    source_id=request_source_id,
+                    accessory_command_id=accessory_command_id,
+                    source=str(source or ""),
+                    desired_on=desired,
+                    safety_priority=bool(safety_priority),
+                )
+                self._latest_accessory_command_by_outlet[registration_state_key] = (
+                    accessory_command_id
+                )
+                self._latest_accessory_identity_by_outlet[
+                    registration_state_key
+                ] = command_identity
+                if dominant_off:
+                    self._dominant_accessory_command_by_outlet[
+                        registration_state_key
+                    ] = (
+                        accessory_command_id
+                    )
+                    if bool(safety_priority):
+                        self._dominant_recovery_identity_by_outlet[
+                            registration_state_key
+                        ] = request_recovery_identity
+                        self._set_recovery_off_status_locked(
+                            registration_state_key,
+                            status="requested",
+                            recovery_identity=request_recovery_identity,
+                        )
+        finally:
+            if registration_barrier_owned:
+                registration_barrier.release()
 
         logger.info(
             "Kasa outlet command requested: outlet=%d command=%s source=%s device=%s host=%s%s attempts=%d%s",
@@ -817,12 +1501,43 @@ class AccessoryRouter:
             nonlocal task_attempts, task_device_ip, task_failure_kind
             last_error: Exception | None = None
             for attempt in range(max_attempts):
+                with self._state_lock:
+                    if not self._accessory_dispatch_authorized_locked(
+                        registration_state_key,
+                        command_identity,
+                        safety_keys=(provisional_state_key,),
+                    ):
+                        return {
+                            "attempts": int(task_attempts),
+                            "device_ip": task_device_ip,
+                            "elapsed_s": float(time.monotonic() - task_started_s),
+                            "superseded": True,
+                        }
                 task_attempts = int(attempt + 1)
                 attempt_started_s = time.monotonic()
                 try:
                     handle, cache_status = self._device_handle_for_identifier_with_cache_status(
                         device_identifier
                     )
+                    with self._state_lock:
+                        physical_identity = (
+                            self._physical_device_identity_for_handle_locked(
+                                device_identifier,
+                                handle,
+                            )
+                        )
+                        canonical_state_key = self._state_key(
+                            physical_identity,
+                            outlet,
+                        )
+                        self._merge_resolved_command_ownership_locked(
+                            provisional_key=registration_state_key,
+                            canonical_key=canonical_state_key,
+                            identity=command_identity,
+                        )
+                        resolved_state_key[0] = canonical_state_key
+                    dispatch_entry = self._dispatch_entry_for(canonical_state_key)
+                    dispatch_barrier = dispatch_entry.barrier
                     task_device_ip = str(handle.ip or "") or None
                     logger.info(
                         "Kasa outlet command attempt: outlet=%d command=%s source=%s device=%s host=%s ip=%s device_cache=%s attempt=%d/%d%s%s",
@@ -838,7 +1553,65 @@ class AccessoryRouter:
                         line_text,
                         timeout_text,
                     )
-                    self._controller.set_outlet_state(handle, outlet, desired)
+                    with dispatch_barrier:
+                        with self._state_lock:
+                            dispatch_authorized = (
+                                self._accessory_dispatch_authorized_locked(
+                                    canonical_state_key,
+                                    command_identity,
+                                    safety_keys=(
+                                        registration_state_key,
+                                        provisional_state_key,
+                                    ),
+                                )
+                            )
+                            if dispatch_authorized:
+                                # This state-lock commit, while the canonical
+                                # physical-outlet barrier is held, is the exact
+                                # software dispatch linearization point.
+                                dispatch_commitment = _DispatchCommitment(
+                                    identity=command_identity,
+                                    device_identifier=device_identifier,
+                                )
+                                self._dispatch_commitment_by_outlet[
+                                    canonical_state_key
+                                ] = dispatch_commitment
+                        if not dispatch_authorized:
+                            return {
+                                "attempts": int(task_attempts),
+                                "device_ip": task_device_ip,
+                                "elapsed_s": float(
+                                    time.monotonic() - task_started_s
+                                ),
+                                "superseded": True,
+                            }
+                        # The network API call follows the committed boundary.
+                        # The per-outlet barrier remains held, but the global
+                        # state lock does not, so unrelated outlets and state
+                        # reads are not serialized behind device/network I/O.
+                        _PHYSICAL_OUTLET_DISPATCH_REGISTRY.begin_committed(
+                            dispatch_entry,
+                            dispatch_commitment,
+                        )
+                        try:
+                            self._controller.set_outlet_state(handle, outlet, desired)
+                        finally:
+                            _PHYSICAL_OUTLET_DISPATCH_REGISTRY.finish_committed(
+                                dispatch_entry,
+                                dispatch_commitment,
+                            )
+                            with self._state_lock:
+                                commitment = self._dispatch_commitment_by_outlet.get(
+                                    canonical_state_key
+                                )
+                                if (
+                                    commitment is not None
+                                    and commitment.identity is command_identity
+                                ):
+                                    self._dispatch_commitment_by_outlet.pop(
+                                        canonical_state_key,
+                                        None,
+                                    )
                     elapsed_s = time.monotonic() - task_started_s
                     attempt_elapsed_s = time.monotonic() - attempt_started_s
                     logger.info(
@@ -883,7 +1656,12 @@ class AccessoryRouter:
                     )
                     time.sleep(retry_delay_s)
             with self._state_lock:
-                self._last_requested_by_outlet.pop(state_key, None)
+                state_key = resolved_state_key[0]
+                if (
+                    self._latest_accessory_command_by_outlet.get(state_key)
+                    == accessory_command_id
+                ):
+                    self._last_requested_by_outlet.pop(state_key, None)
             if last_error is None:
                 raise RuntimeError("Kasa outlet command failed with unknown error.")
             raise last_error
@@ -891,7 +1669,47 @@ class AccessoryRouter:
         def _on_success(info: Any) -> None:
             info_map = info if isinstance(info, dict) else {}
             with self._state_lock:
-                self._last_requested_by_outlet[state_key] = (desired, time.monotonic())
+                state_key = resolved_state_key[0]
+                current_command = bool(
+                    not bool(info_map.get("superseded", False))
+                    and self._accessory_result_is_current_locked(
+                        state_key,
+                        command_identity,
+                        alias_keys=(registration_state_key, provisional_state_key),
+                    )
+                )
+                if current_command:
+                    self._last_requested_by_outlet[state_key] = (desired, time.monotonic())
+                current_recovery_command = bool(
+                    safety_priority
+                    and current_command
+                    and self._dominant_accessory_command_by_outlet.get(state_key)
+                    == accessory_command_id
+                    and self._dominant_recovery_identity_by_outlet.get(state_key)
+                    == request_recovery_identity
+                )
+                if current_recovery_command:
+                    for recovery_key in tuple(
+                        dict.fromkeys(
+                            (
+                                state_key,
+                                registration_state_key,
+                                provisional_state_key,
+                            )
+                        )
+                    ):
+                        if (
+                            self._dominant_recovery_identity_by_outlet.get(
+                                recovery_key
+                            )
+                            == request_recovery_identity
+                        ):
+                            self._set_recovery_off_status_locked(
+                                recovery_key,
+                                status="confirmed",
+                                recovery_identity=request_recovery_identity,
+                            )
+            superseded = bool(info_map.get("superseded", False) or not current_command)
             self._emit_command_result(
                 OutletCommandResult(
                     outlet_id=outlet,
@@ -909,6 +1727,13 @@ class AccessoryRouter:
                     final_state=None,
                     failure_kind=None,
                     connectivity=None,
+                    connection_generation=request_generation,
+                    stream_epoch=request_stream_epoch,
+                    recovery_epoch=request_recovery_epoch,
+                    source_id=request_source_id,
+                    accessory_command_id=accessory_command_id,
+                    safety_priority=bool(safety_priority),
+                    superseded=superseded,
                 )
             )
 
@@ -923,7 +1748,45 @@ class AccessoryRouter:
                 }
             connectivity_text = _format_mapping(connectivity)
             with self._state_lock:
-                self._last_requested_by_outlet.pop(state_key, None)
+                state_key = resolved_state_key[0]
+                current_command = bool(
+                    self._accessory_result_is_current_locked(
+                        state_key,
+                        command_identity,
+                        alias_keys=(registration_state_key, provisional_state_key),
+                    )
+                )
+                if current_command:
+                    self._last_requested_by_outlet.pop(state_key, None)
+                current_recovery_command = bool(
+                    safety_priority
+                    and current_command
+                    and self._dominant_accessory_command_by_outlet.get(state_key)
+                    == accessory_command_id
+                    and self._dominant_recovery_identity_by_outlet.get(state_key)
+                    == request_recovery_identity
+                )
+                if current_recovery_command:
+                    for recovery_key in tuple(
+                        dict.fromkeys(
+                            (
+                                state_key,
+                                registration_state_key,
+                                provisional_state_key,
+                            )
+                        )
+                    ):
+                        if (
+                            self._dominant_recovery_identity_by_outlet.get(
+                                recovery_key
+                            )
+                            == request_recovery_identity
+                        ):
+                            self._set_recovery_off_status_locked(
+                                recovery_key,
+                                status="failed_unknown",
+                                recovery_identity=request_recovery_identity,
+                            )
             self._log_warning(
                 f"Kasa outlet {outlet} command failed ({source}): {exc} "
                 f"(command={command_text}, attempts={task_attempts or 0}/{max_attempts}, "
@@ -949,20 +1812,162 @@ class AccessoryRouter:
                     final_state=None,
                     failure_kind=failure_kind,
                     connectivity=connectivity,
+                    connection_generation=request_generation,
+                    stream_epoch=request_stream_epoch,
+                    recovery_epoch=request_recovery_epoch,
+                    source_id=request_source_id,
+                    accessory_command_id=accessory_command_id,
+                    safety_priority=bool(safety_priority),
+                    superseded=not current_command,
                 )
             )
 
-        accepted = self._submit_task(
-            _task,
-            description=f"set_outlet_state:{outlet}:{desired}",
-            on_success=_on_success,
-            on_error=_on_error,
-        )
+        try:
+            accepted = self._submit_task(
+                _task,
+                description=f"set_outlet_state:{outlet}:{desired}",
+                on_success=_on_success,
+                on_error=_on_error,
+            )
+        except Exception as exc:  # defensive boundary for injected/custom submitters
+            accepted = False
+            self._log_warning(
+                f"Kasa outlet {outlet} task submission raised ({source}): {exc}"
+            )
         if not accepted:
+            with self._state_lock:
+                state_key = registration_state_key
+                current_command = bool(
+                    self._latest_accessory_command_by_outlet.get(state_key)
+                    == accessory_command_id
+                )
+                current_recovery_command = bool(
+                    safety_priority
+                    and current_command
+                    and self._dominant_accessory_command_by_outlet.get(state_key)
+                    == accessory_command_id
+                    and self._dominant_recovery_identity_by_outlet.get(state_key)
+                    == request_recovery_identity
+                )
+                if current_recovery_command:
+                    # This command identity remains as a persistent safety
+                    # tombstone even though no physical OFF task was admitted.
+                    # Older queued ON work must remain suppressed.
+                    self._set_recovery_off_status_locked(
+                        state_key,
+                        status="failed_unknown",
+                        recovery_identity=request_recovery_identity,
+                    )
+                    self._last_requested_by_outlet.pop(state_key, None)
+                elif current_command:
+                    self._latest_accessory_command_by_outlet.pop(state_key, None)
+                    self._latest_accessory_identity_by_outlet.pop(state_key, None)
+                    if (
+                        self._dominant_accessory_command_by_outlet.get(state_key)
+                        == accessory_command_id
+                    ):
+                        self._dominant_accessory_command_by_outlet.pop(state_key, None)
             return False
         with self._state_lock:
-            self._last_requested_by_outlet[state_key] = (desired, request_ts)
+            if (
+                self._latest_accessory_command_by_outlet.get(registration_state_key)
+                == accessory_command_id
+            ):
+                self._last_requested_by_outlet[registration_state_key] = (
+                    desired,
+                    request_ts,
+                )
         return True
+
+    def request_recovery_safety_off(
+        self,
+        *,
+        connection_generation: int,
+        stream_epoch: int,
+        recovery_epoch: int,
+        source_id: int,
+    ) -> int:
+        """Immediately submit dominant OFF work without depending on UI delivery."""
+        with self._state_lock:
+            settings = dict(self._cached_settings)
+            identifier = str(settings.get("kasa_device_identifier", "") or "").strip()
+            configured_identity = (
+                self._physical_device_identity_for_identifier_locked(identifier)
+                if identifier
+                else ""
+            )
+            known_on = {
+                outlet
+                for (device, outlet), (desired, _ts) in self._last_requested_by_outlet.items()
+                if device in {configured_identity, _PROVISIONAL_DEVICE_IDENTITY}
+                and desired
+            }
+        if not settings.get("kasa_enabled") or not identifier:
+            return 0
+        outlets = set(known_on)
+        if bool(settings.get("vacuum_enabled", False)):
+            outlets.add(_coerce_outlet_id(settings.get("vacuum_outlet", 1), default=1))
+        if bool(settings.get("light_enabled", False)):
+            outlets.add(_coerce_outlet_id(settings.get("light_outlet", 2), default=2))
+        submitted = 0
+        for outlet in sorted(outlets):
+            if self.request_outlet_state(
+                int(outlet),
+                False,
+                source="job_recovery_required",
+                connection_generation=int(connection_generation),
+                stream_epoch=int(stream_epoch),
+                recovery_epoch=int(recovery_epoch),
+                source_id=int(source_id),
+                safety_priority=True,
+                _settings_override=settings,
+            ):
+                submitted += 1
+        return submitted
+
+    def recovery_off_status(self) -> dict[OutletStateKey, str]:
+        with self._state_lock:
+            statuses = _PHYSICAL_OUTLET_DISPATCH_REGISTRY.recovery_off_status_snapshot()
+            statuses.update(self._recovery_off_status_by_outlet)
+            return dict(statuses)
+
+    def retire_confirmed_recovery_safety_off(
+        self,
+        *,
+        connection_generation: int,
+        recovery_epoch: int,
+    ) -> int:
+        """Retire confirmed recovery-only OFF dominance after recovery succeeds."""
+        recovery_identity = (int(connection_generation), int(recovery_epoch))
+        retired = 0
+        with self._state_lock:
+            statuses = _PHYSICAL_OUTLET_DISPATCH_REGISTRY.recovery_off_status_snapshot()
+            statuses.update(self._recovery_off_status_by_outlet)
+            for state_key, status in list(statuses.items()):
+                if str(status) != "confirmed":
+                    continue
+                local_identity = self._dominant_recovery_identity_by_outlet.get(state_key)
+                registry_identity = _PHYSICAL_OUTLET_DISPATCH_REGISTRY.recovery_off_identity(
+                    state_key
+                )
+                if local_identity not in (None, recovery_identity):
+                    continue
+                if registry_identity != recovery_identity:
+                    continue
+                if (
+                    _PHYSICAL_OUTLET_DISPATCH_REGISTRY.active_count(state_key)
+                    > 0
+                ):
+                    continue
+                if not _PHYSICAL_OUTLET_DISPATCH_REGISTRY.retire_recovery_off_status(
+                    state_key,
+                    recovery_identity=recovery_identity,
+                ):
+                    continue
+                self._dominant_recovery_identity_by_outlet.pop(state_key, None)
+                self._recovery_off_status_by_outlet.pop(state_key, None)
+                retired += 1
+        return retired
 
     def on_spindle_state_change(self, is_on: bool) -> None:
         desired_spindle = bool(is_on)

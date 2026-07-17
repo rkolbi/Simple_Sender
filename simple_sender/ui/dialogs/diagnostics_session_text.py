@@ -388,6 +388,16 @@ def build_session_diagnostics_lines(
         lines.append("")
     metrics = runtime_metrics(app)
     if metrics:
+        connection_state = metrics.get("connection_state")
+        if isinstance(connection_state, dict):
+            lines.append("Connection worker state:")
+            lines.append(json.dumps(connection_state, sort_keys=True))
+            lines.append("")
+        tx_origin_tail = metrics.get("controller_tx_origin_tail")
+        if isinstance(tx_origin_tail, list) and tx_origin_tail:
+            lines.append("Controller TX origin tail:")
+            lines.append(json.dumps(tx_origin_tail, sort_keys=True))
+            lines.append("")
         lines.append("Runtime telemetry:")
         lines.extend(
             format_runtime_metrics(metrics, include_samples=True, sample_limit=20)

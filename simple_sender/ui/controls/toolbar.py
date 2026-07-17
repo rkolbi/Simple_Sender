@@ -848,7 +848,23 @@ def update_resume_button_visibility(app):
 def update_recover_button_visibility(app):
     if not hasattr(app, "btn_alarm_recover"):
         return
-    visible = bool(app.show_recover_button.get())
+    recovery_required = False
+    checker = getattr(getattr(app, "grbl", None), "recovery_required", None)
+    if callable(checker):
+        try:
+            recovery_required = bool(checker())
+        except Exception:
+            recovery_required = False
+    normal_initialization_required = False
+    normal_checker = getattr(
+        getattr(app, "grbl", None), "normal_session_initialization_required", None
+    )
+    if callable(normal_checker):
+        try:
+            normal_initialization_required = bool(normal_checker())
+        except Exception:
+            normal_initialization_required = False
+    visible = bool(app.show_recover_button.get()) or recovery_required or normal_initialization_required
     if visible:
         if not _widget_mapped(app.btn_alarm_recover):
             pack_kwargs = {"side": "left", "padx": (6, 0)}
@@ -1154,5 +1170,3 @@ def build_toolbar(app):
         _log_suppressed("Failed registering toolbar button theme refresh callback", exc)
     refresh_toolbar_button_theme(app)
     refresh_toolbar_action_focus(app)
-
-

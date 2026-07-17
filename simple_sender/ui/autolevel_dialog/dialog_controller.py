@@ -37,8 +37,21 @@ from typing import Any, cast
 
 from simple_sender.autolevel.grid import AdaptiveGridSpec, ProbeBounds, ProbeGrid, build_adaptive_grid
 from simple_sender.autolevel.height_map import HeightMap
-from simple_sender.autolevel.leveler import LevelFileResult
+from simple_sender.autolevel.leveler import (
+    DEFAULT_MAX_ABS_CORRECTION_MM,
+    DEFAULT_MAX_Z_SPAN_MM,
+    LevelFileResult,
+)
 from simple_sender.autolevel.probe_runner import ProbeRunSettings
+from simple_sender.types import (
+    AutoLevelInstallationTicket,
+    AutoLevelMapProvenance,
+    AutoLevelWorkflowLease,
+)
+from simple_sender.ui.autolevel_state import (
+    active_auto_level_map_is_current,
+    clear_active_auto_level_map,
+)
 from simple_sender.ui.dro import convert_units
 from simple_sender.utils.config import DEFAULT_SETTINGS
 from simple_sender.utils.constants import (
@@ -140,6 +153,9 @@ class AutoLevelDialogController:
         self.profile_options = ("small", "large", "custom")
         self.profile_name = "custom"
         self.pending_g90_text = "Pending G90 restore after alarm clears."
+        self._active_workflow_token: object | None = None
+        self._active_workflow_lease: AutoLevelWorkflowLease | None = None
+        self._active_installation_ticket: AutoLevelInstallationTicket | None = None
 
         self.saved: dict[str, Any] = {}
         self.defaults: AdaptiveGridSpec | None = None
@@ -220,6 +236,7 @@ class AutoLevelDialogController:
         if not self._prepare_context():
             return
         self._create_dialog()
+        self.app._auto_level_dialog_controller = self
         self._load_defaults()
         self._init_variables()
         self._build_ui()
@@ -228,6 +245,7 @@ class AutoLevelDialogController:
         self._poll_start_state()
         if self.dlg is not None:
             self.dlg.protocol("WM_DELETE_WINDOW", self.cancel_probe)
+            self.dlg.bind("<Escape>", lambda _event: self.cancel_probe())
             self.deps.center_window_fn(self.dlg, self.app)
 
     def _resolve_bounds(self) -> Any:
@@ -326,7 +344,7 @@ class AutoLevelDialogController:
         min_spacing_default = float(self.saved.get("min_spacing", 2.0) or 2.0)
         max_spacing_default = float(self.saved.get("max_spacing", 12.0) or 12.0)
         max_points_default = self.saved.get("max_points", None)
-        self.interp_saved = pref_interp(self.saved.get("interpolation", "bicubic"), "bicubic")
+        self.interp_saved = pref_interp(self.saved.get("interpolation", "bilinear"), "bilinear")
         self.path_order_default = str(self.saved.get("path_order", "serpentine") or "serpentine")
         self.run_defaults = ProbeRunSettings(
             safe_z=float(self.saved.get("safe_z", 5.0) or 0.0),
@@ -334,6 +352,14 @@ class AutoLevelDialogController:
             probe_feed=float(self.saved.get("probe_feed", 100.0) or 0.0),
             retract_z=float(self.saved.get("retract_z", 2.0) or 0.0),
             settle_time=float(self.saved.get("settle_time", 0.0) or 0.0),
+        )
+        self.max_abs_correction_default = pref_float(
+            self.saved.get("max_abs_correction"),
+            DEFAULT_MAX_ABS_CORRECTION_MM,
+        )
+        self.max_z_span_default = pref_float(
+            self.saved.get("max_z_span"),
+            DEFAULT_MAX_Z_SPAN_MM,
         )
 
         profile = self.job_prefs.get(self.profile_name, {})
@@ -374,6 +400,8 @@ class AutoLevelDialogController:
         self.retract_var = tk.StringVar(value=f"{run_defaults.retract_z:.2f}")
         self.settle_var = tk.StringVar(value=f"{run_defaults.settle_time:.2f}")
         self.interp_var = tk.StringVar(value=self._interp_default)
+        self.max_abs_correction_var = tk.StringVar(value=f"{self.max_abs_correction_default:.2f}")
+        self.max_z_span_var = tk.StringVar(value=f"{self.max_z_span_default:.2f}")
         self.sample_var = tk.StringVar(value="")
         self.bounds_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
@@ -450,6 +478,8 @@ class AutoLevelDialogController:
             "settle_time": safe_float_text(self.settle_var),
             "path_order": self._path_order_value(self.path_order_var.get()),
             "interpolation": self.interp_var.get().strip().lower(),
+            "max_abs_correction": safe_float_text(self.max_abs_correction_var),
+            "max_z_span": safe_float_text(self.max_z_span_var),
         }
 
     def refresh_preset_values(self) -> None:
@@ -481,6 +511,10 @@ class AutoLevelDialogController:
         self.retract_var.set(f"{float(preset.get('retract_z', run_defaults.retract_z)):.2f}")
         self.settle_var.set(f"{float(preset.get('settle_time', run_defaults.settle_time)):.2f}")
         self.interp_var.set(str(preset.get("interpolation", self.interp_var.get())))
+        self.max_abs_correction_var.set(
+            f"{float(preset.get('max_abs_correction', self.max_abs_correction_default)):.2f}"
+        )
+        self.max_z_span_var.set(f"{float(preset.get('max_z_span', self.max_z_span_default)):.2f}")
         self.update_sample()
 
     def save_preset(self) -> None:
@@ -679,6 +713,8 @@ class AutoLevelDialogController:
             self.status_var.set("")
 
     def _has_complete_height_map(self) -> bool:
+        if not active_auto_level_map_is_current(self.app):
+            return False
         height_map = getattr(self.app, "_auto_level_height_map", None)
         if height_map is None:
             return False
@@ -687,6 +723,18 @@ class AutoLevelDialogController:
         except Exception as exc:
             _log_suppressed("Failed checking auto-level height-map completeness", exc)
             return False
+
+    def handle_active_map_invalidated(self, reason: str) -> None:
+        if self.apply_btn is not None:
+            self.apply_btn.config(state="disabled")
+        if self.save_map_btn is not None:
+            self.save_map_btn.config(state="disabled")
+        if self.map_summary_var is not None:
+            self.map_summary_var.set("No trusted active height map.")
+        if self.stats_var is not None:
+            self.stats_var.set("")
+        if self.status_var is not None and reason:
+            self.status_var.set(str(reason))
 
     def _has_leveled_output(self) -> bool:
         leveled_lines = getattr(self.app, "_auto_level_leveled_lines", None)
@@ -736,6 +784,12 @@ class AutoLevelDialogController:
             max_points = parse_int_optional_var(self.max_points_var)
             path_order = self._path_order_value(self.path_order_var.get())
             avoidance_areas = _parse_avoidance_areas(self.avoidance_vars)
+            max_abs_correction = parse_float_var(self.max_abs_correction_var, "max correction")
+            max_z_span = parse_float_var(self.max_z_span_var, "max Z span")
+            if max_abs_correction <= 0:
+                raise ValueError("Max correction must be > 0.")
+            if max_z_span <= 0:
+                raise ValueError("Max Z span must be > 0.")
         except ValueError as exc:
             self.sample_var.set(str(exc))
             self.bounds_var.set("")
@@ -758,6 +812,8 @@ class AutoLevelDialogController:
             "settle_time": safe_float_text(self.settle_var),
             "path_order": path_order,
             "interpolation": self.interp_var.get().strip().lower(),
+            "max_abs_correction": max_abs_correction,
+            "max_z_span": max_z_span,
             "avoidance_areas": self._avoidance_snapshot(),
         }
         try:
@@ -860,8 +916,22 @@ class AutoLevelDialogController:
         if self.save_map_btn is not None:
             self.save_map_btn.config(state="disabled")
 
+        workflow_token = object()
+        self._active_workflow_token = workflow_token
+
+        def on_lease_acquired(lease: AutoLevelWorkflowLease) -> None:
+            if self._active_workflow_token is workflow_token:
+                clear_active_auto_level_map(
+                    self.app,
+                    "A new Auto-Level workflow is collecting a replacement map.",
+                )
+                self._active_workflow_lease = lease
+                self.app._set_manual_controls_enabled(False)
+
         def on_progress(done: int, total: int) -> None:
             def update() -> None:
+                if self._active_workflow_token is not workflow_token:
+                    return
                 self.progress_bar.configure(value=done)
                 self.status_var.set(f"Probing {done}/{total}")
 
@@ -871,10 +941,105 @@ class AutoLevelDialogController:
                 context="Failed posting auto-level probe progress callback",
             )
 
-        def on_done(ok: bool, reason: str | None) -> None:
+        def on_done(
+            lease: AutoLevelWorkflowLease,
+            installation_ticket: AutoLevelInstallationTicket | None,
+            ok: bool,
+            reason: str | None,
+        ) -> None:
             def finish() -> None:
-                self._set_controls_enabled(True)
-                if ok:
+                if (
+                    self._active_workflow_token is not workflow_token
+                    or self._active_workflow_lease is not lease
+                ):
+                    if installation_ticket is not None:
+                        self.app.grbl.abort_auto_level_installation(
+                            installation_ticket,
+                            "Stale Auto-Level UI completion was retired before installation.",
+                        )
+                    return
+                self._active_installation_ticket = installation_ticket
+                recovery_checker = getattr(
+                    getattr(self.app, "grbl", None), "recovery_required", None
+                )
+                recovery_required = bool(recovery_checker()) if callable(recovery_checker) else False
+                if recovery_required:
+                    if installation_ticket is not None:
+                        self.app.grbl.abort_auto_level_installation(
+                            installation_ticket,
+                            "Recovery began before Auto-Level map installation.",
+                        )
+                    self._active_workflow_token = None
+                    self._active_workflow_lease = None
+                    self._active_installation_ticket = None
+                    clear_active_auto_level_map(
+                        self.app,
+                        "Auto-Level result was invalidated by controller recovery.",
+                    )
+                    self._set_controls_enabled(False)
+                    if self.close_btn is not None:
+                        self.close_btn.config(text="Close", state="normal")
+                    self.status_var.set(
+                        "Probe canceled; controller Recovery Required before further machine use."
+                    )
+                    return
+                installation_provenance: AutoLevelMapProvenance | None = None
+                stats = None
+                if ok and installation_ticket is not None:
+                    try:
+                        stats = height_map.stats()
+
+                        def commit_staged_map(
+                            provenance: AutoLevelMapProvenance,
+                        ) -> bool:
+                            previous = (
+                                getattr(self.app, "_auto_level_grid", None),
+                                getattr(self.app, "_auto_level_height_map", None),
+                                getattr(self.app, "_auto_level_bounds", None),
+                                getattr(self.app, "_auto_level_map_provenance", None),
+                            )
+                            try:
+                                (
+                                    self.app._auto_level_grid,
+                                    self.app._auto_level_height_map,
+                                    self.app._auto_level_bounds,
+                                    self.app._auto_level_map_provenance,
+                                ) = (grid, height_map, grid.bounds, provenance)
+                            except Exception:
+                                (
+                                    self.app._auto_level_grid,
+                                    self.app._auto_level_height_map,
+                                    self.app._auto_level_bounds,
+                                    self.app._auto_level_map_provenance,
+                                ) = previous
+                                return False
+                            return True
+
+                        installation_provenance = (
+                            self.app.grbl.finalize_auto_level_installation(
+                                installation_ticket,
+                                commit_staged_map,
+                            )
+                        )
+                    except Exception as exc:
+                        _log_suppressed(
+                            "Auto-Level map installation finalizer failed", exc
+                        )
+                        self.app.grbl.abort_auto_level_installation(
+                            installation_ticket,
+                            "Auto-Level map installation finalizer raised.",
+                        )
+
+                installed = bool(
+                    installation_provenance is not None
+                    and active_auto_level_map_is_current(self.app)
+                )
+                self._active_workflow_token = None
+                self._active_workflow_lease = None
+                self._active_installation_ticket = None
+                if ok and installed:
+                    self._set_controls_enabled(True)
+                    self.app._set_manual_controls_enabled(True)
                     stats = height_map.stats()
                     if stats:
                         self.status_var.set(
@@ -892,23 +1057,37 @@ class AutoLevelDialogController:
                     else:
                         self.status_var.set("Done.")
                     update_stats_summary(height_map, self.stats_var)
-                    self.app._auto_level_grid = grid
-                    self.app._auto_level_height_map = height_map
-                    self.app._auto_level_bounds = grid.bounds
                     self.apply_btn.config(state="normal")
                     if self.save_map_btn is not None:
                         self.save_map_btn.config(state="normal")
                 else:
-                    message = f"Probe stopped: {reason or 'failed'}"
-                    if getattr(self.app, "_pending_force_g90", False):
-                        message = f"{message} (pending G90 restore)"
+                    clear_active_auto_level_map(
+                        self.app,
+                        "Auto-Level map installation did not finalize.",
+                    )
+                    self._set_controls_enabled(True)
+                    self.app._set_manual_controls_enabled(True)
+                    self.apply_btn.config(state="disabled")
+                    if self.save_map_btn is not None:
+                        self.save_map_btn.config(state="disabled")
+                    detail = reason or (
+                        "stale Auto-Level installation was rejected"
+                        if ok
+                        else "failed"
+                    )
+                    message = f"Probe stopped: {detail}"
                     self.status_var.set(message)
 
-            _post_ui_callback(
+            posted = _post_ui_callback(
                 self.app,
                 finish,
                 context="Failed posting auto-level probe completion callback",
             )
+            if not posted and installation_ticket is not None:
+                self.app.grbl.abort_auto_level_installation(
+                    installation_ticket,
+                    "Auto-Level UI installation callback could not be posted.",
+                )
 
         started = self.app.auto_level_runner.start(
             grid,
@@ -916,8 +1095,11 @@ class AutoLevelDialogController:
             settings,
             on_progress=on_progress,
             on_done=on_done,
+            on_lease_acquired=on_lease_acquired,
         )
         if not started:
+            self._active_workflow_token = None
+            self._active_workflow_lease = None
             self._set_controls_enabled(True)
             self.status_var.set("Probe start failed.")
 
@@ -982,8 +1164,18 @@ class AutoLevelDialogController:
         self.status_var.set("Running test probe...")
         self._set_controls_enabled(False)
 
+        workflow_token = object()
+        self._active_workflow_token = workflow_token
+
+        def on_lease_acquired(lease: AutoLevelWorkflowLease) -> None:
+            if self._active_workflow_token is workflow_token:
+                self._active_workflow_lease = lease
+                self.app._set_manual_controls_enabled(False)
+
         def on_progress(done: int, total: int) -> None:
             def update() -> None:
+                if self._active_workflow_token is not workflow_token:
+                    return
                 self.progress_bar.configure(value=done)
                 self.status_var.set(f"Test probe {done}/{total}")
 
@@ -993,14 +1185,47 @@ class AutoLevelDialogController:
                 context="Failed posting auto-level test-probe progress callback",
             )
 
-        def on_done(ok: bool, reason: str | None) -> None:
+        def on_done(
+            lease: AutoLevelWorkflowLease,
+            installation_ticket: AutoLevelInstallationTicket | None,
+            ok: bool,
+            reason: str | None,
+        ) -> None:
             def finish() -> None:
+                if (
+                    self._active_workflow_token is not workflow_token
+                    or self._active_workflow_lease is not lease
+                ):
+                    return
+                recovery_checker = getattr(
+                    getattr(self.app, "grbl", None), "recovery_required", None
+                )
+                recovery_required = bool(recovery_checker()) if callable(recovery_checker) else False
+                completion_accepted = bool(
+                    ok and not recovery_required and installation_ticket is None
+                )
+                self._active_workflow_token = None
+                self._active_workflow_lease = None
+                if recovery_required:
+                    self._set_controls_enabled(False)
+                    if self.close_btn is not None:
+                        self.close_btn.config(text="Close", state="normal")
+                    self.status_var.set(
+                        "Test probe canceled; controller Recovery Required before further machine use."
+                    )
+                    return
                 self._set_controls_enabled(True)
+                self.app._set_manual_controls_enabled(True)
                 try:
+                    map_current = active_auto_level_map_is_current(self.app)
                     if self.apply_btn is not None:
-                        self.apply_btn.config(state=action_states["apply"])
+                        self.apply_btn.config(
+                            state=action_states["apply"] if map_current else "disabled"
+                        )
                     if self.save_map_btn is not None:
-                        self.save_map_btn.config(state=action_states["save_map"])
+                        self.save_map_btn.config(
+                            state=action_states["save_map"] if map_current else "disabled"
+                        )
                     if self.save_btn is not None:
                         self.save_btn.config(state=action_states["save"])
                     if self.revert_btn is not None:
@@ -1008,7 +1233,7 @@ class AutoLevelDialogController:
                 except Exception as exc:
                     _log_suppressed("Failed restoring action button states after test probe", exc)
                 self.set_start_state()
-                if ok:
+                if ok and completion_accepted:
                     measured = test_map.get_index(0, 0)
                     if measured is None:
                         report = getattr(self.app.probe_controller, "last_report", lambda: None)()
@@ -1027,11 +1252,14 @@ class AutoLevelDialogController:
                         )
                 else:
                     timestamp = time.strftime("%H:%M:%S")
-                    message = f"Test probe failed: {reason or 'failed'}"
-                    if getattr(self.app, "_pending_force_g90", False):
-                        message = f"{message} (pending G90 restore)"
+                    detail = reason or (
+                        "stale Auto-Level completion was rejected"
+                        if ok
+                        else "failed"
+                    )
+                    message = f"Test probe failed: {detail}"
                     self._record_last_test_probe_result(
-                        f"Last test probe [{timestamp}]: X{x_mm:.3f} Y{y_mm:.3f} failed ({reason or 'failed'})"
+                        f"Last test probe [{timestamp}]: X{x_mm:.3f} Y{y_mm:.3f} failed ({detail})"
                     )
                     self.status_var.set(message)
 
@@ -1047,8 +1275,12 @@ class AutoLevelDialogController:
             settings,
             on_progress=on_progress,
             on_done=on_done,
+            on_lease_acquired=on_lease_acquired,
+            result_installation_required=False,
         )
         if not started:
+            self._active_workflow_token = None
+            self._active_workflow_lease = None
             self._set_controls_enabled(True)
             try:
                 if self.apply_btn is not None:
@@ -1126,6 +1358,13 @@ class AutoLevelDialogController:
         return display_path, None
 
     def apply_level(self) -> None:
+        if not active_auto_level_map_is_current(self.app):
+            self.deps.messagebox.showwarning(
+                "Auto-Level",
+                "The height map is inactive or no longer matches the current controller session and job.",
+            )
+            return
+        map_provenance = getattr(self.app, "_auto_level_map_provenance", None)
         height_map = getattr(self.app, "_auto_level_height_map", None)
         if height_map is None or not height_map.is_complete():
             self.deps.messagebox.showwarning("Auto-Level", "Probe a complete grid before applying.")
@@ -1147,6 +1386,16 @@ class AutoLevelDialogController:
         arc_step = math.pi / 18
         _ = line_count
         method = self.interp_var.get().strip().lower()
+        try:
+            max_abs_correction = parse_float_var(self.max_abs_correction_var, "max correction")
+            max_z_span = parse_float_var(self.max_z_span_var, "max Z span")
+            if max_abs_correction <= 0:
+                raise ValueError("Max correction must be > 0.")
+            if max_z_span <= 0:
+                raise ValueError("Max Z span must be > 0.")
+        except ValueError as exc:
+            self.deps.messagebox.showwarning("Auto-Level", str(exc))
+            return
 
         action_states = {
             "apply": self.apply_btn.cget("state") if self.apply_btn is not None else "disabled",
@@ -1186,6 +1435,8 @@ class AutoLevelDialogController:
                     height_map=height_map,
                     arc_step_rad=arc_step,
                     interpolation=method,
+                    max_abs_correction=max_abs_correction,
+                    max_z_span=max_z_span,
                     header_lines=header_lines,
                     streaming_mode=self.streaming_mode,
                     log_fn=log_fn,
@@ -1211,6 +1462,26 @@ class AutoLevelDialogController:
 
             def on_done() -> None:
                 self._set_controls_enabled(True)
+                if (
+                    getattr(self.app, "_auto_level_map_provenance", None)
+                    is not map_provenance
+                    or not active_auto_level_map_is_current(self.app)
+                ):
+                    clear_active_auto_level_map(
+                        self.app,
+                        "Auto-Level apply was discarded because the map context changed.",
+                    )
+                    if result.output_path and is_temp:
+                        try:
+                            os.remove(result.output_path)
+                        except OSError as exc:
+                            _log_suppressed(
+                                "Failed removing stale temporary Auto-Level output", exc
+                            )
+                    self.status_var.set(
+                        "Auto-Level apply canceled: the map is no longer trusted."
+                    )
+                    return
                 if result.error:
                     _restore_action_states()
                     if removed_previous_temp:
@@ -1308,6 +1579,12 @@ class AutoLevelDialogController:
         save_leveled_job(self.app, self.status_var)
 
     def save_height_map(self) -> None:
+        if not active_auto_level_map_is_current(self.app):
+            self.deps.messagebox.showwarning(
+                "Auto-Level",
+                "The height map is inactive or no longer trusted for this controller session.",
+            )
+            return
         save_height_map_file(self.app, self.status_var)
 
     def load_height_map(self) -> None:
@@ -1320,13 +1597,42 @@ class AutoLevelDialogController:
             self.save_map_btn,
             self.save_btn,
         )
+        clear_active_auto_level_map(
+            self.app,
+            "Loaded historical maps are inactive in this release; run a new probe before Apply or Save Map.",
+        )
 
     def cancel_probe(self) -> None:
         if self.app.auto_level_runner.is_running():
+            self._active_workflow_token = None
+            self._active_workflow_lease = None
             self.app.auto_level_runner.cancel()
-            self.status_var.set("Canceling...")
+            self.status_var.set(
+                "Cancellation requested; stopping controller and entering recovery..."
+            )
         elif self.dlg is not None:
+            lease = self._active_workflow_lease
+            installation_ticket = self._active_installation_ticket
+            self._active_workflow_token = None
+            self._active_workflow_lease = None
+            self._active_installation_ticket = None
+            if installation_ticket is not None:
+                self.app.grbl.abort_auto_level_installation(
+                    installation_ticket,
+                    "Auto-Level map installation aborted because its dialog closed.",
+                )
+            if lease is not None:
+                retire = getattr(
+                    self.app.grbl, "retire_auto_level_completion", None
+                )
+                if callable(retire):
+                    retire(
+                        lease,
+                        "Auto-Level result retired because its dialog closed before installation.",
+                    )
             self.dlg.destroy()
+            if getattr(self.app, "_auto_level_dialog_controller", None) is self:
+                self.app._auto_level_dialog_controller = None
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         settings_widgets = (
@@ -1516,6 +1822,31 @@ class AutoLevelDialogController:
         )
         self.interp_combo.grid(row=15, column=1, sticky="w", pady=(4, 2))
         self.interp_combo.bind("<<ComboboxSelected>>", lambda _evt: self.update_sample())
+        ttk.Separator(settings_tab, orient="horizontal").grid(
+            row=16,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=6,
+        )
+        ttk.Label(settings_tab, text="Safety limits").grid(
+            row=17,
+            column=0,
+            columnspan=2,
+            sticky="w",
+        )
+        self.max_abs_correction_entry = grid_row(
+            settings_tab,
+            "Max correction (mm)",
+            self.max_abs_correction_var,
+            18,
+        )
+        self.max_z_span_entry = grid_row(
+            settings_tab,
+            "Max Z span (mm)",
+            self.max_z_span_var,
+            19,
+        )
         self.avoidance_controls = build_avoidance_tab(
             avoidance_tab,
             self.avoidance_vars,
@@ -1524,26 +1855,26 @@ class AutoLevelDialogController:
         )
 
         ttk.Label(settings_tab, textvariable=self.sample_var, wraplength=460, justify="left").grid(
-            row=16,
+            row=20,
             column=0,
             columnspan=2,
             sticky="w",
             pady=(6, 0),
         )
         ttk.Label(settings_tab, textvariable=self.bounds_var, wraplength=460, justify="left").grid(
-            row=17,
+            row=21,
             column=0,
             columnspan=2,
             sticky="w",
         )
         ttk.Label(settings_tab, textvariable=self.map_summary_var, wraplength=460, justify="left").grid(
-            row=18,
+            row=22,
             column=0,
             columnspan=2,
             sticky="w",
         )
         ttk.Label(settings_tab, textvariable=self.stats_var, wraplength=460, justify="left").grid(
-            row=19,
+            row=23,
             column=0,
             columnspan=2,
             sticky="w",
@@ -1597,11 +1928,14 @@ class AutoLevelDialogController:
             self.probe_feed_entry,
             self.retract_entry,
             self.settle_entry,
+            self.max_abs_correction_entry,
+            self.max_z_span_entry,
         ):
             entry.bind("<KeyRelease>", lambda _evt: self.update_sample())
 
     def _hydrate_existing_state(self) -> None:
-        if getattr(self.app, "_auto_level_height_map", None) is not None:
+        map_current = active_auto_level_map_is_current(self.app)
+        if map_current and getattr(self.app, "_auto_level_height_map", None) is not None:
             try:
                 if self.app._auto_level_height_map.is_complete():
                     self.apply_btn.config(state="normal")
@@ -1613,7 +1947,7 @@ class AutoLevelDialogController:
             self.app, "_auto_level_leveled_path", None
         ):
             self.save_btn.config(state="normal")
-        if getattr(self.app, "_auto_level_height_map", None) is not None:
+        if map_current and getattr(self.app, "_auto_level_height_map", None) is not None:
             try:
                 if self.app._auto_level_height_map.is_complete():
                     self.save_map_btn.config(state="normal")
@@ -1643,4 +1977,3 @@ def show_auto_level_dialog(
     if deps is None:
         deps = build_auto_level_dialog_dependencies()
     AutoLevelDialogController(app, deps).show()
-

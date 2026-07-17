@@ -73,7 +73,7 @@ def build_console_panel(app, parent) -> ttk.Frame:
     app.console_filter_sep.grid(row=0, column=4, sticky="ns", padx=(8, 6))
     app.btn_console_all = ttk.Button(
         entry_row,
-        text="ALL",
+        text="All",
         command=lambda: app.streaming_controller.set_console_filter(None),
     )
     set_kb_id(app.btn_console_all, "console_filter_all")
@@ -81,7 +81,7 @@ def build_console_panel(app, parent) -> ttk.Frame:
     apply_tooltip(app.btn_console_all, "Show all console log entries.")
     app.btn_console_errors = ttk.Button(
         entry_row,
-        text="ERRORS",
+        text="Errors",
         command=lambda: app.streaming_controller.set_console_filter("errors"),
     )
     set_kb_id(app.btn_console_errors, "console_filter_errors")
@@ -89,7 +89,7 @@ def build_console_panel(app, parent) -> ttk.Frame:
     apply_tooltip(app.btn_console_errors, "Show only error entries in the console log.")
     app.btn_console_alarms = ttk.Button(
         entry_row,
-        text="ALARMS",
+        text="Alarms",
         command=lambda: app.streaming_controller.set_console_filter("alarms"),
     )
     set_kb_id(app.btn_console_alarms, "console_filter_alarms")

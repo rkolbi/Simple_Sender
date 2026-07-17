@@ -46,7 +46,7 @@ from simple_sender.utils.constants import (
 )
 from simple_sender.utils.grbl_errors import annotate_grbl_message
 from simple_sender.utils.macro_headers import MacroFormatError, parse_macro_header
-from simple_sender.types import MacroExecutorState
+from simple_sender.types import MacroExecutorState, StreamToolChangeIdentity
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
 
@@ -387,6 +387,18 @@ class MacroRunnerMixin(MacroExecutorState):
         title: str,
         noun: str,
     ) -> bool:
+        recovery_checker = getattr(self.grbl, "recovery_required", None)
+        try:
+            recovery_required = bool(recovery_checker()) if callable(recovery_checker) else False
+        except Exception:
+            recovery_required = True
+        if recovery_required:
+            messagebox.showwarning(
+                title,
+                "Controller execution state is uncertain. Complete explicit recovery before "
+                f"running a {noun}.",
+            )
+            return True
         if not self.grbl.is_connected():
             messagebox.showwarning(title, "Connect to GRBL first.")
             return True
@@ -459,6 +471,7 @@ class MacroRunnerMixin(MacroExecutorState):
         self,
         *,
         action,
+        tool_change_identity: StreamToolChangeIdentity | None = None,
     ) -> bool:
         ts = time.strftime("%H:%M:%S")
         if bool(self.app.gui_logging_enabled.get()):
@@ -468,7 +481,7 @@ class MacroRunnerMixin(MacroExecutorState):
         self._last_macro_run_success = None
         t = threading.Thread(
             target=self._run_builtin_workflow_worker,
-            args=(action,),
+            args=(action, tool_change_identity),
             daemon=True,
         )
         t.start()
@@ -483,6 +496,16 @@ class MacroRunnerMixin(MacroExecutorState):
                 "Only editable user macros can run through the generic macro path.",
             )
             return False
+        trust_getter = getattr(self.grbl, "machine_trust_state", None)
+        trust = trust_getter() if callable(trust_getter) else None
+        if trust is not None:
+            missing = trust.missing_for_new_job()
+            if missing:
+                messagebox.showwarning(
+                    "Workflow blocked",
+                    "Machine state is not trusted: " + ", ".join(missing),
+                )
+                return False
         if self._macro_start_blocked(
             allow_streaming_paused=bool(allow_streaming_paused),
             title="Macro blocked",
@@ -526,8 +549,37 @@ class MacroRunnerMixin(MacroExecutorState):
         self,
         workflow_id: str,
         allow_streaming_paused: bool = False,
+        expected_tool_change_identity: StreamToolChangeIdentity | None = None,
     ) -> bool:
         action = builtin_workflow_action(workflow_id)
+        recovery_checker = getattr(self.grbl, "recovery_required", None)
+        try:
+            recovery_required = bool(recovery_checker()) if callable(recovery_checker) else False
+        except Exception:
+            recovery_required = True
+        if recovery_required:
+            messagebox.showwarning(
+                "Workflow blocked",
+                "Controller execution state is uncertain. Complete explicit recovery before "
+                "running a workflow.",
+            )
+            return False
+        trust_getter = getattr(self.grbl, "machine_trust_state", None)
+        trust = trust_getter() if callable(trust_getter) else None
+        if trust is not None:
+            missing = trust.missing_for_new_job()
+            if missing:
+                messagebox.showwarning(
+                    "Workflow blocked",
+                    "Machine state is not trusted: " + ", ".join(missing),
+                )
+                return False
+            if str(workflow_id) == "tool_change" and not trust.setup_tool_reference:
+                messagebox.showwarning(
+                    "Tool change blocked",
+                    "Job Setup/tool reference is not trusted. Run Job Setup before Tool Change.",
+                )
+                return False
         if action.kind == "direct":
             command = getattr(self.app, str(action.command_attr or ""), None)
             if not callable(command):
@@ -552,12 +604,34 @@ class MacroRunnerMixin(MacroExecutorState):
         ):
             return False
         if str(workflow_id) == "tool_change":
+            identity_checker = getattr(
+                self.grbl, "stream_tool_change_identity_current", None
+            )
+            if allow_streaming_paused and (
+                expected_tool_change_identity is None
+                or not callable(identity_checker)
+                or not bool(identity_checker(expected_tool_change_identity))
+            ):
+                messagebox.showwarning(
+                    "Tool change blocked",
+                    "The streamed tool-change workflow is stale or no longer owns controller admission.",
+                )
+                if self._macro_lock.locked():
+                    self._macro_lock.release()
+                return False
             self._prepare_tool_change_workflow_context(
                 allow_streaming_paused=bool(allow_streaming_paused),
             )
-        return self._start_builtin_workflow_execution(action=action)
+        return self._start_builtin_workflow_execution(
+            action=action,
+            tool_change_identity=expected_tool_change_identity,
+        )
 
-    def _run_builtin_workflow_worker(self, action) -> None:
+    def _run_builtin_workflow_worker(
+        self,
+        action,
+        tool_change_identity: StreamToolChangeIdentity | None = None,
+    ) -> None:
         start = time.perf_counter()
         previous_workflow_override = bool(
             getattr(self.app, "_builtin_workflow_unlimited_time_active", False)
@@ -581,6 +655,7 @@ class MacroRunnerMixin(MacroExecutorState):
         self._workflow_audit(f"Start workflow_id={action.workflow_id!r} name={workflow_name!r}", force=True)
         self._start_status_indicator(workflow_name, workflow=True)
         try:
+            self._workflow_command_identity.tool_change_identity = tool_change_identity
             with macro_fast_poll_scope(self.app, "_macro_active_fast_poll_count"):
                 self._reset_prompt_state()
                 self._macro_state_restored = False
@@ -636,6 +711,7 @@ class MacroRunnerMixin(MacroExecutorState):
                 self.ui_q.put(("log", f"[workflow] Unit restore failed: {exc}"))
             self._macro_saved_state = None
             self._macro_state_restored = False
+            self._workflow_command_identity.tool_change_identity = None
             if self._macro_lock.locked():
                 self._macro_lock.release()
             else:
@@ -923,11 +999,27 @@ class MacroRunnerMixin(MacroExecutorState):
         self._manual_error_message = ""
         tracker = None
         send_tracked = getattr(self.grbl, "send_immediate_tracked", None)
+        tool_change_identity = getattr(
+            self._workflow_command_identity,
+            "tool_change_identity",
+            None,
+        )
         if callable(send_tracked):
-            tracker = send_tracked(command, source="macro")
+            if tool_change_identity is None:
+                tracker = send_tracked(command, source="macro")
+            else:
+                tracker = send_tracked(
+                    command,
+                    source="macro",
+                    expected_tool_change_identity=tool_change_identity,
+                )
             if tracker is None:
                 raise RuntimeError(f"Controller rejected immediate macro command before send: {command}")
         else:
+            if tool_change_identity is not None:
+                raise RuntimeError(
+                    "Exact tool-change command admission is unavailable."
+                )
             accepted = True
             if hasattr(self.app, "_send_manual"):
                 accepted = self.app._send_manual(command, "macro")
@@ -964,4 +1056,3 @@ class MacroRunnerMixin(MacroExecutorState):
             if tracker is None and self._manual_error_event.is_set():
                 detail = self._manual_error_message or "GRBL command rejected."
                 raise RuntimeError(f"Macro command failed: {detail}")
-

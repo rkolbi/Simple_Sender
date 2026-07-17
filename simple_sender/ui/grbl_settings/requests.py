@@ -23,6 +23,8 @@
 import time
 from tkinter import messagebox
 
+from simple_sender.types import NormalSessionPhase
+
 
 def _report_settings_refresh_failure(app, message: str) -> None:
     text = str(message or "").strip() or "Settings refresh failed."
@@ -32,6 +34,40 @@ def _report_settings_refresh_failure(app, message: str) -> None:
         pass
     try:
         app.streaming_controller.log(f"[{time.strftime('%H:%M:%S')}] {text}")
+    except Exception:
+        pass
+
+
+def _normal_session_initialization_required(app) -> bool:
+    checker = getattr(getattr(app, "grbl", None), "normal_session_initialization_required", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return True
+
+
+def _normal_session_blocks_settings_refresh(app) -> bool:
+    if not _normal_session_initialization_required(app):
+        return False
+    state_getter = getattr(getattr(app, "grbl", None), "normal_session_state", None)
+    if not callable(state_getter):
+        return True
+    try:
+        state = state_getter()
+    except Exception:
+        return True
+    return (
+        getattr(state, "phase", None) is not NormalSessionPhase.POSITION_REQUIRED
+        or bool(getattr(state, "homing_started", False))
+    )
+
+
+def _defer_until_job_ready(app) -> None:
+    app._pending_settings_refresh = True
+    try:
+        app.status.config(text="Settings refresh queued (Job Ready pending)")
     except Exception:
         pass
 
@@ -69,6 +105,9 @@ def request_settings_dump(app):
         app._pending_settings_refresh = True
         app.status.config(text="Waiting for Grbl startup...")
         return
+    if _normal_session_blocks_settings_refresh(app):
+        _defer_until_job_ready(app)
+        return False
     if app._alarm_locked:
         messagebox.showwarning("Alarm", "Clear alarm before requesting settings.")
         return False
@@ -78,6 +117,15 @@ def request_settings_dump(app):
     except Exception:
         accepted = False
     if accepted is False:
+        if _normal_session_blocks_settings_refresh(app):
+            _defer_until_job_ready(app)
+            try:
+                app.streaming_controller.log(
+                    f"[{time.strftime('%H:%M:%S')}] Settings refresh queued until Job Ready; controller admission rejected $$."
+                )
+            except Exception:
+                pass
+            return False
         app._pending_settings_refresh = False
         _report_settings_refresh_failure(
             app,

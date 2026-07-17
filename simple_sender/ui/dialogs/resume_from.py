@@ -49,9 +49,10 @@ _RESUME_G92_WARNING_BODY = (
 )
 _RESUME_UNSUPPORTED_TLO_TITLE = "Resume blocked"
 _RESUME_UNSUPPORTED_TLO_BODY = (
-    "A dynamic tool length offset command (G43.1) was detected before the selected "
-    "resume line, but its Z value could not be reconstructed safely. Resume From was "
-    "canceled to avoid an unknown Z relationship."
+    "An ambiguous or unsupported tool-length compensation block was detected before "
+    "the selected resume line. This includes multiple G43.1/G49 commands or multiple "
+    "associated Z words in one block. Resume From was canceled to avoid an unknown Z "
+    "relationship."
 )
 # Keep only a few recent line sources cached so repeated dialog use stays fast
 # without retaining many full job references.
@@ -80,7 +81,9 @@ class _ResumeModalState:
     coolant: int | None = None
     feed: float | None = None
     spindle_speed: float | None = None
-    dynamic_tlo_z: float | None = None
+    dynamic_tlo_mm: float | None = None
+    dynamic_tlo_defined_units: str | None = None
+    dynamic_tlo_source_line: str | None = None
     unsupported_dynamic_tlo: bool = False
     has_g92: bool = False
 
@@ -96,12 +99,16 @@ class _ResumeModalState:
             coolant=self.coolant,
             feed=self.feed,
             spindle_speed=self.spindle_speed,
-            dynamic_tlo_z=self.dynamic_tlo_z,
+            dynamic_tlo_mm=self.dynamic_tlo_mm,
+            dynamic_tlo_defined_units=self.dynamic_tlo_defined_units,
+            dynamic_tlo_source_line=self.dynamic_tlo_source_line,
             unsupported_dynamic_tlo=self.unsupported_dynamic_tlo,
             has_g92=self.has_g92,
         )
 
     def to_preamble(self) -> list[str]:
+        if self.unsupported_dynamic_tlo:
+            return []
         preamble = []
         for item in (
             self.units,
@@ -113,8 +120,15 @@ class _ResumeModalState:
         ):
             if item:
                 preamble.append(item)
-        if self.dynamic_tlo_z is not None:
-            preamble.append(f"G43.1 Z{self.dynamic_tlo_z:g}")
+        if self.dynamic_tlo_mm is not None:
+            if self.units == "G20":
+                emitted_tlo = self.dynamic_tlo_mm / 25.4
+            elif self.units == "G21":
+                emitted_tlo = self.dynamic_tlo_mm
+            else:
+                emitted_tlo = None
+            if emitted_tlo is not None:
+                preamble.append(f"G43.1 Z{emitted_tlo:.12g}")
         if self.feed is not None:
             preamble.append(f"F{self.feed:g}")
         if self.spindle is not None:
@@ -243,6 +257,56 @@ def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
         return abs(code - target) < 1e-3
 
     words = WORD_PAT.findall(s)
+    tlo_codes: list[float] = []
+    unsupported_tlo_variant = False
+    for word, value in words:
+        if word != "G":
+            continue
+        try:
+            code = float(value)
+        except Exception:
+            continue
+        if is_code(code, 43.1) or is_code(code, 49):
+            tlo_codes.append(code)
+        elif is_code(code, 43) or is_code(code, 43.2) or is_code(code, 44):
+            unsupported_tlo_variant = True
+
+    z_words = [value for word, value in words if word == "Z"]
+    g43_1_count = sum(1 for code in tlo_codes if is_code(code, 43.1))
+    ambiguous_tlo_block = bool(
+        unsupported_tlo_variant
+        or len(tlo_codes) > 1
+        or (g43_1_count == 1 and len(z_words) != 1)
+    )
+    if ambiguous_tlo_block:
+        state.dynamic_tlo_mm = None
+        state.dynamic_tlo_defined_units = None
+        if not state.unsupported_dynamic_tlo:
+            state.dynamic_tlo_source_line = s
+        state.unsupported_dynamic_tlo = True
+
+    unit_codes: list[str] = []
+    for word, value in words:
+        if word != "G":
+            continue
+        try:
+            code = float(value)
+        except Exception:
+            continue
+        if is_code(code, 20):
+            unit_codes.append("G20")
+        elif is_code(code, 21):
+            unit_codes.append("G21")
+    distinct_units = tuple(dict.fromkeys(unit_codes))
+    block_units = distinct_units[0] if len(distinct_units) == 1 else None
+    ambiguous_units = len(distinct_units) > 1
+    if block_units is not None:
+        state.units = block_units
+    elif ambiguous_units:
+        if not state.unsupported_dynamic_tlo:
+            state.dynamic_tlo_source_line = s
+        state.unsupported_dynamic_tlo = True
+
     z_value: float | None = None
     for w, val in words:
         if w != "Z":
@@ -268,7 +332,7 @@ def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
                 continue
             gstr = f"G{val}"
             if is_code(code, 20) or is_code(code, 21):
-                state.units = gstr
+                continue
             elif is_code(code, 90) or is_code(code, 91):
                 state.distance = gstr
             elif is_code(code, 17) or is_code(code, 18) or is_code(code, 19):
@@ -290,15 +354,27 @@ def _apply_line_to_state(state: _ResumeModalState, raw: str) -> None:
             ):
                 state.coord = gstr
             elif is_code(code, 43.1):
-                if z_value is None:
-                    state.dynamic_tlo_z = None
+                if ambiguous_tlo_block:
+                    continue
+                tlo_units = block_units or state.units
+                if z_value is None or tlo_units not in {"G20", "G21"} or ambiguous_units:
+                    state.dynamic_tlo_mm = None
+                    state.dynamic_tlo_defined_units = None
+                    state.dynamic_tlo_source_line = s
                     state.unsupported_dynamic_tlo = True
                 else:
-                    state.dynamic_tlo_z = z_value
-                    state.unsupported_dynamic_tlo = False
+                    state.dynamic_tlo_mm = (
+                        float(z_value) * 25.4 if tlo_units == "G20" else float(z_value)
+                    )
+                    state.dynamic_tlo_defined_units = tlo_units
+                    state.dynamic_tlo_source_line = s
             elif is_code(code, 49):
-                state.dynamic_tlo_z = None
-                state.unsupported_dynamic_tlo = False
+                if ambiguous_tlo_block:
+                    continue
+                state.dynamic_tlo_mm = None
+                state.dynamic_tlo_defined_units = None
+                if not state.unsupported_dynamic_tlo:
+                    state.dynamic_tlo_source_line = s
         elif w == "M":
             try:
                 code = int(float(val))
@@ -485,7 +561,7 @@ def _confirm_resume_dynamic_tlo_state(app, *, unsupported_dynamic_tlo: bool) -> 
         _log_suppressed("Failed showing unsupported G43.1 warning before Resume From", exc)
     _report_resume_message(
         app,
-        "Resume canceled because G43.1 tool length offset state could not be reconstructed.",
+        "Resume canceled because an ambiguous G43.1/G49 tool-length compensation block could not be reconstructed safely.",
     )
     return False
 

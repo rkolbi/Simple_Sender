@@ -26,6 +26,8 @@ from tkinter import ttk, messagebox
 
 from simple_sender.constants.messages import BusyMessages, DialogTitles
 from .alarm_recovery_dialog import show_alarm_recovery
+from .execution_recovery_dialog import show_execution_recovery
+from .normal_session_initialization_dialog import show_normal_session_initialization
 from .macro_prompt_dialog import show_macro_prompt
 from .spoilboard_generator import show_spoilboard_generator_dialog
 from .popup_utils import center_window
@@ -34,6 +36,8 @@ from simple_sender.ui.autolevel_dialog.dialog_controller import show_auto_level_
 
 __all__ = [
     "show_alarm_recovery",
+    "show_execution_recovery",
+    "show_normal_session_initialization",
     "show_macro_prompt",
     "show_spoilboard_generator_dialog",
     "show_auto_level_dialog",

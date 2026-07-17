@@ -31,6 +31,12 @@ from functools import lru_cache
 from typing import Sequence, TYPE_CHECKING, cast
 
 from simple_sender.types import (
+    ConnectionScopedEvent,
+    ControllerSuspensionPhase,
+    ExecutionPendingState,
+    GcodeSourceAdmission,
+    GcodeSourceIdentity,
+    GcodeSourcePhase,
     GcodeAckedEvent,
     GcodeSentEvent,
     GrblWorkerState,
@@ -38,12 +44,14 @@ from simple_sender.types import (
     ManualPendingItem,
     ProgressBytesEvent,
     ProgressEvent,
-    StreamCompletionEofEvent,
+    RecoveryPhase,
     StreamErrorEvent,
     StreamPendingItem,
     StreamPauseReasonEvent,
     StreamQueueItem,
     StreamStateEvent,
+    StreamToolChangeIdentity,
+    WorkIdentity,
 )
 from simple_sender.kasa_accessory import SpindleCommandDetector
 
@@ -218,7 +226,12 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         Returns:
             True if streaming is active
         """
-        return self._streaming
+        with self._stream_lock:
+            return bool(
+                self._streaming
+                or self._paused
+                or self._execution_pending is not None
+            )
 
     def set_dry_run_sanitize(self, enabled: bool) -> None:
         """Enable or disable dry-run sanitization for streamed G-code."""
@@ -260,36 +273,211 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         self._gcode_pause_reason_cache = pause_cache
         self._gcode_spindle_state_cache = spindle_cache
 
-    def prime_gcode_send_cache(self, lines: Sequence[str]) -> None:
+    def prime_gcode_send_cache(
+        self,
+        lines: Sequence[str],
+        *,
+        source_identity: GcodeSourceIdentity,
+    ) -> bool:
         """Prime fast-send metadata from an in-memory line list.
 
         This is used when the active stream source is file-backed but the UI
         already has a full in-memory line list for non-sample jobs.
         """
-        self._prepare_in_memory_gcode_send_cache(lines)
+        with self._write_lock:
+            with self._stream_lock:
+                if (
+                    source_identity != self._gcode_source_identity
+                    or source_identity.cleared
+                    or self._gcode_source_phase
+                    not in {GcodeSourcePhase.RESERVED, GcodeSourcePhase.COMMITTED}
+                    or self._recovery_state.required
+                    or int(source_identity.connection_generation)
+                    != int(self._connection_generation)
+                    or int(source_identity.stream_epoch) != int(self._stream_token)
+                    or int(source_identity.recovery_epoch) != int(self._recovery_epoch)
+                ):
+                    return False
+                self._prepare_in_memory_gcode_send_cache(lines)
+                return True
+
+    def admit_gcode_source(
+        self,
+        lines: Sequence[str],
+        *,
+        name: str | None = None,
+        ui_load_generation: int = 0,
+    ) -> GcodeSourceAdmission:
+        """Reserve an unrunnable source and return its immutable transaction identity."""
+        with self._write_lock:
+            with self._stream_lock:
+                unresolved_work = bool(
+                    self._streaming
+                    or self._paused
+                    or self._execution_pending is not None
+                    or self._stream_pending_item is not None
+                    or self._stream_vacuum_pending is not None
+                    or self._stream_tool_change_pending is not None
+                    or self._manual_pending_item is not None
+                    or self._stream_line_queue
+                    or self._manual_source_queue
+                    or self._manual_tracker_queue
+                    or self._manual_identity_queue
+                    or not self._outgoing_q.empty()
+                    or self._auto_level_lease_blocks_ordinary_locked()
+                )
+                handoff_clear = bool(
+                    not lines
+                    and self._recovery_state.required
+                    and not self._gcode
+                    and self._gcode_source_identity.cleared
+                )
+                if (self._recovery_state.required and not handoff_clear) or unresolved_work:
+                    reason = (
+                        "G-code source cannot change while controller work is active, "
+                        "unresolved, or recovering."
+                    )
+                    self.ui_q.put(("log", f"[load blocked] {reason}"))
+                    return GcodeSourceAdmission(
+                        accepted=False,
+                        identity=self._gcode_source_identity,
+                        reason=reason,
+                    )
+                self._invalidate_auto_level_map_locked(
+                    "G-code source replacement invalidated the installed Auto-Level map."
+                )
+                self._stream_token += 1
+                self._retire_suspension_locked("G-code source replaced")
+                self._gcode = lines
+                self._prepare_in_memory_gcode_send_cache(lines)
+                self._gcode_name = name
+                self._streaming = False
+                self._paused = False
+                self._send_index = 0
+                self._ack_index = -1
+                self._ack_byte_offset = 0
+                self._stream_file_size_bytes = self._resolve_stream_file_size_bytes(lines)
+                self._reset_stream_buffer()
+                self._gcode_source_seq += 1
+                self._gcode_source_transaction_seq += 1
+                identity = GcodeSourceIdentity(
+                    source_id=int(self._gcode_source_seq),
+                    connection_generation=int(self._connection_generation),
+                    stream_epoch=int(self._stream_token),
+                    recovery_epoch=int(self._recovery_epoch),
+                    name=name,
+                    cleared=not bool(lines),
+                    transaction_id=int(self._gcode_source_transaction_seq),
+                    ui_load_generation=max(0, int(ui_load_generation)),
+                )
+                self._gcode_source_identity = identity
+                self._gcode_source_phase = GcodeSourcePhase.RESERVED
+        logger.info(
+            "Reserved %d lines of G-code transaction=%d ui_generation=%d",
+            len(lines),
+            int(identity.transaction_id),
+            int(identity.ui_load_generation),
+        )
+        return GcodeSourceAdmission(accepted=True, identity=identity)
+
+    def commit_gcode_source(self, identity: GcodeSourceIdentity) -> bool:
+        """Atomically make the exact reserved source runnable after UI installation."""
+        with self._write_lock:
+            with self._stream_lock:
+                if (
+                    identity != self._gcode_source_identity
+                    or self._gcode_source_phase is not GcodeSourcePhase.RESERVED
+                    or (
+                        self._recovery_state.required
+                        and not (
+                            identity.cleared
+                            and self._recovery_state.phase
+                            is RecoveryPhase.RECOVERY_COMPLETE
+                        )
+                    )
+                    or int(identity.connection_generation) != int(self._connection_generation)
+                    or int(identity.stream_epoch) != int(self._stream_token)
+                    or int(identity.recovery_epoch) != int(self._recovery_epoch)
+                ):
+                    return False
+                self._gcode_source_phase = (
+                    GcodeSourcePhase.CLEARED
+                    if identity.cleared
+                    else GcodeSourcePhase.COMMITTED
+                )
+                generation = int(self._connection_generation)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
+                line_count = len(self._gcode)
+        self.ui_q.put(
+            StreamStateEvent(
+                "cleared" if identity.cleared else "loaded",
+                line_count,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
+        logger.info(
+            "Committed G-code source transaction=%d lines=%d",
+            int(identity.transaction_id),
+            int(line_count),
+        )
+        return True
+
+    def abort_gcode_source(
+        self,
+        identity: GcodeSourceIdentity,
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Abort the exact reservation into a new cleared, unrunnable identity."""
+        with self._write_lock:
+            with self._stream_lock:
+                if (
+                    identity != self._gcode_source_identity
+                    or self._gcode_source_phase is not GcodeSourcePhase.RESERVED
+                ):
+                    return False
+                self._stream_token += 1
+                self._retire_suspension_locked("G-code source reservation aborted")
+                self._gcode = []
+                self._streaming = False
+                self._paused = False
+                self._send_index = 0
+                self._ack_index = -1
+                self._ack_byte_offset = 0
+                self._stream_file_size_bytes = 0
+                self._reset_stream_buffer()
+                cleared = self._set_cleared_source_locked()
+                self._gcode_source_phase = GcodeSourcePhase.ABORTED
+        self.ui_q.put(
+            ("log", f"[load aborted] {str(reason or 'Source installation did not commit.')}"),
+        )
+        logger.warning(
+            "Aborted G-code source transaction=%d; cleared source=%d",
+            int(identity.transaction_id),
+            int(cleared.source_id),
+        )
+        return True
     
-    def load_gcode(self, lines: Sequence[str], *, name: str | None = None) -> None:
+    def load_gcode(self, lines: Sequence[str], *, name: str | None = None) -> bool:
         """Load G-code for streaming.
         
         Args:
             lines: List of G-code lines (already cleaned)
             name: Optional job name for error reporting
         """
-        self._gcode = lines
-        self._prepare_in_memory_gcode_send_cache(lines)
-        self._gcode_name = name
-        self._streaming = False
-        self._paused = False
-        self._send_index = 0
-        self._ack_index = -1
-        self._ack_byte_offset = 0
-        self._stream_file_size_bytes = self._resolve_stream_file_size_bytes(lines)
-        self._reset_stream_buffer()
-        self.ui_q.put(StreamStateEvent("loaded", len(lines)))
-        logger.info(f"Loaded {len(lines)} lines of G-code")
+        admission = self.admit_gcode_source(lines, name=name)
+        return bool(
+            admission.accepted and self.commit_gcode_source(admission.identity)
+        )
     
     def start_stream(self) -> None:
         """Start streaming loaded G-code from beginning."""
+        if self.recovery_required():
+            self.ui_q.put(("log", "[recovery] Run blocked until reset recovery is completed."))
+            return
         if not self.is_connected():
             logger.warning("Cannot start stream - not connected")
             return
@@ -298,17 +486,58 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             logger.warning("Cannot start stream - no G-code loaded")
             return
         
-        self._clear_outgoing()
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = True
-            self._paused = False
-        self._abort_writes.clear()
-        self._reset_stream_buffer()
-        self._ack_byte_offset = 0
+        with self._write_lock:
+            generation = self.connection_generation()
+            if not self._session_is_current(generation) or not self.is_connected():
+                return
+            with self._stream_lock:
+                if (
+                    self._recovery_state.required
+                    or self._abort_writes.is_set()
+                    or self._execution_pending is not None
+                    or self._gcode_source_phase is not GcodeSourcePhase.COMMITTED
+                    or self._auto_level_lease_blocks_ordinary_locked()
+                ):
+                    return
+                self._clear_outgoing()
+                eligible, missing_trust = self.job_start_eligibility(
+                    self._gcode_source_identity
+                )
+                if not eligible:
+                    self.ui_q.put(
+                        (
+                            "log",
+                            "[recovery] Run blocked; untrusted state: "
+                            + ", ".join(missing_trust),
+                        )
+                    )
+                    return
+                self._reset_stream_buffer()
+                self._stream_token += 1
+                self._set_suspension_locked(
+                    ControllerSuspensionPhase.NONE,
+                    request_id=0,
+                    tx_admission_closed=False,
+                    operator_ack_required=False,
+                )
+                self._streaming = True
+                self._paused = False
+                self._execution_pending = None
+                self._stream_start_index = 0
+                self._ack_byte_offset = 0
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
         self._emit_buffer_fill()
         if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
-            self.ui_q.put(ProgressBytesEvent(0, int(self._stream_file_size_bytes)))
+            self.ui_q.put(
+                ProgressBytesEvent(
+                    0,
+                    int(self._stream_file_size_bytes),
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
         self._signal_tx_activity()
         if self._dry_run_sanitize:
             self.ui_q.put(
@@ -317,7 +546,15 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
                 )
             )
-        self.ui_q.put(StreamStateEvent("running", None))
+        self.ui_q.put(
+            StreamStateEvent(
+                "running",
+                None,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
         logger.info("Started G-code streaming")
     
     def start_stream_from(
@@ -331,6 +568,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             start_index: Zero-based index to resume from
             preamble: Optional setup commands to send first (e.g., G90, G21)
         """
+        if self.recovery_required():
+            self.ui_q.put(
+                ("log", "[recovery] Resume From blocked until reset recovery is completed.")
+            )
+            return
         if not self.is_connected():
             logger.warning("Cannot resume stream - not connected")
             return
@@ -383,22 +625,52 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             except Exception:
                 pass
 
-        self._clear_outgoing()
-        with self._stream_lock:
-            self._stream_token += 1
-            self._streaming = True
-            self._paused = False
-        self._abort_writes.clear()
-        self._reset_stream_buffer()
-        
-        with self._stream_lock:
-            self._send_index = start_index
-            self._ack_index = start_index - 1
-            self._ack_byte_offset = int(initial_ack_byte_offset)
-            
-            if preamble:
-                cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
-                self._resume_preamble = deque(cleaned)
+        with self._write_lock:
+            generation = self.connection_generation()
+            if not self._session_is_current(generation) or not self.is_connected():
+                return
+            with self._stream_lock:
+                if (
+                    self._recovery_state.required
+                    or self._abort_writes.is_set()
+                    or self._execution_pending is not None
+                    or self._gcode_source_phase is not GcodeSourcePhase.COMMITTED
+                    or self._auto_level_lease_blocks_ordinary_locked()
+                ):
+                    return
+                self._clear_outgoing()
+                eligible, missing_trust = self.job_start_eligibility(
+                    self._gcode_source_identity
+                )
+                if not eligible:
+                    self.ui_q.put(
+                        (
+                            "log",
+                            "[recovery] Resume From blocked; untrusted state: "
+                            + ", ".join(missing_trust),
+                        )
+                    )
+                    return
+                self._reset_stream_buffer()
+                self._stream_token += 1
+                self._set_suspension_locked(
+                    ControllerSuspensionPhase.NONE,
+                    request_id=0,
+                    tx_admission_closed=False,
+                    operator_ack_required=False,
+                )
+                self._streaming = True
+                self._paused = False
+                self._execution_pending = None
+                self._stream_start_index = start_index
+                self._send_index = start_index
+                self._ack_index = start_index - 1
+                self._ack_byte_offset = int(initial_ack_byte_offset)
+                if preamble:
+                    cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
+                    self._resume_preamble = deque(cleaned)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
 
         self._emit_buffer_fill()
         if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
@@ -409,6 +681,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         int(self._stream_file_size_bytes),
                     ),
                     int(self._stream_file_size_bytes),
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
                 )
             )
         self._signal_tx_activity()
@@ -419,8 +694,24 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
                 )
             )
-        self.ui_q.put(ProgressEvent(int(start_index), len(self._gcode)))
-        self.ui_q.put(StreamStateEvent("running", None))
+        self.ui_q.put(
+            ProgressEvent(
+                int(start_index),
+                len(self._gcode),
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
+        self.ui_q.put(
+            StreamStateEvent(
+                "running",
+                None,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
         logger.info(f"Resumed streaming from line {start_index}")
     
     def pause_stream(self) -> bool | None:
@@ -429,66 +720,185 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
     
     def resume_stream(self) -> bool | None:
         """Resume paused stream (cycle start)."""
-        if not self._streaming:
-            return None
-        if self._stream_vacuum_pending is not None:
+        with self._write_lock:
+            if self.recovery_required():
+                self.ui_q.put(("log", "[recovery] Resume blocked until reset recovery is completed."))
+                return False
+            with self._stream_lock:
+                if not self._streaming and self._execution_pending is None:
+                    return None
+            if self._stream_vacuum_pending is not None:
+                self.ui_q.put(
+                    (
+                        "log",
+                        "[resume blocked] Accessory confirmation is still pending; use Cancel/Reset or wait for the Kasa result.",
+                    )
+                )
+                return False
+            with self._stream_lock:
+                current = self._suspension_state
+                if (
+                    not self._suspension_identity_current_locked(current)
+                    or current.phase
+                    not in {
+                        ControllerSuspensionPhase.APPLICATION_HOLD_CONFIRMED,
+                        ControllerSuspensionPhase.EXTERNAL_HOLD,
+                        ControllerSuspensionPhase.SAFETY_DOOR,
+                    }
+                ):
+                    self.ui_q.put(
+                        (
+                            "log",
+                            "[resume blocked] Wait for controller Hold confirmation before resuming.",
+                        )
+                    )
+                    return False
+                if (
+                    current.phase is ControllerSuspensionPhase.SAFETY_DOOR
+                    and not current.controller_state.strip().lower().startswith("door:0")
+                ):
+                    self.ui_q.put(
+                        (
+                            "log",
+                            "[resume blocked] Safety Door is not yet reported closed and ready (Door:0).",
+                        )
+                    )
+                    return False
+                self._suspension_request_seq += 1
+                request_id = int(self._suspension_request_seq)
+                requested = self._set_suspension_locked(
+                    ControllerSuspensionPhase.RESUME_REQUESTED,
+                    request_id=request_id,
+                    controller_state=current.controller_state,
+                    tx_admission_closed=True,
+                    operator_ack_required=current.operator_ack_required,
+                    serial_port=current.serial_port,
+                )
+                self._paused = True
+                self._arm_suspension_confirmation_timer_locked(requested)
+                generation = int(self._connection_generation)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
             self.ui_q.put(
-                (
-                    "log",
-                    "[resume blocked] Accessory confirmation is still pending; use Cancel/Reset or wait for the Kasa result.",
+                StreamStateEvent(
+                    "resume_requested",
+                    current.controller_state,
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
                 )
             )
-            return False
-        try:
-            accepted = self.resume()
-        except SerialWriteError as exc:
-            logger.error(f"Resume failed: {exc}")
-            self.ui_q.put(("log", f"[resume failed] {exc}"))
-            return False
-        if accepted is False:
-            self.ui_q.put(("log", "[resume failed] Cycle-start was not sent."))
-            return False
-        self._paused = False
-        self._signal_tx_activity()
-        self.ui_q.put(StreamStateEvent("running", None))
-        logger.info("Stream resumed")
+            try:
+                accepted = self.resume()
+            except SerialWriteError as exc:
+                logger.error(f"Resume failed: {exc}")
+                self.ui_q.put(("log", f"[resume failed] {exc}"))
+                if not self.recovery_required():
+                    self._enter_recovery_required(
+                        "Cycle Start could not be written during suspended execution; controller state is uncertain.",
+                        generation=generation,
+                        attempt_controller_stop=True,
+                    )
+                return False
+            if accepted is False:
+                self.ui_q.put(("log", "[resume failed] Cycle-start was not sent."))
+                if not self.recovery_required():
+                    self._enter_recovery_required(
+                        "Cycle Start was not admitted during suspended execution; controller state is uncertain.",
+                        generation=generation,
+                        attempt_controller_stop=True,
+                    )
+                return False
+        logger.info("Stream resume requested; waiting for controller confirmation")
         return True
 
     def set_stream_vacuum_confirmation_required(self, required: bool) -> None:
         self._stream_vacuum_confirmation_required = bool(required)
 
     def _pause_stream(self, reason: str | None = None) -> bool | None:
-        if not self._streaming:
-            return None
-        if not self._paused:
+        with self._write_lock:
+            if not self._streaming or self.recovery_required():
+                return None
+            with self._stream_lock:
+                if self._recovery_state.required or self._suspension_blocks_tx_locked():
+                    return None
+                self._suspension_request_seq += 1
+                request_id = int(self._suspension_request_seq)
+                requested = self._set_suspension_locked(
+                    ControllerSuspensionPhase.APPLICATION_HOLD_REQUESTED,
+                    request_id=request_id,
+                    tx_admission_closed=True,
+                    operator_ack_required=False,
+                )
+                self._suspension_pause_reason = str(reason or "").strip() or None
+                self._paused = True
+                generation = int(self._connection_generation)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
+                self._arm_suspension_confirmation_timer_locked(requested)
+            self.ui_q.put(
+                StreamStateEvent(
+                    "pause_requested",
+                    reason,
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
             try:
                 accepted = self.hold()
             except SerialWriteError as exc:
                 logger.error(f"Pause failed: {exc}")
                 self.ui_q.put(("log", f"[pause failed] {exc}"))
+                if not self.recovery_required():
+                    self._enter_recovery_required(
+                        "Feed hold could not be written during active execution; controller state is uncertain.",
+                        generation=generation,
+                        attempt_controller_stop=True,
+                    )
                 return False
             if accepted is False:
                 self.ui_q.put(("log", "[pause failed] Feed hold was not sent."))
+                if not self.recovery_required():
+                    self._enter_recovery_required(
+                        "Feed hold was not admitted during active execution; controller state is uncertain.",
+                        generation=generation,
+                        attempt_controller_stop=True,
+                    )
                 return False
-        self._paused = True
         self._signal_tx_activity()
-        self.ui_q.put(StreamStateEvent("paused", None))
         if reason:
-            self.ui_q.put(StreamPauseReasonEvent(str(reason)))
-            logger.info(f"Stream paused ({reason})")
+            logger.info(f"Stream pause requested ({reason})")
         else:
-            logger.info("Stream paused")
+            logger.info("Stream pause requested")
         return True
     
     def stop_stream(self) -> bool | None:
         """Stop active stream and reset."""
-        if not (self._streaming or self._paused):
-            return None
-        accepted = self.reset(emit_state=False)
+        with self._write_lock:
+            with self._stream_lock:
+                if not (
+                    self._streaming
+                    or self._paused
+                    or self._execution_pending is not None
+                ):
+                    return None
+            accepted = self.reset(emit_state=False)
+            generation = int(self._connection_generation)
+            stream_epoch = int(self._stream_token)
+            recovery_epoch = int(self._recovery_epoch)
         if accepted is False:
             self.ui_q.put(("log", "[stop failed] Ctrl-X was not sent; stream state is unchanged."))
             return False
-        self.ui_q.put(StreamStateEvent("stopped", None))
+        self.ui_q.put(
+            StreamStateEvent(
+                "stopped",
+                None,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
         logger.info("Stream stopped")
         return True
     
@@ -561,16 +971,27 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             parts.append(line_text)
         return " | ".join(parts)
     
-    def _tx_loop(self, stop_evt: threading.Event) -> None:
+    def _tx_loop(
+        self,
+        stop_evt: threading.Event,
+        generation: int | None = None,
+        serial_port: object | None = None,
+    ) -> None:
         """Transmit thread - handles streaming and command queue.
         
         Args:
             stop_evt: Event to signal thread shutdown
         """
-        logger.debug("TX thread started")
+        if generation is None:
+            generation = self.connection_generation()
+        if serial_port is None:
+            serial_port = getattr(self, "ser", None)
+        logger.debug("TX thread started for generation %s", generation)
         
         try:
             while not stop_evt.is_set():
+                if not self._session_is_current(int(generation), serial_port):
+                    break
                 self._tx_loop_cycles += 1
                 if not self.is_connected():
                     idle_wait = self._tx_idle_wait_s()
@@ -582,10 +1003,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 
                 # Handle streaming
                 if self._streaming and not self._paused:
-                    self._process_stream_queue()
+                    self._process_stream_queue(session_generation=int(generation))
 
                 # Handle manual commands with buffer pacing
-                self._process_manual_queue()
+                self._process_manual_queue(session_generation=int(generation))
 
                 idle_wait = EVENT_QUEUE_TIMEOUT
                 blocked_waiting_for_ack = False
@@ -622,14 +1043,26 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         except Exception as e:
             logger.error(f"TX thread error: {e}", exc_info=True)
             self._emit_exception("TX thread error", e)
-            self._signal_disconnect(f"[tx/thread] TX thread error: {e}")
+            self._signal_disconnect(
+                f"[tx/thread] TX thread error: {e}",
+                generation=int(generation),
+                serial_port=serial_port,
+            )
             stop_evt.set()
         
         finally:
             logger.debug("TX thread stopped")
 
     def _stream_loop_blocked(self) -> bool:
-        return (not self._streaming) or self._paused or self._abort_writes.is_set()
+        with self._stream_lock:
+            return (
+                (not self._streaming)
+                or self._paused
+                or self._suspension_blocks_tx_locked()
+                or self._abort_writes.is_set()
+                or self._recovery_state.required
+                or self._gcode_source_phase is not GcodeSourcePhase.COMMITTED
+            )
 
     def _snapshot_file_backed_stream_fetch_locked(
         self,
@@ -774,12 +1207,48 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return ("tool_change", stripped[3:].strip())
         return None
 
-    def _ack_handled_stream_line(self, item: StreamPendingItem, *, emit_sent: bool = True) -> None:
+    def _ack_handled_stream_line(
+        self,
+        item: StreamPendingItem,
+        *,
+        emit_sent: bool = True,
+        generation: int | None = None,
+        expected_stream_epoch: int | None = None,
+    ) -> None:
+        with self._write_lock:
+            if generation is None:
+                generation = self.connection_generation()
+            if not self._session_is_current(int(generation)):
+                return
+            self._ack_handled_stream_line_admitted(
+                item,
+                emit_sent=emit_sent,
+                generation=int(generation),
+                expected_stream_epoch=expected_stream_epoch,
+            )
+
+    def _ack_handled_stream_line_admitted(
+        self,
+        item: StreamPendingItem,
+        *,
+        emit_sent: bool = True,
+        generation: int,
+        expected_stream_epoch: int | None = None,
+    ) -> None:
         ack_idx: int | None = None
         ack_line = str(item.line or "")
         ack_byte_offset: int | None = None
         stream_file_size_bytes = 0
         with self._stream_lock:
+            if self._recovery_state.required:
+                return
+            if (
+                expected_stream_epoch is not None
+                and int(expected_stream_epoch) != int(self._stream_token)
+            ):
+                return
+            stream_epoch = int(self._stream_token)
+            recovery_epoch = int(self._recovery_epoch)
             if not item.is_gcode:
                 return
             idx = self._send_index
@@ -812,14 +1281,40 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         if ack_idx is None:
             return
         if emit_sent:
-            self.ui_q.put(GcodeSentEvent(int(ack_idx), ack_line))
-        self.ui_q.put(GcodeAckedEvent(int(ack_idx)))
-        self.ui_q.put(ProgressEvent(int(ack_idx) + 1, len(self._gcode)))
+            self.ui_q.put(
+                GcodeSentEvent(
+                    int(ack_idx),
+                    ack_line,
+                    generation=int(generation),
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
+        self.ui_q.put(
+            GcodeAckedEvent(
+                int(ack_idx),
+                generation=int(generation),
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
+        self.ui_q.put(
+            ProgressEvent(
+                int(ack_idx) + 1,
+                len(self._gcode),
+                generation=int(generation),
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
         if ack_byte_offset is not None and stream_file_size_bytes > 0:
             self.ui_q.put(
                 ProgressBytesEvent(
                     min(int(ack_byte_offset), int(stream_file_size_bytes)),
                     int(stream_file_size_bytes),
+                    generation=int(generation),
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
                 )
             )
     def _start_stream_tool_change_locked(
@@ -827,7 +1322,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         item: StreamPendingItem,
         *,
         tool_name: str,
-    ) -> tuple[int | None, str]:
+    ) -> tuple[int | None, str, StreamToolChangeIdentity]:
         idx = item.idx if item.idx is not None else self._send_index
         self._stream_pending_item = None
         self._stream_tool_change_pending = StreamPendingItem(
@@ -838,8 +1333,84 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         )
         self._stream_tool_change_name = str(tool_name or "")
         self._stream_tool_change_active = True
+        serial_port = self.ser
+        if serial_port is None:
+            raise RuntimeError("Tool-change directive has no current serial session.")
+        self._stream_tool_change_request_seq += 1
+        identity = StreamToolChangeIdentity(
+            connection_generation=int(self._connection_generation),
+            serial_port=serial_port,
+            stream_epoch=int(self._stream_token),
+            recovery_epoch=int(self._recovery_epoch),
+            source_identity=self._gcode_source_identity,
+            directive_index=idx,
+            request_token=int(self._stream_tool_change_request_seq),
+        )
+        self._stream_tool_change_identity = identity
         self._paused = True
-        return idx, self._stream_tool_change_name
+        return idx, self._stream_tool_change_name, identity
+
+    def _stream_workflow_pause_reason_locked(self) -> str | None:
+        if self._stream_tool_change_pending is not None and self._stream_tool_change_active:
+            return "tool change"
+        if self._stream_vacuum_pending is not None:
+            return "accessory confirmation"
+        return None
+
+    def _stream_tool_change_identity_current_locked(
+        self,
+        expected_identity: StreamToolChangeIdentity | None,
+    ) -> bool:
+        identity = self._stream_tool_change_identity
+        pending = self._stream_tool_change_pending
+        return bool(
+            expected_identity is identity
+            and self._streaming
+            and self._paused
+            and self._stream_tool_change_active
+            and pending is not None
+            and identity is not None
+            and int(identity.connection_generation) == int(self._connection_generation)
+            and identity.serial_port is self.ser
+            and int(identity.stream_epoch) == int(self._stream_token)
+            and int(identity.recovery_epoch) == int(self._recovery_epoch)
+            and identity.source_identity is self._gcode_source_identity
+            and not identity.source_identity.cleared
+            and identity.directive_index == pending.idx
+            and not self._recovery_state.required
+            and not self._normal_session_state.required
+            and self._execution_pending is None
+            and not self._abort_writes.is_set()
+        )
+
+    def _tool_change_macro_admission_allowed_locked(
+        self,
+        source: str | None,
+        expected_identity: StreamToolChangeIdentity | None,
+    ) -> bool:
+        return bool(
+            source == "macro"
+            and self._stream_tool_change_identity_current_locked(expected_identity)
+            and not self._suspension_blocks_tx_locked()
+        )
+
+    def stream_tool_change_identity_current(
+        self,
+        expected_identity: StreamToolChangeIdentity | None,
+    ) -> bool:
+        with self._write_lock:
+            with self._connection_lock:
+                with self._stream_lock:
+                    return self._stream_tool_change_identity_current_locked(
+                        expected_identity
+                    )
+
+    def current_stream_tool_change_identity(self) -> StreamToolChangeIdentity | None:
+        with self._stream_lock:
+            identity = self._stream_tool_change_identity
+            if not self._stream_tool_change_identity_current_locked(identity):
+                return None
+            return identity
 
     def _start_stream_vacuum_confirmation_locked(
         self,
@@ -867,20 +1438,42 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         pending_item: StreamPendingItem | None = None
         pending_on = False
         still_streaming = False
-        with self._stream_lock:
-            pending_item = self._stream_vacuum_pending
-            pending_on = bool(self._stream_vacuum_pending_on)
-            self._stream_vacuum_pending = None
-            self._stream_vacuum_pending_on = False
-            still_streaming = bool(self._streaming)
-            self._paused = False
+        suspension_blocks = False
+        with self._write_lock:
+            with self._stream_lock:
+                pending_item = self._stream_vacuum_pending
+                if pending_item is None or self._recovery_state.required:
+                    return
+                pending_on = bool(self._stream_vacuum_pending_on)
+                self._stream_vacuum_pending = None
+                self._stream_vacuum_pending_on = False
+                still_streaming = bool(self._streaming)
+                suspension_blocks = self._suspension_blocks_tx_locked()
+                self._paused = bool(suspension_blocks)
+                generation = int(self._connection_generation)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
         if pending_item is None:
             return
         if not still_streaming:
             return
         if success:
-            self._ack_handled_stream_line(pending_item)
-            self.ui_q.put(StreamStateEvent("running", None))
+            self._ack_handled_stream_line(
+                pending_item,
+                generation=generation,
+                expected_stream_epoch=stream_epoch,
+            )
+            if suspension_blocks:
+                return
+            self.ui_q.put(
+                StreamStateEvent(
+                    "running",
+                    None,
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
             self._signal_tx_activity()
             return
         detail = str(reason or "").strip() or (
@@ -891,51 +1484,139 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         idx = pending_item.idx
         line_text = pending_item.line
         msg = self._format_stream_error(detail, idx, line_text)
-        with self._stream_lock:
-            self._streaming = False
-            self._paused = False
-            self._stream_pending_item = None
-            self._resume_preamble.clear()
+        with self._write_lock:
+            with self._stream_lock:
+                if (
+                    self._recovery_state.required
+                    or int(self._stream_token) != stream_epoch
+                    or int(self._recovery_epoch) != recovery_epoch
+                ):
+                    return
+                self._streaming = False
+                self._paused = False
+                self._stream_pending_item = None
+                self._resume_preamble.clear()
         self.ui_q.put(StreamErrorEvent(msg, idx, line_text, self._gcode_name))
         self.ui_q.put(("log", f"[stream error] {msg}"))
-        self.ui_q.put(StreamStateEvent("error", detail))
+        self.ui_q.put(
+            StreamStateEvent(
+                "error",
+                detail,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
 
-    def complete_stream_tool_change(self, success: bool, reason: str | None = None) -> None:
+    def complete_stream_tool_change(
+        self,
+        expected_identity: StreamToolChangeIdentity,
+        success: bool,
+        reason: str | None = None,
+    ) -> bool:
         pending_item: StreamPendingItem | None = None
         still_streaming = False
-        with self._stream_lock:
-            pending_item = self._stream_tool_change_pending
-            self._stream_tool_change_pending = None
-            self._stream_tool_change_name = ""
-            self._stream_tool_change_active = False
-            still_streaming = bool(self._streaming)
-            self._paused = False
+        suspension_blocks = False
+        with self._write_lock:
+            with self._stream_lock:
+                pending_item = self._stream_tool_change_pending
+                if (
+                    pending_item is None
+                    or self._recovery_state.required
+                    or self._stream_tool_change_identity is not expected_identity
+                    or not self._stream_tool_change_identity_current_locked(expected_identity)
+                ):
+                    try:
+                        self.ui_q.put(
+                            (
+                                "log",
+                                "[tool change] Stale or duplicate workflow completion rejected.",
+                            )
+                        )
+                    except Exception:
+                        pass
+                    return False
+                self._stream_tool_change_pending = None
+                self._stream_tool_change_name = ""
+                self._stream_tool_change_active = False
+                self._stream_tool_change_identity = None
+                still_streaming = bool(self._streaming)
+                suspension_blocks = self._suspension_blocks_tx_locked()
+                self._paused = bool(suspension_blocks)
+                generation = int(self._connection_generation)
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
         if pending_item is None:
-            return
+            return False
         if not still_streaming:
-            return
+            return False
         if success:
-            self._ack_handled_stream_line(pending_item)
-            self.ui_q.put(StreamStateEvent("running", None))
+            self._ack_handled_stream_line(
+                pending_item,
+                generation=generation,
+                expected_stream_epoch=stream_epoch,
+            )
+            if suspension_blocks:
+                return True
+            self.ui_q.put(
+                StreamStateEvent(
+                    "running",
+                    None,
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
             self._signal_tx_activity()
-            return
+            return True
         detail = str(reason or "").strip() or "Tool change workflow canceled."
         detail_lower = detail.lower()
         if "cancel" in detail_lower:
-            with self._stream_lock:
-                self._streaming = False
-                self._paused = False
+            with self._write_lock:
+                with self._stream_lock:
+                    if (
+                        self._recovery_state.required
+                        or int(self._stream_token) != stream_epoch
+                        or int(self._recovery_epoch) != recovery_epoch
+                    ):
+                        return False
+                    self._streaming = False
+                    self._paused = False
             self.ui_q.put(("log", f"[stream] Tool change canceled: {detail}"))
-            self.ui_q.put(StreamStateEvent("stopped", None))
-            return
+            self.ui_q.put(
+                StreamStateEvent(
+                    "stopped",
+                    None,
+                    generation=generation,
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
+            )
+            return True
         idx = pending_item.idx
         line_text = pending_item.line
         msg = self._format_stream_error(f"Tool change failed: {detail}", idx, line_text)
-        with self._stream_lock:
-            self._streaming = False
+        with self._write_lock:
+            with self._stream_lock:
+                if (
+                    self._recovery_state.required
+                    or int(self._stream_token) != stream_epoch
+                    or int(self._recovery_epoch) != recovery_epoch
+                ):
+                    return False
+                self._streaming = False
         self.ui_q.put(StreamErrorEvent(msg, idx, line_text, self._gcode_name))
         self.ui_q.put(("log", f"[stream error] {msg}"))
-        self.ui_q.put(StreamStateEvent("error", detail))
+        self.ui_q.put(
+            StreamStateEvent(
+                "error",
+                detail,
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
+        return True
 
     def _handle_stream_source_read_failure(self, failure: _StreamSourceReadError) -> None:
         source_name = ""
@@ -1095,6 +1776,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             line=item.line,
             queued_ts=time.time(),
             file_end_offset=item.file_end_offset,
+            connection_generation=int(self._connection_generation),
+            stream_epoch=int(self._stream_token),
+            recovery_epoch=int(self._recovery_epoch),
         )
         self._stream_buf_used += line_len
         self._stream_line_queue.append(queue_item)
@@ -1120,16 +1804,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             or self._paused
         )
 
-    def _process_stream_queue(self) -> None:
+    def _process_stream_queue(self, session_generation: int | None = None) -> None:
         """Process streaming queue - fill GRBL buffer."""
+        if session_generation is None:
+            session_generation = self.connection_generation()
         while True:
+            if not self._session_is_current(int(session_generation)):
+                break
             if self._stream_loop_blocked():
                 break
             read_failure: _StreamSourceReadError | None = None
             prefetched_snapshot: tuple[int, object, int, str] | None = None
             prefetched_item: StreamPendingItem | None = None
 
-            with self._stream_lock:
+            with self._write_lock, self._stream_lock:
+                if int(session_generation) != int(self._connection_generation):
+                    break
                 if self._stream_loop_blocked():
                     break
                 stream_token = self._stream_token
@@ -1160,7 +1850,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             directive_deferred = False
             tool_change_started = False
             prefetch_invalidated = False
-            with self._stream_lock:
+            with self._write_lock, self._stream_lock:
+                if int(session_generation) != int(self._connection_generation):
+                    break
                 if self._stream_loop_blocked():
                     break
                 stream_token = self._stream_token
@@ -1186,27 +1878,74 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                             self._stream_pending_item = item
                             directive_deferred = True
                         elif kind == "tool_change":
-                            idx, tool_name = self._start_stream_tool_change_locked(
+                            idx, tool_name, tool_change_identity = self._start_stream_tool_change_locked(
                                 item,
                                 tool_name=str(directive_payload or ""),
                             )
-                            self.ui_q.put(StreamStateEvent("paused", None))
-                            self.ui_q.put(StreamPauseReasonEvent("tool change"))
-                            self.ui_q.put(("stream_tool_change", idx, tool_name))
+                            self.ui_q.put(
+                                StreamStateEvent(
+                                    "paused",
+                                    "tool change",
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
+                                )
+                            )
+                            self.ui_q.put(
+                                StreamPauseReasonEvent(
+                                    "tool change",
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
+                                )
+                            )
+                            self.ui_q.put(
+                                ConnectionScopedEvent(
+                                    (
+                                        "stream_tool_change",
+                                        idx,
+                                        tool_name,
+                                        tool_change_identity,
+                                    ),
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
+                                )
+                            )
                             tool_change_started = True
                         elif self._stream_vacuum_confirmation_required:
                             idx = self._start_stream_vacuum_confirmation_locked(
                                 item,
                                 is_on=(kind == "vacuum_on"),
                             )
-                            self.ui_q.put(StreamStateEvent("paused", None))
-                            self.ui_q.put(StreamPauseReasonEvent("accessory confirmation"))
                             self.ui_q.put(
-                                (
-                                    "stream_vacuum_directive",
-                                    kind == "vacuum_on",
-                                    idx,
-                                    True,
+                                StreamStateEvent(
+                                    "paused",
+                                    "accessory confirmation",
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
+                                )
+                            )
+                            self.ui_q.put(
+                                StreamPauseReasonEvent(
+                                    "accessory confirmation",
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
+                                )
+                            )
+                            self.ui_q.put(
+                                ConnectionScopedEvent(
+                                    (
+                                        "stream_vacuum_directive",
+                                        kind == "vacuum_on",
+                                        idx,
+                                        True,
+                                    ),
+                                    generation=int(session_generation),
+                                    stream_epoch=int(stream_token),
+                                    recovery_epoch=int(self._recovery_epoch),
                                 )
                             )
                             tool_change_started = True
@@ -1225,36 +1964,73 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             if handled_item is not None:
                 # Handle vacuum directives in sender space and never transmit to GRBL.
                 handled_idx = handled_item.idx
-                self._ack_handled_stream_line(handled_item)
-                self.ui_q.put(("stream_vacuum_directive", handled_vacuum_on, handled_idx))
+                self._ack_handled_stream_line(
+                    handled_item,
+                    generation=int(session_generation),
+                    expected_stream_epoch=int(stream_token),
+                )
+                self.ui_q.put(
+                    ConnectionScopedEvent(
+                        ("stream_vacuum_directive", handled_vacuum_on, handled_idx),
+                        generation=int(session_generation),
+                        stream_epoch=int(stream_token),
+                        recovery_epoch=int(self._recovery_epoch),
+                    )
+                )
                 continue
             if directive_deferred or tool_change_started:
                 break
 
             if self._stream_send_invalidated(stream_token):
                 with self._stream_lock:
-                    self._rollback_reserved_stream_locked(
-                        is_gcode=queue_item.is_gcode,
-                        line_len=line_len,
-                    )
-                    self._stream_pending_item = None
+                    if (
+                        int(queue_item.connection_generation)
+                        == int(self._connection_generation)
+                        and int(queue_item.stream_epoch) == int(self._stream_token)
+                        and int(queue_item.recovery_epoch) == int(self._recovery_epoch)
+                    ):
+                        self._rollback_reserved_stream_locked(
+                            is_gcode=queue_item.is_gcode,
+                            line_len=line_len,
+                        )
+                        self._stream_pending_item = None
                 self._emit_buffer_fill()
                 break
 
-            if not self._write_line(queue_item.line, line_payload):
+            if not self._write_line(
+                queue_item.line,
+                line_payload,
+                expected_generation=int(session_generation),
+                expected_stream_epoch=int(queue_item.stream_epoch),
+                expected_recovery_epoch=int(queue_item.recovery_epoch),
+            ):
                 with self._stream_lock:
-                    self._rollback_reserved_stream_locked(
-                        is_gcode=queue_item.is_gcode,
-                        line_len=line_len,
+                    suspension_now_blocks = self._suspension_blocks_tx_locked()
+                    queue_identity_current = bool(
+                        int(queue_item.connection_generation)
+                        == int(self._connection_generation)
+                        and int(queue_item.stream_epoch) == int(self._stream_token)
+                        and int(queue_item.recovery_epoch) == int(self._recovery_epoch)
                     )
-                    self._stream_pending_item = item
+                    if queue_identity_current:
+                        self._rollback_reserved_stream_locked(
+                            is_gcode=queue_item.is_gcode,
+                            line_len=line_len,
+                        )
+                        self._stream_pending_item = item
                 self._emit_buffer_fill()
                 if not self.is_connected():
+                    break
+                if suspension_now_blocks:
                     break
                 if not (self._abort_writes.is_set() or stream_token != self._stream_token):
                     self._streaming = False
                     self._paused = False
-                    self.ui_q.put(StreamStateEvent("error", "Write failed"))
+                    self.ui_q.put(
+                        StreamStateEvent(
+                            "error", "Write failed", generation=int(session_generation)
+                        )
+                    )
                 break
 
             if not queue_item.is_gcode and self._resume_preamble:
@@ -1263,52 +2039,85 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._record_tx_bytes(line_len)
             self._emit_buffer_fill()
             if spindle_state is not None:
-                self.ui_q.put(("spindle_state", bool(spindle_state), queue_item.idx))
-            if queue_item.is_gcode and queue_item.idx is not None:
-                self.ui_q.put(GcodeSentEvent(int(queue_item.idx), queue_item.line))
-
-        with self._stream_lock:
-            send_index = self._send_index
-            ack_index = self._ack_index
-            pending = bool(
-                self._stream_line_queue or
-                self._stream_pending_item or
-                self._resume_preamble or
-                self._stream_tool_change_pending is not None
-            )
-            completion_verified, total_lines, line_count_known = (
-                self._stream_completion_verified(
-                    source=self._gcode,
-                    send_index=send_index,
-                    ack_index=ack_index,
-                )
-            )
-
-        if (self._streaming and
-            not pending and
-            completion_verified):
-            stream_file_size = max(
-                0, int(getattr(self, "_stream_file_size_bytes", 0) or 0)
-            )
-            if stream_file_size > 0:
-                with self._stream_lock:
-                    self._ack_byte_offset = int(stream_file_size)
                 self.ui_q.put(
-                    ProgressBytesEvent(int(stream_file_size), int(stream_file_size))
+                    ConnectionScopedEvent(
+                        ("spindle_state", bool(spindle_state), queue_item.idx),
+                        generation=int(session_generation),
+                        stream_epoch=int(queue_item.stream_epoch),
+                        recovery_epoch=int(queue_item.recovery_epoch),
+                    )
                 )
-            self._streaming = False
+            if queue_item.is_gcode and queue_item.idx is not None:
+                self.ui_q.put(
+                    GcodeSentEvent(
+                        int(queue_item.idx),
+                        queue_item.line,
+                        generation=int(session_generation),
+                        stream_epoch=int(queue_item.stream_epoch),
+                        recovery_epoch=int(queue_item.recovery_epoch),
+                    )
+                )
+
+        completion_committed = False
+        with self._write_lock:
+            if not self._session_is_current(int(session_generation)):
+                return
+            with self._stream_lock:
+                send_index = self._send_index
+                ack_index = self._ack_index
+                pending = bool(
+                    self._stream_line_queue
+                    or self._stream_pending_item
+                    or self._resume_preamble
+                    or self._stream_tool_change_pending is not None
+                )
+                completion_verified, total_lines, line_count_known = (
+                    self._stream_completion_verified(
+                        source=self._gcode,
+                        send_index=send_index,
+                        ack_index=ack_index,
+                    )
+                )
+                stream_epoch = int(self._stream_token)
+                recovery_epoch = int(self._recovery_epoch)
+                if (
+                    self._streaming
+                    and not self._recovery_state.required
+                    and not pending
+                    and completion_verified
+                ):
+                    stream_file_size = max(
+                        0, int(getattr(self, "_stream_file_size_bytes", 0) or 0)
+                    )
+                    if stream_file_size > 0:
+                        self._ack_byte_offset = int(stream_file_size)
+                    self._streaming = False
+                    self._execution_pending = ExecutionPendingState(
+                        connection_generation=int(session_generation),
+                        stream_epoch=stream_epoch,
+                        recovery_epoch=recovery_epoch,
+                        verified_eof=bool(completion_verified),
+                        total_lines=int(total_lines),
+                        total_lines_known=bool(line_count_known),
+                        last_acked_index=int(ack_index),
+                        send_index=int(send_index),
+                        file_size_bytes=int(stream_file_size),
+                    )
+                    completion_committed = True
+
+        if completion_committed:
             self.ui_q.put(
-                StreamCompletionEofEvent(
-                    bool(completion_verified),
-                    int(total_lines),
-                    bool(line_count_known),
-                    int(ack_index),
-                    int(send_index),
+                StreamStateEvent(
+                    "execution_pending_idle",
+                    None,
+                    generation=int(session_generation),
+                    stream_epoch=stream_epoch,
+                    recovery_epoch=recovery_epoch,
                 )
             )
-            self.ui_q.put(StreamStateEvent("done", None))
             logger.info(
-                "Streaming complete (verified_eof=%s, total_lines=%d, "
+                "Streaming fully acknowledged; awaiting controller Idle "
+                "(verified_eof=%s, total_lines=%d, "
                 "last_acked_index=%d, send_index=%d, total_known=%s)",
                 bool(completion_verified),
                 int(total_lines),
@@ -1323,6 +2132,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             pending: list[str] = []
             pending_sources: list[str | None] = []
             pending_trackers = []
+            pending_identities: list[WorkIdentity] = []
             try:
                 with self._stream_lock:
                     while True:
@@ -1333,12 +2143,24 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         pending_trackers.append(
                             self._manual_tracker_queue.popleft() if self._manual_tracker_queue else None
                         )
+                        pending_identities.append(
+                            self._manual_identity_queue.popleft()
+                            if self._manual_identity_queue
+                            else self._current_work_identity_locked()
+                        )
             except queue.Empty:
                 pass
-            kept: list[tuple[str, str | None, ManualCommandResultTracker | None]] = []
+            kept: list[
+                tuple[str, str | None, ManualCommandResultTracker | None, WorkIdentity]
+            ] = []
             for idx, cmd in enumerate(pending):
                 source = pending_sources[idx] if idx < len(pending_sources) else None
                 tracker = pending_trackers[idx] if idx < len(pending_trackers) else None
+                identity = (
+                    pending_identities[idx]
+                    if idx < len(pending_identities)
+                    else WorkIdentity(0, 0, 0)
+                )
                 if isinstance(cmd, str) and cmd.lstrip().upper().startswith("$J="):
                     self._resolve_manual_tracker(
                         tracker,
@@ -1346,10 +2168,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                         error="Manual jog command was purged before completion.",
                     )
                     continue
-                kept.append((cmd, source, tracker))
+                kept.append((cmd, source, tracker, identity))
             with self._stream_lock:
-                for cmd, source, tracker in kept:
-                    self._enqueue_manual_command(cmd, source, tracker=tracker)
+                for cmd, source, tracker, identity in kept:
+                    if self._work_identity_current_locked(identity):
+                        self._enqueue_manual_command(
+                            cmd,
+                            source,
+                            tracker=tracker,
+                            identity=identity,
+                        )
+                    else:
+                        self._resolve_manual_tracker(
+                            tracker,
+                            success=False,
+                            error="Manual command belonged to a retired execution epoch.",
+                        )
             if self._manual_pending_item is not None:
                 line = self._manual_pending_item.line
                 if isinstance(line, str) and line.lstrip().upper().startswith("$J="):
@@ -1362,19 +2196,37 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self._signal_tx_activity()
 
     def _manual_loop_blocked(self) -> bool:
-        if self._streaming or self._paused:
-            allow_tool_change_macro = bool(
-                self._streaming
-                and self._paused
-                and bool(getattr(self, "_stream_tool_change_active", False))
-            )
-            if not allow_tool_change_macro:
+        with self._write_lock, self._stream_lock:
+            if self._recovery_state.required:
                 return True
-        if not self.is_connected():
-            return True
-        if self._abort_writes.is_set() and not self._alarm_active:
-            return True
-        return False
+            tracker = (
+                self._manual_pending_item.tracker
+                if self._manual_pending_item is not None
+                else (self._manual_tracker_queue[0] if self._manual_tracker_queue else None)
+            )
+            source = (
+                self._manual_pending_item.source
+                if self._manual_pending_item is not None
+                else (self._manual_source_queue[0] if self._manual_source_queue else None)
+            )
+            if (
+                self._streaming or self._paused
+            ) and not self._tool_change_macro_admission_allowed_locked(
+                source,
+                getattr(tracker, "tool_change_identity", None),
+            ):
+                return True
+            expected_lease = getattr(tracker, "auto_level_lease", None)
+            if self._auto_level_lease_blocks_ordinary_locked() and (
+                expected_lease is None
+                or not self._auto_level_lease_identity_current_locked(expected_lease)
+            ):
+                return True
+            if not self.is_connected():
+                return True
+            if self._abort_writes.is_set() and not self._alarm_active:
+                return True
+            return False
 
     def _line_allowed_during_alarm(self, line: str) -> bool:
         if not self._alarm_active:
@@ -1410,6 +2262,10 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         else:
             self._stream_buf_used = max(0, self._stream_buf_used - line_len)
 
+    def _after_manual_reservation_before_write(self) -> None:
+        """Deterministic test seam at the reservation/physical-write boundary."""
+        return
+
     def _reserve_manual_slot_locked(
         self,
         line: str,
@@ -1417,7 +2273,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         line_len: int,
         source: str | None,
         tracker=None,
+        identity: WorkIdentity | None = None,
+        tool_change_identity: StreamToolChangeIdentity | None = None,
+        auto_level_lease=None,
     ) -> tuple[bool, bool, int]:
+        identity = identity or self._current_work_identity_locked()
         usable = max(1, int(self._rx_window) - RX_BUFFER_SAFETY)
         if line_len > usable and self._stream_buf_used <= 0:
             self._manual_pending_item = None
@@ -1431,6 +2291,11 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line_len=line_len,
                 source=source,
                 tracker=tracker,
+                connection_generation=int(identity.connection_generation),
+                stream_epoch=int(identity.stream_epoch),
+                recovery_epoch=int(identity.recovery_epoch),
+                tool_change_identity=tool_change_identity,
+                auto_level_lease=auto_level_lease,
             )
             return False, True, usable
 
@@ -1445,13 +2310,23 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 manual_source=source,
                 queued_ts=time.time(),
                 manual_tracker=tracker,
+                connection_generation=int(identity.connection_generation),
+                stream_epoch=int(identity.stream_epoch),
+                recovery_epoch=int(identity.recovery_epoch),
+                tool_change_identity=tool_change_identity,
+                auto_level_lease=auto_level_lease,
             )
         )
         return False, False, usable
 
-    def _process_manual_queue(self) -> None:
+    def _process_manual_queue(self, session_generation: int | None = None) -> None:
         """Process immediate command queue with buffer pacing."""
-        self._purge_pending_jogs()
+        if session_generation is None:
+            session_generation = self.connection_generation()
+        if not self._session_is_current(int(session_generation)):
+            return
+        with self._write_lock:
+            self._purge_pending_jogs()
         while True:
             if self._manual_loop_blocked():
                 return
@@ -1459,6 +2334,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             line_len: int
             source: str | None
             tracker = None
+            identity: WorkIdentity
+            tool_change_identity: StreamToolChangeIdentity | None = None
+            auto_level_lease = None
             if self._manual_pending_item is not None:
                 pending_item = self._manual_pending_item
                 line = pending_item.line
@@ -1466,14 +2344,40 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 line_len = pending_item.line_len
                 source = pending_item.source
                 tracker = getattr(pending_item, "tracker", None)
+                tool_change_identity = pending_item.tool_change_identity
+                auto_level_lease = pending_item.auto_level_lease
+                identity = WorkIdentity(
+                    connection_generation=int(pending_item.connection_generation),
+                    stream_epoch=int(pending_item.stream_epoch),
+                    recovery_epoch=int(pending_item.recovery_epoch),
+                )
+                if identity == WorkIdentity(0, 0, 0):
+                    with self._stream_lock:
+                        identity = self._current_work_identity_locked()
             else:
-                with self._stream_lock:
+                with self._write_lock, self._stream_lock:
+                    if int(session_generation) != int(self._connection_generation):
+                        return
                     try:
                         line = self._outgoing_q.get_nowait()
                     except queue.Empty:
                         return
                     source = self._manual_source_queue.popleft() if self._manual_source_queue else None
                     tracker = self._manual_tracker_queue.popleft() if self._manual_tracker_queue else None
+                    tool_change_identity = getattr(tracker, "tool_change_identity", None)
+                    auto_level_lease = getattr(tracker, "auto_level_lease", None)
+                    identity = (
+                        self._manual_identity_queue.popleft()
+                        if self._manual_identity_queue
+                        else self._current_work_identity_locked()
+                    )
+                    if not self._work_identity_current_locked(identity):
+                        self._resolve_manual_tracker(
+                            tracker,
+                            success=False,
+                            error="Manual command belonged to a retired execution epoch.",
+                        )
+                        continue
                 if not self._line_allowed_during_alarm(line):
                     self._resolve_manual_tracker(
                         tracker,
@@ -1522,13 +2426,59 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 continue
 
             assert payload is not None
-            with self._stream_lock:
+            with self._write_lock, self._stream_lock:
+                if int(session_generation) != int(self._connection_generation):
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command connection session was retired.",
+                    )
+                    return
+                if not self._work_identity_current_locked(identity):
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command was retired before buffer reservation.",
+                    )
+                    break
+                if (
+                    self._streaming or self._paused
+                ) and not self._tool_change_macro_admission_allowed_locked(
+                    source,
+                    tool_change_identity,
+                ):
+                    self._manual_pending_item = ManualPendingItem(
+                        line=line,
+                        payload=payload,
+                        line_len=line_len,
+                        source=source,
+                        tracker=tracker,
+                        connection_generation=int(identity.connection_generation),
+                        stream_epoch=int(identity.stream_epoch),
+                        recovery_epoch=int(identity.recovery_epoch),
+                        tool_change_identity=tool_change_identity,
+                        auto_level_lease=auto_level_lease,
+                    )
+                    break
+                if self._auto_level_lease_blocks_ordinary_locked() and (
+                    auto_level_lease is None
+                    or not self._auto_level_lease_identity_current_locked(auto_level_lease)
+                ):
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Command did not own the active Auto-Level workflow lease.",
+                    )
+                    break
                 drop_for_buffer, deferred, usable = self._reserve_manual_slot_locked(
                     line=line,
                     payload=payload,
                     line_len=line_len,
                     source=source,
                     tracker=tracker,
+                    identity=identity,
+                    tool_change_identity=tool_change_identity,
+                    auto_level_lease=auto_level_lease,
                 )
 
             if deferred:
@@ -1545,10 +2495,13 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 )
                 continue
 
+            self._after_manual_reservation_before_write()
+
             if self._abort_writes.is_set() and not allowed_alarm_cmd:
                 with self._stream_lock:
-                    self._rollback_reserved_manual_locked(line_len)
-                    self._manual_pending_item = None
+                    if self._work_identity_current_locked(identity):
+                        self._rollback_reserved_manual_locked(line_len)
+                        self._manual_pending_item = None
                 self._resolve_manual_tracker(
                     tracker,
                     success=False,
@@ -1558,23 +2511,85 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 break
 
             is_settings_dump = line.strip().upper() == "$$"
-            if is_settings_dump:
-                self._settings_dump_active = True
-                self._settings_dump_seen = False
-            if not self._write_line(line, payload, allow_abort=allowed_alarm_cmd):
+            blocked_before_write = False
+            with self._write_lock:
+                with self._stream_lock:
+                    blocked_before_write = bool(
+                        not self._work_identity_current_locked(identity)
+                        or self._suspension_blocks_tx_locked()
+                        or (
+                            (self._streaming or self._paused)
+                            and not self._tool_change_macro_admission_allowed_locked(
+                                source,
+                                tool_change_identity,
+                            )
+                        )
+                        or (
+                            self._auto_level_lease_blocks_ordinary_locked()
+                            and (
+                                auto_level_lease is None
+                                or not self._auto_level_lease_identity_current_locked(
+                                    auto_level_lease
+                                )
+                            )
+                        )
+                    )
+                    if blocked_before_write and self._work_identity_current_locked(identity):
+                        self._rollback_reserved_manual_locked(line_len)
+                        self._manual_pending_item = None
+                if blocked_before_write:
+                    write_succeeded = False
+                else:
+                    if is_settings_dump:
+                        self._settings_dump_active = True
+                        self._settings_dump_seen = False
+                    write_succeeded = self._write_line(
+                        line,
+                        payload,
+                        allow_abort=allowed_alarm_cmd,
+                        expected_generation=int(session_generation),
+                        expected_stream_epoch=int(identity.stream_epoch),
+                        expected_recovery_epoch=int(identity.recovery_epoch),
+                        expected_tool_change_identity=tool_change_identity,
+                        expected_auto_level_lease=auto_level_lease,
+                        command_origin="GrblWorkerStreamingMixin._process_manual_queue",
+                        caller_purpose=str(source or "manual"),
+                        admission_class="manual_tracked",
+                        tracked_command_identity=(
+                            ""
+                            if tracker is None
+                            else str(getattr(tracker, "command_id", ""))
+                        ),
+                    )
+            if blocked_before_write:
+                self._resolve_manual_tracker(
+                    tracker,
+                    success=False,
+                    error="Manual command was retired after RX reservation and before transmission.",
+                )
+                self._emit_buffer_fill()
+                break
+            if not write_succeeded:
                 if is_settings_dump:
                     self._settings_dump_active = False
                     self._settings_dump_seen = False
                     self.clear_watchdog_ignore("settings_dump")
                 with self._stream_lock:
-                    self._rollback_reserved_manual_locked(line_len)
-                    if self.is_connected():
+                    identity_current = self._work_identity_current_locked(identity)
+                    if identity_current:
+                        self._rollback_reserved_manual_locked(line_len)
+                    if identity_current and self.is_connected():
                         self._manual_pending_item = ManualPendingItem(
                             line=line,
                             payload=payload,
                             line_len=line_len,
                             source=source,
                             tracker=tracker,
+                            connection_generation=int(identity.connection_generation),
+                            stream_epoch=int(identity.stream_epoch),
+                            recovery_epoch=int(identity.recovery_epoch),
+                            tool_change_identity=tool_change_identity,
+                            auto_level_lease=auto_level_lease,
                         )
                     else:
                         self._resolve_manual_tracker(

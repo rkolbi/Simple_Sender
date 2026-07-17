@@ -282,27 +282,24 @@ def _quick_toggle_request(app, *, channel: str) -> None:
         log_kasa_message(app, f"Quick toggle ignored: outlet {outlet_id} is unavailable.")
         _refresh_kasa_quick_ui(app)
         return
-    try:
-        accepted = bool(
-            app.accessory_router.request_outlet_state(
-                int(outlet_id),
-                bool(target_state),
-                source=source,
-            )
+    accepted = bool(
+        _kasa_runtime._request_outlet_state(
+            app,
+            outlet_id=int(outlet_id),
+            is_on=bool(target_state),
+            source=source,
+            failure_context="Failed issuing Kasa quick-toggle command",
+            skipped_message=f"Quick toggle command skipped for outlet {outlet_id}.",
+            log_message=log_kasa_message,
         )
-    except Exception as exc:
-        _log_suppressed("Failed issuing Kasa quick-toggle command", exc)
-        return
+    )
     if not accepted:
         log_kasa_message(app, f"Quick toggle command skipped for outlet {outlet_id}.")
         _refresh_kasa_quick_ui(app)
         return
-    if channel == "vacuum":
-        if bool(target_state):
-            _cancel_pending_vacuum_off_delay(app)
-        _set_kasa_quick_state(app, vacuum=bool(target_state))
-    else:
-        _set_kasa_quick_state(app, light=bool(target_state))
+    if channel == "vacuum" and bool(target_state):
+        _cancel_pending_vacuum_off_delay(app)
+    # UI state changes only after a current hardware result is confirmed.
 
 
 def toggle_kasa_vacuum_quick(app) -> None:
@@ -443,10 +440,46 @@ def _set_kasa_failure_status(app, result: OutletCommandResult) -> None:
 
 def on_kasa_command_result(app, result: OutletCommandResult) -> None:
     def _apply() -> None:
+        if bool(getattr(result, "superseded", False)):
+            return
+        grbl = getattr(app, "grbl", None)
+        for value, getter_name in (
+            (getattr(result, "connection_generation", None), "connection_generation"),
+            (getattr(result, "stream_epoch", None), "stream_epoch"),
+            (getattr(result, "recovery_epoch", None), "recovery_epoch"),
+        ):
+            getter = getattr(grbl, getter_name, None)
+            if value is not None and callable(getter) and int(value) != int(getter()):
+                return
+        result_source_id = getattr(result, "source_id", None)
+        source_getter = getattr(grbl, "current_gcode_source_identity", None)
+        if result_source_id is not None and callable(source_getter):
+            if int(result_source_id) != int(source_getter().source_id):
+                return
+        command_id = getattr(result, "accessory_command_id", None)
+        if command_id is not None:
+            latest = getattr(app, "_kasa_latest_result_command_by_outlet", None)
+            if not isinstance(latest, dict):
+                latest = {}
+                app._kasa_latest_result_command_by_outlet = latest
+            outlet = int(result.outlet_id)
+            if int(command_id) < int(latest.get(outlet, 0) or 0):
+                return
+            latest[outlet] = int(command_id)
         _set_outlet_status(app, result)
         _sync_kasa_job_state_from_result(app, result)
         _sync_kasa_quick_state_from_result(app, result)
         _complete_confirmed_stream_vacuum_directive(app, result)
+        if bool(getattr(result, "safety_priority", False)):
+            statuses = getattr(app, "_kasa_recovery_off_status", None)
+            if not isinstance(statuses, dict):
+                statuses = {}
+                app._kasa_recovery_off_status = statuses
+            statuses[int(result.outlet_id)] = (
+                "confirmed"
+                if bool(result.success) and not bool(result.on)
+                else "failed_unknown"
+            )
         if not result.success:
             detail = (
                 " dust collection state not confirmed; CNC job may continue."

@@ -75,6 +75,7 @@ from simple_sender.ui.kasa_actions import (
     test_kasa_outlet,
 )
 from simple_sender.ui.tool_change_actions import handle_stream_tool_change
+from simple_sender.types import StreamToolChangeIdentity
 
 class ActionsMixin:
     def refresh_ports(self, auto_connect: bool = False) -> None:
@@ -214,10 +215,16 @@ class ActionsMixin:
     def _handle_stream_tool_change(
         self,
         tool_name: str,
+        identity: StreamToolChangeIdentity,
         *,
         line_index: int | None = None,
     ) -> None:
-        handle_stream_tool_change(self, tool_name, line_index=line_index)
+        handle_stream_tool_change(
+            self,
+            tool_name,
+            identity,
+            line_index=line_index,
+        )
 
     def _start_job_accessories(self, source: str = "job_run") -> None:
         start_job_accessories(self, source=source)

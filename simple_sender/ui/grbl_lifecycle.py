@@ -26,7 +26,6 @@ import threading
 import time
 import logging
 from simple_sender.utils.log_suppressed import log_suppressed_exception
-from tkinter import messagebox
 
 from simple_sender.constants.messages import MachineStateMessages, StatusMessages
 from simple_sender.ui.connection_runtime_state import (
@@ -37,8 +36,15 @@ from simple_sender.ui.connection_runtime_state import (
 from simple_sender.ui.controls.toolbar import set_toolbar_button_label
 from simple_sender.ui.icons import ICON_CONNECT
 from simple_sender.ui.job_setup_state import invalidate_job_setup_state
+from simple_sender.ui.autolevel_state import clear_active_auto_level_map
 from simple_sender.ui.job_controls import disable_job_controls
 from simple_sender.ui.modal_sync import clear_modal_sync_state, request_modal_state_sync
+from simple_sender.ui.gcode.source_transaction import (
+    abort_source_transaction,
+    commit_source_transaction,
+    reserve_source_transaction,
+    require_current_source_transaction,
+)
 from simple_sender.utils.constants import (
     STATUS_POLL_DEFAULT,
     STATUS_POLL_IDLE,
@@ -115,6 +121,14 @@ def _report_modal_sync_failure(app, message: str) -> None:
 def _clear_status_frame_cache(app) -> None:
     """Invalidate cached status-frame continuity across connection resets."""
     try:
+        from simple_sender.ui.events.status import (
+            _clear_coalesced_status_positions_state,
+        )
+
+        _clear_coalesced_status_positions_state(app)
+    except Exception as exc:
+        _log_suppressed("Failed clearing coalesced status coordinates", exc)
+    try:
         app._last_status_raw = ""
     except Exception as exc:
         _log_suppressed("Failed clearing cached last status frame", exc)
@@ -144,8 +158,8 @@ def _clear_loaded_job_after_restore_failure(app) -> None:
     clear_fn = getattr(app, "_clear_gcode", None)
     if callable(clear_fn):
         try:
-            clear_fn()
-            return
+            if clear_fn() is not False:
+                return
         except Exception as exc:
             _log_suppressed("Failed clearing job after reconnect restore failure", exc)
     try:
@@ -202,25 +216,49 @@ def _handle_reconnect_gcode_restore_failure(app, exc: BaseException) -> None:
 
 
 def _restore_loaded_gcode_after_connect(app) -> None:
-    if getattr(app, "_gcode_source", None) is not None:
+    payload = getattr(app, "_gcode_source", None)
+    if payload is None and app._last_gcode_lines:
+        payload = app._last_gcode_lines
+    if payload is not None:
         name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
-        app.grbl.load_gcode(app._gcode_source, name=name or None)
-        if (
-            not _pi_profile_enabled(app)
-            and not getattr(app, "_gcode_streaming_mode", False)
-            and app._last_gcode_lines
-        ):
-            prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
-            if callable(prime_cache):
-                try:
-                    prime_cache(app._last_gcode_lines)
-                except Exception as exc:
-                    _log_suppressed("Failed priming in-memory send cache after reconnect", exc)
-        _set_gcode_restore_state(app, failed=False)
-        return
-    if app._last_gcode_lines:
-        name = os.path.basename(getattr(app, "_last_gcode_path", "") or "")
-        app.grbl.load_gcode(app._last_gcode_lines, name=name or None)
+        ui_generation = 0
+        identity = None
+        try:
+            ui_generation, admission = reserve_source_transaction(
+                app,
+                payload,
+                name=name or None,
+            )
+            if not bool(getattr(admission, "accepted", False)):
+                raise RuntimeError(str(getattr(admission, "reason", "restore rejected")))
+            identity = admission.identity
+            require_current_source_transaction(app, identity, ui_generation)
+            if (
+                getattr(app, "_gcode_source", None) is not None
+                and not _pi_profile_enabled(app)
+                and not getattr(app, "_gcode_streaming_mode", False)
+                and app._last_gcode_lines
+            ):
+                prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
+                if callable(prime_cache) and not bool(
+                    prime_cache(
+                        app._last_gcode_lines,
+                        source_identity=identity,
+                    )
+                ):
+                    raise RuntimeError("Reconnect cache priming identity was rejected")
+            require_current_source_transaction(app, identity, ui_generation)
+            if not commit_source_transaction(app, identity, ui_generation):
+                raise RuntimeError("Reconnect source commit was rejected")
+        except Exception as exc:
+            if identity is not None:
+                abort_source_transaction(
+                    app,
+                    identity,
+                    ui_generation,
+                    reason=f"reconnect source restore failed: {exc}",
+                )
+            raise
         _set_gcode_restore_state(app, failed=False)
         return
     _set_gcode_restore_state(app, failed=False)
@@ -633,6 +671,18 @@ def _worker_reports_connected(app) -> bool:
         return False
 
 
+def _worker_recovery_required(app) -> bool:
+    worker = getattr(app, "grbl", None)
+    checker = getattr(worker, "recovery_required", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception as exc:
+        _log_suppressed("Failed checking GRBL recovery state", exc)
+        return True
+
+
 def handle_connection_event(app, is_on: bool, port):
     runtime = get_connection_runtime_state(app)
     runtime.connected = bool(is_on)
@@ -645,6 +695,11 @@ def handle_connection_event(app, is_on: bool, port):
     invalidate_job_setup_state(app)
     alarm_latched = bool(getattr(app, "_alarm_latched", False))
     alarm_message = str(getattr(app, "_alarm_message", "") or "")
+    recovery_required = _worker_recovery_required(app)
+    clear_active_auto_level_map(
+        app,
+        "Auto-Level map invalidated by controller session change.",
+    )
     if runtime.connected:
         app._auto_reconnect_last_port = port or app._auto_reconnect_last_port
         app._auto_reconnect_pending = False
@@ -653,7 +708,7 @@ def handle_connection_event(app, is_on: bool, port):
         app._auto_reconnect_delay = 3.0
         app._auto_reconnect_next_ts = 0.0
         app._auto_reconnect_startup_gate_ts = 0.0
-        app._auto_reconnect_blocked = False
+        app._auto_reconnect_blocked = recovery_required
         app._auto_reconnect_port_scan_inflight = False
         app._report_units = None
         app._zero_all_pending_active = False
@@ -711,11 +766,22 @@ def handle_connection_event(app, is_on: bool, port):
         disable_job_controls(app)
         app.btn_alarm_recover.config(state="disabled")
         app._set_manual_controls_enabled(False)
+        if recovery_required:
+            try:
+                app._update_recover_button_visibility()
+                app.btn_alarm_recover.config(state="normal")
+            except Exception as exc:
+                _log_suppressed("Failed exposing recovery action after connect", exc)
+            app._resume_after_disconnect = False
+            app._resume_from_index = None
+            app._resume_job_name = None
+            app.status.config(text=StatusMessages.RECOVERY_REQUIRED)
         app.throughput_var.set("TX: 0 B/s")
-        try:
-            _restore_loaded_gcode_after_connect(app)
-        except Exception as exc:
-            _handle_reconnect_gcode_restore_failure(app, exc)
+        if not recovery_required:
+            try:
+                _restore_loaded_gcode_after_connect(app)
+            except Exception as exc:
+                _handle_reconnect_gcode_restore_failure(app, exc)
         _record_connection_timeline(
             app,
             "connected",
@@ -785,17 +851,34 @@ def handle_connection_event(app, is_on: bool, port):
             app._update_unit_toggle_display()
         except Exception as exc:
             _log_suppressed("Failed refreshing unit toggle display after disconnect", exc)
-        app.machine_state.set(MachineStateMessages.DISCONNECTED)
-        app._machine_state_text = MachineStateMessages.DISCONNECTED
+        disconnected_machine_state = (
+            MachineStateMessages.RECOVERY_REQUIRED
+            if recovery_required
+            else MachineStateMessages.DISCONNECTED
+        )
+        app.machine_state.set(disconnected_machine_state)
+        app._machine_state_text = disconnected_machine_state
         try:
             app._ensure_state_label_width(app._machine_state_text)
         except Exception as exc:
             _log_suppressed("Failed ensuring machine-state label width after disconnect", exc)
         app._update_state_highlight(app._machine_state_text)
-        app.status.config(text=StatusMessages.DISCONNECTED)
+        app.status.config(
+            text=(
+                StatusMessages.RECOVERY_REQUIRED
+                if recovery_required
+                else StatusMessages.DISCONNECTED
+            )
+        )
         disable_job_controls(app)
         app.btn_stop.config(state="disabled")
         app.btn_alarm_recover.config(state="disabled")
+        if recovery_required:
+            try:
+                app._update_recover_button_visibility()
+                app.btn_alarm_recover.config(state="normal")
+            except Exception as exc:
+                _log_suppressed("Failed exposing recovery action after disconnect", exc)
         app._set_manual_controls_enabled(False)
         app._rapid_rates = None
         app._rapid_rates_source = None
@@ -810,7 +893,7 @@ def handle_connection_event(app, is_on: bool, port):
             app._auto_reconnect_retry = 0
             app._auto_reconnect_next_ts = 0.0
             app._auto_reconnect_blocked = True
-        if not app._user_disconnect:
+        if not app._user_disconnect and not recovery_required:
             app._auto_reconnect_pending = True
             app._auto_reconnect_retry = 0
             app._auto_reconnect_delay = 3.0
@@ -824,6 +907,15 @@ def handle_connection_event(app, is_on: bool, port):
 
 def handle_ready_event(app, ready):
     runtime = get_connection_runtime_state(app)
+    recovery_required = _worker_recovery_required(app)
+    if bool(ready) and recovery_required:
+        ready = False
+        app._resume_after_disconnect = False
+        app._resume_from_index = None
+        app._resume_job_name = None
+        app._auto_reconnect_pending = False
+        app._auto_reconnect_blocked = True
+        app.status.config(text=StatusMessages.RECOVERY_REQUIRED)
     runtime.ready = bool(ready)
     sync_connection_runtime_state_to_app(app, runtime)
     if not runtime.ready:
@@ -846,7 +938,9 @@ def handle_ready_event(app, ready):
         if runtime.connected:
             disable_job_controls(app)
             app._set_manual_controls_enabled(False)
-            if runtime.connected_port:
+            if recovery_required:
+                app.status.config(text=StatusMessages.RECOVERY_REQUIRED)
+            elif runtime.connected_port:
                 app.status.config(
                     text=StatusMessages.connected_waiting_for_grbl(runtime.connected_port)
                 )
@@ -896,31 +990,19 @@ def handle_ready_event(app, ready):
             app._resume_job_name = None
             apply_status_poll_profile(app)
             return
-        if getattr(app, "_resume_after_disconnect", False) and not runtime.alarm_locked:
-            app._resume_after_disconnect = False
-            total_lines = (
-                app._gcode_total_lines
-                if getattr(app, "_gcode_streaming_mode", False)
-                else len(app._last_gcode_lines)
-            )
-            if total_lines > 0:
-                start_index = app._resume_from_index
-                if start_index is None:
-                    start_index = max(0, app._last_acked_index + 1)
-                start_index = max(0, min(start_index, total_lines - 1))
-                job_name = app._resume_job_name or os.path.basename(
-                    getattr(app, "_last_gcode_path", "") or ""
-                )
-                label = f" '{job_name}'" if job_name else ""
-                prompt = f"Resume interrupted job{label} from line {start_index + 1}?"
-                if messagebox.askyesno("Resume job", prompt):
-                    _schedule_reconnect_resume(app, start_index=start_index)
-            app._resume_from_index = None
-            app._resume_job_name = None
+        # Interrupted streams cannot be resumed from last_acked_index: GRBL may
+        # already have accepted later commands whose execution is uncertain.
+        app._resume_after_disconnect = False
+        app._resume_from_index = None
+        app._resume_job_name = None
     apply_status_poll_profile(app)
 
 
 def maybe_auto_reconnect(app):
+    if _worker_recovery_required(app):
+        app._auto_reconnect_pending = False
+        app._auto_reconnect_blocked = True
+        return
     if app.connected or app._closing or (not app._auto_reconnect_pending):
         if bool(getattr(app, "connected", False)) and bool(getattr(app, "_grbl_ready", False)):
             app._auto_reconnect_pending = False

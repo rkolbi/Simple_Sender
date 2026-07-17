@@ -66,6 +66,8 @@ class _LevelerError(Exception):
 
 
 LEVEL_DECIMALS = 4
+DEFAULT_MAX_ABS_CORRECTION_MM = 2.0
+DEFAULT_MAX_Z_SPAN_MM = 3.0
 
 
 def _level_gcode_iter(
@@ -75,9 +77,17 @@ def _level_gcode_iter(
     arc_step_rad: float,
     apply_to_rapids: bool,
     interpolation: str,
+    max_abs_correction: float | None,
+    max_z_span: float | None,
 ):
     if not height_map.is_complete():
         raise _LevelerError("Height map is incomplete.")
+    limit_error = height_map.validate_limits(
+        max_abs_correction=max_abs_correction,
+        max_z_span=max_z_span,
+    )
+    if limit_error:
+        raise _LevelerError(limit_error)
     if arc_step_rad <= 0:
         arc_step_rad = math.pi / 18
 
@@ -140,6 +150,16 @@ def _level_gcode_iter(
 
         if feed_mode == "G93":
             raise _LevelerError("Inverse time feed (G93) is not supported for auto-level.")
+
+        if has_g(53):
+            raise _LevelerError(
+                "Auto-Level does not support G53 machine-coordinate motion. "
+                "Remove or repost G53 moves before applying auto-level."
+            )
+
+        if has_g(43) or has_g(43.1) or has_g(49):
+            yield raw_line_text
+            continue
 
         nx, ny, nz = x, y, z
         has_axis = False
@@ -251,9 +271,7 @@ def _level_gcode_iter(
                 if not has_z:
                     yield raw_line_text
                 else:
-                    offset = height_map.interpolate(x, y, interpolation)
-                    if offset is None:
-                        raise _LevelerError("Height map interpolation failed.")
+                    offset = _height_offset(height_map, x, y, interpolation)
                     z_out = nz + offset
                     parts = []
                     prefix = _prefix_words(words, motion)
@@ -277,9 +295,7 @@ def _level_gcode_iter(
                 for idx, (sx, sy, sz) in enumerate(segments, start=1):
                     z_out = sz
                     if motion != 0 or apply_to_rapids:
-                        offset = height_map.interpolate(sx, sy, interpolation)
-                        if offset is None:
-                            raise _LevelerError("Height map interpolation failed.")
+                        offset = _height_offset(height_map, sx, sy, interpolation)
                         z_out = sz + offset
                     parts = []
                     if idx == 1 and prefix:
@@ -345,9 +361,7 @@ def _level_gcode_iter(
                 sx = cu + r * math.cos(ang)
                 sy = cv + r * math.sin(ang)
                 sz = w0 + (w1 - w0) * t
-                offset = height_map.interpolate(sx, sy, interpolation)
-                if offset is None:
-                    raise _LevelerError("Height map interpolation failed.")
+                offset = _height_offset(height_map, sx, sy, interpolation)
                 z_out = sz + offset
                 parts = []
                 if i == 1 and prefix:
@@ -374,6 +388,8 @@ def level_gcode_lines(
     arc_step_rad: float = math.pi / 18,
     apply_to_rapids: bool = False,
     interpolation: str = "bilinear",
+    max_abs_correction: float | None = DEFAULT_MAX_ABS_CORRECTION_MM,
+    max_z_span: float | None = DEFAULT_MAX_Z_SPAN_MM,
 ) -> LevelResult:
     try:
         out_lines = list(
@@ -383,6 +399,8 @@ def level_gcode_lines(
                 arc_step_rad=arc_step_rad,
                 apply_to_rapids=apply_to_rapids,
                 interpolation=interpolation,
+                max_abs_correction=max_abs_correction,
+                max_z_span=max_z_span,
             )
         )
     except _LevelerError as exc:
@@ -398,6 +416,8 @@ def level_gcode_file(
     arc_step_rad: float = math.pi / 18,
     apply_to_rapids: bool = False,
     interpolation: str = "bilinear",
+    max_abs_correction: float | None = DEFAULT_MAX_ABS_CORRECTION_MM,
+    max_z_span: float | None = DEFAULT_MAX_Z_SPAN_MM,
     input_encoding: str = "utf-8",
     header_lines: list[str] | None = None,
 ) -> LevelFileResult:
@@ -417,6 +437,8 @@ def level_gcode_file(
                     arc_step_rad=arc_step_rad,
                     apply_to_rapids=apply_to_rapids,
                     interpolation=interpolation,
+                    max_abs_correction=max_abs_correction,
+                    max_z_span=max_z_span,
                 ):
                     outfile.write(line.rstrip("\n"))
                     outfile.write("\n")
@@ -462,6 +484,23 @@ def write_gcode_lines(
             _log_suppressed("Failed removing output file after write_gcode_lines failure", remove_exc)
         return LevelFileResult(None, 0, str(exc), isinstance(exc, OSError))
     return LevelFileResult(output_path, lines_written, None, False)
+
+
+def _height_offset(height_map: HeightMap, x: float, y: float, interpolation: str) -> float:
+    if not height_map.contains_xy(x, y):
+        raise _LevelerError(
+            "Auto-Level motion is outside the probed height-map bounds "
+            f"at X{x:.4f} Y{y:.4f}. "
+            f"Map bounds are X[{height_map.xs[0]:.4f}, {height_map.xs[-1]:.4f}] "
+            f"Y[{height_map.ys[0]:.4f}, {height_map.ys[-1]:.4f}]."
+        )
+    offset = height_map.interpolate(x, y, interpolation)
+    if offset is None:
+        raise _LevelerError(
+            "Height map interpolation failed because the required grid cell "
+            "has a missing or skipped probe point."
+        )
+    return offset
 
 
 def _collect_g_codes(words: list[tuple[str, str]]) -> set[float]:
@@ -544,4 +583,3 @@ def _feed_word(feed_raw: float | None, feed_specified: bool, last_feed_out: floa
     if feed_specified or last_feed_out is None or abs(feed_raw - last_feed_out) > 1e-9:
         return f"F{_format_float(feed_raw, LEVEL_DECIMALS)}"
     return None
-

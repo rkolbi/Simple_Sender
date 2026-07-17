@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from simple_sender.utils.grbl_errors import GRBL_ALARM_CODES, GRBL_ERROR_CODES
 
-HELP_ABOUT_TITLE = "Simple Sender About v3.18"
+HELP_ABOUT_TITLE = "Simple Sender About v3.19.1"
 
 
 @dataclass(frozen=True)
@@ -86,10 +86,10 @@ def _sec(
 _GRBL_STATE_MEANINGS: tuple[tuple[str, str], ...] = (
     ("Idle", "Machine is ready and not moving. This is the normal safe state for settings refresh, probing setup, and job start."),
     ("Run", "A job or commanded motion is actively running."),
-    ("Hold", "Feed hold is active and motion is paused. Resume uses ~ when it is safe to continue."),
+    ("Hold", "Feed hold closes sender TX immediately. Resume requires an explicit operator request and current controller evidence that Hold has ended before job transmission reopens."),
     ("Jog", "A jog move is active. Some commands are locked out until the jog is canceled or completed."),
     ("Alarm", "GRBL latched a safety or motion alarm. Clear the cause first, then Unlock ($X) or Home ($H) as appropriate."),
-    ("Door", "A safety door state is active. Motion and command acceptance are restricted until the controller returns to a safe state."),
+    ("Door", "A safety door state closes sender TX. Closing the door does not automatically reopen transmission; use explicit Resume and wait for controller confirmation."),
     ("Check", "Check mode is active. GRBL validates moves without executing real machine motion."),
     ("Home", "A homing cycle is in progress."),
     ("Sleep", "GRBL is in low-power sleep mode and needs the normal wake or reset workflow before use."),
@@ -108,8 +108,8 @@ def _grbl_reference_subsections() -> tuple[HelpSubsection, ...]:
             bullets=(
                 "Ctrl-X: soft reset. Immediately halts motion and resets GRBL. Used by Stop/Reset and ALL STOP reset modes.",
                 "?: status report request. Used for live status polling, diagnostics, and the %update macro directive.",
-                "!: feed hold. Pauses execution and is used by Pause and related hold paths.",
-                "~: cycle start or resume. Used by Resume and by run paths that continue motion.",
+                "!: feed hold. Pause closes sender TX before sending it and remains Pause requested until GRBL reports Hold.",
+                "~: cycle start or resume. Sender TX remains closed until GRBL reports that the exact current session has left Hold or Door.",
                 "0x85: jog cancel. Used by JOG STOP and by hold-jog release and fail-safe cancellation logic.",
                 "0x91 / 0x92 / 0x90: feed override plus 10, minus 10, and reset.",
                 "0x9A / 0x9B / 0x99: spindle override plus 10, minus 10, and reset.",
@@ -192,7 +192,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
     _sec(
         "Getting Started",
         paragraphs=(
-            "A typical startup flow is: choose the serial port, connect, wait for the GRBL banner and first status report, clear alarms if needed, home if your machine uses homing, jog carefully to confirm motion, load a file, review Job Info, complete Job Setup, and then run only when the machine state is fully understood.",
+            "A typical startup flow is: choose the serial port, connect, wait for the GRBL banner and first status report, clear alarms if needed, home the CNC before movement actions, jog carefully to confirm motion after homing, load a file, review Job Info, complete Job Setup, and then run only when the machine state is fully understood.",
         ),
         subsections=(
             _sub(
@@ -210,7 +210,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 bullets=(
                     "Pick the serial port and click Connect. If Reconnect to last port on open is enabled, the app can remember and reopen the last port automatically.",
                     "Connect and Disconnect go through a short pending state so repeated clicks do not start overlapping workers.",
-                    "The app waits for the GRBL banner and the first valid status report before enabling the main controls and GRBL settings refresh paths.",
+                    "The current connection generation's single expected GRBL banner establishes Communication Ready. Status received before that banner is telemetry only and cannot consume startup ownership or enable commands.",
+                    "Job Ready is separate: the sender performs fresh current-session modal ($G) and coordinate-parameter ($#) synchronization and requires current position plus homing or explicit physical-position acceptance before job-driving controls can enable.",
                     "If the machine starts in Alarm, clear it with Unlock ($X) or Home ($H) as appropriate.",
                 ),
                 notes=(
@@ -233,7 +234,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 "Quick Start Workflow",
                 bullets=(
                     "Launch the sender, select the port, and Connect.",
-                    "Wait for the GRBL banner and the first status report so the machine is truly ready.",
+                    "Wait for the current-session GRBL banner for Communication Ready, then complete normal-session synchronization and position verification for Job Ready. A status report alone is not the startup handshake.",
                     "Read Job to load the file, then review the job dimensions and estimate.",
                     "Run the built-in Job Setup workflow and confirm the Tool reference label is populated for the session.",
                     "Press Run. If setup state is missing or invalid, rerun Job Setup or intentionally choose Start Anyway only if you accept the risk.",
@@ -264,7 +265,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Operation Walkthrough",
                 bullets=(
-                    "Connect and wait for the GRBL banner and first status before assuming the machine is ready.",
+                    "Startup auto-connect shows a welcome/communication popup while Simple Sender attempts controller communication. After Communication Ready, controller synchronization, and automatic $$ settings capture, the readiness popup offers Home Now or OK / I’ll Home Later.",
+                    "Use Home Now, or use the workflow-row Home button later, before treating the machine as Job Ready. Home Later only dismisses the reminder; home the CNC before jogging, zeroing, probing, parking, running jobs, or other movement actions. Homing waits for current-session Home-to-Idle evidence.",
                     "If the controller is in Alarm, use Unlock ($X) or Home ($H), then verify limits and homing settings such as $20, $21, and $22 as needed.",
                     "Set units and jogging carefully. The unit toggle inserts G20 or G21 as needed, and jogging is blocked during streaming and alarms.",
                     "Read Job, review the dimensions and estimate, and optionally run the Preflight check from App Settings > Diagnostics.",
@@ -273,7 +275,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "For a dry run, enable Dry run: strip spindle/coolant/M6/S/T from streamed G-code in App Settings > Safety before pressing Run.",
                     "Press Run. If no valid tool reference is stored for the session, the app shows Job Setup Not Completed with Start Anyway and Cancel.",
                     "If Dry Run is enabled, Run opens the explicit Dry Run confirmation first so you can continue in Dry Run, switch back to normal cutting, or cancel.",
-                    "Use Pause and Resume for feed hold and cycle start, Stop/Reset for the configured reset path, and ALL STOP for the fastest software stop path.",
+                    "Use Pause and Resume for controller-confirmed feed hold and cycle start, Stop/Reset for the configured reset path, and ALL STOP for the fastest software stop path. None replaces a physical emergency stop or power isolation.",
                 ),
             ),
             _sub(
@@ -287,9 +289,10 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Core Behaviors",
                 bullets=(
-                    "Handshake waits for the banner or status plus the first status report before enabling controls and GRBL settings refresh.",
+                    "Startup ownership is generation-bound and single-use: only the expected banner establishes Communication Ready. Pre-banner status remains telemetry-only, and a later banner is treated as a controller reset.",
+                    "Run and Resume From require Job Ready: fresh normal-session modal/coordinate/position/accessory trust, an exact worker/UI source identity in Committed state, and no pending source installation or execution-Idle confirmation.",
                     "Training Wheels can confirm connect, run, pause, resume, stop, spindle, clear, and unlock actions.",
-                    "Auto-reconnect can retry the last port after an unexpected disconnect and can also reconnect on startup if enabled.",
+                    "Auto-reconnect can retry an idle/startup connection, but it does not resume a job interrupted by a disconnect. Active-job connection loss enters Recovery Required because GRBL may have buffered commands beyond the last acknowledgment.",
                     "ALARM:x, Reset to continue messages, or an Alarm state stop and clear the sender queues and lock controls except Unlock, Home, and ALL STOP.",
                     "Optional GRBL alarm or error popups show code definitions and are deduped by the configured interval.",
                     "Performance mode batches console updates and suppresses per-line RX logging during streaming.",
@@ -301,6 +304,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Manual and immediate commands use a bounded queue. If it fills, new commands are dropped and the UI reports the cumulative dropped count.",
                     "When Dry Run is enabled, fresh Run and resume-start paths such as Resume From require an explicit operator choice before stream side effects begin.",
                     "Resume From reconstructs modal state where possible, but it cannot prove the cutter is physically safe at the selected restart line. Verify work zero, tool, Z clearance, spindle state, and physical position before resuming.",
+                    "Active G43.1 offsets are stored as a physical millimetre value while reconstructing Resume From state, then converted into the emitted G20/G21 mode. Blocks with ambiguous units, multiple G43.1/G49 commands, multiple associated Z words, or unsupported TLO variants are not resumed.",
                 ),
             ),
             _sub(
@@ -311,9 +315,23 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "If endpoint-only quick-scan bounds include G2/G3 arcs without complete SSMETA extents, dimensions are treated as rough because true arc extents were not calculated.",
                     "Diagnostics and runtime metrics record whether dimensions and units came from SSMETA or from a file scan.",
                     "Starting a new Read Job cancels the previous loader so stale background work does not overwrite the current results.",
-                    "Streaming uses character-counting flow control and Bf feedback for the RX window. During an active job, a GRBL error response enters a protective error-hold: the sender stops dispatching more job lines, requests realtime feed hold when appropriate, reports the failed source line when available, and requires restart or Resume From instead of normal Resume.",
+                    "Streaming uses character-counting flow control and Bf feedback for the RX window. During an active job, a GRBL error response stops further dispatch, records the uncertain transmitted range, requests feed hold/reset when possible, and enters Recovery Required rather than skipping the rejected line or offering normal Resume.",
+                    "Current-session Hold and Door reports close ordinary stream and tool-change macro/probe TX without discarding ACK accounting. External Hold and Door require explicit Resume. Controller confirmation clears only controller suspension; a pending tool change returns to its independent Tool Change pause and keeps later job lines blocked.",
+                    "A safety-significant realtime write failure enters fail-closed Recovery Required before the caller receives failure. Current-session jog-cancel failure is treated as uncertain even when cached status appears Idle.",
+                    "Every streamed Tool Change command and completion carries the exact originating connection, serial object, stream/recovery/source directive, and request identity. Stale or reconstructed workflows cannot command or release a later tool change. A current replacement behind a still-live stale UI thread is explicitly failed with Stop/restart guidance instead of being silently left pending.",
+                    "Auto-Level acquires one exclusive worker-owned lease only when controller command queues, reservations, streams, resets, jog state, and recovery are clear. After exact modal restoration, one single-use worker ticket authorizes UI staging; final worker revalidation must succeed before the provenance-bound map is published and Apply/Save are enabled. Reset, alarm, recovery, session/source replacement, and relevant WCS/G92/TLO changes invalidate the active map, and historical loaded maps remain inactive. Cancellation requests hold/reset recovery, and a retired lease or failed restoration/finalization cannot publish success.",
                     "Send-time validation failures such as $ job lines, non-ASCII text, or lines that still exceed 80 bytes are terminal stream errors rather than normally resumable pauses.",
                     "ALARM:x, reset/reboot, and Reset to continue paths remain terminal alarm/reset handling rather than normal resumable pauses.",
+                    "A streamed GRBL error:, including an error after final ACK while Idle or exact UI completion acknowledgement is pending, an unexpected startup banner, current-session connection loss, or disconnect before controller completion enters worker-owned Recovery Required state. Command admission closes atomically, pending confirmed vacuum directives and retired stream/ACK/UI completion work are quarantined, and automatic reconnect-resume and last-ACK resume are disabled.",
+                    "Recovery progresses through Reset Required, Reset Sent - Awaiting Banner, and Reset Confirmed - State Untrusted. The matching banner confirms only the reset and never restores Ready. Every additional banner or replacement connection retires the prior recovery identity and all evidence gathered under it; the interrupted job is not restored.",
+                    "The recovery dialog requires complete, non-contradictory modal-state ($G) and coordinate-parameter ($#) response transactions, homing or explicit acceptance of a physically checked current position, and physical verification of an exact synchronized M5/M9 state. XYZ reports must contain exactly three finite values; duplicate MPos, WPos, or WCO fields are rejected even when equal, and simultaneous representations must satisfy MPos = WPos + WCO within GRBL reporting-rounding tolerance. TLO requires exactly one finite scalar. Extra/missing fields, empty components, trailing garbage, contradictions, non-finite values, and numeric overflow invalidate the owning evidence.",
+                    "If approved recovery snapshot installation fails, admission stays closed and Recover offers Retry Recovery Finalization. The worker accepts only the exact current immutable snapshot object and its exact single-use finalization identity; an equal copy, stale callback, reset, alarm, disconnect, or replacement session cannot reopen admission.",
+                    "Loaded-job replacement, clear, and reconnect restore use worker-authoritative reserve/install/commit transactions. Run and Resume From require the exact UI identity to match a worker source in Committed state with no pending install. A reserved source cannot stream, and stale callbacks cannot mutate or re-enable a newer source.",
+                    "Whenever worker recovery is active, Recover is forced visible and enabled even though normal machine controls remain locked. The recovery dialog can disconnect only its exact recovery identity. Serial disconnect is not an emergency stop: buffered or executing controller work may continue, so use the physical emergency stop or power isolation when needed.",
+                    "A first clean connection and a reconnect after clean idle disconnect use an exact generation-and-serial startup owner with one pending, consumed, timed-out, or retired outcome. Startup auto-connect presents a non-blocking communication popup; after synchronization and automatic $$ settings capture, the readiness popup offers Home Now or OK / I’ll Home Later. Clean-session Job Ready remains blocked until homing installs the exact worker-approved state snapshot and the worker accepts that exact installation acknowledgement; Home Later is not clearance for movement. Reconnect cannot reuse prior-session cache values. A replacement connection after unresolved execution uncertainty receives a new recovery identity, remains blocked, and never restores the interrupted source.",
+                    "Recovery Required retires any pending confirmed VACUUM_ON/OFF stream directive, then establishes configured Kasa accessory OFF dominance before asynchronous submission. Stable device ID plus outlet is the canonical safety identity across hostname/IP aliases, cache replacement, and rediscovery; unresolved aliases share a conservative provisional domain until resolution merges ownership. The exact software dispatch commitment is recorded under the router state lock while holding that canonical outlet barrier, before the network call. Physical outlet dispatch ownership records a unique router-instance owner and can outlive one router while a committed call is active; router shutdown drains only that exact instance, and a replacement router serializes against unresolved same-outlet work before conflicting commands. Recovery OFF suppresses work not yet committed. A committed call cannot be canceled; it remains superseded and still requires Recovery OFF. Requested and failed_unknown Recovery OFF states block ON across later recovery epochs, reconnects, and replacement routers. Reconnect alone does not clear physical uncertainty; an identity-valid OFF retry must succeed and become confirmed, then confirmed dominance retires only after successful recovery completion for the exact identity. Idle registry entries are cleaned up only after no router reference, active commitment, or unresolved/unretired tombstone remains. Requested or failed_unknown never means physical OFF was confirmed; Kasa remains convenience automation, not a safety system.",
+                    "After Job Ready, ordinary MPos, WPos, and WCO telemetry is accepted only when each recognized field is unique, contains exactly three finite values, and simultaneous representations agree within reporting-rounding tolerance. Recognized coordinate field names are normalized before installation. Raw status is separate from the last validated-and-installed coordinate signature. A malformed frame cannot become a duplicate/freshness baseline, enter coordinate coalescing, advance the position throttle or coordinate sequence, signal a fresh-coordinate waiter, or overwrite operational/macro coordinates. Deferred coordinate evidence is bound to the originating connection generation, recovery epoch, session/serial identity, and coalescing request. Stale callbacks after disconnect, recovery entry, replacement connection, shutdown, or newer valid evidence are discarded without updating DROs, macro coordinates, installed signatures, freshness, or throttle timestamps. Freshness is published only after those exact validated values are installed in operational, DRO, and macro caches.",
+                    "If the recovery soft reset cannot be transmitted, assume buffered motion may still execute and use the physical emergency stop or power cutoff when necessary.",
                     "Each outbound line counts its trailing newline for buffer accounting, and non-ASCII or over-80-byte lines are rejected.",
                     "Exact trimmed VACUUM_ON and VACUUM_OFF lines are intercepted by the sender and never sent to GRBL. The optional Kasa confirmation setting holds the stream at those directives until success or failure is known.",
                     "Lines that start with TC: are intercepted and routed through the built-in Tool Change workflow, then the paused stream resumes when the operator finishes the tool change.",
@@ -363,7 +381,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 "GRBL Settings UI",
                 bullets=(
                     "If the post-connect $$ snapshot is already available, the first GRBL Settings popup open uses that cached data immediately.",
-                    "Refresh $$ is available when the machine is idle, not alarmed, and fully through the handshake.",
+                    "Refresh $$ is available when the machine is idle, not alarmed, and through Communication Ready plus Job Ready; requests made while Job Ready is pending remain queued.",
                     "Refresh $$ requests a newer controller snapshot; it is not required for the first usable display when cached data already exists.",
                     "The GRBL Settings popup is scrollable, shows descriptions and units, supports inline numeric validation, and highlights pending edits until you save them.",
                     "If enabled, the optional Raw $$ page opens the last raw settings dump in the same popup.",
@@ -801,7 +819,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Enabled outlets can turn on at job start and turn off when a job finishes, stops, alarms, or is canceled.",
             "Exact trimmed VACUUM_ON and VACUUM_OFF lines in streamed files toggle the configured vacuum outlet and are never sent to GRBL. By default the stream continues after the command is queued; if Require Kasa directive confirmation during jobs is enabled, the stream holds until the command result succeeds or fails.",
             "Device operations use bounded request timeouts so a stalled Kasa call does not block the accessory worker indefinitely.",
-            "If a Kasa command fails, the app retries through reconnect/discovery, logs a failure classification and local network context where available, and warns that dust collection state was not confirmed. Accepted job-accessory OFF requests stay tracked until a confirmed OFF succeeds.",
+            "If a Kasa command fails, the app retries through reconnect/discovery, logs a failure classification and local network context where available, and warns that dust collection state was not confirmed. Hostname/IP aliases for the same stable device ID and outlet share one process-level dispatch barrier and tombstone. The exact software dispatch commitment is recorded after final authorization under the router state lock and canonical outlet barrier, before the network API call. Recovery OFF suppresses work not yet committed; a committed call cannot be canceled. Router shutdown drains only its unique router-instance commitments and may remain incomplete while its committed physical dispatch is active. Replacement routers serialize against unresolved same-outlet commitments. Requested and failed_unknown Recovery OFF states block ON across later recovery epochs and replacement routers; reconnect alone does not clear them. A successful identity-valid OFF retry must become confirmed, and confirmed dominance retires only after successful recovery completion. Idle registry entries are removed only after no router reference, active dispatch, or unresolved/unretired tombstone remains.",
             "The Kasa section lives in App Settings > Kasa Plug. Use Discover, choose the device, refresh the outlet list, map Vacuum and Spindle Light, and use the built-in outlet test buttons before cutting.",
             "If the device exposes only one controllable outlet, the app keeps Vacuum available and disables Spindle Light mapping automatically.",
         ),
@@ -829,7 +847,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Connect fails: verify the port and the expected 115200 baud rate, then close any other sender software.",
             "Windows COM checks: confirm that the controller appears in Device Manager and that the COM number changes when you unplug and replug it.",
             "Linux serial permissions: make sure your user belongs to the correct serial-device group and then log out and back in after changing membership.",
-            "No $$ refresh: wait for the handshake to finish, clear alarms, and stop streaming before refreshing settings.",
+            "No $$ refresh: wait for Communication Ready; startup normally captures $$ automatically before the readiness popup. Manual refresh requires the machine to be idle, not alarmed, and not homing or streaming.",
             "Alarm state: use $X or $H as appropriate, then re-home and re-setup as needed.",
             "Run shows Job Setup Not Completed: rerun the built-in Job Setup workflow to capture the session tool reference before cutting.",
             "Preflight says no G-code job is loaded: load or reload the file first.",
@@ -850,7 +868,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
         "FAQ",
         bullets=(
             "4-axis or grblHAL: not supported. This build targets 3-axis GRBL 1.1h.",
-            "Why is $$ deferred: to avoid startup interleaving so the connection handshake finishes cleanly before the settings table refreshes.",
+            "Why manual $$ refresh may be deferred: to avoid interleaving settings capture with startup synchronization, homing, streaming, alarms, or recovery. On clean startup, Simple Sender requests $$ automatically before the readiness popup.",
             "Why are alarms handled strictly: for safety and predictable sender behavior.",
             "Persistent offsets with G10 L20: enable persistent zeroing if you want the zero buttons to use G10 L20 instead of G92.",
         ),
@@ -1030,7 +1048,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 "GRBL Settings Popup",
                 bullets=(
                     "If the post-connect $$ snapshot was already captured, the first popup open renders that cached snapshot immediately.",
-                    "Refresh $$: requests a fresh settings dump and populates the table when you want a newer controller snapshot.",
+                    "Refresh $$: requests a fresh settings dump and populates the table when you want a newer controller snapshot; if Job Ready is pending, the request stays queued.",
                     "Save Changes: writes edited settings back to GRBL in sequence and verifies them with a follow-up refresh.",
                     "Settings table: scrollable columns for Setting, Name, Value, Units, and Description.",
                     "Edited highlight: pending edits remain highlighted until saved or reverted.",
@@ -1093,6 +1111,16 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Disable Macro Timeouts.",
                     "Open Macro Manager. When launched from App Settings, it stays above App Settings and closing it leaves App Settings open.",
                     "Protected built-in workflows remain outside the general user-macro timeout limits.",
+                ),
+            ),
+            _sub(
+                "App Settings: Auto-Level",
+                bullets=(
+                    "Interpolation: bilinear is the conservative default; bicubic remains available as an advanced option.",
+                    "Max correction (mm): hard limit for the largest absolute height-map correction.",
+                    "Max Z span (mm): hard limit for total probed map Z range.",
+                    "Apply rejects G53 machine-coordinate motion, motion outside the probed X/Y bounds, and moves that need a skipped or missing probe node.",
+                    "G43, G43.1, and G49 tool-length-offset commands are preserved unchanged during Auto-Level apply.",
                 ),
             ),
             _sub(

@@ -298,6 +298,14 @@ def on_close(app):
     app._shutdown_timed_out = False
     _set_shutdown_status("Shutting down...")
     _log_shutdown("[shutdown] Shutting down...", context="Failed logging shutdown start message")
+    try:
+        from simple_sender.ui.events.status import (
+            _clear_coalesced_status_positions_state,
+        )
+
+        _clear_coalesced_status_positions_state(app)
+    except Exception as exc:
+        _log_suppressed("Failed clearing coalesced status coordinates during shutdown", exc)
     for event_name in ("_connection_state_event", "_status_update_event", "_modal_update_event"):
         evt = getattr(app, event_name, None)
         try:

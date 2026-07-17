@@ -32,8 +32,20 @@ from simple_sender.ui.loaded_job_metadata_state import (
     sync_loaded_job_metadata_state_to_app,
 )
 from simple_sender.ui.tk_vars import read_bool_pref
+from simple_sender.ui.job_controls import (
+    disable_job_controls,
+    job_controls_missing,
+    job_controls_ready,
+)
 from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
+from .source_transaction import (
+    StaleGcodeSourceTransaction,
+    abort_source_transaction,
+    commit_source_transaction,
+    require_current_source_transaction,
+    reserve_source_transaction,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -203,7 +215,7 @@ def _sync_loaded_job_restore_state(
     app._gcode_restore_failure_message = str(message or "").strip()
 
 
-def apply_loaded_gcode(
+def _apply_loaded_gcode_impl(
     app,
     path: str,
     lines: list[str],
@@ -269,12 +281,78 @@ def apply_loaded_gcode(
             app.streaming_controller.log(msg)
         lines = result.lines
         lines_hash = deps.hash_lines(lines)
+    source_payload = streaming_source if streaming_source is not None else lines
+    source_name = deps.os.path.basename(path)
+    ui_generation, admission = reserve_source_transaction(
+        app,
+        source_payload,
+        name=source_name,
+    )
+    if not bool(getattr(admission, "accepted", False)):
+        app._gcode_loading = False
+        app._finish_gcode_loading()
+        app.status.config(
+            text="G-code load blocked; the previously loaded worker source is unchanged."
+        )
+        return False
+    source_identity = admission.identity
+    app._pending_gcode_source_transaction = (source_identity, ui_generation)
+    app.btn_run.config(state="disabled")
+    app.btn_resume_from.config(state="disabled")
+
+    def _require_current(*, committed: bool = False) -> None:
+        require_current_source_transaction(
+            app,
+            source_identity,
+            ui_generation,
+            require_committed=committed,
+        )
+
+    def _fail_transaction(reason: str) -> None:
+        aborted = abort_source_transaction(
+            app,
+            source_identity,
+            ui_generation,
+            reason=reason,
+        )
+        if not aborted:
+            return
+        app._pending_gcode_source_transaction = None
+        clear_fn = getattr(app, "_clear_gcode", None)
+        if callable(clear_fn):
+            try:
+                clear_fn()
+                return
+            except Exception as clear_exc:
+                _log_suppressed(
+                    "Failed clearing UI after aborted G-code source transaction",
+                    clear_exc,
+                )
+        try:
+            disable_job_controls(app)
+        except Exception as controls_exc:
+            _log_suppressed(
+                "Failed disabling controls after aborted source transaction",
+                controls_exc,
+            )
+        app._gcode_loading = False
+        try:
+            app._finish_gcode_loading()
+        except Exception as finish_exc:
+            _log_suppressed(
+                "Failed closing loading UI after aborted G-code source transaction",
+                finish_exc,
+            )
+        app.status.config(text="G-code load failed closed; no job is runnable.")
+
+    _require_current()
     if (
         app._gcode_validation_report is None
         and streaming_source is None
         and not validated
     ):
         app._gcode_validation_report = deps.validate_gcode_lines(lines)
+    _require_current()
     app._clear_pending_ui_updates()
     _sync_loaded_job_restore_state(app, failed=False)
     app._last_gcode_lines = lines
@@ -300,6 +378,7 @@ def apply_loaded_gcode(
     app._stats_after_id = None
     app._stats_token = int(getattr(app, "_stats_token", 0)) + 1
     _reset_loaded_runtime_tracking(app)
+    _require_current()
     existing_source = state.source
     if existing_source is not None and existing_source is not streaming_source:
         cleanup_path = getattr(existing_source, "_cleanup_path", None)
@@ -321,6 +400,7 @@ def apply_loaded_gcode(
                 )
     state.source = streaming_source
     sync_loaded_job_metadata_state_to_app(app, state)
+    _require_current()
     if streaming_source is None:
         in_memory_file_size_bytes = 0
         try:
@@ -541,6 +621,7 @@ def apply_loaded_gcode(
         state.total_lines_known = bool(state.file_line_count_known)
         sync_loaded_job_metadata_state_to_app(app, state)
     deps.set_sample_streaming_state(app, sample_only)
+    _require_current()
     try:
         app._set_job_button_mode(
             "auto_level" if (lines or streaming_source is not None) else "read_job"
@@ -580,27 +661,20 @@ def apply_loaded_gcode(
         except Exception:
             app._gcode_time_to_stream_ready_ms = None
     if streaming_source is not None:
-        app.grbl.load_gcode(streaming_source, name=deps.os.path.basename(path))
         if not sample_only and lines and _should_prime_file_backed_send_cache(app):
             prime_cache = getattr(app.grbl, "prime_gcode_send_cache", None)
             if callable(prime_cache):
-                try:
-                    prime_cache(lines)
-                except Exception as exc:
-                    _log_suppressed(
-                        "Failed priming in-memory G-code send cache for file-backed job",
-                        exc,
+                if not bool(prime_cache(lines, source_identity=source_identity)):
+                    raise RuntimeError(
+                        "Worker rejected cache priming for a stale source identity"
                     )
-    else:
-        app.grbl.load_gcode(lines, name=deps.os.path.basename(path))
+    _require_current()
     streaming_controller = getattr(app, "streaming_controller", None)
-    if streaming_controller is not None:
-        log_job_loaded = getattr(streaming_controller, "log_job_loaded", None)
-        if callable(log_job_loaded):
-            try:
-                log_job_loaded()
-            except Exception as exc:
-                _log_suppressed("Failed logging loaded job lifecycle entry", exc)
+    log_job_loaded = (
+        getattr(streaming_controller, "log_job_loaded", None)
+        if streaming_controller is not None
+        else None
+    )
     _sync_loaded_job_restore_state(app, failed=False)
     app._last_sent_index = -1
     app._last_acked_index = -1
@@ -768,16 +842,19 @@ def apply_loaded_gcode(
         app._auto_level_prereq_snapshot = snapshot
 
     _refresh_autolevel_prereq_snapshot("load")
+    _require_current()
     viewer_ready = False
     secondary_ready = True
+    post_commit_stats_work = None
 
     def finalize_load_if_ready() -> None:
         if not (viewer_ready and secondary_ready):
             return
-        started_at = getattr(app, "_gcode_load_started_at", None)
-        app._gcode_load_started_at = None
-        if started_at is not None:
-            try:
+        try:
+            _require_current()
+            started_at = getattr(app, "_gcode_load_started_at", None)
+            app._gcode_load_started_at = None
+            if started_at is not None:
                 elapsed_ms = max(
                     0.0, (time.perf_counter() - float(started_at)) * 1000.0
                 )
@@ -788,28 +865,82 @@ def apply_loaded_gcode(
                 record_task_timing(
                     app, "gcode.load.time_to_popup_close", elapsed_ms, success=True
                 )
+            app._gcode_loading = False
+            app._finish_gcode_loading()
+            _require_current()
+            if not commit_source_transaction(
+                app,
+                source_identity,
+                ui_generation,
+            ):
+                raise RuntimeError("Worker rejected the completed G-code source install")
+        except StaleGcodeSourceTransaction:
+            return
+        except Exception as exc:
+            _fail_transaction(f"final source commit failed: {exc}")
+            return
+        app._pending_gcode_source_transaction = None
+        try:
+            _require_current(committed=True)
+        except StaleGcodeSourceTransaction:
+            return
+        if callable(log_job_loaded):
+            try:
+                log_job_loaded()
             except Exception as exc:
-                _log_suppressed("Failed recording end-to-end G-code load timing", exc)
-        app._gcode_loading = False
-        app._finish_gcode_loading()
-        if (
-            app.connected
-            and lines
-            and app._grbl_ready
-            and app._status_seen
-            and not app._alarm_locked
-        ):
-            app.btn_run.config(state="normal")
-            app.btn_resume_from.config(state="normal")
-        else:
-            app.btn_run.config(state="disabled")
-            app.btn_resume_from.config(state="disabled")
+                _log_suppressed("Failed logging loaded job lifecycle entry", exc)
+        if callable(post_commit_stats_work):
+            after_fn = getattr(app, "after", None)
+            settle_delay_ms = int(
+                max(0, int(getattr(app, "_gcode_stats_settle_delay_ms", 0) or 0))
+            )
+            try:
+                if callable(after_fn):
+                    after_fn(settle_delay_ms, post_commit_stats_work)
+                else:
+                    post_commit_stats_work()
+            except Exception as exc:
+                _log_suppressed("Failed scheduling post-commit G-code stats", exc)
+        state = get_loaded_job_metadata_state(app)
+        total_label = state.total_lines if state.total_lines is not None else len(lines)
+        mode_label = " (file-backed streaming)" if streaming_source is not None else ""
+        try:
+            loaded_text = (
+                f"Loaded: {deps.os.path.basename(path)}  ({total_label} lines){mode_label}"
+            )
+            missing = job_controls_missing(app)
+            if missing:
+                loaded_text += "; Job Ready pending: " + ", ".join(missing)
+            app.status.config(text=loaded_text)
+        except Exception as exc:
+            _log_suppressed("Failed projecting committed G-code status", exc)
+        try:
+            _require_current(committed=True)
+        except StaleGcodeSourceTransaction:
+            return
+        ready_for_run = bool(lines and job_controls_ready(app, has_job=bool(lines)))
+        try:
+            app.btn_run.config(state="normal" if ready_for_run else "disabled")
+            app.btn_resume_from.config(
+                state="normal" if ready_for_run else "disabled"
+            )
+        except Exception as exc:
+            _log_suppressed("Failed projecting committed G-code controls", exc)
+            try:
+                app.btn_run.config(state="disabled")
+                app.btn_resume_from.config(state="disabled")
+            except Exception:
+                pass
 
     name = deps.os.path.basename(path)
 
     def on_done():
         def _apply_done() -> None:
             nonlocal viewer_ready
+            try:
+                _require_current()
+            except StaleGcodeSourceTransaction:
+                return
             viewer_ready = True
             finalize_load_if_ready()
 
@@ -825,6 +956,10 @@ def apply_loaded_gcode(
         _apply_done()
 
     def on_progress(done, total):
+        try:
+            _require_current()
+        except StaleGcodeSourceTransaction:
+            return
         app._set_gcode_loading_progress(done, total, name)
 
     if not lines and streaming_source is None:
@@ -841,6 +976,8 @@ def apply_loaded_gcode(
         return result
 
     def _apply_stats_and_status() -> dict[str, float]:
+        nonlocal post_commit_stats_work
+        _require_current()
         section_timings_ms: dict[str, float] = {}
         deferred_stats_work = None
 
@@ -864,6 +1001,10 @@ def apply_loaded_gcode(
                 file_info_refresher()
 
         def _run_parse_schedule() -> None:
+            try:
+                _require_current(committed=True)
+            except StaleGcodeSourceTransaction:
+                return
             deps.schedule_gcode_parse(app, lines, app._gcode_hash)
 
         if sample_only:
@@ -896,24 +1037,11 @@ def apply_loaded_gcode(
             section_timings_ms,
             "status.loaded_label",
             lambda: app.status.config(
-                text=f"Loaded: {deps.os.path.basename(path)}  ({total_label} lines){mode_label}"
+                text=f"Installing: {deps.os.path.basename(path)}  ({total_label} lines){mode_label}"
             ),
         )
         if callable(deferred_stats_work):
-            after_fn = getattr(app, "after", None)
-            settle_delay_ms = int(
-                max(0, int(getattr(app, "_gcode_stats_settle_delay_ms", 0) or 0))
-            )
-            if callable(after_fn):
-                _measure_section(
-                    section_timings_ms,
-                    "stats.schedule_deferred",
-                    lambda: after_fn(settle_delay_ms, deferred_stats_work),
-                )
-            else:
-                _measure_section(
-                    section_timings_ms, "stats.defer_fallback_sync", deferred_stats_work
-                )
+            post_commit_stats_work = deferred_stats_work
         if callable(file_info_refresher):
             _measure_section(
                 section_timings_ms,
@@ -923,6 +1051,7 @@ def apply_loaded_gcode(
         return section_timings_ms
 
     def _apply_viewer_lines() -> dict[str, float]:
+        _require_current()
         section_timings_ms: dict[str, float] = {}
         def _apply_live_window_viewer() -> None:
             preview_cap = int(getattr(deps, "GCODE_LIVE_WINDOW_LOOKAHEAD_LINES", 10) or 10)
@@ -975,6 +1104,10 @@ def apply_loaded_gcode(
     stage_subsection_timings_ms: dict[str, dict[str, float]] = {}
 
     def _run_stage(stage_index: int) -> None:
+        try:
+            _require_current()
+        except StaleGcodeSourceTransaction:
+            return
         if stage_index >= len(post_load_stages):
             if stage_timings_ms:
                 logger.info(
@@ -988,8 +1121,11 @@ def apply_loaded_gcode(
         started_at = time.perf_counter()
         try:
             stage_result = stage_fn()
+        except StaleGcodeSourceTransaction:
+            return
         except Exception as exc:
             _log_suppressed(f"Failed deferred apply stage: {stage_name}", exc)
+            _fail_transaction(f"deferred UI stage {stage_name} failed: {exc}")
             return
         if isinstance(stage_result, dict):
             stage_subsection_timings_ms[str(stage_name)] = {
@@ -1034,3 +1170,51 @@ def apply_loaded_gcode(
             _log_suppressed("Failed scheduling deferred G-code apply stages", exc)
     _run_stage(0)
 
+
+def apply_loaded_gcode(
+    app,
+    path: str,
+    lines: list[str],
+    **kwargs,
+):
+    """Install a loaded source, aborting its reservation on synchronous failure."""
+    try:
+        return _apply_loaded_gcode_impl(app, path, lines, **kwargs)
+    except StaleGcodeSourceTransaction:
+        return False
+    except Exception as exc:
+        pending = getattr(app, "_pending_gcode_source_transaction", None)
+        if isinstance(pending, tuple) and len(pending) == 2:
+            identity, ui_generation = pending
+            aborted = abort_source_transaction(
+                app,
+                identity,
+                int(ui_generation),
+                reason=f"synchronous UI installation failed: {exc}",
+            )
+            if aborted:
+                app._pending_gcode_source_transaction = None
+                clear_fn = getattr(app, "_clear_gcode", None)
+                if callable(clear_fn):
+                    try:
+                        clear_fn()
+                    except Exception as clear_exc:
+                        _log_suppressed(
+                            "Failed clearing UI after synchronous source abort",
+                            clear_exc,
+                        )
+                try:
+                    disable_job_controls(app)
+                except Exception as controls_exc:
+                    _log_suppressed(
+                        "Failed disabling controls after synchronous source abort",
+                        controls_exc,
+                    )
+        logger.exception("G-code source UI transaction failed")
+        try:
+            app._gcode_loading = False
+            app._finish_gcode_loading()
+            app.status.config(text="G-code load failed closed; no job is runnable.")
+        except Exception as ui_exc:
+            _log_suppressed("Failed reporting G-code source transaction failure", ui_exc)
+        return False
