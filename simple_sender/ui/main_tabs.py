@@ -40,6 +40,7 @@ from simple_sender.ui.theme_helpers import (
     notebook_page_style_name,
 )
 from simple_sender.ui.viewer.gcode_viewer import HeadlessGcodeView
+from simple_sender.ui.job_summary import build_job_summary
 from simple_sender.ui.widgets_common import set_kb_id
 from simple_sender.ui.widgets_tooltips import apply_tooltip, set_tab_tooltip
 
@@ -618,6 +619,7 @@ def build_main_tabs(app, parent):
     app.console_pane = console_pane
     app.overdrive_pane = overdrive_pane
 
+    build_job_summary(app, console_pane)
     build_console_panel(app, console_pane).pack(fill="both", expand=True)
     build_overdrive_tab(app, overdrive_pane)
 

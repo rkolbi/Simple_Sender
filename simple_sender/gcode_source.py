@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 from array import array
+import os
 import threading
 from typing import IO, Iterable, Iterator, cast, overload
 
@@ -43,6 +44,11 @@ class FileGcodeSource:
         line_count_known: bool | None = None,
         sparse_offsets: Iterable[int] | None = None,
         sparse_stride: int | None = None,
+        snapshot_sha256: str | None = None,
+        snapshot_size_bytes: int | None = None,
+        snapshot_mtime_ns: int | None = None,
+        validation_complete: bool = False,
+        validated_line_count: int | None = None,
     ):
         self.path = path
         self._offsets: array[int] | None
@@ -73,6 +79,11 @@ class FileGcodeSource:
             self._line_count_known = bool(line_count_known)
         # Sequential fallback cursor for non-indexed sources.
         self._cursor_index = -1
+        self.snapshot_sha256 = str(snapshot_sha256 or "")
+        self.snapshot_size_bytes = max(0, int(snapshot_size_bytes or 0))
+        self.snapshot_mtime_ns = max(0, int(snapshot_mtime_ns or 0))
+        self.validation_complete = bool(validation_complete)
+        self.validated_line_count = max(0, int(validated_line_count or 0))
 
     def __len__(self) -> int:
         return self._line_count
@@ -159,6 +170,28 @@ class FileGcodeSource:
             line_count_known=self._line_count_known,
             sparse_offsets=self._sparse_offsets,
             sparse_stride=self._sparse_stride,
+            snapshot_sha256=self.snapshot_sha256,
+            snapshot_size_bytes=self.snapshot_size_bytes,
+            snapshot_mtime_ns=self.snapshot_mtime_ns,
+            validation_complete=self.validation_complete,
+            validated_line_count=self.validated_line_count,
+        )
+
+    def snapshot_identity_matches(self) -> bool:
+        """Return whether the owned snapshot still matches its admitted metadata."""
+        if not self.snapshot_sha256:
+            return True
+        try:
+            stat_result = os.stat(self.path)
+        except OSError:
+            return False
+        return bool(
+            int(stat_result.st_size) == self.snapshot_size_bytes
+            and int(getattr(stat_result, "st_mtime_ns", 0) or 0)
+            == self.snapshot_mtime_ns
+            and self.validation_complete
+            and self.validated_line_count == self._line_count
+            and self._line_count_known
         )
 
     def line_count_known(self) -> bool:

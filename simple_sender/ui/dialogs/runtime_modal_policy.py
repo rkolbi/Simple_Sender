@@ -98,7 +98,7 @@ RUNTIME_MODAL_DIALOG_POLICIES: dict[str, RuntimeModalDialogPolicy] = {
     "simple_sender.ui.dialogs.execution_recovery_dialog.show_execution_recovery": RuntimeModalDialogPolicy(
         dialog_id="simple_sender.ui.dialogs.execution_recovery_dialog.show_execution_recovery",
         classification=RUNTIME_RECOVERY_NOT_NEEDED,
-        reason="Execution recovery is an explicit operator action opened from the recovery control.",
+        reason="Execution recovery is operator-invoked; its entry point explicitly refuses to open while screen lock is active.",
     ),
     "simple_sender.ui.dialogs.macro_prompt_dialog.show_macro_prompt": RuntimeModalDialogPolicy(
         dialog_id="simple_sender.ui.dialogs.macro_prompt_dialog.show_macro_prompt",

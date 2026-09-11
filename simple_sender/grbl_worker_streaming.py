@@ -369,6 +369,15 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     cleared=not bool(lines),
                     transaction_id=int(self._gcode_source_transaction_seq),
                     ui_load_generation=max(0, int(ui_load_generation)),
+                    snapshot_sha256=str(
+                        getattr(lines, "snapshot_sha256", "") or ""
+                    ),
+                    snapshot_size_bytes=max(
+                        0, int(getattr(lines, "snapshot_size_bytes", 0) or 0)
+                    ),
+                    validated_line_count=max(
+                        0, int(getattr(lines, "validated_line_count", 0) or 0)
+                    ),
                 )
                 self._gcode_source_identity = identity
                 self._gcode_source_phase = GcodeSourcePhase.RESERVED
@@ -472,6 +481,22 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         return bool(
             admission.accepted and self.commit_gcode_source(admission.identity)
         )
+
+    def _loaded_snapshot_identity_matches(self) -> bool:
+        checker = getattr(self._gcode, "snapshot_identity_matches", None)
+        if not callable(checker):
+            return True
+        try:
+            matches = bool(checker())
+        except Exception:
+            matches = False
+        if matches:
+            return True
+        message = "Job snapshot changed or is unavailable; reload the G-code before running."
+        logger.error(message)
+        self.ui_q.put(("log", f"[run blocked] {message}"))
+        self.ui_q.put(StreamStateEvent("error", message))
+        return False
     
     def start_stream(self) -> None:
         """Start streaming loaded G-code from beginning."""
@@ -484,6 +509,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         
         if not self._gcode:
             logger.warning("Cannot start stream - no G-code loaded")
+            return
+        if not self._loaded_snapshot_identity_matches():
             return
         
         with self._write_lock:
@@ -579,6 +606,8 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         
         if not self._gcode:
             logger.warning("Cannot resume stream - no G-code loaded")
+            return
+        if not self._loaded_snapshot_identity_matches():
             return
 
         start_index = max(0, int(start_index))

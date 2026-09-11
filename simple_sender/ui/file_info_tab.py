@@ -334,6 +334,20 @@ def render_file_info_text(app) -> str:
     lines.append(f"- Total lines: {_line_count_text(total_lines, total_known)}")
     lines.append(f"- Executable lines: {_line_count_text(exec_lines, exec_known)}")
     lines.append(f"- Motion lines: {_line_count_text(motion_lines, motion_known)}")
+    source = state.source
+    snapshot_digest = str(getattr(source, "snapshot_sha256", "") or "")
+    validation_complete = bool(getattr(source, "validation_complete", False))
+    validated_lines = int(getattr(source, "validated_line_count", 0) or 0)
+    if snapshot_digest:
+        lines.append(f"- Job snapshot SHA-256: {snapshot_digest}")
+        lines.append(
+            "- Command validation: "
+            + (
+                f"complete ({validated_lines:,} executable lines)"
+                if validation_complete
+                else "not complete"
+            )
+        )
     lines.append(
         f"- Estimated Job Time: {_fmt_duration(estimate_sec)} [{estimate_conf}]"
     )

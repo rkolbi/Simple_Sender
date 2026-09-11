@@ -382,6 +382,13 @@ def _handle_normal_session_initialization_event(
         app._normal_session_initialization_dialog = None
         app._normal_session_initialization_dialog_identity = None
         app._normal_session_initialization_dialog_phase = None
+    elif dialog is not None:
+        refresh = getattr(dialog, "_refresh_presentation", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception as exc:
+                _log_suppressed("Failed refreshing readiness dialog presentation", exc)
     app._pending_modal_sync = False
     app._modal_sync_inflight = False
     app._modal_sync_inflight_started_ts = 0.0
@@ -889,7 +896,7 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
             apply_fn = getattr(app, "_apply_loaded_gcode", None)
             if not callable(apply_fn):
                 raise RuntimeError("Missing _apply_loaded_gcode handler")
-            apply_fn(
+            applied = apply_fn(
                 path,
                 sample_lines,
                 lines_hash=lines_hash,
@@ -899,6 +906,8 @@ def _schedule_loaded_stream_apply(app: Any) -> None:
                 sample_only=sample_only,
                 defer_viewer_stage_apply=True,
             )
+            if applied is False:
+                raise RuntimeError("Worker/UI source installation did not complete")
             source_consumed = True
 
         def _phase_finalize() -> None:

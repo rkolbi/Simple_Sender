@@ -242,6 +242,7 @@ def _mark_status_coordinates_fresh(app, *, context: str) -> bool:
         context=context,
     )
     if sequence_advanced:
+        app._status_last_installed_coordinate_ts = float(time.monotonic())
         _signal_thread_event(app, "_status_coords_update_event")
     return bool(sequence_advanced)
 

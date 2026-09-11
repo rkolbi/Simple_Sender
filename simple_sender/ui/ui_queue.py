@@ -21,6 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+from simple_sender.ui.job_summary import refresh_job_summary
 from simple_sender.utils.log_suppressed import log_suppressed_exception
 import queue
 import threading
@@ -1062,6 +1063,10 @@ def drain_ui_queue(app: AppProtocol) -> None:
                     _log_suppressed("Failed logging UI queue drop-summary event to console", exc)
         if app._closing:
             return
+        try:
+            refresh_job_summary(app)
+        except Exception as exc:
+            _log_suppressed("Failed refreshing read-only job summary", exc)
         now = time.monotonic()
         pending = 0
         try:

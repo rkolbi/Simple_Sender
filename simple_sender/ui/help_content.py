@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from simple_sender.utils.grbl_errors import GRBL_ALARM_CODES, GRBL_ERROR_CODES
 
-HELP_ABOUT_TITLE = "Simple Sender About v3.19.1"
+HELP_ABOUT_TITLE = "Simple Sender About v3.20"
 
 
 @dataclass(frozen=True)
@@ -224,7 +224,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Use Read Job to open the shared operating-system file picker and load a G-code file through the normal file pipeline.",
                     "On Linux, the file dialog temporarily applies the larger of the current UI scale and Linux File Dialog Scale, uses the current dialog theme, and enforces a readable minimum size so the chooser stays usable on Pi/Openbox touchscreen setups.",
                     "Linux dialogs default to /root/CNC_Jobs unless App Settings > Theme > Linux File Dialog Default Path is set to a different valid folder.",
-                    "Loaded jobs stay read-only. The sender strips BOM markers, comments, and bare % lines, then compacts or splits supported lines to respect GRBL's 80-byte limit.",
+                    "Read Job leaves the selected file untouched and creates an application-owned snapshot after stripping BOM markers, comments, and bare % lines. Every executable snapshot line must fit GRBL's 80-byte limit including its newline, or the load is rejected.",
                     "Job Info is a large read-only popup that shows SSMETA metadata when present, plus file size, line counters, estimate, dimensions, and separate Toolpaths and Tools Required lists when the metadata provides them.",
                     "The Tools Required list removes repeated identical entries while preserving first-seen order.",
                     "If load metadata is already available, the first Job Info popup open renders it immediately without requiring a reopen or reload.",
@@ -259,17 +259,18 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
     _sec(
         "Running a Job",
         paragraphs=(
-            "Simple Sender keeps the run path lean, but it still exposes the state you need to decide whether a job is safe to start. Review bounds, dimensions, tool setup, and machine state before pressing Run.",
+            "Read Job prepares an application-owned file-backed snapshot and completes bounded whole-job command and placement-fact validation before the job becomes runnable. Run streams that prepared snapshot without starting copy, hash, or validation work. Review bounds, dimensions, tool setup, and machine state before pressing Run.",
         ),
         subsections=(
             _sub(
                 "Operation Walkthrough",
                 bullets=(
+                    'Connection readiness and execution recovery dialogs use phase-specific titles and operator instructions. Show technical details reveals the internal phase, reason, missing checks and session identity. Explanations scroll while action buttons remain below the scroll area; recovery actions use two columns. The normal readiness prompt remains non-modal, and Home Later still only dismisses the reminder. Execution recovery remains modal and cannot be opened while the screen is locked. Existing confirmation, reset, homing, physical verification and finalization requirements are unchanged; applying recovery state is not reported as completed recovery.',
                     "Startup auto-connect shows a welcome/communication popup while Simple Sender attempts controller communication. After Communication Ready, controller synchronization, and automatic $$ settings capture, the readiness popup offers Home Now or OK / I’ll Home Later.",
                     "Use Home Now, or use the workflow-row Home button later, before treating the machine as Job Ready. Home Later only dismisses the reminder; home the CNC before jogging, zeroing, probing, parking, running jobs, or other movement actions. Homing waits for current-session Home-to-Idle evidence.",
                     "If the controller is in Alarm, use Unlock ($X) or Home ($H), then verify limits and homing settings such as $20, $21, and $22 as needed.",
                     "Set units and jogging carefully. The unit toggle inserts G20 or G21 as needed, and jogging is blocked during streaming and alarms.",
-                    "Read Job, review the dimensions and estimate, and optionally run the Preflight check from App Settings > Diagnostics.",
+                    "Read Job waits for snapshot creation, SHA-256 hashing, and complete command validation. Job Info shows the validation receipt. Review the dimensions and estimate, and optionally run the broader Preflight check from App Settings > Diagnostics.",
                     "Choose your safety options: Training Wheels confirmations, ALL STOP mode, auto-reconnect behavior, and Performance mode.",
                     "Home if required, set work zero, and complete Job Setup so the tool reference state is valid for this session.",
                     "For a dry run, enable Dry run: strip spindle/coolant/M6/S/T from streamed G-code in App Settings > Safety before pressing Run.",
@@ -291,6 +292,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 bullets=(
                     "Startup ownership is generation-bound and single-use: only the expected banner establishes Communication Ready. Pre-banner status remains telemetry-only, and a later banner is treated as a controller reset.",
                     "Run and Resume From require Job Ready: fresh normal-session modal/coordinate/position/accessory trust, an exact worker/UI source identity in Committed state, and no pending source installation or execution-Idle confirmation.",
+                    "The committed source identity includes the application-owned snapshot SHA-256, byte size, and validated line count. Missing or changed snapshot metadata blocks Run and Resume From before streaming starts.",
+                    "Run and Resume From project exact absolute linear targets into the standard GRBL machine envelope using the existing automatic $130/$131/$132 snapshot and fresh trusted MPos/WCO/WCS/G92/TLO/modal caches. A verified violation blocks execution. If placement cannot be proven, the warning names the reason and requires confirmation. This does not request controller information or change GRBL streaming and acknowledgment handling.",
                     "Training Wheels can confirm connect, run, pause, resume, stop, spindle, clear, and unlock actions.",
                     "Auto-reconnect can retry an idle/startup connection, but it does not resume a job interrupted by a disconnect. Active-job connection loss enters Recovery Required because GRBL may have buffered commands beyond the last acknowledgment.",
                     "ALARM:x, Reset to continue messages, or an Alarm state stop and clear the sender queues and lock controls except Unlock, Home, and ALL STOP.",
@@ -343,8 +346,8 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Line Length Limitations and CAM Guidance",
                 bullets=(
-                    "Automatic line splitting is limited to linear G0 or G1 moves in G94 that use X, Y, and Z axes. Arcs, inverse-time moves, and unsupported axes must already fit within the limit.",
-                    "If a line stays over 80 bytes after compaction and cannot be split safely, the load is rejected.",
+                    "Job lines are not rewritten or split to make them fit. Every executable line must fit GRBL's 80-byte receive limit including its newline.",
+                    "If a line is over 80 bytes after comments and surrounding whitespace are removed, the load is rejected before Run.",
                     "Recommended CAM habits: disable line numbers if possible, reduce coordinate decimal places to a practical range, and avoid long inline comments or long tool names inside motion lines.",
                     "If your CAM insists on long arc lines, consider arc-to-line approximation or a different post setting so the output stays GRBL-friendly.",
                 ),
@@ -854,12 +857,14 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Preflight says job bounds are unavailable: wait for load or parse work to finish, then rerun the check.",
             "Preflight says travel settings are unavailable: refresh or import GRBL settings so $130, $131, and $132 are available.",
             "Preflight reports out-of-bounds travel: compare the reported span to the machine travel settings and either repost, reposition, or correct the controller settings.",
+            "Preflight reports a verified placement violation: correct the work zero, job coordinates, or controller travel settings before running.",
+            "Preflight says placement is unverifiable: wait for a fresh Idle coordinate report when evidence is stale, or review the listed program construct and physical setup before deciding whether to continue.",
             "Streaming stops unexpectedly: inspect the console for errors or alarms and verify that the G-code is appropriate for GRBL 1.1h.",
             "Manual queue full: stop sending rapid repeated manual or jog commands and wait for the queue to drain.",
             "Load fails due to 80-byte limit: repost with shorter lines or simpler motion output, especially for long arcs or unsupported axes.",
             "Raspberry Pi feels sluggish: keep Performance mode enabled, avoid extra background tasks, and prefer faster local storage.",
             "Kasa fails and SSH is unavailable: before rebooting, ping the Pi by hostname and IP, try SSH by IP, check the router client list, check the Kasa mobile app, confirm whether the Pi touchscreen still responds, and export a diagnostics bundle if Simple Sender is reachable.",
-            "Large-file handling feels slow: let the initial prepare path finish and expect some diagnostics work to be sampled or deferred on ultra-large jobs.",
+            "Large-file handling feels slow: let snapshot creation and complete validation finish; nonessential metadata and diagnostics work may be sampled or deferred on ultra-large jobs.",
             "Macro behavior is unexpected: inspect the macro in Macro Manager or the sample view and re-test with the spindle off.",
             "Need a support bundle: use App Settings > Diagnostics > Export diagnostics bundle or Export session diagnostics.",
         ),
@@ -979,6 +984,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             _sub(
                 "Console",
                 bullets=(
+                    'The read-only job summary above the console shows the loaded filename and current readiness or blocking guidance. During running or paused jobs it shows run time excluding pauses and estimated remaining time when available. It refreshes from current state at most once per second through the existing UI loop; it does not enable controls, verify physical setup, or replace the existing status and recovery dialogs.',
                     "Console log: read-only GRBL traffic display.",
                     "Command entry: manual command input field.",
                     "Send: sends the entry to GRBL if the current machine state allows it.",
@@ -1198,6 +1204,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Verbose preserves fuller detailed TX logging for troubleshooting.",
                     "Developer Options.",
                     "Preflight check (Run check).",
+                    "Preflight keeps span and placement separate: verified machine-envelope violations block Run/Resume From, while unverifiable placement requires confirmation and identifies the missing evidence or unsupported construct.",
                     "Export session diagnostics (Save report).",
                     "Runtime telemetry (Open telemetry).",
                     "Export diagnostics bundle (Save ZIP).",

@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from simple_sender.types import NormalSessionPhase
-from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme, center_window
+from simple_sender.ui.dialogs.popup_utils import apply_toplevel_theme
+from simple_sender.ui.dialogs.readiness_presentation import ReadinessPresentation, normal_session_copy
 from simple_sender.ui.dialogs.startup_connection_dialog import (
     close_startup_connection_dialog,
 )
@@ -19,7 +20,7 @@ def show_normal_session_initialization(app) -> None:
     if not state.required:
         messagebox.showinfo(
             "Job readiness",
-            "Normal-session initialization is not currently required.",
+            "No connection readiness checks are pending. Check the main-window status before operating.",
         )
         return
     identity = state.action_identity
@@ -30,6 +31,7 @@ def show_normal_session_initialization(app) -> None:
     existing_phase = getattr(app, "_normal_session_initialization_dialog_phase", None)
     if existing is not None and existing_identity == identity and existing_phase == state.phase:
         try:
+            existing._refresh_presentation()
             existing.lift()
             existing.focus_force()
         except Exception:
@@ -45,31 +47,13 @@ def show_normal_session_initialization(app) -> None:
     app._normal_session_initialization_dialog = dlg
     app._normal_session_initialization_dialog_identity = identity
     app._normal_session_initialization_dialog_phase = state.phase
-    dlg.title("Machine information obtained")
     dlg.transient(app)
-    dlg.resizable(False, False)
     apply_toplevel_theme(dlg, app)
-    frame = ttk.Frame(dlg, padding=14)
-    frame.pack(fill="both", expand=True)
-    ttk.Label(
-        frame,
-        text=(
-            f"Successfully connected to {getattr(app, '_connected_port', '') or 'the controller'}.\n\n"
-            "Machine configuration and controller state were obtained.\n\n"
-            "Home the machine before running jobs, probing, tool changes, parking, "
-            "or other machine-coordinate operations."
-        ),
-        wraplength=560,
-        justify="left",
-    ).pack(fill="x", pady=(0, 10))
-    phase_var = tk.StringVar()
-    detail_var = tk.StringVar()
-    ttk.Label(frame, textvariable=phase_var, justify="left").pack(fill="x")
-    ttk.Label(frame, textvariable=detail_var, wraplength=560, justify="left").pack(
-        fill="x", pady=(4, 10)
+    presentation = ReadinessPresentation(
+        dlg, app,
+        intro=f"Controller connection: {getattr(app, '_connected_port', '') or 'current port'}.",
     )
-    buttons = ttk.Frame(frame)
-    buttons.pack(fill="x")
+    buttons = presentation.buttons
 
     def identity_current() -> bool:
         try:
@@ -95,11 +79,14 @@ def show_normal_session_initialization(app) -> None:
             return
         current = worker.normal_session_state()
         trust = worker.machine_trust_state()
-        phase_var.set(f"Readiness phase: {current.phase.value}")
         missing = trust.missing_for_new_job()
-        detail_var.set(
-            str(current.reason or "")
-            + ("\nMissing: " + ", ".join(missing) if missing else "")
+        title, message = normal_session_copy(current)
+        presentation.update(
+            title, message,
+            f"Readiness phase: {current.phase.value}\n"
+            f"Reason: {current.reason or 'Not reported'}\n"
+            f"Missing: {', '.join(missing) or 'None reported'}\n"
+            f"Session identity: {identity}",
         )
 
     def retry_sync() -> None:
@@ -109,7 +96,7 @@ def show_normal_session_initialization(app) -> None:
         if not worker.request_normal_session_state_sync(identity):
             messagebox.showwarning(
                 "Job readiness",
-                "State synchronization was not admitted for this session identity.",
+                "Synchronization could not start for the current connection. Check the controller status and try again.",
                 parent=dlg,
             )
         refresh()
@@ -120,36 +107,37 @@ def show_normal_session_initialization(app) -> None:
             return
         if not worker.start_normal_session_homing(identity):
             messagebox.showwarning(
-                "Home machine", "Normal-session homing did not start.", parent=dlg
+                "Home machine", "Homing could not start. Check the controller status before trying again.", parent=dlg
             )
             return
         setattr(app, "_normal_session_home_requested_from_dialog", True)
-        phase_var.set("Homing requested")
-        detail_var.set("Waiting for current-session Home-to-Idle evidence.")
+        refresh()
 
     if state.phase in {
         NormalSessionPhase.SYNCHRONIZING,
         NormalSessionPhase.FAILED,
     }:
         retry_button = ttk.Button(buttons, text="Retry State Sync", command=retry_sync)
-        retry_button.pack(side="left", padx=(0, 6))
+        retry_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=4)
     if state.phase is NormalSessionPhase.POSITION_REQUIRED:
         home_button = ttk.Button(buttons, text="Home Now", command=home_machine)
-        home_button.pack(side="left", padx=(0, 6))
+        home_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=4)
     close_button_text = (
         "OK / I’ll Home Later"
         if state.phase is NormalSessionPhase.POSITION_REQUIRED
         else "Close"
     )
     close_button = ttk.Button(buttons, text=close_button_text, command=close_dialog)
-    close_button.pack(side="right", padx=(6, 0))
+    close_button.grid(row=0, column=1, sticky="ew", padx=(6, 0), pady=4)
+    dlg._refresh_presentation = refresh
     refresh()
     dlg.protocol("WM_DELETE_WINDOW", close_dialog)
     try:
         dlg.bind("<Escape>", lambda _event: close_dialog())
     except Exception:
         pass
-    center_window(dlg, app)
+    presentation.present()
+    close_button.focus_set()
 
 
 __all__ = ["show_normal_session_initialization"]

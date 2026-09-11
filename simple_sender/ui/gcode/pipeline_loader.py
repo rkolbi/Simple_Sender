@@ -60,6 +60,31 @@ class _GcodeLoadCancelled(Exception):
     """Raised when a newer load token supersedes the active worker."""
 
 
+class _SystemCommandError(Exception):
+    def __init__(self, line_no: int, text: str) -> None:
+        super().__init__(text)
+        self.line_no = int(line_no)
+        self.text = str(text)
+
+
+class _UnsendableLineError(Exception):
+    def __init__(self, line_no: int, text: str, reason: str) -> None:
+        super().__init__(reason)
+        self.line_no = int(line_no)
+        self.text = str(text)
+        self.reason = str(reason)
+
+
+@dataclass(slots=True)
+class _JobSnapshotData:
+    path: str
+    sha256: str
+    byte_size: int
+    raw_line_count: int
+    cleaned_line_count: int
+    mtime_ns: int
+
+
 @dataclass(slots=True)
 class _FastPrepareData:
     sample_lines: list[str]
@@ -99,6 +124,261 @@ class _FastPrepareData:
 def _check_load_token(app, token: int) -> None:
     if token != app._gcode_load_token:
         raise _GcodeLoadCancelled()
+
+
+def _remove_temp_path(deps, path: str | None) -> None:
+    if not path:
+        return
+    try:
+        deps.os.remove(path)
+    except OSError:
+        return
+
+
+def _source_stat_identity(stat_result: Any) -> tuple[int, int, int, int]:
+    return (
+        int(getattr(stat_result, "st_dev", 0) or 0),
+        int(getattr(stat_result, "st_ino", 0) or 0),
+        int(getattr(stat_result, "st_size", 0) or 0),
+        int(getattr(stat_result, "st_mtime_ns", 0) or 0),
+    )
+
+
+def _create_job_snapshot(
+    app,
+    path: str,
+    token: int,
+    deps,
+    *,
+    file_size: int | None,
+) -> _JobSnapshotData:
+    """Create the bounded, canonical file that is later admitted to the worker."""
+    started_at = deps.time.perf_counter()
+    success = False
+    snapshot_path: str | None = None
+    try:
+        _check_load_token(app, token)
+        temp_dir = str(deps.get_preferred_temp_dir() or "").strip() or None
+        buffer_size = max(1, int(getattr(deps, "TEMP_FILE_BUFFER_SIZE", 64 * 1024)))
+        hasher = deps.hashlib.sha256()
+        raw_line_count = 0
+        cleaned_line_count = 0
+        byte_size = 0
+        progress_last_ts = 0.0
+        progress_last_pct = -1
+        source_identity_before: tuple[int, int, int, int] | None = None
+        source_identity_after: tuple[int, int, int, int] | None = None
+
+        with deps.tempfile.NamedTemporaryFile(
+            mode="wb",
+            buffering=buffer_size,
+            delete=False,
+            prefix="simple_sender_job_",
+            suffix=".gcode",
+            dir=temp_dir,
+        ) as snapshot_file:
+            snapshot_path = str(snapshot_file.name)
+            with open(path, "r", encoding="utf-8", errors="replace", newline="") as source:
+                try:
+                    source_identity_before = _source_stat_identity(
+                        deps.os.fstat(source.fileno())
+                    )
+                except (AttributeError, OSError):
+                    source_identity_before = None
+                while True:
+                    if (raw_line_count & 0x1FF) == 0:
+                        _check_load_token(app, token)
+                    raw = source.readline()
+                    if not raw:
+                        break
+                    raw_line_count += 1
+                    cleaned = cast(str, deps.clean_gcode_line(raw))
+                    if cleaned:
+                        if cleaned.startswith("$"):
+                            raise _SystemCommandError(raw_line_count, cleaned)
+                        try:
+                            payload = cleaned.encode("ascii") + b"\n"
+                        except UnicodeEncodeError as exc:
+                            raise _UnsendableLineError(
+                                raw_line_count,
+                                cleaned,
+                                "Non-ASCII characters are not supported by GRBL job streaming.",
+                            ) from exc
+                        if len(payload) > int(deps.MAX_LINE_LENGTH):
+                            raise _UnsendableLineError(
+                                raw_line_count,
+                                cleaned,
+                                f"Line is {len(payload)} bytes including newline; GRBL limit is {deps.MAX_LINE_LENGTH} bytes.",
+                            )
+                        snapshot_file.write(payload)
+                        hasher.update(payload)
+                        byte_size += len(payload)
+                        cleaned_line_count += 1
+                    if file_size and (raw_line_count & 0x7F) == 0:
+                        now = deps.time.perf_counter()
+                        if now - progress_last_ts >= deps.GCODE_LOAD_PROGRESS_INTERVAL:
+                            try:
+                                pct = min(100, int(source.tell() * 100 / file_size))
+                            except (OSError, ValueError):
+                                pct = progress_last_pct
+                            if pct != progress_last_pct:
+                                _emit_progress(
+                                    app,
+                                    token,
+                                    pct,
+                                    100,
+                                    f"Securing job snapshot: {deps.os.path.basename(path)}",
+                                )
+                                progress_last_pct = pct
+                            progress_last_ts = now
+                try:
+                    source_identity_after = _source_stat_identity(
+                        deps.os.fstat(source.fileno())
+                    )
+                except (AttributeError, OSError):
+                    source_identity_after = None
+            snapshot_file.flush()
+            try:
+                deps.os.fsync(snapshot_file.fileno())
+            except (AttributeError, OSError):
+                pass
+
+        _check_load_token(app, token)
+        if (
+            source_identity_before is not None
+            and source_identity_after is not None
+            and source_identity_before != source_identity_after
+        ):
+            raise RuntimeError(
+                "The selected G-code file changed while it was being prepared. Reload the job after the file is stable."
+            )
+        snapshot_stat = deps.os.stat(snapshot_path)
+        if int(getattr(snapshot_stat, "st_size", -1)) != byte_size:
+            raise RuntimeError("Prepared job snapshot size verification failed.")
+        _emit_progress(
+            app,
+            token,
+            100,
+            100,
+            f"Secured job snapshot: {deps.os.path.basename(path)}",
+        )
+        success = True
+        return _JobSnapshotData(
+            path=snapshot_path,
+            sha256=hasher.hexdigest(),
+            byte_size=int(byte_size),
+            raw_line_count=int(raw_line_count),
+            cleaned_line_count=int(cleaned_line_count),
+            mtime_ns=int(getattr(snapshot_stat, "st_mtime_ns", 0) or 0),
+        )
+    except Exception:
+        _remove_temp_path(deps, snapshot_path)
+        raise
+    finally:
+        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        record_task_timing(app, "gcode.load.snapshot", elapsed_ms, success=success)
+
+
+def _validate_job_snapshot(
+    app,
+    *,
+    deps,
+    token: int,
+    display_path: str,
+    snapshot: _JobSnapshotData,
+) -> Any:
+    """Run the full bounded validator before the snapshot can be admitted."""
+    started_at = deps.time.perf_counter()
+    success = False
+    try:
+        _check_load_token(app, token)
+        line_count = 0
+        validated_hasher = deps.hashlib.sha256()
+
+        def iter_snapshot_lines():
+            nonlocal line_count
+            with open(
+                snapshot.path,
+                "rb",
+                buffering=max(
+                    1, int(getattr(deps, "TEMP_FILE_BUFFER_SIZE", 64 * 1024))
+                ),
+            ) as handle:
+                while True:
+                    if (line_count & 0x1FF) == 0:
+                        _check_load_token(app, token)
+                    raw = handle.readline()
+                    if not raw:
+                        break
+                    validated_hasher.update(raw)
+                    line_count += 1
+                    if (line_count & 0x7F) == 0:
+                        _emit_progress(
+                            app,
+                            token,
+                            min(
+                                100,
+                                int(
+                                    line_count
+                                    * 100
+                                    / max(1, snapshot.cleaned_line_count)
+                                ),
+                            ),
+                            100,
+                            f"Validating job: {deps.os.path.basename(display_path)}",
+                        )
+                    yield raw.decode("ascii", errors="strict").rstrip("\r\n")
+
+        report = deps.validate_gcode_lines(iter_snapshot_lines())
+        _check_load_token(app, token)
+        if validated_hasher.hexdigest() != snapshot.sha256:
+            raise RuntimeError("Prepared job snapshot digest verification failed.")
+        if int(getattr(report, "total_lines", -1)) != snapshot.cleaned_line_count:
+            raise RuntimeError("Prepared job snapshot line-count verification failed.")
+        report.snapshot_sha256 = snapshot.sha256
+        _emit_progress(
+            app,
+            token,
+            100,
+            100,
+            f"Validated job: {deps.os.path.basename(display_path)}",
+        )
+        success = True
+        return report
+    finally:
+        elapsed_ms = max(0.0, (deps.time.perf_counter() - started_at) * 1000.0)
+        record_task_timing(app, "gcode.load.validate_snapshot", elapsed_ms, success=success)
+
+
+def _validation_blocking_summary(report: Any) -> str | None:
+    sections: list[str] = []
+    for attr, label in (
+        ("long_line_count", "overlong lines"),
+        ("unsupported_axes", "unsupported axes"),
+        ("unsupported_words", "unknown word letters"),
+        ("unsupported_g_codes", "unsupported G-codes"),
+        ("unsupported_m_codes", "unsupported M-codes"),
+        ("grbl_warnings", "GRBL-incompatible commands"),
+        ("malformed_line_count", "malformed or unsupported syntax lines"),
+    ):
+        value = getattr(report, attr, None)
+        if not value:
+            continue
+        if isinstance(value, int):
+            detail = str(value)
+        else:
+            try:
+                detail = ", ".join(f"{key} ({count})" for key, count in value.items())
+            except Exception:
+                detail = str(value)
+        sections.append(f"{label}: {detail}")
+    if not sections:
+        return None
+    return (
+        "Complete job validation found commands that cannot be sent reliably to GRBL:\n"
+        + "\n".join(f"- {section}" for section in sections)
+        + "\n\nThe job was not loaded. Correct the post-processor output and reload it."
+    )
 
 
 def _resolve_ultra_large_threshold_bytes(app, deps) -> int:
@@ -933,12 +1213,19 @@ def _stream_from_disk(
     started_at = deps.time.perf_counter()
     success = False
     prepare_data: _FastPrepareData | None = None
+    snapshot: _JobSnapshotData | None = None
     try:
         _check_load_token(app, token)
         if log_message:
             app.ui_q.put(("log", log_message))
-        # Fast file-backed load path: become stream-ready immediately without
-        # mandatory full rewrite/validation/hash/index passes.
+        snapshot = _create_job_snapshot(
+            app,
+            path,
+            token,
+            deps,
+            file_size=file_size,
+        )
+        _check_load_token(app, token)
         sample_only = True
         cache_profile = "disabled"
         setattr(app, "_gcode_full_line_cache_profile", cache_profile)
@@ -951,12 +1238,25 @@ def _stream_from_disk(
         )
         prepare_data = quick_scan_gcode(
             app,
-            path,
+            snapshot.path,
             token,
             deps,
-            file_size=file_size,
+            file_size=snapshot.byte_size,
         )
         _check_load_token(app, token)
+        report = _validate_job_snapshot(
+            app,
+            deps=deps,
+            token=token,
+            display_path=path,
+            snapshot=snapshot,
+        )
+        blocking_summary = _validation_blocking_summary(report)
+        if blocking_summary:
+            _remove_temp_path(deps, snapshot.path)
+            snapshot = None
+            app.ui_q.put(("gcode_load_error", token, path, blocking_summary))
+            return
         app._gcode_quick_scan_ms = float(
             getattr(prepare_data, "quick_scan_ms", 0.0) or 0.0
         )
@@ -964,10 +1264,20 @@ def _stream_from_disk(
         app.ui_q.put(
             (
                 "log",
-                "[gcode] Run path stays fast; use preflight and Job Info validation details when you want extra review before cutting.",
+                "[gcode] Immutable job snapshot and complete bounded validation finished before stream admission; no preparation work remains on the Run path.",
             )
         )
-        cleaned_lines_estimate = max(0, int(prepare_data.cleaned_lines_estimate))
+        cleaned_lines_estimate = int(snapshot.cleaned_line_count)
+        prepare_data.cleaned_lines_estimate = cleaned_lines_estimate
+        prepare_data.cleaned_lines_known = True
+        prepare_data.executable_lines_estimate = cleaned_lines_estimate
+        prepare_data.file_size_bytes = int(file_size or snapshot.byte_size)
+        prepare_data.file_line_count = int(snapshot.raw_line_count)
+        prepare_data.file_line_count_known = True
+        prepare_data.estimate_inputs_snapshot["gcode_hash"] = snapshot.sha256
+        prepare_data.autolevel_prereq_snapshot["source_hash"] = snapshot.sha256
+        prepare_data.autolevel_prereq_snapshot["source_path"] = snapshot.path
+        prepare_data.autolevel_prereq_snapshot["source_total_lines"] = cleaned_lines_estimate
         index_mode_requested = _resolve_index_mode_policy(
             deps,
             file_size=file_size,
@@ -975,13 +1285,18 @@ def _stream_from_disk(
         )
         lines_for_app = list(prepare_data.sample_lines)
         source = deps.FileGcodeSource(
-            path,
+            snapshot.path,
             offsets=None,
-            already_clean=False,
+            already_clean=True,
             total_lines=cleaned_lines_estimate,
-            line_count_known=bool(prepare_data.cleaned_lines_known),
+            line_count_known=True,
+            snapshot_sha256=snapshot.sha256,
+            snapshot_size_bytes=snapshot.byte_size,
+            snapshot_mtime_ns=snapshot.mtime_ns,
+            validation_complete=True,
+            validated_line_count=cleaned_lines_estimate,
         )
-        setattr(source, "_cleanup_path", None)
+        setattr(source, "_cleanup_path", snapshot.path)
         setattr(source, "_prepare_sampled_lines", None)
         setattr(
             source, "_prepare_sample_head_lines", int(prepare_data.sampled_head_lines)
@@ -1047,9 +1362,9 @@ def _stream_from_disk(
         )
         setattr(source, "_offset_index_enabled", False)
         setattr(source, "_index_mode_requested", str(index_mode_requested))
-        setattr(source, "_load_mode", "quick_scan_ready")
-        setattr(source, "_quick_hash", prepare_data.lines_hash_quick)
-        setattr(source, "_strict_validation_requested", False)
+        setattr(source, "_load_mode", "validated_snapshot_ready")
+        setattr(source, "_quick_hash", snapshot.sha256)
+        setattr(source, "_strict_validation_requested", True)
         setattr(
             source,
             "_quick_scan_ms",
@@ -1118,9 +1433,10 @@ def _stream_from_disk(
             (
                 "log",
                 "[gcode] Quick scan complete; file-backed stream-ready: "
-                f"mode=quick_scan_ready, "
+                f"mode=validated_snapshot_ready, "
                 f"index={index_mode_requested}, "
-                f"line_count={'known' if prepare_data.cleaned_lines_known else 'estimated'}({cleaned_lines_estimate:,}).",
+                f"line_count=known({cleaned_lines_estimate:,}), "
+                f"sha256={snapshot.sha256[:16]}....",
             )
         )
         app.ui_q.put(
@@ -1142,12 +1458,13 @@ def _stream_from_disk(
                 path,
                 source,
                 lines_for_app,
-                prepare_data.lines_hash_quick,
+                snapshot.sha256,
                 cleaned_lines_estimate,
-                None,
+                report,
                 sample_only,
             )
         )
+        snapshot = None
         record_task_timing(
             app,
             "gcode.load.time_to_stream_ready",
@@ -1156,8 +1473,28 @@ def _stream_from_disk(
         )
         success = True
     except _GcodeLoadCancelled:
+        _remove_temp_path(deps, getattr(snapshot, "path", None))
+        return
+    except _SystemCommandError as exc:
+        _remove_temp_path(deps, getattr(snapshot, "path", None))
+        app.ui_q.put(
+            ("gcode_load_invalid_command", token, path, exc.line_no, exc.text)
+        )
+        return
+    except _UnsendableLineError as exc:
+        _remove_temp_path(deps, getattr(snapshot, "path", None))
+        app.ui_q.put(
+            (
+                "gcode_load_error",
+                token,
+                path,
+                f"G-code line {exc.line_no} cannot be streamed safely: {exc.reason}\n"
+                f"Line: {exc.text[:160]}",
+            )
+        )
         return
     except Exception:
+        _remove_temp_path(deps, getattr(snapshot, "path", None))
         raise
     finally:
         # Release scan objects as soon as possible; streaming source retains only
@@ -1223,7 +1560,7 @@ def load_gcode_from_path(app, path: str, module):
                     (
                         "log",
                         f"[gcode] Ultra-large mode active ({size_text} >= {ultra_threshold_text}); "
-                        "forcing fast-load mode with sampled prepare.",
+                        "using sampled metadata and conservative file-backed cache choices; complete validation remains required.",
                     )
                 )
             _stream_from_disk(

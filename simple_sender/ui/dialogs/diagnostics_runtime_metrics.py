@@ -288,6 +288,18 @@ def _append_gcode_source_metrics(
     metrics["gcode_load_mode"] = str(getattr(app, "_gcode_load_mode", "") or "").strip()
     metrics["gcode_index_mode"] = str(getattr(app, "_gcode_index_mode", "") or "").strip()
     metrics["gcode_source_line_count_known"] = bool(source_line_count_known)
+    metrics["gcode_snapshot_sha256"] = str(
+        getattr(gcode_source, "snapshot_sha256", "") or ""
+    )
+    metrics["gcode_snapshot_size_bytes"] = max(
+        0, int(getattr(gcode_source, "snapshot_size_bytes", 0) or 0)
+    )
+    metrics["gcode_validation_complete"] = bool(
+        getattr(gcode_source, "validation_complete", False)
+    )
+    metrics["gcode_validated_line_count"] = max(
+        0, int(getattr(gcode_source, "validated_line_count", 0) or 0)
+    )
     time_to_ready = getattr(app, "_gcode_time_to_stream_ready_ms", None)
     time_to_popup = getattr(app, "_gcode_time_to_popup_close_ms", None)
     try:

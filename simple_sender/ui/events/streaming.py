@@ -361,6 +361,13 @@ def handle_recovery_required_event(app, state: ExecutionRecoveryState) -> None:
         app._execution_recovery_dialog = None
         app._execution_recovery_dialog_identity = None
         app._execution_recovery_dialog_phase = None
+    elif dialog is not None:
+        refresh = getattr(dialog, "_refresh_presentation", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception as exc:
+                _log_stream_ui_issue("Failed refreshing recovery dialog presentation", exc)
     cancel_after = getattr(app, "after_cancel", None)
     for callback_attr in (
         "_status_manual_controls_after_id",

@@ -267,6 +267,9 @@ class GcodeSourceIdentity:
     cleared: bool = False
     transaction_id: int = 0
     ui_load_generation: int = 0
+    snapshot_sha256: str = ""
+    snapshot_size_bytes: int = 0
+    validated_line_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

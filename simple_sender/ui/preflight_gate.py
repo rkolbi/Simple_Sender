@@ -56,6 +56,7 @@ def run_preflight_gate(app, *, action_label: str, messagebox_module=tk_messagebo
     label = str(action_label or "").strip() or "Run"
     label_lower = label.lower()
     result = _PREFLIGHT_SERVICE.validate_job(app)
+    setattr(app, "_last_preflight_result", result)
     if result.failures:
         message = "\n".join(result.failures)
         _report_operator_message(

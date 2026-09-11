@@ -5,6 +5,17 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+## [3.20] - 2026-09-11
+
+### Changed
+- Connection readiness and execution recovery now show phase-specific operator guidance with expandable technical details. Scrollable explanations and a two-column recovery action area keep buttons reachable. Normal readiness remains non-modal; execution recovery explicitly refuses to open under screen lock. Existing worker admission and confirmation requirements are preserved.
+- Every normal G-code load now creates an application-owned, file-backed canonical job snapshot, computes its SHA-256 digest, and completes bounded whole-job validation before worker source admission. Run and Resume From do not perform snapshot, hash, or validation work. The original selected file can be changed, replaced, removed, or disconnected after a successful load without changing the admitted stream. Unsupported axes/words/G-codes/M-codes, GRBL-incompatible commands, `$` commands, non-ASCII lines, and overlong lines fail the load before motion; sender-managed `M6` remains supported.
+- The worker source identity now carries the snapshot digest, byte size, and validated line count. A missing or size/timestamp-mismatched application snapshot blocks Run and Resume From before stream state is entered. Job Info and diagnostics expose the validation receipt.
+- Complete validation now records digest-bound absolute linear target ranges for placement preflight. Run and Resume From project those ranges into the standard GRBL machine envelope using the already automatic `$130/$131/$132` snapshot and fresh trusted MPos/WCO/WCS/G92/TLO/modal caches. A verified violation blocks execution; arcs, G53, G10/G92, G91, probing, stored-position moves, tool-offset changes, multiple WCS use, tool-change motion, or missing/stale evidence produce an explicit confirmation warning. No controller query or stream-loop behavior changed.
+
+### Added
+- Added a compact read-only job summary above the console with filename, readiness/blocking guidance, run time excluding pauses, and explicitly estimated remaining time when available. It uses the existing UI loop with updates capped at once per second; machine command admission, setup warnings, and completion safeguards are unchanged.
+
 ### Fixed
 - Real-controller clean connections now surface a consolidated startup/readiness popup flow. Startup auto-connect shows a non-blocking welcome/communication popup, and successful controller synchronization plus a captured `$$` settings snapshot replaces it with **Home Now** and **OK / I’ll Home Later** choices. Communication Ready no longer appears permanently unusable merely because the operator did not discover the repurposed recovery action; homing and exact snapshot installation remain mandatory before Job Ready.
 - The readiness popup's **Home Now** action and the protected workflow-row **Home** button now use the same normal-session homing admission, homing watchdog grace, and current-session Home-to-Idle provenance checks, so long physical homing cycles do not get mistaken for a dead connection and Home remains available after **I’ll Home Later**.
@@ -21,7 +32,7 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 - The normal startup readiness popup is now a non-grabbed prompt with only **Home Now** and **OK / I’ll Home Later**. The popup-local **Lock** control was removed because the main window remains reachable, and **Retry State Sync** is reserved for synchronizing or failed readiness states.
 
 ### Validation
-- Current Windows / Python `3.12.1` direct validation as of `2026-07-17`: `.\.venv\Scripts\python.exe -m pytest` passed with `2593 passed, 1 skipped` (the environment-gated physical Kasa test); `.\.venv\Scripts\python.exe tools\run_ruff.py check .`, `.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`, `.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`, and `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini` passed. The wrapper/coverage gate, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun.
+- Current Windows / Python `3.12.1` validation as of `2026-09-11`: `run_tests.bat` passed all seven stages with `2647 passed, 1 skipped` (the environment-gated physical Kasa test), 74% total line coverage, 89.2% aggregate critical-path coverage, and no Ruff, compileall, manifest, or configured-mypy failures across 141 source files. Cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not run.
 
 ## [3.19.1] - 2026-07-16
 

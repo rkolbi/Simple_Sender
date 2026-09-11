@@ -270,7 +270,7 @@ def build_diagnostics_section(app, parent: ttk.Frame, row: int) -> int:
     attach_numeric_keypad(app.ultra_large_size_threshold_mb_entry, allow_decimal=False)
     apply_tooltip(
         app.ultra_large_size_threshold_mb_entry,
-        "File size at or above this value forces ultra-large safeguards (sample-only + fast-load). Set to 0 to disable.",
+        "File size at or above this value forces sampled metadata and conservative file-backed cache/index choices. Complete command validation still runs. Set to 0 to disable threshold-specific choices.",
     )
     if not hasattr(app, "ultra_large_size_threshold_info_var"):
         app.ultra_large_size_threshold_info_var = tk.StringVar(master=parent, value="")
@@ -1160,4 +1160,3 @@ def build_power_section(app, parent: ttk.Frame, row: int) -> int:
         ),
     )
     return row + 1
-

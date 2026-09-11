@@ -22,7 +22,7 @@
 
 from typing import Any, Callable
 
-from simple_sender.services.preflight_service import PreflightService
+from simple_sender.services.preflight_service import PlacementOutcome, PreflightService
 
 _DEFAULT_PREFLIGHT_SERVICE = PreflightService()
 
@@ -53,6 +53,9 @@ def format_validation_summary(report: Any) -> list[str]:
     if unsupported_words:
         words = ", ".join(f"{k} x{v}" for k, v in unsupported_words.items())
         summary.append(f"Unknown words: {words}")
+    malformed_lines = int(getattr(report, "malformed_line_count", 0) or 0)
+    if malformed_lines:
+        summary.append(f"Malformed or unsupported syntax: {malformed_lines} line(s)")
     hazards = sorted(getattr(report, "modal_hazards", set()))
     if hazards:
         summary.append(f"Modal hazards: {', '.join(hazards)}")
@@ -82,6 +85,7 @@ def evaluate_run_preflight(
         get_bounds=get_bounds,
         get_travel_limits=get_travel_limits,
     ).validate_job(app)
+    setattr(app, "_last_preflight_result", result)
     return list(result.failures), list(result.warnings)
 
 
@@ -115,6 +119,15 @@ def run_preflight_check(
         showwarning(
             title,
             prefix + "\n".join(f"- {item}" for item in issues),
+        )
+        return
+    result = getattr(app, "_last_preflight_result", None)
+    placement = getattr(result, "placement", None)
+    if getattr(placement, "outcome", None) is PlacementOutcome.VERIFIED_SAFE:
+        showinfo(
+            "Preflight check",
+            "No issues detected. Machine-envelope placement is verified for the "
+            "current automatic machine-state snapshot.",
         )
         return
     showinfo("Preflight check", "No issues detected.")

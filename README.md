@@ -1,20 +1,20 @@
 # Simple Sender - Full Manual
-![Release: 3.19.1](https://img.shields.io/badge/release-3.19.1-blue)
+![Release: 3.20](https://img.shields.io/badge/release-3.20-blue)
 ![GRBL 1.1h](https://img.shields.io/badge/GRBL-1.1h-2a9d8f) ![3-axis](https://img.shields.io/badge/Axes-3--axis-4a4a4a) ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white) ![Tkinter](https://img.shields.io/badge/Tkinter-GUI-1f6feb) ![pyserial](https://img.shields.io/badge/pyserial-serial-6c757d)
 
 Simple Sender is designed to be a dependable, operator-friendly GRBL sender that focuses on a clean, practical workflow that stays responsive, runs well on modest hardware, and helps operators work safely, efficiently, and with confidence.
 ![](pics/screen-shot.png)
 
-Current stable release: `3.19.1`. This is the current release-ready baseline.
+Current stable release: `3.20`. This is the current release-ready baseline.
 
-Current `3.19.1` local validation as of `2026-07-17` in the verified local Windows / Python `3.12.1` environment:
-- Direct pytest (`.\.venv\Scripts\python.exe -m pytest`): `2593 passed, 1 skipped` (the skipped test is the environment-gated physical Kasa integration test)
+Current `3.20` local validation as of `2026-09-11` in the verified local Windows / Python `3.12.1` environment:
+- Direct pytest (`.\.venv\Scripts\python.exe -m pytest`): `2647 passed, 1 skipped` (the skipped test is the environment-gated physical Kasa integration test)
 - Repo-supported Ruff path (`.\.venv\Scripts\python.exe tools\run_ruff.py check .`): clean
 - Compile check (`.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`): clean
 - Mypy manifest gate (`.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`): clean
 - Repo-supported mypy config gate (`.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`): clean (`141` configured source files)
 
-The `run_tests.bat` wrapper, pytest coverage gate, critical-path coverage check, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.19.1` safety work. Historical wrapper/coverage snapshots remain in [CHANGELOG.md](CHANGELOG.md).
+The `run_tests.bat` wrapper also passed all seven stages, with 74% total line coverage and 89.2% aggregate critical-path coverage. Cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not run for this worktree. Historical validation snapshots remain in [CHANGELOG.md](CHANGELOG.md).
 
 ## Design Objectives and Key Features
 
@@ -74,7 +74,7 @@ Simple Sender was built to make everyday CNC work easier, clearer, and more depe
 
 ## Technical Overview
 - Target: GRBL 1.1h, 3-axis.
-- Character-count streaming with a Bf-informed RX window; auto-compacts/splits long G-code lines to fit GRBL's 80-byte limit; send-time ASCII/line-length checks; live buffer fill and TX throughput.
+- Character-count streaming with a Bf-informed RX window; load-time and send-time ASCII/80-byte line checks; live buffer fill and TX throughput.
 - Alarm-safe: locks controls except unlock/home; Training Wheels confirmations for critical actions.
 - Handshake: waits for banner + first status before enabling controls/$$.
 - Read-only file load (Read Job) through the shared file-dialog path, clear/unload button, inline status/progress. On Linux, Tk file dialogs use the current theme plus temporary scaling/min-size safeguards so they stay readable on Pi/Openbox touchscreen setups, and default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** points somewhere else.
@@ -278,10 +278,10 @@ This is a practical end-to-end flow, with rationale for the key options.
    - Choose jog steps and test jogs with $J= moves; Jog Cancel (0x85) is available. Jogging is blocked during streaming/alarms.
    - For first-time setup, use Safe mode in App Settings > Jogging to set conservative jog feeds and step sizes.
 4) **Load G-code**
-   - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. Linux dialogs default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** is set to another valid folder; invalid paths fall back safely. Loaded jobs remain read-only; comments/% lines are stripped, and long lines are compacted or split to respect GRBL's 80-byte limit (unsplittable lines are rejected).
+   - Click **Read Job** to open the shared OS file picker. On Linux, the app temporarily raises Tk dialog scaling, applies the current dialog theme, and enforces a minimum dialog size so the chooser stays readable under Pi/Openbox touchscreen setups. Linux dialogs default to `/root/CNC_Jobs` unless **App Settings > Theme > Linux File Dialog Default Path** is set to another valid folder; invalid paths fall back safely. The loader strips comments and blank lines into an application-owned file-backed snapshot, computes its SHA-256 digest, and validates every executable line before the job becomes runnable. Non-ASCII, overlong, system-command, or GRBL-incompatible jobs are rejected during load.
    - Check the job dimensions/estimate block for bounds sanity before running.
    - Review time/bounds estimates; if $110-112 are missing, set a fallback rapid rate and manual X/Y/Z max rates in **App Settings > Estimation**, then adjust the estimate factor if needed.
-   - Optional: run the Preflight check in **App Settings > Diagnostics** to catch validation issues before running.
+   - Whole-job command validation is mandatory during load. The optional **Preflight check** in **App Settings > Diagnostics** reviews the loaded validation result together with the available machine and bounds checks.
 5) **App safety options**
    - Training Wheels ON: confirms critical actions (run/pause/resume/stop/spindle/clear/unlock/connect).
    - ALL STOP mode: both modes halt the active stream first; Soft Reset always sends `Ctrl-X`, while Stop Stream + Reset avoids an extra reset when stop already performed one.
@@ -297,8 +297,8 @@ This is a practical end-to-end flow, with rationale for the key options.
    - **Communication Ready** means the current connection generation's one expected GRBL startup banner was received. **Job Ready** additionally requires current-session `$G`/`$#` synchronization, exact finite coordinate/TLO report shapes, a current machine-position report plus homing or explicit physical-position acceptance, conservative M5/M9 evidence, installation of the exact worker-approved snapshot into the UI and macro caches, and an exact committed worker/UI job-source identity. Run and Resume From remain disabled while any prerequisite, snapshot handoff, or source installation is pending.
    - Click **Run** (Training Wheels may prompt). If no valid tool reference is present for the session, the app shows **Job Setup Not Completed** with **Start Anyway** and **Cancel**. If Dry Run is enabled, Run prompts first with explicit choices: continue in Dry Run, switch to Normal Run and start, or cancel.
    - When `SSMETA` tool metadata is present, the Start Job confirmation keeps `Toolpaths` and `Tools Required` as separate truthful lists. The required-tools list removes repeated identical entries while preserving first-seen order. It does not invent one-to-one pairings between toolpaths and tools, and it no longer shows a stale G-code validation line.
-   - After confirmation, streaming starts immediately and keeps run-path checks lean; use Preflight and Job Info when you want extra review before cutting.
-   - Streaming uses character-counting flow control; buffer fill and TX throughput update as acks arrive, and Start/Run never blocks on a separate manual deep-validation pass.
+   - After confirmation, streaming starts immediately from the already prepared snapshot. No file copy, hash, or whole-job validation pass runs after Run is pressed.
+   - Streaming uses character-counting flow control; buffer fill and TX throughput update as acknowledgments arrive. Job Info shows the full snapshot SHA-256 and validated executable-line count for the admitted source.
    - Use **Pause/Resume** for feed hold/cycle start; **Stop/Reset** for soft reset; **ALL STOP** for immediate halt per your chosen mode.
 8) **Alarms / errors**
    - On `ALARM:`, reset/reboot, or `Reset to continue`, streaming stops through the hard alarm/reset path, queues clear, and controls lock except Unlock/Home/ALL STOP.
@@ -325,6 +325,11 @@ This is a practical end-to-end flow, with rationale for the key options.
 6) Clear alarms with Unlock ($X) or Home ($H).
 
 ## UI Tour
+
+Connection readiness and execution recovery dialogs use phase-specific titles and operator instructions. Show technical details reveals the internal phase, reason, missing checks and session identity. Explanations scroll while action buttons remain below the scroll area; recovery actions use two columns. The normal readiness prompt remains non-modal, and Home Later still only dismisses the reminder. Execution recovery remains modal and cannot be opened while the screen is locked. Existing confirmation, reset, homing, physical verification and finalization requirements are unchanged; applying recovery state is not reported as completed recovery.
+
+The read-only job summary above the console shows the loaded filename and current readiness or blocking guidance. During running or paused jobs it shows run time excluding pauses and estimated remaining time when available. It refreshes from current state at most once per second through the existing UI loop; it does not enable controls, verify physical setup, or replace the existing status and recovery dialogs.
+
 - **Top bar:** Port picker, Refresh, Connect/Disconnect, Read Job, Clear Job, Run/Pause/Resume/Stop, Unlock. The toolbar prefers the app-local icon assets in `simple_sender/ui/icons`; if those assets cannot be loaded, the existing drawn shape icons remain the final fallback.
 
 - **Hints:** Most controls show tooltips; disabled controls include the reason (not connected, streaming, alarm, etc.). Tooltips auto-wrap and clamp to the visible screen so long hints (including GRBL settings text) stay on-screen. After clicking a control, its tooltip stays hidden until you move off that control and hover it again. The About popup intentionally disables tooltips so reading and search results stay unobstructed.
@@ -380,7 +385,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Performance mode:** Batches console updates and suppresses per-line RX logging during streaming.
 - **Status-path smoothing:** Streaming status updates use adaptive position-update coalescing under UI queue pressure to reduce rare Tk event spikes while preserving final-position/progress correctness. Deferred coordinate evidence is bound to the originating connection generation, recovery epoch, session/serial identity, and coalescing request id; stale callbacks after disconnect, recovery entry, replacement connection, shutdown, or newer evidence are discarded without updating DROs, macro coordinates, freshness, installed signatures, or throttle timestamps.
 - **Diagnostics:** Preflight check summarizes bounds/validation, diagnostics exports include both a text report and a diagnostics ZIP (session report, performance report, runtime metrics, connection timeline, logs, settings snapshot), and backup bundles cover settings/macros/checklists (App Settings > Diagnostics). Backup-bundle import validates settings through the same repair/import path used elsewhere, warns when imported values were repaired, and requires explicit confirmation before overwriting colliding macro/checklist assets.
-- **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py` and diagnostics now call that service directly.
+- **Preflight boundary:** Job preflight evaluation lives in `simple_sender/services/preflight_service.py` and diagnostics call that service directly. It keeps the existing span check separate from exact placement. For complete absolute linear jobs, it projects the validated work-coordinate targets through the automatically captured `$130/$131/$132`, WCO, MPos, active-WCS, G92, TLO, and modal-state evidence. A proven machine-envelope violation blocks Run and Resume From. If that projection cannot be proven because evidence is stale/missing or the job uses constructs such as arcs, incremental motion, G53, G92/G10, probing, tool-offset changes, stored-position moves, multiple WCS values, or tool-change workflow motion, the warning identifies the reason and requires explicit confirmation. Preflight does not issue new controller queries or add work to the streaming loop.
 - **Kasa Plug:** Available on Linux only; the Kasa settings/actions are hidden or forced off on non-Linux platforms.
 - **Status polling:** Interval is configurable; consecutive status query failures trigger a disconnect.
 - **Idle noise:** `<Idle|...>` not logged to console (still processed).
@@ -393,7 +398,8 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Resume TLO guard:** Resume From tracks dynamic `G43.1 Z...` as a canonical physical millimetre offset with source-unit provenance, converts it into the final emitted G20/G21 mode, and clears it on an unambiguous `G49`. Blocks containing multiple `G43.1`/`G49` commands, multiple associated Z words, unsupported TLO variants, or ambiguous units make Resume From unavailable rather than choosing textual order. Modal reconstruction does not prove the cutter is physically safe at the selected restart line; the operator must verify work zero, tool, Z clearance, spindle state, and physical position before resuming.
 
 ## Jobs, Files, and Streaming
-- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading strips BOM/comments/% lines with a single-pass quick assessment and then streams directly from the canonical file-backed source (`FileGcodeSource`) using bounded live-window/state retention. Read-only; Clear unloads.
+- **Read Job:** Opens the shared OS file dialog. On Linux, the app temporarily applies the larger of the current UI scale and `Linux File Dialog Scale`, themes the dialog widgets, and enforces a readable minimum dialog size before opening the chooser. Loading leaves the selected file untouched, strips BOM/comments/% lines into an application-owned canonical file-backed source (`FileGcodeSource`), computes its SHA-256, and validates the complete command stream before admission. Bounded live-window/state retention remains in use; Clear unloads and removes the snapshot.
+- **Placement validation:** The complete snapshot-validation pass also retains bounded linear-target facts tied to the snapshot digest. Immediately before Run or Resume From, preflight combines those facts with existing automatically captured controller settings and fresh trusted status/session caches. This work finishes before streaming starts and does not alter GRBL TX/RX, character-counting, acknowledgments, buffer pacing, or EOF handling.
 - **SSMETA header parse:** During quick assessment, the loader scans only the header window (first lines/bytes) for `SSMETA key=value` metadata in comment lines. When complete extents/units are present, the sender prefers metadata-derived dimensions/units and marks dimensions confidence as confident.
 - **Arc bounds truthfulness:** When quick-scan bounds are based only on observed endpoints and the file contains `G2`/`G3` arcs without complete `SSMETA` extents, dimensions are treated as rough rather than confident. This does not calculate true arc extents; it prevents endpoint-only scan bounds from being overstated.
 - **Tool metadata truthfulness:** When `SSMETA` includes tool metadata, the app shows `Toolpaths` and `Tools Required` as separate lists in Job Info and in the Start Job confirmation. The required-tools display removes repeated identical entries while preserving first-seen order. The app does not guess pairings that are not present in the file.
@@ -404,10 +410,10 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **Custom sender directives:** Exact trimmed lines `VACUUM_ON` / `VACUUM_OFF` are intercepted before queue/send, toggle the configured vacuum action internally, and are marked handled without reaching GRBL. By default Kasa control remains convenience automation; App Settings can optionally require Kasa directive confirmation during active jobs, holding the stream until the command result is known.
 - **Tool-change sender directive:** Lines that start with `TC:` are intercepted before queue/send, treated as required-tool prompts, shown in the existing tool-change popup, then routed through the built-in Tool Change workflow. One opaque identity binds the exact connection, serial object, stream/recovery epochs, source, directive index, and request token to every tool-change command and completion callback; stale, reconstructed, duplicate, stopped, reset, or prior-session work cannot command or complete a later directive. The UI thread is associated with that same identity: if current Tool Change B arrives while a stale A thread is still alive, A is signaled and B is explicitly failed with a Stop/restart instruction instead of remaining silently pending. The supported streamed `TC:` workflow assumes files generated by the bundled Simple-Sender Vectric posts, including their stop-before-`TC:` and restart-after-segment contract. Streaming stays paused with a scoped no-timeout override until the operator finishes that workflow, then resumes. After the built-in tool-change flow completes, the machine parks at safe Z over WCS `X0/Y0` and the posted job is expected to reposition from there. `TC:` lines are marked handled and never sent to GRBL.
 - **Directive matching scope:** The above directive handling runs in the same pre-send file-stream pipeline used for normal job lines, while all other lines continue through normal G-code processing.
-- **Lean large-file model:** Jobs of any size use the same file-backed quick-assessment path, then stream from disk with bounded in-memory retention (live window + sampled metadata).
-- **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) automatically force fast-load behavior and defer strict validation; send-time safety checks remain active.
+- **Lean large-file model:** Jobs of any size use the same file-backed snapshot and complete bounded validation path, then stream from that snapshot with bounded in-memory retention (live window + sampled metadata).
+- **Ultra-large auto-safeguard mode:** Files at or above the configured ultra-large threshold (default `200 MB`) force sampled metadata preparation and conservative file-backed cache/index choices. Complete command validation remains mandatory.
 - **Lean runtime model:** The sender does not render Top View/Spatial geometry during load; UI remains focused on readiness, dimensions, and estimate output.
-- **Line length safety:** The unified loader compacts lines first (drops spaces/line numbers, trims zeros). If still too long, linear G0/G1 moves in G94 with X/Y/Z axes can be split into multiple segments; arcs, inverse-time moves, or unsupported axes must already fit or the load is rejected. Unsplit lines above 80 bytes are rejected, and send-time checks enforce the same limit.
+- **Line length safety:** After comments and surrounding whitespace are removed, every executable line must fit GRBL's 80-byte receive limit including its newline. The load is rejected before Run when any line is too long, and send-time checks enforce the same limit.
 - **System commands:** GRBL system commands (lines starting with `$`, e.g., `$H`) are rejected in job files; run them from the UI or a macro instead.
 - **Lifecycle console logging:** Job lifecycle logging stays intentionally sparse and truthful: load, start, immediate early telemetry, `10%` progress milestones, sparse heartbeat while running, and completion are logged without reverting to noisy per-line progress chatter.
 - **Stop / ALL STOP:** Stops queueing immediately, clears the sender buffers, and issues the configured real-time bytes. Operator feedback is tied to accepted realtime sends instead of disconnected/no-op paths, but GRBL may still execute moves already in its own buffer; use a hardware E-stop for a hard cut.
@@ -418,7 +424,7 @@ This is a practical end-to-end flow, with rationale for the key options.
 - **UI queue wake-up:** When the UI queue is idle and new work arrives, the first posted UI event now wakes the drain loop promptly instead of waiting for the next normal periodic drain tick. Ongoing queue draining still uses the existing bounded timer/backoff model.
 
 ### Line length limitations and CAM guidance
-- Long lines are only auto-split when they are linear G0/G1 moves in G94 with X/Y/Z axes. Arcs (G2/G3), inverse-time feed (G93), or lines with unsupported axes (A/B/C/U/V/W) must already be within 80 bytes, or the load is rejected.
+- Job lines are not rewritten or split to make them fit. Every executable line must be within 80 bytes including its newline, or the load is rejected.
 - Recommended CAM post settings: disable line numbers if possible, reduce decimal places on coordinates (3-4 is usually enough for GRBL work), and avoid emitting long comment blocks or tool names inline with motion.
 - If your CAM insists on long arc lines, consider switching to small linear segments (arc-to-line approximation) or reduce arc detail so each line fits under the limit.
 
@@ -898,7 +904,7 @@ Run the suite:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-Use `run_tests.bat` as the broader local release gate when a wrapper/coverage gate is required. It runs the same full Ruff scope as the repo-supported Ruff path and also enforces compile, coverage-threshold, and mypy-manifest checks. For the `3.19.1` safety work, the direct local validation rerun as of `2026-07-17` passed with `.\.venv\Scripts\python.exe -m pytest`: `2593 passed, 1 skipped` (the environment-gated physical Kasa test), `.\.venv\Scripts\python.exe tools\run_ruff.py check .`: clean, `.\.venv\Scripts\python.exe -m compileall -q simple_sender tests tools`: clean, `.\.venv\Scripts\python.exe tools\check_mypy_targets.py --expected-count 141`: clean, and `.\.venv\Scripts\python.exe -m mypy --config-file mypy.ini`: clean. The wrapper/coverage gate, cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not rerun for this `3.19.1` safety work. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
+Use `run_tests.bat` as the broader local release gate. It runs the full Ruff and compile scopes, pytest with coverage, critical-path coverage, the mypy manifest, and configured mypy. For the `3.20` safety work, the local Windows / Python `3.12.1` gate rerun on `2026-09-11` passed all seven stages: `2647 passed, 1 skipped` (the environment-gated physical Kasa test), 74% total line coverage, 89.2% aggregate critical-path coverage, and 141 configured mypy source files with no issues. Cross-platform CI, hardware-in-the-loop behavior, and Raspberry Pi image provenance/build validation were not run for this worktree. Dated historical snapshots remain in [CHANGELOG.md](CHANGELOG.md). For machine-side proof work, use [MACHINE_VALIDATION_CHECKLIST.md](MACHINE_VALIDATION_CHECKLIST.md) together with the diagnostics bundle export.
 
 The current `mypy.ini` manifest runs mypy against 141 source files explicitly configured in the manifest. Historical direct-tree `mypy main.py simple_sender` snapshots are kept in [CHANGELOG.md](CHANGELOG.md) instead of being presented as current when that broader command was not rerun for the latest validation note.
 
@@ -954,6 +960,7 @@ pre-commit run --all-files
 ```
 
 Release history and validated baselines are tracked in `CHANGELOG.md`.
+- v3.20 release notes: `RELEASE_NOTES_v3.20.md`.
 - v3.19.1 release notes: `RELEASE_NOTES_v3.19.1.md`.
 - v3.19 release notes: `RELEASE_NOTES_v3.19.md`.
 
@@ -983,7 +990,7 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - Raspberry Pi and other low-power systems benefit from leaving `Performance mode` enabled, especially while streaming or browsing large files.
 - Large G-code files are supported, but faster storage and more RAM reduce temp-file churn, background scan latency, and live-window refresh pressure.
 - Practical RAM guidance: lighter jobs can run on 2 GB-class systems, but 4 GB or more is the safer baseline if you routinely open very large files, keep diagnostics on, or run other services on the same machine.
-- Streaming and fast-load safeguards intentionally trade some immediate detail for responsiveness on ultra-large jobs; use the diagnostics and profiling tools when tuning those thresholds.
+- Ultra-large safeguards sample nonessential metadata and use conservative file-backed caches to preserve responsiveness; they do not skip complete command validation.
 - Runtime profiling hooks and diagnostics exports are the preferred way to confirm whether a machine is CPU-bound, memory-bound, or UI-queue bound before changing settings.
 
 ## Known Limitations
@@ -1005,6 +1012,8 @@ Release history and validated baselines are tracked in `CHANGELOG.md`.
 - Preflight reports `Job bounds are unavailable`: wait for the load/parse pipeline to finish, then rerun the check; on very large files this can appear briefly while background analysis catches up.
 - Preflight warns that travel settings are unavailable: refresh or import GRBL settings so `$130/$131/$132` are populated before relying on travel checks.
 - Preflight reports out-of-bounds travel: compare the reported axis span to the machine travel in the GRBL settings table, then re-post/reposition the job or correct the controller settings if needed.
+- Preflight reports a verified placement violation: the projected machine-coordinate range is outside the standard GRBL envelope from `-$130/$131/$132` through `0`; correct the work zero, job coordinates, or controller travel settings before running.
+- Preflight says placement is unverifiable: read the listed reason. Wait for a fresh Idle status if coordinates are stale, or review the program and physical setup carefully when arcs, G53, G92/G10, G91, probing, stored-position moves, tool-offset changes, multiple WCS values, or tool-change motion prevent an exact proof.
 - Streaming stops: check console for error/alarm; validate G-code for GRBL 1.1h.
 - Status shows `Manual queue full`: reduce rapid jog spam/hold-repeat frequency, wait for queue drain, then retry.
 - Load fails with 80-byte limit: check for long arcs/inverse-time moves or unsupported axes and re-post with shorter lines.
@@ -1414,7 +1423,7 @@ Macro UI is included below along with the rest of the interface.
 ### App Settings: Diagnostics
 - Developer Options: reveals the advanced diagnostics controls described below.
 - Logging Mode: `Standard` is the default and reduces routine TX file logging while keeping recent serial activity available for diagnostics; `Verbose` preserves fuller detailed TX logging for troubleshooting.
-- Preflight check (Run check): evaluates the loaded job for readiness, bounds availability, and machine-travel overruns using the current `$130/$131/$132` travel settings when available.
+- Preflight check (Run check): evaluates readiness, span versus current `$130/$131/$132`, and machine-envelope placement using the existing automatic settings snapshot and fresh trusted position/offset/modal caches. Verified violations block execution; unverifiable placement requires explicit confirmation with the reason shown.
 - Export session diagnostics (Save report): saves console/status history and settings to a text report.
 - Runtime telemetry (Open telemetry): opens a live telemetry window for worker queue depth and TX/runtime counters.
 - Export diagnostics bundle (Save ZIP): writes a single ZIP containing session diagnostics, performance report, runtime metrics JSON, connection timeline JSON, logs, settings snapshot, Linux/Raspberry Pi network diagnostics when available, and manifest.
@@ -1423,12 +1432,12 @@ Macro UI is included below along with the rest of the interface.
 - Apply perf-test preset: enables the low-overhead diagnostics profiling preset intended for repeatable performance capture, and it forces `Logging Mode = Standard`.
 - Backup bundle (Export/Import): archives or restores settings, macros, and checklist files in one zip. Import validates settings before replacing the live copy, reports repaired values, and asks before replacing colliding macro/checklist assets.
 - Sample-only threshold (lines): cleaned line count threshold for aggressive sampled prepare behavior (set `0` to disable line-based trigger).
-- Ultra-large threshold (MB): file size at or above this value forces fast-load safeguards for that load (sample-only + skip full validation); set `0` to disable.
+- Ultra-large threshold (MB): file size at or above this value forces sampled metadata and conservative file-backed cache/index choices; complete command validation still runs. Set `0` to disable the threshold-specific choices.
 - Ultra-large threshold info: shows the computed trigger in GiB/bytes for the current MB value.
 - Enable runtime performance profiling (restart required): records startup/CPU/RSS/UI-drain metrics and emits a one-shot report on exit (enabled by default for new settings).
 - Enable leak-watch snapshots (higher overhead): captures tracemalloc milestone snapshots and reports top growth deltas.
 - Performance report log path: optional destination file to append exit reports.
-- Recommendation: keep Run path lean; use preflight, Job Info, and the built-in validation summary when you want extra review before cutting.
+- Recommendation: let Read Job finish snapshot creation and mandatory validation, then use Preflight and Job Info to review machine readiness, bounds, estimates, and the validation receipt before cutting.
 
 ### Baseline Capture (Lean Mode)
 - Idle (no file loaded): let the app sit connected/ready for 5 minutes.

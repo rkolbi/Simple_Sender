@@ -286,6 +286,16 @@ def build_session_diagnostics_lines(
     except (TypeError, ValueError):
         pass
     lines.append("G-code storage mode: " + storage_detail)
+    source = getattr(app, "_gcode_source", None)
+    snapshot_digest = str(getattr(source, "snapshot_sha256", "") or "")
+    if snapshot_digest:
+        lines.append(
+            "G-code snapshot receipt: "
+            f"sha256={snapshot_digest}, "
+            f"bytes={int(getattr(source, 'snapshot_size_bytes', 0) or 0):,}, "
+            f"validation_complete={bool(getattr(source, 'validation_complete', False))}, "
+            f"validated_lines={int(getattr(source, 'validated_line_count', 0) or 0):,}"
+        )
     lines.append(
         "G-code line-cache cap: "
         f"{int(cap_lines):,} ({cap_profile}), cap_hit={cap_hit}, sample_cap={sample_cap:,}"
