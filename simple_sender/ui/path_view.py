@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 import threading
 import time
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 POSITION_FRESH_S = 0.75
 POSITION_AGING_S = 2.5
 POSITION_STALE_S = 8.0
+PREVIEW_DETAIL_LIMITS = (2_000, 10_000, 50_000, 200_000)
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,11 @@ class PathView(ttk.Frame):
         self._position_items: list[int] = []
         self.status_var = tk.StringVar(master=self, value="No job preview loaded.")
         self.warning_var = tk.StringVar(master=self, value="")
+        self.detail_var = tk.IntVar(master=self, value=1)
+        self._detail_level = 1
+        self.detail_label_var = tk.StringVar(master=self, value="Preview detail: medium")
+        self._preview_seed_lines: tuple[str, ...] = ()
+        self._selected_tool_section_id: int | None = None
         self._build()
 
     def _build(self) -> None:
@@ -124,6 +131,12 @@ class PathView(ttk.Frame):
         ttk.Button(toolbar, text="Fit", command=self.fit_to_view).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text="+", width=3, command=lambda: self.zoom(1.25)).pack(side="left", padx=(0, 4))
         ttk.Button(toolbar, text="-", width=3, command=lambda: self.zoom(0.8)).pack(side="left", padx=(0, 8))
+        ttk.Label(toolbar, textvariable=self.detail_label_var).pack(side="left", padx=(0, 4))
+        ttk.Scale(toolbar, from_=0, to=3, variable=self.detail_var, command=self._detail_changed, length=120).pack(side="left", padx=(0, 8))
+        self.tool_var = tk.StringVar(master=self, value="All paths")
+        self.tool_combo = ttk.Combobox(toolbar, textvariable=self.tool_var, state="readonly", width=24, values=("All paths",))
+        self.tool_combo.pack(side="left", padx=(0, 8))
+        self.tool_combo.bind("<<ComboboxSelected>>", self._tool_changed)
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="left", fill="x", expand=True)
         self.canvas = tk.Canvas(self, highlightthickness=1, background="#111417")
         self.canvas.grid(row=1, column=0, sticky="nsew")
@@ -135,6 +148,26 @@ class PathView(ttk.Frame):
 
     def set_lod(self, lod: PreviewLod | None) -> None:
         self._lod = lod
+        labels = ["All paths"] + [f"{section.section_id + 1}: {section.label}" for section in (lod.tool_sections if lod else ())]
+        tool_combo = getattr(self, "tool_combo", None)
+        tool_var = getattr(self, "tool_var", None)
+        if tool_combo is not None and tool_var is not None:
+            tool_combo.configure(values=labels)
+            if tool_var.get() not in labels:
+                tool_var.set("All paths")
+            selected_label = tool_var.get()
+        else:
+            selected_label = "All paths"
+        selected_id = None
+        if selected_label != "All paths":
+            try:
+                selected_id = int(selected_label.split(":", 1)[0]) - 1
+            except (TypeError, ValueError):
+                selected_id = None
+        self._selected_tool_section_id = next(
+            (s.section_id for s in (lod.tool_sections if lod else ()) if s.section_id == selected_id),
+            None,
+        )
         self._travel_area = known_xy_machine_travel_area(self.app)
         if lod is None:
             if self._travel_area is None:
@@ -146,13 +179,39 @@ class PathView(ttk.Frame):
                 )
             self.warning_var.set("")
         else:
-            suffix = " Preview Limited." if lod.limited else ""
-            self.status_var.set(
-                f"Planned Path: {lod.original_motion_count:,} motions, "
-                f"{lod.rendered_point_count:,} rendered points.{suffix}"
+            selected_section = next(
+                (section for section in lod.tool_sections if section.section_id == self._selected_tool_section_id),
+                None,
             )
+            if selected_section is not None:
+                scope = f" Selected: {selected_section.label}."
+            else:
+                scope = ""
+            self.status_var.set("Planned Path." + scope)
             self.warning_var.set(_warning_text(lod))
         self.render()
+
+    def _tool_changed(self, _event=None) -> None:
+        label = self.tool_var.get()
+        self._selected_tool_section_id = next(
+            (section.section_id for section in (self._lod.tool_sections if self._lod else ()) if label == f"{section.section_id + 1}: {section.label}"),
+            None,
+        )
+        schedule_path_preview_from_app(
+            self.app,
+            level=self._detail_level,
+            seed_lines=self._preview_seed_lines,
+        )
+
+    def _detail_changed(self, raw_value) -> None:
+        level = max(0, min(3, int(round(float(raw_value)))))
+        self.detail_var.set(level)
+        names = ("low", "medium", "high", "maximum")
+        self.detail_label_var.set(f"Preview detail: {names[level]}")
+        if level == self._detail_level:
+            return
+        self._detail_level = level
+        schedule_path_preview_from_app(self.app, level=level, seed_lines=self._preview_seed_lines)
 
     def update_reported_position(self, position: tuple[float, float, float] | None, ts: float) -> None:
         self._position = position
@@ -217,6 +276,15 @@ class PathView(ttk.Frame):
         if lod is not None:
             self._draw_bounds(lod.bounds)
             for batch in lod.batches:
+                selected_section = next(
+                    (section for section in lod.tool_sections if section.section_id == self._selected_tool_section_id),
+                    None,
+                )
+                if selected_section is not None and (
+                    batch.source_end < selected_section.source_start
+                    or batch.source_start > selected_section.source_end
+                ):
+                    continue
                 coords: list[float] = []
                 for x, y in batch.points:
                     sx, sy = self._to_screen(x, y)
@@ -373,6 +441,7 @@ def _warning_text(lod: PreviewLod) -> str:
         PreviewWarningCode.MALFORMED_ARC: "Preview Limited: one or more arcs could not be drawn.",
         PreviewWarningCode.NONFINITE_VALUE: "Preview Limited: non-finite numeric values were skipped.",
         PreviewWarningCode.LOD_LIMITED: "Preview Limited: large job shown with reduced detail.",
+        PreviewWarningCode.SOURCE_SAMPLED: "Preview Limited: large job preview uses sampled source lines; it is not a complete toolpath.",
     }
     return " ".join(labels[code] for code in labels if code in codes)
 
@@ -446,18 +515,53 @@ def _post_ui(app, callback) -> None:
             logger.exception("Failed posting Path View callback through ui_q")
 
 
-def schedule_path_preview(app, lines: Iterable[str]) -> None:
+def schedule_path_preview(
+    app,
+    lines: Iterable[str],
+    *,
+    source_complete: bool = True,
+    source_line_count: int | None = None,
+    sampled_source: bool = False,
+    tool_sections_override=None,
+) -> None:
     app._path_preview_generation = int(getattr(app, "_path_preview_generation", 0) or 0) + 1
     app._path_preview_loading = True
     generation = int(app._path_preview_generation)
     source_lines = tuple(lines)
+    app._path_preview_seed_lines = source_lines
 
     def keep_running() -> bool:
         return generation == int(getattr(app, "_path_preview_generation", 0) or 0)
 
     def worker() -> None:
         try:
-            geometry = parse_preview_geometry(source_lines, keep_running=keep_running)
+            preview_lines = list(source_lines)
+            source_path = str(getattr(app, "_path_preview_source_path", "") or "")
+            if not source_complete and source_path and not sampled_source:
+                preview_lines = _sample_snapshot_lines_by_tool(
+                    source_path,
+                    total_lines=int(getattr(app, "_path_preview_source_line_count", 0) or len(preview_lines)),
+                    limit=max(1, len(preview_lines)),
+                )
+            geometry = parse_preview_geometry(preview_lines, keep_running=keep_running)
+            geometry = type(geometry)(
+                segments=geometry.segments,
+                bounds=geometry.bounds,
+                warnings=geometry.warnings,
+                motion_count=geometry.motion_count,
+                units=geometry.units,
+                metadata={
+                    **geometry.metadata,
+                    "source_complete": bool(source_complete),
+                    "source_line_count": source_line_count,
+                    "preview_line_count": len(preview_lines),
+                    "tool_sections": (
+                        tuple(tool_sections_override)
+                        if tool_sections_override is not None
+                        else geometry.metadata.get("tool_sections", ())
+                    ),
+                },
+            )
             lod = build_lod(geometry)
         except Exception:
             logger.exception("Path preview parse failed")
@@ -467,14 +571,143 @@ def schedule_path_preview(app, lines: Iterable[str]) -> None:
             if generation != int(getattr(app, "_path_preview_generation", 0) or 0):
                 return
             app._path_preview_loading = False
-            app._path_preview_lod = lod
+            if lod is None:
+                app._path_preview_lod = getattr(app, "_path_preview_lod", None)
+            if lod is not None and (lod.batches or lod.bounds is not None):
+                app._path_preview_lod = lod
             view = getattr(app, "path_view", None)
-            if view is not None and callable(getattr(view, "set_lod", None)):
+            if lod is not None and (lod.batches or lod.bounds is not None) and view is not None and callable(getattr(view, "set_lod", None)):
                 view.set_lod(lod)
 
         _post_ui(app, apply)
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _sample_snapshot_lines(path: str, *, total_lines: int, limit: int) -> list[str]:
+    stride = max(1, (max(1, int(total_lines)) + max(1, int(limit)) - 1) // max(1, int(limit)))
+    selected: list[str] = []
+    pending_tool_line: tuple[int, str] | None = None
+    tool_change_re = re.compile(r"(?:\bM0*6\b|^\s*TC\s*:)", re.IGNORECASE)
+    tool_select_re = re.compile(r"\bT\s*[-+]?\d+(?:\.0+)?\b", re.IGNORECASE)
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        for index, line in enumerate(handle):
+            text = line.rstrip("\r\n")
+            keep_for_tool_change = bool(tool_change_re.search(text))
+            if tool_select_re.search(text):
+                pending_tool_line = (index, text)
+            if keep_for_tool_change and pending_tool_line is not None:
+                pending_index, pending_text = pending_tool_line
+                if pending_index != index and pending_text not in selected:
+                    selected.append(pending_text)
+                pending_tool_line = None
+            if index % stride == 0 or index == total_lines - 1 or keep_for_tool_change:
+                if text:
+                    selected.append(text)
+    return selected
+
+
+def _collect_tc_markers(path: str) -> list[str]:
+    markers: list[str] = []
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        for line in handle:
+            text = line.rstrip("\r\n")
+            if text.lstrip().upper().startswith("TC:"):
+                markers.append(text)
+    return markers
+
+
+def _sample_snapshot_lines_by_tool(path: str, *, total_lines: int, limit: int) -> list[str]:
+    sections: list[list[tuple[int, str]]] = [[]]
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        for line_index, raw in enumerate(handle):
+            text = raw.rstrip("\r\n")
+            if text.lstrip().upper().startswith("TC:"):
+                sections.append([(line_index, text)])
+            elif text:
+                sections[-1].append((line_index, text))
+    if len(sections) == 1:
+        return _sample_snapshot_lines(path, total_lines=total_lines, limit=limit)
+    per_section = max(1, int(limit) // len(sections))
+    output: list[str] = []
+    for section in sections:
+        marker = section[:1] if section and section[0][1].lstrip().upper().startswith("TC:") else []
+        body = section[1:] if marker else section
+        stride = max(1, (len(body) + per_section - 1) // per_section)
+        output.extend(marker)
+        output.extend(line for index, line in enumerate(body) if index % stride == 0 or index == len(body) - 1)
+    return output
+
+
+def _sample_snapshot_tool_section(path: str, *, section_id: int, limit: int) -> list[tuple[int, str]]:
+    sections: list[list[tuple[int, str]]] = [[]]
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        for line_index, raw in enumerate(handle):
+            text = raw.rstrip("\r\n")
+            if text.lstrip().upper().startswith("TC:"):
+                sections.append([(line_index, text)])
+            elif text:
+                sections[-1].append((line_index, text))
+    # Section ID 0 is the first TC section; sections[0] is preamble content.
+    source_index = section_id + 1
+    if source_index < 0 or source_index >= len(sections):
+        return []
+    section = sections[source_index]
+    marker = section[:1] if section and section[0][1].lstrip().upper().startswith("TC:") else []
+    body = section[1:] if marker else section
+    stride = max(1, (len(body) + max(1, limit) - 1) // max(1, limit))
+    return marker + [line for index, line in enumerate(body) if index % stride == 0 or index == len(body) - 1]
+
+
+def schedule_path_preview_from_app(app, *, level: int, seed_lines: Iterable[str] = ()) -> None:
+    level = max(0, min(3, int(level)))
+    limit = PREVIEW_DETAIL_LIMITS[level]
+    if not tuple(seed_lines):
+        seed_lines = getattr(app, "_path_preview_seed_lines", ())
+    path = str(getattr(app, "_path_preview_source_path", "") or "")
+    total_lines = int(getattr(app, "_path_preview_source_line_count", 0) or 0)
+    selected_section_id = getattr(getattr(app, "path_view", None), "_selected_tool_section_id", None)
+    if path and selected_section_id is not None:
+        def selected_worker() -> None:
+            try:
+                lines = _sample_snapshot_tool_section(path, section_id=int(selected_section_id), limit=limit)
+            except (OSError, UnicodeError):
+                logger.exception("Failed reading selected Path View tool section")
+                lines = list(seed_lines)
+            schedule_path_preview(
+                app,
+                lines,
+                source_complete=False,
+                source_line_count=total_lines,
+                sampled_source=True,
+                tool_sections_override=getattr(getattr(app, "path_view", None), "_lod", None).tool_sections
+                if getattr(getattr(app, "path_view", None), "_lod", None) is not None
+                else None,
+            )
+        threading.Thread(target=selected_worker, daemon=True).start()
+        return
+    if path and total_lines > limit:
+        def worker() -> None:
+            try:
+                lines = _sample_snapshot_lines_by_tool(path, total_lines=total_lines, limit=limit)
+            except (OSError, UnicodeError):
+                logger.exception("Failed reading Path View detail sample")
+                lines = list(seed_lines)
+            schedule_path_preview(
+                app,
+                lines,
+                source_complete=False,
+                source_line_count=total_lines,
+                sampled_source=True,
+            )
+        threading.Thread(target=worker, daemon=True).start()
+        return
+    schedule_path_preview(
+        app,
+        seed_lines,
+        source_complete=not bool(path),
+        source_line_count=total_lines or len(tuple(seed_lines)),
+    )
 
 
 def update_path_view_position(app) -> None:

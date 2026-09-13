@@ -903,7 +903,20 @@ def _apply_loaded_gcode_impl(
             except Exception as exc:
                 _log_suppressed("Failed scheduling post-commit G-code stats", exc)
         try:
-            schedule_path_preview(app, lines)
+            app._path_preview_source_path = str(
+                getattr(streaming_source, "path", "") if streaming_source is not None else ""
+            )
+            app._path_preview_source_line_count = int(total_lines or len(lines))
+            schedule_path_preview(
+                app,
+                lines,
+                source_complete=streaming_source is None,
+                source_line_count=(
+                    int(total_lines)
+                    if total_lines is not None
+                    else (len(lines) if streaming_source is None else None)
+                ),
+            )
         except Exception as exc:
             _log_suppressed("Failed scheduling passive Path View preview", exc)
         state = get_loaded_job_metadata_state(app)

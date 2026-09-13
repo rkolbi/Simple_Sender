@@ -16,13 +16,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import math
+from bisect import bisect_right
 import re
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
 
 GEOMETRY_POINT_BUDGET = 12000
-CANVAS_ITEM_BUDGET = 96
+CANVAS_ITEM_BUDGET = 1024
 ARC_MAX_SEGMENTS = 72
 ARC_MIN_SEGMENTS = 4
 ARC_TOLERANCE_MM = 0.35
@@ -36,6 +37,7 @@ class PreviewWarningCode(str, Enum):
     MALFORMED_ARC = "MALFORMED_ARC"
     NONFINITE_VALUE = "NONFINITE_VALUE"
     LOD_LIMITED = "LOD_LIMITED"
+    SOURCE_SAMPLED = "SOURCE_SAMPLED"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,16 @@ class PreviewBatch:
     points: tuple[tuple[float, float], ...]
     source_start: int
     source_end: int
+
+
+@dataclass(frozen=True)
+class PreviewToolSection:
+    section_id: int
+    label: str
+    tool_number: int | None
+    source_start: int
+    source_end: int
+    confidence: str = "inferred"
 
 
 @dataclass(frozen=True)
@@ -96,6 +108,10 @@ class PreviewLod:
     original_motion_count: int = 0
     rendered_point_count: int = 0
     limited: bool = False
+    source_complete: bool = True
+    source_line_count: int | None = None
+    preview_line_count: int = 0
+    tool_sections: tuple[PreviewToolSection, ...] = ()
 
 
 _WORD_RE = re.compile(r"([A-Z])\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)", re.I)
@@ -258,11 +274,26 @@ def parse_preview_geometry(lines: Iterable[str], *, keep_running=None) -> Previe
     plane = "G17"
     arc_centers_absolute = False
     motion_count = 0
+    pending_tool: int | None = None
+    tool_events: list[tuple[int, int | None, str | None]] = []
+    last_line_index = 0
 
-    for line_index, raw in enumerate(lines):
+    for sequence_index, raw in enumerate(lines):
+        if isinstance(raw, tuple) and len(raw) == 2:
+            line_index = int(raw[0])
+            raw_line = str(raw[1])
+        else:
+            line_index = sequence_index
+            raw_line = str(raw)
+        last_line_index = line_index
         if callable(keep_running) and not keep_running():
             break
-        text = _strip_comments(raw).upper()
+        raw_text = raw_line.strip()
+        if raw_text.upper().startswith("TC:"):
+            tool_name = raw_text[3:].strip() or "Unnamed tool"
+            tool_events.append((line_index, None, tool_name))
+            continue
+        text = _strip_comments(raw_line).upper()
         if not text:
             continue
         words = _words(text, line_index, warnings)
@@ -306,6 +337,11 @@ def parse_preview_geometry(lines: Iterable[str], *, keep_running=None) -> Previe
                 j_word = value * units_scale
             elif letter == "R":
                 r_word = value * units_scale
+            elif letter == "T" and value.is_integer():
+                pending_tool = int(value)
+        if any(letter == "M" and int(value) in {6} for letter, value in words):
+            tool_events.append((line_index, pending_tool, None))
+            pending_tool = None
         for code in sorted(geometry_warning_codes):
             warnings.append(
                 PreviewWarning(PreviewWarningCode.UNSUPPORTED_COORDINATE_CHANGE, line_index, code)
@@ -357,13 +393,21 @@ def parse_preview_geometry(lines: Iterable[str], *, keep_running=None) -> Previe
                 segments.extend(arc_out)
                 motion_count += 1
             x, y, z = nx, ny, nz
+    sections: list[PreviewToolSection] = []
+    for index, (start, tool, tool_name) in enumerate(tool_events):
+        end = tool_events[index + 1][0] - 1 if index + 1 < len(tool_events) else max(start, last_line_index)
+        if tool_name:
+            label = f"Tool: {tool_name}"
+        else:
+            label = f"Tool {tool}" if tool is not None else "Tool change (unknown tool)"
+        sections.append(PreviewToolSection(index, label, tool, start, end))
     return PreviewGeometry(
         segments=tuple(segments),
         bounds=_bounds_from_segments(segments),
         warnings=tuple(warnings),
         motion_count=motion_count,
         units=units,
-        metadata={"passive": True},
+        metadata={"passive": True, "tool_sections": tuple(sections)},
     )
 
 
@@ -371,19 +415,54 @@ def build_lod(geometry: PreviewGeometry, *, point_budget: int = GEOMETRY_POINT_B
     budget = max(16, int(point_budget))
     segments = geometry.segments
     original_points = len(segments) * 2
-    stride = max(1, int(math.ceil(max(1, len(segments)) / max(1, budget // 2))))
-    selected = segments[::stride]
+    tool_sections_meta = tuple(
+        section for section in geometry.metadata.get("tool_sections", ())
+        if isinstance(section, PreviewToolSection)
+    )
+    section_starts = tuple(section.source_start for section in tool_sections_meta)
+
+    def section_for_source(source_index: int) -> PreviewToolSection | None:
+        position = bisect_right(section_starts, source_index) - 1
+        if position < 0:
+            return None
+        section = tool_sections_meta[position]
+        return section if source_index <= section.source_end else None
+    if tool_sections_meta:
+        nonempty = [
+            section for section in tool_sections_meta
+            if any(section.source_start <= seg.source_index <= section.source_end for seg in segments)
+        ]
+        per_section_budget = max(2, budget // max(1, len(nonempty)))
+        selected: list[PreviewSegment] = []
+        for section in nonempty:
+            section_segments = [
+                seg for seg in segments
+                if section.source_start <= seg.source_index <= section.source_end
+            ]
+            stride = max(1, int(math.ceil(len(section_segments) / max(1, per_section_budget // 2))))
+            selected.extend(section_segments[::stride])
+            if section_segments[-1] not in selected:
+                selected.append(section_segments[-1])
+        stride = 1
+    else:
+        stride = max(1, int(math.ceil(max(1, len(segments)) / max(1, budget // 2))))
+        selected = list(segments[::stride])
     batches: list[PreviewBatch] = []
     current_kind = ""
+    current_section_id: int | None = None
     points: list[tuple[float, float]] = []
     source_start = source_end = 0
     for seg in selected:
-        if seg.kind != current_kind or not points:
+        section = section_for_source(seg.source_index)
+        segment_section_id = section.section_id if section is not None else None
+        section_changed = bool(points) and segment_section_id != current_section_id
+        if seg.kind != current_kind or not points or section_changed:
             if len(points) >= 2:
                 batches.append(
                     PreviewBatch(current_kind, tuple(points), source_start, source_end)
                 )
             current_kind = seg.kind
+            current_section_id = segment_section_id
             points = [(seg.x1, seg.y1), (seg.x2, seg.y2)]
             source_start = source_end = seg.source_index
             continue
@@ -396,6 +475,16 @@ def build_lod(geometry: PreviewGeometry, *, point_budget: int = GEOMETRY_POINT_B
         batches.append(PreviewBatch(current_kind, tuple(points), source_start, source_end))
     limited = stride > 1 or sum(len(batch.points) for batch in batches) > budget
     warnings = list(geometry.warnings)
+    source_complete = bool(geometry.metadata.get("source_complete", True))
+    source_line_count_raw = geometry.metadata.get("source_line_count")
+    source_line_count = int(source_line_count_raw) if isinstance(source_line_count_raw, int) else None
+    preview_line_count = int(geometry.metadata.get("preview_line_count", 0) or 0)
+    tool_sections = tuple(
+        section for section in geometry.metadata.get("tool_sections", ())
+        if isinstance(section, PreviewToolSection)
+    )
+    if not source_complete:
+        warnings.append(PreviewWarning(PreviewWarningCode.SOURCE_SAMPLED, None, "preview input is sampled"))
     if limited:
         warnings.append(
             PreviewWarning(
@@ -404,11 +493,31 @@ def build_lod(geometry: PreviewGeometry, *, point_budget: int = GEOMETRY_POINT_B
                 f"displayed={sum(len(batch.points) for batch in batches)} original={original_points}",
             )
         )
+    if tool_sections:
+        section_budget = max(1, CANVAS_ITEM_BUDGET // max(1, len(tool_sections)))
+        rendered_batches: list[PreviewBatch] = []
+        for section in tool_sections:
+            section_batches = [
+                batch for batch in batches
+                if not (
+                    batch.source_end < section.source_start
+                    or batch.source_start > section.source_end
+                )
+            ]
+            rendered_batches.extend(section_batches[:section_budget])
+        rendered_batches = rendered_batches[:CANVAS_ITEM_BUDGET]
+    else:
+        rendered_batches = batches[:CANVAS_ITEM_BUDGET]
+
     return PreviewLod(
-        batches=tuple(batches[:CANVAS_ITEM_BUDGET]),
+        batches=tuple(rendered_batches),
         bounds=geometry.bounds,
         warnings=tuple(warnings),
         original_motion_count=geometry.motion_count,
-        rendered_point_count=sum(len(batch.points) for batch in batches[:CANVAS_ITEM_BUDGET]),
+        rendered_point_count=sum(len(batch.points) for batch in rendered_batches),
         limited=limited or len(batches) > CANVAS_ITEM_BUDGET,
+        source_complete=source_complete,
+        source_line_count=source_line_count,
+        preview_line_count=preview_line_count,
+        tool_sections=tool_sections,
     )
