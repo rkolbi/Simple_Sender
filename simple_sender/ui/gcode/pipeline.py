@@ -74,13 +74,17 @@ from simple_sender.utils.constants import (
 )
 from simple_sender.utils.temp_paths import get_preferred_temp_dir
 from simple_sender.ui.job_controls import disable_job_controls
+from simple_sender.ui.path_view import clear_path_preview
 from .source_transaction import (
     abort_source_transaction,
     commit_source_transaction,
     reserve_source_transaction,
 )
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
-from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
+from .pipeline_loader import (
+    load_gcode_from_path as _load_gcode_from_path,
+    load_gcode_from_path_with_options as _load_gcode_from_path_with_options,
+)
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -279,6 +283,20 @@ def load_gcode_from_path(app, path: str):
     return _load_gcode_from_path(app, path, module=sys.modules[__name__])
 
 
+def load_gcode_from_path_with_options(
+    app,
+    path: str,
+    *,
+    sanitize_non_ascii: bool = False,
+):
+    return _load_gcode_from_path_with_options(
+        app,
+        path,
+        module=sys.modules[__name__],
+        sanitize_non_ascii=bool(sanitize_non_ascii),
+    )
+
+
 def apply_loaded_gcode(
     app,
     path: str,
@@ -431,6 +449,10 @@ def _install_cleared_gcode_ui(
     _apply_state_defaults(app, _CLEAR_GCODE_RUNTIME_DEFAULTS)
     _reset_autolevel_state(app)
     app._gcode_parse_token += 1
+    try:
+        clear_path_preview(app)
+    except Exception as exc:
+        _log_suppressed("Failed clearing passive Path View preview", exc)
     after_id = getattr(app, "_stats_after_id", None)
     if after_id is not None and hasattr(app, "after_cancel"):
         try:

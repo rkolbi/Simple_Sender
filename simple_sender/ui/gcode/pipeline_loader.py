@@ -75,6 +75,24 @@ class _UnsendableLineError(Exception):
         self.reason = str(reason)
 
 
+class _NonAsciiCharactersError(Exception):
+    def __init__(
+        self,
+        *,
+        first_line_no: int,
+        first_line: str,
+        characters: list[str],
+        removed_count: int,
+        affected_line_count: int,
+    ) -> None:
+        super().__init__("Non-ASCII characters are not supported by GRBL job streaming.")
+        self.first_line_no = int(first_line_no)
+        self.first_line = str(first_line)
+        self.characters = tuple(characters)
+        self.removed_count = int(removed_count)
+        self.affected_line_count = int(affected_line_count)
+
+
 @dataclass(slots=True)
 class _JobSnapshotData:
     path: str
@@ -151,6 +169,7 @@ def _create_job_snapshot(
     deps,
     *,
     file_size: int | None,
+    sanitize_non_ascii: bool = False,
 ) -> _JobSnapshotData:
     """Create the bounded, canonical file that is later admitted to the worker."""
     started_at = deps.time.perf_counter()
@@ -168,6 +187,12 @@ def _create_job_snapshot(
         progress_last_pct = -1
         source_identity_before: tuple[int, int, int, int] | None = None
         source_identity_after: tuple[int, int, int, int] | None = None
+        first_non_ascii_line_no: int | None = None
+        first_non_ascii_line = ""
+        non_ascii_chars: list[str] = []
+        non_ascii_seen: set[str] = set()
+        non_ascii_removed_count = 0
+        non_ascii_line_count = 0
 
         with deps.tempfile.NamedTemporaryFile(
             mode="wb",
@@ -196,6 +221,23 @@ def _create_job_snapshot(
                     if cleaned:
                         if cleaned.startswith("$"):
                             raise _SystemCommandError(raw_line_count, cleaned)
+                        unsupported_chars = [ch for ch in cleaned if ord(ch) > 0x7F]
+                        if unsupported_chars:
+                            non_ascii_line_count += 1
+                            non_ascii_removed_count += len(unsupported_chars)
+                            if first_non_ascii_line_no is None:
+                                first_non_ascii_line_no = raw_line_count
+                                first_non_ascii_line = cleaned
+                            for ch in unsupported_chars:
+                                if ch not in non_ascii_seen and len(non_ascii_chars) < 16:
+                                    non_ascii_seen.add(ch)
+                                    non_ascii_chars.append(ch)
+                            if sanitize_non_ascii:
+                                cleaned = "".join(ch for ch in cleaned if ord(ch) <= 0x7F)
+                                if not cleaned:
+                                    continue
+                            else:
+                                continue
                         try:
                             payload = cleaned.encode("ascii") + b"\n"
                         except UnicodeEncodeError as exc:
@@ -243,6 +285,14 @@ def _create_job_snapshot(
             except (AttributeError, OSError):
                 pass
 
+        if first_non_ascii_line_no is not None and not sanitize_non_ascii:
+            raise _NonAsciiCharactersError(
+                first_line_no=first_non_ascii_line_no,
+                first_line=first_non_ascii_line,
+                characters=non_ascii_chars,
+                removed_count=non_ascii_removed_count,
+                affected_line_count=non_ascii_line_count,
+            )
         _check_load_token(app, token)
         if (
             source_identity_before is not None
@@ -875,6 +925,7 @@ def _prepare_stream_source_fast(
     deps,
     *,
     file_size: int | None,
+    ssmeta_header: tuple[bool, dict[str, str]] | None = None,
 ) -> _FastPrepareData:
     started_at = deps.time.perf_counter()
     success = False
@@ -904,17 +955,24 @@ def _prepare_stream_source_fast(
         line_scan_limit = _resolve_fast_prepare_scan_limit_lines(
             app, deps, file_size=file_size
         )
-        ssmeta_present, ssmeta = _read_ssmeta_header(
-            path,
-            max_lines=max(
-                1,
-                int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_LINES", 500) or 500),
-            ),
-            max_bytes=max(
-                1024,
-                int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_BYTES", 64 * 1024) or (64 * 1024)),
-            ),
-        )
+        if ssmeta_header is None:
+            ssmeta_present, ssmeta = _read_ssmeta_header(
+                path,
+                max_lines=max(
+                    1,
+                    int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_LINES", 500) or 500),
+                ),
+                max_bytes=max(
+                    1024,
+                    int(
+                        getattr(deps, "GCODE_SSMETA_HEADER_MAX_BYTES", 64 * 1024)
+                        or (64 * 1024)
+                    ),
+                ),
+            )
+        else:
+            ssmeta_present = bool(ssmeta_header[0])
+            ssmeta = dict(ssmeta_header[1])
         ssmeta_bounds = _ssmeta_bounds_box(ssmeta)
         ssmeta_units = _ssmeta_units_value(ssmeta)
         ssmeta_scan_reduced = False
@@ -1190,6 +1248,7 @@ def quick_scan_gcode(
     deps,
     *,
     file_size: int | None,
+    ssmeta_header: tuple[bool, dict[str, str]] | None = None,
 ) -> _FastPrepareData:
     """Unified low-memory quick scan used by every load before stream-ready."""
     return _prepare_stream_source_fast(
@@ -1198,6 +1257,7 @@ def quick_scan_gcode(
         token,
         deps,
         file_size=file_size,
+        ssmeta_header=ssmeta_header,
     )
 
 
@@ -1209,6 +1269,7 @@ def _stream_from_disk(
     *,
     file_size: int | None,
     log_message: str | None = None,
+    sanitize_non_ascii: bool = False,
 ) -> None:
     started_at = deps.time.perf_counter()
     success = False
@@ -1224,8 +1285,23 @@ def _stream_from_disk(
             token,
             deps,
             file_size=file_size,
+            sanitize_non_ascii=sanitize_non_ascii,
         )
         _check_load_token(app, token)
+        ssmeta_header = _read_ssmeta_header(
+            path,
+            max_lines=max(
+                1,
+                int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_LINES", 500) or 500),
+            ),
+            max_bytes=max(
+                1024,
+                int(
+                    getattr(deps, "GCODE_SSMETA_HEADER_MAX_BYTES", 64 * 1024)
+                    or (64 * 1024)
+                ),
+            ),
+        )
         sample_only = True
         cache_profile = "disabled"
         setattr(app, "_gcode_full_line_cache_profile", cache_profile)
@@ -1242,6 +1318,7 @@ def _stream_from_disk(
             token,
             deps,
             file_size=snapshot.byte_size,
+            ssmeta_header=ssmeta_header,
         )
         _check_load_token(app, token)
         report = _validate_job_snapshot(
@@ -1481,6 +1558,21 @@ def _stream_from_disk(
             ("gcode_load_invalid_command", token, path, exc.line_no, exc.text)
         )
         return
+    except _NonAsciiCharactersError as exc:
+        _remove_temp_path(deps, getattr(snapshot, "path", None))
+        app.ui_q.put(
+            (
+                "gcode_load_non_ascii",
+                token,
+                path,
+                exc.first_line_no,
+                exc.first_line,
+                list(exc.characters),
+                exc.removed_count,
+                exc.affected_line_count,
+            )
+        )
+        return
     except _UnsendableLineError as exc:
         _remove_temp_path(deps, getattr(snapshot, "path", None))
         app.ui_q.put(
@@ -1505,6 +1597,16 @@ def _stream_from_disk(
 
 
 def load_gcode_from_path(app, path: str, module):
+    return load_gcode_from_path_with_options(app, path, module, sanitize_non_ascii=False)
+
+
+def load_gcode_from_path_with_options(
+    app,
+    path: str,
+    module,
+    *,
+    sanitize_non_ascii: bool = False,
+):
     deps = module
     if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         deps.messagebox.showwarning(
@@ -1570,6 +1672,7 @@ def load_gcode_from_path(app, path: str, module):
                 deps,
                 file_size=file_size,
                 log_message=log_message,
+                sanitize_non_ascii=sanitize_non_ascii,
             )
         except _GcodeLoadCancelled:
             return

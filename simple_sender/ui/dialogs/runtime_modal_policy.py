@@ -125,6 +125,11 @@ RUNTIME_MODAL_DIALOG_POLICIES: dict[str, RuntimeModalDialogPolicy] = {
         classification=RUNTIME_RECOVERY_NOT_NEEDED,
         reason="Run-start confirmation is only opened by an operator action that screen lock already blocks.",
     ),
+    "simple_sender.ui.events.router._ask_remove_non_ascii_and_continue": RuntimeModalDialogPolicy(
+        dialog_id="simple_sender.ui.events.router._ask_remove_non_ascii_and_continue",
+        classification=RUNTIME_RECOVERY_NOT_NEEDED,
+        reason="Unsupported-character recovery is opened only from operator-initiated file load before stream admission, not from active runtime execution.",
+    ),
     "simple_sender.ui.job_setup_state.confirm_job_start_without_setup": RuntimeModalDialogPolicy(
         dialog_id="simple_sender.ui.job_setup_state.confirm_job_start_without_setup",
         classification=RUNTIME_RECOVERY_NOT_NEEDED,

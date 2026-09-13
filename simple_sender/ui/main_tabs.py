@@ -31,6 +31,11 @@ from simple_sender.ui.file_info_tab import build_file_info_panel
 from simple_sender.ui.help_dialog import build_help_about_panel
 from simple_sender.ui.log_viewer import LogViewer
 from simple_sender.ui.overdrive_tab import build_overdrive_tab
+from simple_sender.ui.path_view import (
+    build_path_view_panel,
+    prepare_path_view_for_open,
+    update_path_view_position,
+)
 from simple_sender.ui.settings import (
     activate_app_settings_surface,
     build_app_settings_panel,
@@ -50,6 +55,7 @@ _POPUP_GEOMETRY = {
     "file_info": (1200, 860),
     "grbl_settings": (1280, 900),
     "logs": (1280, 900),
+    "path_view": (1200, 860),
     "checklists": (1100, 860),
     "app_settings": (1380, 940),
     "help": (1380, 940),
@@ -61,6 +67,11 @@ def _lower_popup_button_entries(app) -> list[dict]:
         {
             "button": getattr(app, "btn_job_info_popup", None),
             "label": "Job Info",
+            "pack_kwargs": {"side": "left", "padx": (0, 6)},
+        },
+        {
+            "button": getattr(app, "btn_path_view_popup", None),
+            "label": "Path View",
             "pack_kwargs": {"side": "left", "padx": (0, 6)},
         },
         {
@@ -314,6 +325,18 @@ def _show_file_info_popup(app) -> tk.Toplevel:
         width=_POPUP_GEOMETRY["file_info"][0],
         height=_POPUP_GEOMETRY["file_info"][1],
         build_body=lambda body, _popup: build_file_info_panel(app, body).pack(fill="both", expand=True),
+    )
+
+
+def _show_path_view_popup(app) -> tk.Toplevel:
+    return _show_popup_window(
+        app,
+        key="path_view",
+        title="Path View",
+        width=_POPUP_GEOMETRY["path_view"][0],
+        height=_POPUP_GEOMETRY["path_view"][1],
+        build_body=lambda body, _popup: build_path_view_panel(app, body).pack(fill="both", expand=True),
+        on_show=lambda: prepare_path_view_for_open(app),
     )
 
 
@@ -589,6 +612,13 @@ def build_main_tabs(app, parent):
         tooltip="Open loaded job details in a large popup.",
     )
     app.btn_file_info_popup = app.btn_job_info_popup
+    app.btn_path_view_popup = _build_popup_button(
+        left_buttons,
+        text="Path View",
+        command=lambda: _show_path_view_popup(app),
+        kb_id="show_path_view_popup",
+        tooltip="Open the passive planned-path preview and reported-position view.",
+    )
     app.btn_grbl_settings_popup = _build_popup_button(
         left_buttons,
         text="GRBL Settings",
@@ -626,6 +656,7 @@ def build_main_tabs(app, parent):
     _register_optional_buttons(app)
     sync_auxiliary_button_visibility(app)
     app._active_tab_label = "Console"
+    app._update_path_view_position = lambda: update_path_view_position(app)
     app._app_settings_tab_active = False
     app._app_settings_prewarm_after_id = None
     app._prewarm_app_settings_popup = lambda: _prewarm_app_settings_popup(app)

@@ -37,6 +37,7 @@ from simple_sender.ui.job_controls import (
     job_controls_missing,
     job_controls_ready,
 )
+from simple_sender.ui.path_view import schedule_path_preview
 from simple_sender.utils.task_timing import record_task_timing
 from .stats import format_streaming_estimate_text
 from .source_transaction import (
@@ -901,6 +902,10 @@ def _apply_loaded_gcode_impl(
                     post_commit_stats_work()
             except Exception as exc:
                 _log_suppressed("Failed scheduling post-commit G-code stats", exc)
+        try:
+            schedule_path_preview(app, lines)
+        except Exception as exc:
+            _log_suppressed("Failed scheduling passive Path View preview", exc)
         state = get_loaded_job_metadata_state(app)
         total_label = state.total_lines if state.total_lines is not None else len(lines)
         mode_label = " (file-backed streaming)" if streaming_source is not None else ""

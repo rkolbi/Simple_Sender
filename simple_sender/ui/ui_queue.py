@@ -87,6 +87,7 @@ _UI_DRAIN_SPECIAL_EVENT_KINDS = frozenset(
         "gcode_loaded_stream",
         "gcode_load_progress",
         "gcode_load_error",
+        "gcode_load_non_ascii",
     }
 )
 _UI_DRAIN_SPECIAL_TASK_PREFIXES = (
@@ -717,6 +718,7 @@ class UiEventQueue:
         "gcode_load_error",
         "gcode_load_invalid",
         "gcode_load_invalid_command",
+        "gcode_load_non_ascii",
         "gcode_loaded",
         "gcode_loaded_stream",
         "macro_prompt",

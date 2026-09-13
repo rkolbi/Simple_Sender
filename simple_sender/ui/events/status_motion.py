@@ -979,6 +979,12 @@ def update_positions_and_macro_state(
         app._status_installed_coordinate_signature = coordinate_signature
         app._status_last_installed_coordinate_ts = float(time_module.monotonic())
         signal_thread_event(app, "_status_coords_update_event")
+        updater = getattr(app, "_update_path_view_position", None)
+        if callable(updater):
+            try:
+                updater()
+            except Exception as exc:
+                log_suppressed("Failed updating Path View reported position", exc)
     probe_active = bool(pin_state & {"P"})
     hold_active = bool(pin_state & {"H"}) or "hold" in fields.state.lower()
 

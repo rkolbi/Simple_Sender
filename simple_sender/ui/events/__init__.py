@@ -95,6 +95,29 @@ def handle_gcode_load_invalid_command(app, idx, name, line_no, command):
     return _router.handle_gcode_load_invalid_command(app, idx, name, line_no, command)
 
 
+def handle_gcode_load_non_ascii(
+    app,
+    idx,
+    name,
+    line_no,
+    line_text,
+    characters,
+    removed_count,
+    affected_line_count,
+):
+    _router.messagebox = messagebox
+    return _router.handle_gcode_load_non_ascii(
+        app,
+        idx,
+        name,
+        line_no,
+        line_text,
+        characters,
+        removed_count,
+        affected_line_count,
+    )
+
+
 def handle_gcode_load_error(app, idx, name, message):
     _router.messagebox = messagebox
     return _router.handle_gcode_load_error(app, idx, name, message)
@@ -122,6 +145,7 @@ __all__ = [
     "handle_gcode_load_error",
     "handle_gcode_load_invalid",
     "handle_gcode_load_invalid_command",
+    "handle_gcode_load_non_ascii",
     "handle_gcode_loaded",
     "handle_gcode_loaded_stream",
     "handle_gcode_load_progress",
