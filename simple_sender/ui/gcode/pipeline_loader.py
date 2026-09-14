@@ -21,7 +21,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import deque
 import math
 import re
@@ -38,6 +38,7 @@ from .pipeline_loader_prepare import (
 )
 from .pipeline_loader_ssmeta import (
     _parse_ssmeta_line,
+    _parse_ssmeta_lines,
     _read_ssmeta_header,
     _ssmeta_bounds_box,
     _ssmeta_units_value,
@@ -101,6 +102,9 @@ class _JobSnapshotData:
     raw_line_count: int
     cleaned_line_count: int
     mtime_ns: int
+    ssmeta_header: tuple[bool, dict[str, str]] = field(
+        default_factory=lambda: (False, {})
+    )
 
 
 @dataclass(slots=True)
@@ -169,7 +173,6 @@ def _create_job_snapshot(
     deps,
     *,
     file_size: int | None,
-    sanitize_non_ascii: bool = False,
 ) -> _JobSnapshotData:
     """Create the bounded, canonical file that is later admitted to the worker."""
     started_at = deps.time.perf_counter()
@@ -193,6 +196,18 @@ def _create_job_snapshot(
         non_ascii_seen: set[str] = set()
         non_ascii_removed_count = 0
         non_ascii_line_count = 0
+        ssmeta_lines: list[str] = []
+        ssmeta_bytes = 0
+        ssmeta_max_lines = max(
+            1, int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_LINES", 500) or 500)
+        )
+        ssmeta_max_bytes = max(
+            1024,
+            int(
+                getattr(deps, "GCODE_SSMETA_HEADER_MAX_BYTES", 64 * 1024)
+                or (64 * 1024)
+            ),
+        )
 
         with deps.tempfile.NamedTemporaryFile(
             mode="wb",
@@ -217,29 +232,30 @@ def _create_job_snapshot(
                     if not raw:
                         break
                     raw_line_count += 1
+                    if raw_line_count <= ssmeta_max_lines and ssmeta_bytes < ssmeta_max_bytes:
+                        ssmeta_lines.append(raw)
+                        ssmeta_bytes += len(raw.encode("utf-8", "ignore"))
                     cleaned = cast(str, deps.clean_gcode_line(raw))
                     if cleaned:
                         if cleaned.startswith("$"):
                             raise _SystemCommandError(raw_line_count, cleaned)
                         unsupported_chars = [ch for ch in cleaned if ord(ch) > 0x7F]
                         if unsupported_chars:
-                            non_ascii_line_count += 1
-                            non_ascii_removed_count += len(unsupported_chars)
-                            if first_non_ascii_line_no is None:
-                                first_non_ascii_line_no = raw_line_count
-                                first_non_ascii_line = cleaned
-                            for ch in unsupported_chars:
-                                if ch not in non_ascii_seen and len(non_ascii_chars) < 16:
-                                    non_ascii_seen.add(ch)
-                                    non_ascii_chars.append(ch)
-                            if sanitize_non_ascii:
-                                cleaned = "".join(ch for ch in cleaned if ord(ch) <= 0x7F)
-                                if not cleaned:
-                                    continue
-                            else:
+                            if not cleaned.startswith("TC:"):
+                                non_ascii_line_count += 1
+                                non_ascii_removed_count += len(unsupported_chars)
+                                if first_non_ascii_line_no is None:
+                                    first_non_ascii_line_no = raw_line_count
+                                    first_non_ascii_line = cleaned
+                                for ch in unsupported_chars:
+                                    if ch not in non_ascii_seen and len(non_ascii_chars) < 16:
+                                        non_ascii_seen.add(ch)
+                                        non_ascii_chars.append(ch)
                                 continue
                         try:
-                            payload = cleaned.encode("ascii") + b"\n"
+                            payload = cleaned.encode(
+                                "utf-8" if cleaned.startswith("TC:") else "ascii"
+                            ) + b"\n"
                         except UnicodeEncodeError as exc:
                             raise _UnsendableLineError(
                                 raw_line_count,
@@ -285,7 +301,7 @@ def _create_job_snapshot(
             except (AttributeError, OSError):
                 pass
 
-        if first_non_ascii_line_no is not None and not sanitize_non_ascii:
+        if first_non_ascii_line_no is not None:
             raise _NonAsciiCharactersError(
                 first_line_no=first_non_ascii_line_no,
                 first_line=first_non_ascii_line,
@@ -320,6 +336,7 @@ def _create_job_snapshot(
             raw_line_count=int(raw_line_count),
             cleaned_line_count=int(cleaned_line_count),
             mtime_ns=int(getattr(snapshot_stat, "st_mtime_ns", 0) or 0),
+            ssmeta_header=_parse_ssmeta_lines(ssmeta_lines),
         )
     except Exception:
         _remove_temp_path(deps, snapshot_path)
@@ -377,7 +394,7 @@ def _validate_job_snapshot(
                             100,
                             f"Validating job: {deps.os.path.basename(display_path)}",
                         )
-                    yield raw.decode("ascii", errors="strict").rstrip("\r\n")
+                    yield raw.decode("utf-8", errors="strict").rstrip("\r\n")
 
         report = deps.validate_gcode_lines(iter_snapshot_lines())
         _check_load_token(app, token)
@@ -410,6 +427,11 @@ def _validation_blocking_summary(report: Any) -> str | None:
         ("unsupported_m_codes", "unsupported M-codes"),
         ("grbl_warnings", "GRBL-incompatible commands"),
         ("malformed_line_count", "malformed or unsupported syntax lines"),
+        (
+            "raw_m6_count",
+            "bare or controller-style M6/M06 tool changes (use TC:<description> or M6/M06 <description>)",
+        ),
+        ("structural_error_count", "duplicate words or conflicting modal-group lines"),
     ):
         value = getattr(report, attr, None)
         if not value:
@@ -1269,7 +1291,6 @@ def _stream_from_disk(
     *,
     file_size: int | None,
     log_message: str | None = None,
-    sanitize_non_ascii: bool = False,
 ) -> None:
     started_at = deps.time.perf_counter()
     success = False
@@ -1285,23 +1306,9 @@ def _stream_from_disk(
             token,
             deps,
             file_size=file_size,
-            sanitize_non_ascii=sanitize_non_ascii,
         )
         _check_load_token(app, token)
-        ssmeta_header = _read_ssmeta_header(
-            path,
-            max_lines=max(
-                1,
-                int(getattr(deps, "GCODE_SSMETA_HEADER_MAX_LINES", 500) or 500),
-            ),
-            max_bytes=max(
-                1024,
-                int(
-                    getattr(deps, "GCODE_SSMETA_HEADER_MAX_BYTES", 64 * 1024)
-                    or (64 * 1024)
-                ),
-            ),
-        )
+        ssmeta_header = snapshot.ssmeta_header
         sample_only = True
         cache_profile = "disabled"
         setattr(app, "_gcode_full_line_cache_profile", cache_profile)
@@ -1341,7 +1348,7 @@ def _stream_from_disk(
         app.ui_q.put(
             (
                 "log",
-                "[gcode] Immutable job snapshot and complete bounded validation finished before stream admission; no preparation work remains on the Run path.",
+                "[gcode] Immutable job snapshot and complete bounded validation finished before admission; Run only rechecks the retained snapshot digest and identity before transmission.",
             )
         )
         cleaned_lines_estimate = int(snapshot.cleaned_line_count)
@@ -1372,6 +1379,7 @@ def _stream_from_disk(
             snapshot_mtime_ns=snapshot.mtime_ns,
             validation_complete=True,
             validated_line_count=cleaned_lines_estimate,
+            retain_open_handle=True,
         )
         setattr(source, "_cleanup_path", snapshot.path)
         setattr(source, "_prepare_sampled_lines", None)
@@ -1597,16 +1605,6 @@ def _stream_from_disk(
 
 
 def load_gcode_from_path(app, path: str, module):
-    return load_gcode_from_path_with_options(app, path, module, sanitize_non_ascii=False)
-
-
-def load_gcode_from_path_with_options(
-    app,
-    path: str,
-    module,
-    *,
-    sanitize_non_ascii: bool = False,
-):
     deps = module
     if app.grbl.is_streaming() or bool(getattr(app, "_stream_done_pending_idle", False)):
         deps.messagebox.showwarning(
@@ -1672,7 +1670,6 @@ def load_gcode_from_path_with_options(
                 deps,
                 file_size=file_size,
                 log_message=log_message,
-                sanitize_non_ascii=sanitize_non_ascii,
             )
         except _GcodeLoadCancelled:
             return

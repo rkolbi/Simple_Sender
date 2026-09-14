@@ -764,6 +764,7 @@ class GrblWorkerState:
     _connection_lifecycle_lock: Any
     _stream_token: int
     _recovery_epoch: int
+    _snapshot_start_pending: Any | None
     _execution_pending: ExecutionPendingState | None
     _status_observation_seq: int
     _suspension_state: ControllerSuspensionState

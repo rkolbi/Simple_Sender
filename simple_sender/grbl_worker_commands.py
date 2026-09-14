@@ -231,6 +231,13 @@ class GrblWorkerCommandMixin(GrblWorkerState):
                         error="Manual command was blocked while physical execution remained pending.",
                     )
                     return None
+                if self._snapshot_start_pending is not None:
+                    self._resolve_manual_tracker(
+                        tracker,
+                        success=False,
+                        error="Manual command was blocked while snapshot verification was pending.",
+                    )
+                    return None
                 allow_stream_paused_macro = self._tool_change_macro_admission_allowed_locked(
                     command_source,
                     expected_tool_change_identity,

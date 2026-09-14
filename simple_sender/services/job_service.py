@@ -96,7 +96,23 @@ class JobService:
             return dry_run_guard_result
         self._reset_accessory_router_state(app)
         self._apply_stream_start_settings(app)
-        app.grbl.start_stream()
+        accepted = app.grbl.start_stream()
+        pending = False
+        pending_checker = getattr(app.grbl, "snapshot_verification_pending", None)
+        if callable(pending_checker):
+            try:
+                pending = bool(pending_checker())
+            except Exception as exc:
+                self._log_suppressed("Failed checking snapshot verification state", exc)
+        if accepted is False and not pending:
+            return JobStartResult(
+                JobStartOutcome.START_FAILED,
+                detail=self._build_start_failure_detail(app),
+            )
+        if pending:
+            app._snapshot_verified_start_context = {"kind": "run", "start_index": 0}
+            self._reset_stream_progress_state(app)
+            return JobStartResult(JobStartOutcome.STARTED)
         started = self._stream_started(app)
         if not started:
             return JobStartResult(
@@ -277,6 +293,15 @@ class JobService:
             self._log_suppressed("Failed stopping Kasa job accessories on Stop/Reset", exc)
 
     def _job_has_real_active_or_finishing_state(self, app: Any) -> bool:
+        pending_checker = getattr(app.grbl, "snapshot_verification_pending", None)
+        if callable(pending_checker):
+            try:
+                if bool(pending_checker()):
+                    return True
+            except Exception as exc:
+                self._log_suppressed(
+                    "Failed checking snapshot verification state for Stop Job", exc
+                )
         try:
             if bool(app.grbl.is_streaming()):
                 return True

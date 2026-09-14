@@ -34,6 +34,7 @@ from simple_sender.gcode_parser_core import (
     GcodeParseResult,
     clean_gcode_line,
     parse_gcode_lines,
+    parse_sender_tool_change_directive,
     _arc_center_from_radius,
     _arc_sweep,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "GcodeParseResult",
     "clean_gcode_line",
     "parse_gcode_lines",
+    "parse_sender_tool_change_directive",
     "_arc_center_from_radius",
     "_arc_sweep",
     "GcodeSplitResult",
@@ -79,4 +81,3 @@ __all__ = [
     "_split_linear_move",
     "_trim_number_str",
 ]
-

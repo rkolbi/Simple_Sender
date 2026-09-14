@@ -28,7 +28,7 @@ import math
 import re
 from typing import Iterable
 
-from simple_sender.gcode_parser import WORD_PAT
+from simple_sender.gcode_parser import WORD_PAT, parse_sender_tool_change_directive
 from simple_sender.utils.constants import MAX_LINE_LENGTH
 
 DETAIL_LINE_LIMIT = 200
@@ -90,7 +90,6 @@ SUPPORTED_M_CODES = {
     3,
     4,
     5,
-    6,
     7,
     8,
     9,
@@ -126,6 +125,19 @@ MODAL_HAZARDS = {
 GRBL_WARN_G_CODES = {
     90.1: "G90.1 (arc center absolute) is not supported by GRBL 1.1h",
 }
+
+_G_MODAL_GROUPS = {
+    "motion": {0.0, 1.0, 2.0, 3.0, 38.2, 38.3, 38.4, 38.5, 80.0},
+    "plane": {17.0, 18.0, 19.0},
+    "distance mode": {90.0, 91.0},
+    "arc-center mode": {90.1, 91.1},
+    "feed mode": {93.0, 94.0},
+    "units": {20.0, 21.0},
+    "work coordinate system": {54.0, 55.0, 56.0, 57.0, 58.0, 59.0, 59.1, 59.2, 59.3},
+    "tool-length offset": {43.1, 49.0},
+    "return mode": {98.0, 99.0},
+}
+_DUPLICATE_SINGLE_WORDS = {"X", "Y", "Z", "F", "S"}
 
 
 @dataclass
@@ -172,6 +184,8 @@ class GcodeValidationReport:
     line_issues: list[GcodeValidationLineIssue]
     line_issues_truncated: bool
     malformed_line_count: int = 0
+    raw_m6_count: int = 0
+    structural_error_count: int = 0
     placement: GcodePlacementAnalysis = field(default_factory=GcodePlacementAnalysis)
     snapshot_sha256: str = ""
 
@@ -398,6 +412,8 @@ def validate_gcode_lines(
     line_issue_count = 0
     line_issues_truncated = False
     malformed_line_count = 0
+    raw_m6_count = 0
+    structural_error_count = 0
     placement_accumulator = _PlacementAccumulator()
     total = 0
 
@@ -454,7 +470,7 @@ def validate_gcode_lines(
         sender_directive = bool(
             line == "VACUUM_ON"
             or line == "VACUUM_OFF"
-            or line.startswith("TC:")
+            or parse_sender_tool_change_directive(line) is not None
         )
         if word_pattern is WORD_PAT and not sender_directive:
             residual = WORD_PAT.sub("", line.upper())
@@ -465,10 +481,41 @@ def validate_gcode_lines(
                     line_issue_seen,
                     "Malformed or unsupported syntax",
                 )
+        if sender_directive:
+            if line_issues_for_line:
+                store_line_issue(idx, line, line_issues_for_line)
+            continue
         if not words:
             if line_issues_for_line:
                 store_line_issue(idx, line, line_issues_for_line)
             continue
+        word_values: dict[str, list[float]] = {}
+        for letter, value_text in words:
+            try:
+                value = round(float(value_text), 3)
+            except (TypeError, ValueError):
+                continue
+            word_values.setdefault(letter, []).append(value)
+        structural_messages: list[str] = []
+        for letter in _DUPLICATE_SINGLE_WORDS:
+            if len(word_values.get(letter, ())) > 1:
+                structural_messages.append(f"Duplicate {letter} word")
+        for letter in ("G", "M"):
+            values = word_values.get(letter, ())
+            if len(values) != len(set(values)):
+                structural_messages.append(f"Duplicate {letter}-code word")
+        g_values = set(word_values.get("G", ()))
+        for group_name, group_values in _G_MODAL_GROUPS.items():
+            if len(g_values.intersection(group_values)) > 1:
+                structural_messages.append(f"Conflicting {group_name} commands")
+        if structural_messages:
+            structural_error_count += 1
+            for structural_message in structural_messages:
+                add_issue(
+                    line_issues_for_line,
+                    line_issue_seen,
+                    structural_message,
+                )
         for letter, val in words:
             if letter in UNSUPPORTED_AXES:
                 unsupported_axes[letter] += 1
@@ -518,6 +565,13 @@ def validate_gcode_lines(
                     )
                     continue
                 code_int = int(round(code))
+                if code_int == 6:
+                    raw_m6_count += 1
+                    add_issue(
+                        line_issues_for_line,
+                        line_issue_seen,
+                        "Bare or controller-style M6/M06 is unsupported; use TC:<description> or M6/M06 <description> for the Simple Sender tool-change workflow",
+                    )
                 if code_int not in supported_m_codes:
                     code_label = f"M{code_int}"
                     count_code(unsupported_m_codes, code_label)
@@ -543,6 +597,8 @@ def validate_gcode_lines(
         line_issues=line_issues,
         line_issues_truncated=line_issues_truncated,
         malformed_line_count=malformed_line_count,
+        raw_m6_count=raw_m6_count,
+        structural_error_count=structural_error_count,
         placement=placement_accumulator.finish(),
     )
 

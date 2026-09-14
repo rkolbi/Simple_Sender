@@ -260,7 +260,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
     _sec(
         "Running a Job",
         paragraphs=(
-            "Read Job prepares an application-owned file-backed snapshot and completes bounded whole-job command and placement-fact validation before the job becomes runnable. Run streams that prepared snapshot without starting copy, hash, or validation work. Review bounds, dimensions, tool setup, and machine state before pressing Run.",
+            "Read Job prepares an application-owned file-backed snapshot and completes bounded whole-job command and placement-fact validation before the job becomes runnable. Run verifies the retained snapshot SHA-256 in the background, then revalidates its exact worker/session identity before any job command is admitted; parsing and whole-job command validation are not repeated. Review bounds, dimensions, tool setup, and machine state before pressing Run.",
         ),
         subsections=(
             _sub(
@@ -274,7 +274,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Read Job waits for snapshot creation, SHA-256 hashing, and complete command validation. Job Info shows the validation receipt. Review the dimensions and estimate, and optionally run the broader Preflight check from App Settings > Diagnostics.",
                     "Choose your safety options: Training Wheels confirmations, ALL STOP mode, auto-reconnect behavior, and Performance mode.",
                     "Home if required, set work zero, and complete Job Setup so the tool reference state is valid for this session.",
-                    "For a dry run, enable Dry run: strip spindle/coolant/M6/S/T from streamed G-code in App Settings > Safety before pressing Run.",
+                    "For a dry run, enable Dry run: strip spindle/coolant/S/T from streamed G-code in App Settings > Safety before pressing Run. Sender-owned TC:<description> and uppercase M6/M06 <description> directives still run the Tool Change workflow; bare or controller-style M6/M06 is rejected.",
                     "Press Run. If no valid tool reference is stored for the session, the app shows Job Setup Not Completed with Start Anyway and Cancel.",
                     "If Dry Run is enabled, Run opens the explicit Dry Run confirmation first so you can continue in Dry Run, switch back to normal cutting, or cancel.",
                     "Use Pause and Resume for controller-confirmed feed hold and cycle start, Stop/Reset for the configured reset path, and ALL STOP for the fastest software stop path. None replaces a physical emergency stop or power isolation.",
@@ -293,7 +293,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                 bullets=(
                     "Startup ownership is generation-bound and single-use: only the expected banner establishes Communication Ready. Pre-banner status remains telemetry-only, and a later banner is treated as a controller reset.",
                     "Run and Resume From require Job Ready: fresh normal-session modal/coordinate/position/accessory trust, an exact worker/UI source identity in Committed state, and no pending source installation or execution-Idle confirmation.",
-                    "The committed source identity includes the application-owned snapshot SHA-256, byte size, and validated line count. Missing or changed snapshot metadata blocks Run and Resume From before streaming starts.",
+                    "The committed source identity includes the application-owned snapshot SHA-256, byte size, and validated line count. Run and Resume From verify the retained snapshot handle outside the central worker locks, then atomically revalidate source, handle, connection, stream, and recovery identity. Missing, changed, or superseded evidence blocks streaming before any job command is sent.",
                     "Run and Resume From project exact absolute linear targets into the standard GRBL machine envelope using the existing automatic $130/$131/$132 snapshot and fresh trusted MPos/WCO/WCS/G92/TLO/modal caches. A verified violation blocks execution. If placement cannot be proven, the warning names the reason and requires confirmation. This does not request controller information or change GRBL streaming and acknowledgment handling.",
                     "Training Wheels can confirm connect, run, pause, resume, stop, spindle, clear, and unlock actions.",
                     "Auto-reconnect can retry an idle/startup connection, but it does not resume a job interrupted by a disconnect. Active-job connection loss enters Recovery Required because GRBL may have buffered commands beyond the last acknowledgment.",
@@ -325,7 +325,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "A safety-significant realtime write failure enters fail-closed Recovery Required before the caller receives failure. Current-session jog-cancel failure is treated as uncertain even when cached status appears Idle.",
                     "Every streamed Tool Change command and completion carries the exact originating connection, serial object, stream/recovery/source directive, and request identity. Stale or reconstructed workflows cannot command or release a later tool change. A current replacement behind a still-live stale UI thread is explicitly failed with Stop/restart guidance instead of being silently left pending.",
                     "Auto-Level acquires one exclusive worker-owned lease only when controller command queues, reservations, streams, resets, jog state, and recovery are clear. After exact modal restoration, one single-use worker ticket authorizes UI staging; final worker revalidation must succeed before the provenance-bound map is published and Apply/Save are enabled. Reset, alarm, recovery, session/source replacement, and relevant WCS/G92/TLO changes invalidate the active map, and historical loaded maps remain inactive. Cancellation requests hold/reset recovery, and a retired lease or failed restoration/finalization cannot publish success.",
-                    "Send-time validation failures such as $ job lines, non-ASCII text that was not removed during load, or lines that still exceed 80 bytes are terminal stream errors rather than normally resumable pauses.",
+                    "Send-time validation failures such as $ job lines, executable non-ASCII text, or lines that exceed 80 bytes are terminal stream errors rather than normally resumable pauses.",
                     "ALARM:x, reset/reboot, and Reset to continue paths remain terminal alarm/reset handling rather than normal resumable pauses.",
                     "A streamed GRBL error:, including an error after final ACK while Idle or exact UI completion acknowledgement is pending, an unexpected startup banner, current-session connection loss, or disconnect before controller completion enters worker-owned Recovery Required state. Command admission closes atomically, pending confirmed vacuum directives and retired stream/ACK/UI completion work are quarantined, and automatic reconnect-resume and last-ACK resume are disabled.",
                     "Recovery progresses through Reset Required, Reset Sent - Awaiting Banner, and Reset Confirmed - State Untrusted. The matching banner confirms only the reset and never restores Ready. Every additional banner or replacement connection retires the prior recovery identity and all evidence gathered under it; the interrupted job is not restored.",
@@ -337,9 +337,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Recovery Required retires any pending confirmed VACUUM_ON/OFF stream directive, then establishes configured Kasa accessory OFF dominance before asynchronous submission. Stable device ID plus outlet is the canonical safety identity across hostname/IP aliases, cache replacement, and rediscovery; unresolved aliases share a conservative provisional domain until resolution merges ownership. The exact software dispatch commitment is recorded under the router state lock while holding that canonical outlet barrier, before the network call. Physical outlet dispatch ownership records a unique router-instance owner and can outlive one router while a committed call is active; router shutdown drains only that exact instance, and a replacement router serializes against unresolved same-outlet work before conflicting commands. Recovery OFF suppresses work not yet committed. A committed call cannot be canceled; it remains superseded and still requires Recovery OFF. Requested and failed_unknown Recovery OFF states block ON across later recovery epochs, reconnects, and replacement routers. Reconnect alone does not clear physical uncertainty; an identity-valid OFF retry must succeed and become confirmed, then confirmed dominance retires only after successful recovery completion for the exact identity. Idle registry entries are cleaned up only after no router reference, active commitment, or unresolved/unretired tombstone remains. Requested or failed_unknown never means physical OFF was confirmed; Kasa remains convenience automation, not a safety system.",
                     "After Job Ready, ordinary MPos, WPos, and WCO telemetry is accepted only when each recognized field is unique, contains exactly three finite values, and simultaneous representations agree within reporting-rounding tolerance. Recognized coordinate field names are normalized before installation. Raw status is separate from the last validated-and-installed coordinate signature. A malformed frame cannot become a duplicate/freshness baseline, enter coordinate coalescing, advance the position throttle or coordinate sequence, signal a fresh-coordinate waiter, or overwrite operational/macro coordinates. Deferred coordinate evidence is bound to the originating connection generation, recovery epoch, session/serial identity, and coalescing request. Stale callbacks after disconnect, recovery entry, replacement connection, shutdown, or newer valid evidence are discarded without updating DROs, macro coordinates, installed signatures, freshness, or throttle timestamps. Freshness is published only after those exact validated values are installed in operational, DRO, and macro caches.",
                     "If the recovery soft reset cannot be transmitted, assume buffered motion may still execute and use the physical emergency stop or power cutoff when necessary.",
-                    "Each outbound line counts its trailing newline for buffer accounting. During load, unsupported non-ASCII characters can be removed from the loaded copy only after operator approval and complete revalidation; the original file is not changed. Outbound non-ASCII or over-80-byte lines are rejected.",
+                    "Each outbound line counts its trailing newline for buffer accounting. Unicode is preserved in recognized TC:<description> and uppercase M6/M06 <description> tool directives and ignored inside comments. Non-ASCII in executable G-code is rejected without character deletion, as are bare or controller-style M6/M06, duplicate controller words, and conflicting modal-group commands.",
                     "Exact trimmed VACUUM_ON and VACUUM_OFF lines are intercepted by the sender and never sent to GRBL. The optional Kasa confirmation setting holds the stream at those directives until success or failure is known.",
-                    "Lines that start with TC: are intercepted and routed through the built-in Tool Change workflow, then the paused stream resumes when the operator finishes the tool change.",
+                    "Lines that start with TC:, or uppercase M6/M06 followed by whitespace and a nonempty description, are intercepted and routed through the same built-in Tool Change workflow. They are never sent to GRBL; the paused stream resumes when the operator finishes the tool change.",
                     "System commands that start with $ are rejected in job files. Use the UI or a macro for those instead.",
                     "Run progress is byte-offset based and final completion waits for GRBL to reach Idle after the last acknowledged line.",
                     "During deferred completion, macros, probing entry points, and GRBL settings refresh remain blocked until the final Idle arrives.",
@@ -378,7 +378,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "Performance mode reduces console churn and suppresses per-line RX logs during streaming while still keeping alarms and errors visible.",
                     "Manual command errors update the status bar with a source label and do not alter the stream state.",
                     "Streaming errors report the file name, line number, and line text in the error status and do not silently skip the rejected command.",
-                    "Program pauses such as M0, M1, and tool changes such as M6 pause the stream after the line is acknowledged.",
+                    "Program pauses M0 and M1 pause after acknowledgement. Bare or controller-style M6/M06 is rejected during load. Sender-owned uppercase M6/M06 <description> is accepted as an alias for TC:<description>; bundled Simple Sender/Vectric posts continue to emit TC:.",
                     "Console Save pre-fills a timestamped filename so exporting logs is touch-friendly.",
                 ),
             ),
@@ -451,9 +451,9 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Dry Run is intended for motion and setup checking without real spindle activity. It is especially useful after changing workholding, zero location, post processor settings, or any other setup assumption.",
         ),
         bullets=(
-            "Dry run sanitize strips spindle, coolant, M6, S, and T commands while streaming.",
+            "Dry run sanitize strips spindle, coolant, S, and T commands while streaming. Bare or controller-style M6/M06 is rejected during load.",
             "When Dry Run is enabled, fresh Run and resume-start paths such as Resume From prompt you to continue in Dry Run, switch back to Normal Run and continue, or cancel.",
-            "Sender-side TC:<tool name> directives still use the built-in Tool Change workflow even when Dry Run sanitizing is on.",
+            "Sender-side TC:<description> and uppercase M6/M06 <description> directives still use the built-in Tool Change workflow even when Dry Run sanitizing is on.",
             "Use Dry Run in the air and watch the first moves carefully so you can pause immediately if the machine heads the wrong direction.",
         ),
         notes=(
@@ -494,7 +494,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
                     "LOAD waits for actual load completion or failure.",
                     "OPEN and CLOSE fail fast when the connect or disconnect transition never really started.",
                     "Local-command helpers such as SENDHEX and SAFE fail the macro if their local action fails.",
-                    "Streamed TC:<tool name> directives use the protected tool-change path and intentionally wait with no timeout until the operator finishes the workflow.",
+                    "Streamed TC:<description> and uppercase M6/M06 <description> directives use the protected tool-change path and intentionally wait with no timeout until the operator finishes the workflow.",
                     "Audit-style macro log entries can record raw, evaluated, and outcome details when GUI logging is enabled.",
                 ),
                 notes=(
@@ -927,7 +927,7 @@ HELP_ABOUT_SECTIONS: tuple[HelpSection, ...] = (
             "Built-in: Home. Purpose: run $H from the protected workflow row. Use it before setup, after alarms, or after controller resets when homing is required.",
             "Built-in: Park at Bit Setter. Purpose: move to the configured fixed-sensor coordinates for cleaning, inspection, or staging.",
             "Built-in: Job Setup. Purpose: guide the operator through XYZ Plate, Z Plate, or Manual setup and capture the reference tool height for the current valid session.",
-            "Built-in: Tool Change. Purpose: re-probe after a tool swap, reapply the stored tool-reference logic, and then park at safe Z over WCS X0 Y0. This is also the workflow used by streamed TC:<tool name> directives.",
+            "Built-in: Tool Change. Purpose: re-probe after a tool swap, reapply the stored tool-reference logic, and then park at safe Z over WCS X0 Y0. This is also the workflow used by streamed TC:<description> and uppercase M6/M06 <description> directives.",
             "Built-in: Park at Work. Purpose: raise to a configured safe machine Z and return to WCS X0 Y0 without changing offsets.",
             "User Macro 1-5. Purpose: editable file-backed user routines managed in Macro Manager for custom operator workflows outside the protected built-in setup actions.",
         ),

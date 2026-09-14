@@ -29,6 +29,7 @@ from typing import Any, Callable, Iterable, List, MutableMapping, Optional, Set
 logger = logging.getLogger(__name__)
 PAREN_COMMENT_PAT = re.compile(r"\(.*?\)")
 WORD_PAT = re.compile(r"([A-Z])([-+]?(?:\d+(?:\.\d*)?|\.\d+))")
+SENDER_M6_DIRECTIVE_PAT = re.compile(r"^M(?:6|06)[ \t]+(?P<description>\S(?:.*\S)?)$")
 AXIS_WORDS = ("X", "Y", "Z")
 UNSUPPORTED_AXIS_WORDS = ("A", "B", "C", "U", "V", "W")
 SPLIT_DECIMALS = (6, 5, 4, 3)
@@ -75,14 +76,37 @@ class GcodeParseResult:
     moves: List[GcodeMove]
 
 
+def parse_sender_tool_change_directive(line: str) -> str | None:
+    """Return a recognized sender-owned tool description, or ``None``.
+
+    ``TC:`` keeps its established opaque-payload behavior.  The compatibility
+    forms ``M6 <description>`` and ``M06 <description>`` are deliberately
+    uppercase-only and require a nonempty description after horizontal
+    whitespace so controller-style M6 commands cannot be mistaken for sender
+    directives.
+    """
+    stripped = str(line or "").strip()
+    if stripped.startswith("TC:"):
+        return stripped[3:].strip()
+    match = SENDER_M6_DIRECTIVE_PAT.fullmatch(stripped)
+    if match is None:
+        return None
+    return match.group("description")
+
+
 def clean_gcode_line(line: str) -> str:
     """Strip comments/whitespace and return a safe, normalized line."""
     line = line.replace("\ufeff", "")
     # Preserve tool-change directive payloads verbatim so CAM-emitted tool names
     # (including parentheses/symbols) survive into the sender workflow.
     stripped = line.strip()
-    if stripped.startswith("TC:"):
-        return stripped
+    tool_description = parse_sender_tool_change_directive(stripped)
+    if tool_description is not None:
+        if stripped.startswith("TC:"):
+            return stripped
+        # Store one canonical sender-owned representation in the admitted
+        # snapshot; neither spelling can reach GRBL.
+        return f"TC:{tool_description}"
     out_chars: list[str] = []
     paren_depth = 0
     bracket_depth = 0

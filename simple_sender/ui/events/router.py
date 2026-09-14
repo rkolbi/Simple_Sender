@@ -27,8 +27,7 @@ import logging
 from simple_sender.utils.log_suppressed import log_suppressed_exception
 import time
 from typing import Any, cast
-import tkinter as tk
-from tkinter import messagebox, ttk, TclError
+from tkinter import messagebox, TclError
 
 from .status import (
     _parse_modal_units,
@@ -2120,58 +2119,6 @@ def _format_non_ascii_characters(characters: list[str]) -> str:
     return ", ".join(parts) if parts else "not available"
 
 
-def _ask_remove_non_ascii_and_continue(app, message: str) -> bool:
-    hook = getattr(app, "_ask_remove_non_ascii_and_continue", None)
-    if callable(hook):
-        return bool(hook(message))
-    result: dict[str, bool] = {"accepted": False}
-    dialog = tk.Toplevel(app)
-    dialog.title("Unsupported Characters Found")
-    dialog.transient(app)
-    dialog.resizable(True, False)
-    frame = ttk.Frame(dialog, padding=12)
-    frame.pack(fill="both", expand=True)
-    ttk.Label(
-        frame,
-        text=message,
-        justify="left",
-        wraplength=720,
-    ).pack(fill="x", pady=(0, 12))
-    buttons = ttk.Frame(frame)
-    buttons.pack(fill="x")
-
-    def close(accepted: bool) -> None:
-        result["accepted"] = bool(accepted)
-        try:
-            dialog.grab_release()
-        except TclError:
-            pass
-        dialog.destroy()
-
-    ttk.Button(
-        buttons,
-        text="Remove Characters and Continue",
-        command=lambda: close(True),
-    ).pack(side="left", padx=(0, 8))
-    ttk.Button(
-        buttons,
-        text="Cancel File Load",
-        command=lambda: close(False),
-    ).pack(side="left")
-    dialog.protocol("WM_DELETE_WINDOW", lambda: close(False))
-    try:
-        dialog.grab_set()
-        dialog.wait_window()
-    except TclError:
-        return bool(
-            messagebox.askyesno(
-                "Unsupported Characters Found",
-                message + "\n\nRemove Characters and Continue?",
-            )
-        )
-    return bool(result["accepted"])
-
-
 def handle_gcode_load_non_ascii(
     app,
     token,
@@ -2192,28 +2139,18 @@ def handle_gcode_load_non_ascii(
     app._gcode_status_last_text = ""
     char_text = _format_non_ascii_characters(characters)
     msg = (
-        "This G-code file contains characters that cannot be safely sent to the controller.\n\n"
+        "This G-code file contains a non-ASCII character in executable G-code.\n\n"
         f"First occurrence:\nLine {line_no}\n{line_text[:240]}\n\n"
         f"Unsupported character(s): {char_text}\n\n"
-        "GRBL job streaming supports ASCII only.\n\n"
-        "Simple Sender can remove unsupported non-ASCII characters from the loaded copy "
-        "and validate the file again.\n\n"
-        "The original file on disk will not be changed.\n\n"
+        "Executable GRBL commands must be ASCII. Unicode is allowed only in comments "
+        "or a recognized TC:<description> or uppercase M6/M06 <description> tool directive. Simple Sender will not delete characters "
+        "because doing so could change a coordinate or command.\n\n"
         f"Found {int(removed_count):,} unsupported character(s) on "
         f"{int(affected_line_count):,} line(s)."
     )
-    if _ask_remove_non_ascii_and_continue(app, msg):
-        loader = getattr(app, "_load_gcode_from_path_with_options", None)
-        if callable(loader):
-            loader(path, sanitize_non_ascii=True)
-        else:
-            from simple_sender.ui.gcode.pipeline import load_gcode_from_path_with_options
-
-            load_gcode_from_path_with_options(app, path, sanitize_non_ascii=True)
-        app.status.config(text="Reloading G-code after removing unsupported characters")
-        return
     _signal_gcode_load_result(app, token=token, success=False, path=path, error=msg)
-    app.status.config(text="G-code load canceled")
+    messagebox.showerror("Unsupported Character in G-code", msg)
+    app.status.config(text="G-code load rejected")
 
 
 def _fail_gcode_load(

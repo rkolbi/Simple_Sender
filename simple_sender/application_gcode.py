@@ -50,7 +50,6 @@ from simple_sender.ui.gcode.pipeline import (
     apply_loaded_gcode,
     clear_gcode,
     load_gcode_from_path,
-    load_gcode_from_path_with_options,
 )
 from simple_sender.ui.gcode.stats import (
     apply_gcode_stats,
@@ -108,18 +107,6 @@ class GcodeMixin:
 
     def _load_gcode_from_path(self, path: str):
         return load_gcode_from_path(self, path)
-
-    def _load_gcode_from_path_with_options(
-        self,
-        path: str,
-        *,
-        sanitize_non_ascii: bool = False,
-    ):
-        return load_gcode_from_path_with_options(
-            self,
-            path,
-            sanitize_non_ascii=bool(sanitize_non_ascii),
-        )
 
     def _apply_loaded_gcode(
         self,

@@ -650,13 +650,29 @@ def resume_from_line(
         setting = getattr(app, "kasa_confirm_stream_directives", False)
         getter = getattr(setting, "get", None)
         setter(bool(getter()) if callable(getter) else bool(setting))
-    app.grbl.start_stream_from(start_index, preamble)
+    accepted = app.grbl.start_stream_from(start_index, preamble)
+    pending = False
+    pending_checker = getattr(app.grbl, "snapshot_verification_pending", None)
+    if callable(pending_checker):
+        try:
+            pending = bool(pending_checker())
+        except Exception as exc:
+            _log_suppressed("Failed checking snapshot verification state", exc)
+    if pending:
+        app._snapshot_verified_start_context = {
+            "kind": "resume",
+            "start_index": int(start_index),
+            "total_lines": int(total_lines),
+            "prior_kasa_stream_line_index": prior_kasa_stream_line_index,
+        }
+        app.status.config(text="Verifying job snapshot before Resume From...")
+        return
     started = False
     try:
         started = bool(app.grbl.is_streaming())
     except Exception as exc:
         _log_suppressed("Failed checking GRBL streaming state after Resume From", exc)
-    if not started:
+    if accepted is False or not started:
         try:
             app._kasa_last_stream_line_index = prior_kasa_stream_line_index
         except Exception as exc:

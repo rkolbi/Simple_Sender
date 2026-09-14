@@ -5,12 +5,26 @@ Historical entries may reference pre-lean features (for example legacy pathview/
 
 ## [Unreleased]
 
+### Added
+- Added a passive Path View popup for 2D planned-path preview, controller-configured Machine Travel Area context from `$130/$131`, and reported WPos display. The preview pipeline is isolated from streaming, soft-limit enforcement, and machine-control decisions, uses typed limitations for unsupported geometry-affecting commands, and renders bounded batch/LOD geometry for large jobs.
+- Path View now applies its existing Fit behavior once whenever the popup opens, after the first successful render/population of current preview, travel-area, or position geometry, so the first view frames the relevant visible geometry without disturbing later operator zooming or panning.
+- Preserved Unicode, including degree symbols, in sender-owned `TC:` tool descriptions and ignored Unicode inside comments. Non-ASCII in executable G-code is now rejected with its source line and is never deleted or transformed.
+- Uppercase sender-owned `M6 <description>` and `M06 <description>` are now accepted as aliases for `TC:<description>`, preserving Unicode descriptions and using the identical intercepted Tool Change workflow without controller transmission. Whitespace and a nonempty description are mandatory; bare or controller-style `M6`/`M06` remains a hard pre-admission failure. Bundled Simple Sender/Vectric posts continue to emit `TC:`.
+- Duplicate controller words and conflicting units, distance, plane, feed, arc-center, motion, and other modal-group commands now hard-fail complete pre-admission validation.
+- File-backed source read failures now close transmission admission, attempt the serialized hold/reset recovery path, invalidate affected trust, and remain quarantined with an explicit warning when buffered motion may still be executing.
+
+### Fixed
+- Job Info now preserves `SSMETA` detected in the original loaded file header before the streaming snapshot strips comments, so ordinary header comments before `SSMETA` no longer make valid metadata appear unavailable.
+
+### Validation
+- Windows / Python `3.12.1` review on `2026-09-14`: `run_tests.bat` passed all seven stages (`2738 passed, 1 skipped`, 73% total coverage, 89.4% aggregate critical coverage, clean Ruff/compileall/mypy-manifest/configured-mypy). The physical Kasa test remained environment-skipped; no hardware, cross-platform CI, or Raspberry Pi image validation was performed.
+
 ## [3.20] - 2026-09-11
 
 ### Changed
 - Connection readiness and execution recovery now show phase-specific operator guidance with expandable technical details. Scrollable explanations and a two-column recovery action area keep buttons reachable. Normal readiness remains non-modal; execution recovery explicitly refuses to open under screen lock. Existing worker admission and confirmation requirements are preserved.
-- Every normal G-code load now creates an application-owned, file-backed canonical job snapshot, computes its SHA-256 digest, and completes bounded whole-job validation before worker source admission. Run and Resume From do not perform snapshot, hash, or validation work. The original selected file can be changed, replaced, removed, or disconnected after a successful load without changing the admitted stream. Unsupported axes/words/G-codes/M-codes, GRBL-incompatible commands, `$` commands, non-ASCII lines, and overlong lines fail the load before motion; sender-managed `M6` remains supported.
-- The worker source identity now carries the snapshot digest, byte size, and validated line count. A missing or size/timestamp-mismatched application snapshot blocks Run and Resume From before stream state is entered. Job Info and diagnostics expose the validation receipt.
+- Every normal G-code load now creates an application-owned, file-backed canonical job snapshot, computes its SHA-256 digest, and completes bounded whole-job validation before worker source admission. The original selected file can be changed, replaced, removed, or disconnected after a successful load without changing the admitted stream. Unsupported axes/words/G-codes/M-codes, GRBL-incompatible commands, `$` commands, executable non-ASCII, bare or controller-style `M6`/`M06`, structural conflicts, and overlong lines fail the load before motion; Unicode in sender-owned tool descriptions remains intact.
+- The worker source identity now carries the snapshot digest, byte size, and validated line count. Run and Resume From reserve an exact start identity, recompute SHA-256 through a dedicated retained binary snapshot handle outside the central worker locks, then atomically revalidate source/handle/session/stream/recovery identity before admission. This keeps the UI and stop/reset/disconnect paths responsive while same-size/same-timestamp changes still block execution. SSMETA is captured during canonical snapshot creation and remains bound to that digest. Job Info and diagnostics expose the validation receipt.
 - Complete validation now records digest-bound absolute linear target ranges for placement preflight. Run and Resume From project those ranges into the standard GRBL machine envelope using the already automatic `$130/$131/$132` snapshot and fresh trusted MPos/WCO/WCS/G92/TLO/modal caches. A verified violation blocks execution; arcs, G53, G10/G92, G91, probing, stored-position moves, tool-offset changes, multiple WCS use, tool-change motion, or missing/stale evidence produce an explicit confirmation warning. No controller query or stream-loop behavior changed.
 
 ### Added

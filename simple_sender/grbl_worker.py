@@ -328,6 +328,9 @@ class GrblWorker(
         self._rx_window = RX_BUFFER_SIZE
         self._stream_token = 0
         self._recovery_epoch = 0
+        self._snapshot_start_seq = 0
+        self._snapshot_start_pending = None
+        self._snapshot_verification_thread: threading.Thread | None = None
         self._execution_pending: ExecutionPendingState | None = None
         self._suspension_state = ControllerSuspensionState()
         self._suspension_request_seq = 0

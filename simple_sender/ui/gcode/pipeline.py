@@ -81,10 +81,7 @@ from .source_transaction import (
     reserve_source_transaction,
 )
 from .pipeline_apply import apply_loaded_gcode as _apply_loaded_gcode
-from .pipeline_loader import (
-    load_gcode_from_path as _load_gcode_from_path,
-    load_gcode_from_path_with_options as _load_gcode_from_path_with_options,
-)
+from .pipeline_loader import load_gcode_from_path as _load_gcode_from_path
 
 logger = logging.getLogger(__name__)
 _logged_suppressed: set[tuple[str, str]] = set()
@@ -281,20 +278,6 @@ def _apply_state_defaults(app, defaults: dict[str, object]) -> None:
 
 def load_gcode_from_path(app, path: str):
     return _load_gcode_from_path(app, path, module=sys.modules[__name__])
-
-
-def load_gcode_from_path_with_options(
-    app,
-    path: str,
-    *,
-    sanitize_non_ascii: bool = False,
-):
-    return _load_gcode_from_path_with_options(
-        app,
-        path,
-        module=sys.modules[__name__],
-        sanitize_non_ascii=bool(sanitize_non_ascii),
-    )
 
 
 def apply_loaded_gcode(

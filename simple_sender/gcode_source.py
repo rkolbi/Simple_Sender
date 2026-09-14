@@ -23,9 +23,9 @@
 from __future__ import annotations
 
 from array import array
-import os
+import hashlib
 import threading
-from typing import IO, Iterable, Iterator, cast, overload
+from typing import Callable, IO, Iterable, Iterator, cast, overload
 
 from simple_sender.gcode_parser import clean_gcode_line
 
@@ -49,6 +49,7 @@ class FileGcodeSource:
         snapshot_mtime_ns: int | None = None,
         validation_complete: bool = False,
         validated_line_count: int | None = None,
+        retain_open_handle: bool = False,
     ):
         self.path = path
         self._offsets: array[int] | None
@@ -67,6 +68,7 @@ class FileGcodeSource:
         self._already_clean = bool(already_clean)
         self._lock = threading.Lock()
         self._file: IO[str] | None = None
+        self._snapshot_file: IO[bytes] | None = None
         if total_lines is not None:
             self._line_count = int(total_lines)
         else:
@@ -84,6 +86,10 @@ class FileGcodeSource:
         self.snapshot_mtime_ns = max(0, int(snapshot_mtime_ns or 0))
         self.validation_complete = bool(validation_complete)
         self.validated_line_count = max(0, int(validated_line_count or 0))
+        self._retain_open_handle = bool(retain_open_handle)
+        if self._retain_open_handle:
+            self._open()
+            self._open_snapshot()
 
     def __len__(self) -> int:
         return self._line_count
@@ -158,6 +164,12 @@ class FileGcodeSource:
                 except (OSError, ValueError):
                     pass
             self._file = None
+            if self._snapshot_file and not self._snapshot_file.closed:
+                try:
+                    self._snapshot_file.close()
+                except (OSError, ValueError):
+                    pass
+            self._snapshot_file = None
             self._cursor_index = -1
 
     def clone(self) -> "FileGcodeSource":
@@ -175,23 +187,56 @@ class FileGcodeSource:
             snapshot_mtime_ns=self.snapshot_mtime_ns,
             validation_complete=self.validation_complete,
             validated_line_count=self.validated_line_count,
+            retain_open_handle=self._retain_open_handle,
         )
 
-    def snapshot_identity_matches(self) -> bool:
-        """Return whether the owned snapshot still matches its admitted metadata."""
+    def snapshot_handle_identity(self) -> object | None:
+        """Return the retained binary snapshot handle identity, if configured."""
+        with self._lock:
+            if not self._retain_open_handle:
+                return None
+            return self._open_snapshot()
+
+    def snapshot_identity_matches(
+        self,
+        *,
+        expected_handle: object | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Return whether the opened snapshot bytes match their validated digest."""
         if not self.snapshot_sha256:
             return True
-        try:
-            stat_result = os.stat(self.path)
-        except OSError:
-            return False
-        return bool(
-            int(stat_result.st_size) == self.snapshot_size_bytes
-            and int(getattr(stat_result, "st_mtime_ns", 0) or 0)
-            == self.snapshot_mtime_ns
-            and self.validation_complete
+        if not (
+            self.validation_complete
             and self.validated_line_count == self._line_count
             and self._line_count_known
+        ):
+            return False
+        try:
+            with self._lock:
+                handle = self._open_snapshot()
+                if expected_handle is not None and handle is not expected_handle:
+                    return False
+                original_position = handle.tell()
+                digest = hashlib.sha256()
+                byte_count = 0
+                try:
+                    handle.seek(0)
+                    while True:
+                        if cancelled is not None and cancelled():
+                            return False
+                        payload = handle.read(1024 * 1024)
+                        if not payload:
+                            break
+                        digest.update(payload)
+                        byte_count += len(payload)
+                finally:
+                    handle.seek(original_position)
+        except (OSError, UnicodeError, ValueError):
+            return False
+        return bool(
+            byte_count == self.snapshot_size_bytes
+            and digest.hexdigest() == self.snapshot_sha256
         )
 
     def line_count_known(self) -> bool:
@@ -246,6 +291,11 @@ class FileGcodeSource:
                 newline="",
             )
         return self._file
+
+    def _open_snapshot(self) -> IO[bytes]:
+        if self._snapshot_file is None or self._snapshot_file.closed:
+            self._snapshot_file = open(self.path, "rb")
+        return self._snapshot_file
 
     def _clean_line(self, raw: str) -> str:
         if self._already_clean:

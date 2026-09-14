@@ -24,6 +24,7 @@ import os
 import time
 import logging
 import tkinter as tk
+from datetime import datetime
 from typing import Callable
 
 from simple_sender.constants.messages import MachineStateMessages, StatusMessages
@@ -914,6 +915,59 @@ def _schedule_loaded_reconcile(
     _run_phase(0)
 
 
+def _finalize_snapshot_verified_start(app) -> None:
+    context = getattr(app, "_snapshot_verified_start_context", None)
+    if not isinstance(context, dict):
+        return
+    app._snapshot_verified_start_context = None
+    kind = str(context.get("kind", ""))
+    start_index = max(0, int(context.get("start_index", 0) or 0))
+    if kind == "run":
+        app._reset_gcode_view_for_run()
+        app._job_started_at = datetime.now()
+        app._job_completion_notified = False
+        app._job_completion_finalize_pending = False
+        run_type = "dry run" if bool(app.dry_run_sanitize_stream.get()) else "normal"
+        accessory_source = "job_run"
+    elif kind == "resume":
+        app._clear_pending_ui_updates()
+        app._last_sent_index = start_index - 1
+        app._last_acked_index = start_index - 1
+        app._last_error_index = -1
+        total_lines = max(0, int(context.get("total_lines", 0) or 0))
+        if total_lines:
+            app.progress_pct.set(int(round((start_index / total_lines) * 100)))
+        app.status.config(text=f"Resuming at line {start_index + 1}")
+        run_type = "resume"
+        accessory_source = "job_resume"
+    else:
+        return
+    streaming_controller = getattr(app, "streaming_controller", None)
+    log_job_started = getattr(streaming_controller, "log_job_started", None)
+    if callable(log_job_started):
+        try:
+            log_job_started(run_type=run_type, start_index=start_index)
+        except Exception as exc:
+            _log_stream_ui_issue("Failed logging verified job start", exc)
+    try:
+        if hasattr(app, "_start_job_accessories"):
+            app._start_job_accessories(accessory_source)
+    except Exception as exc:
+        _log_stream_ui_issue("Failed starting accessories after snapshot verification", exc)
+
+
+def _cancel_snapshot_verified_start_ui(app) -> None:
+    context = getattr(app, "_snapshot_verified_start_context", None)
+    app._snapshot_verified_start_context = None
+    if isinstance(context, dict) and context.get("kind") == "resume":
+        try:
+            app._kasa_last_stream_line_index = context.get(
+                "prior_kasa_stream_line_index"
+            )
+        except Exception as exc:
+            _log_stream_ui_issue("Failed restoring Resume From accessory index", exc)
+
+
 def handle_stream_state_event(app, evt):
     st = evt[1]
     perf_monitor = getattr(app, "_perf_monitor", None)
@@ -953,6 +1007,8 @@ def handle_stream_state_event(app, evt):
         app._stream_loaded_signature = None
     now = time.time()
     app._stream_state = st
+    if st in {"stopped", "error", "alarm", "recovery_required", "reset_required"}:
+        _cancel_snapshot_verified_start_ui(app)
     load_settling = bool(getattr(app, "_gcode_load_settling", False))
     if st == "loaded" and load_settling:
         end_deferred_completion_wait(app, now_ts=now)
@@ -1001,6 +1057,7 @@ def handle_stream_state_event(app, evt):
         "resume_requested",
     }
     if st == "running":
+        _finalize_snapshot_verified_start(app)
         if prev in suspended_states:
             if app._stream_paused_at is not None:
                 app._stream_pause_total += max(0.0, now - app._stream_paused_at)
@@ -1108,6 +1165,16 @@ def handle_stream_state_event(app, evt):
             job_ready_hook=job_controls_ready,
             set_run_resume_hook=set_run_resume_from,
         )
+    elif st == "verifying_snapshot":
+        _reset_stream_completion_evidence(app)
+        app._stream_done_pending_idle = False
+        app.btn_run.config(state="disabled")
+        app.btn_pause.config(state="disabled")
+        app.btn_resume.config(state="disabled")
+        app.btn_resume_from.config(state="disabled")
+        app._set_manual_controls_enabled(False)
+        _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
+        app.status.config(text="Verifying the committed job snapshot...")
     elif st == "running":
         _reset_stream_completion_evidence(app)
         app._stream_done_pending_idle = False
@@ -1304,6 +1371,7 @@ def handle_stream_state_event(app, evt):
         _set_streaming_lock_safe(app, True, defer_toolbar_refresh=True)
         app.status.config(text=StatusMessages.RECOVERY_REQUIRED)
     stream_busy = st in (
+        "verifying_snapshot",
         "running",
         "pause_requested",
         "paused",

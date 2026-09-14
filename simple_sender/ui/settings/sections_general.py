@@ -702,7 +702,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     app.all_stop_desc.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
     app.dry_run_sanitize_check = ttk.Checkbutton(
         safety,
-        text="Dry run: strip spindle/coolant/M6/S/T from streamed G-code",
+        text="Dry run: strip spindle/coolant/S/T from streamed G-code",
         variable=app.dry_run_sanitize_stream,
     )
     app.dry_run_sanitize_check.grid(
@@ -710,7 +710,7 @@ def build_safety_section(app, parent: ttk.Frame, row: int) -> int:
     )
     apply_tooltip(
         app.dry_run_sanitize_check,
-        "Strip M3/M4/M5, M7/M8/M9, M6, S, and T words from streamed G-code for dry runs. Sender-side TC:<tool name> directives still pause and run the built-in Tool Change workflow.",
+        "Strip M3/M4/M5, M7/M8/M9, S, and T words from streamed G-code for dry runs. Sender-owned TC:<description> and uppercase M6/M06 <description> directives still pause and run the built-in Tool Change workflow; bare or controller-style M6/M06 is rejected during load.",
     )
     app.homing_watchdog_check = ttk.Checkbutton(
         safety,

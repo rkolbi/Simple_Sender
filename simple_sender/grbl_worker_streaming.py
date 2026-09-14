@@ -27,8 +27,9 @@ import re
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Sequence, TYPE_CHECKING, cast
+from typing import Any, Callable, Sequence, TYPE_CHECKING, cast
 
 from simple_sender.types import (
     ConnectionScopedEvent,
@@ -54,6 +55,7 @@ from simple_sender.types import (
     WorkIdentity,
 )
 from simple_sender.kasa_accessory import SpindleCommandDetector
+from simple_sender.gcode_parser import parse_sender_tool_change_directive
 
 from .utils.constants import (
     EVENT_QUEUE_TIMEOUT,
@@ -94,10 +96,27 @@ class _StreamSourceReadError(RuntimeError):
         super().__init__(str(error) or "source read failed")
 
 
+@dataclass(frozen=True, slots=True)
+class _SnapshotStartTicket:
+    request_id: int
+    source: object
+    source_identity: GcodeSourceIdentity
+    snapshot_handle: object
+    serial_port: object
+    connection_generation: int
+    stream_epoch: int
+    recovery_epoch: int
+    start_index: int
+    initial_ack_byte_offset: int
+    preamble: tuple[str, ...]
+
+
 class GrblWorkerStreamingMixin(GrblWorkerState):
     _stream_vacuum_confirmation_required: bool
     _stream_vacuum_pending: StreamPendingItem | None
     _stream_vacuum_pending_on: bool
+    _snapshot_start_seq: int
+    _snapshot_verification_thread: threading.Thread | None
 
     if TYPE_CHECKING:
         def manual_queue_busy(self) -> bool: ...
@@ -311,6 +330,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         """Reserve an unrunnable source and return its immutable transaction identity."""
         with self._write_lock:
             with self._stream_lock:
+                # A source replacement supersedes an uncommitted start ticket.
+                # No job bytes can have been admitted while this ticket exists.
+                self._snapshot_start_pending = None
                 unresolved_work = bool(
                     self._streaming
                     or self._paused
@@ -482,51 +504,103 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             admission.accepted and self.commit_gcode_source(admission.identity)
         )
 
-    def _loaded_snapshot_identity_matches(self) -> bool:
-        checker = getattr(self._gcode, "snapshot_identity_matches", None)
-        if not callable(checker):
-            return True
-        try:
-            matches = bool(checker())
-        except Exception:
-            matches = False
-        if matches:
-            return True
+    def _report_snapshot_verification_failure(
+        self, ticket: _SnapshotStartTicket | None = None
+    ) -> None:
         message = "Job snapshot changed or is unavailable; reload the G-code before running."
         logger.error(message)
         self.ui_q.put(("log", f"[run blocked] {message}"))
-        self.ui_q.put(StreamStateEvent("error", message))
-        return False
-    
-    def start_stream(self) -> None:
-        """Start streaming loaded G-code from beginning."""
-        if self.recovery_required():
-            self.ui_q.put(("log", "[recovery] Run blocked until reset recovery is completed."))
-            return
-        if not self.is_connected():
-            logger.warning("Cannot start stream - not connected")
-            return
-        
-        if not self._gcode:
-            logger.warning("Cannot start stream - no G-code loaded")
-            return
-        if not self._loaded_snapshot_identity_matches():
-            return
-        
+        self.ui_q.put(
+            StreamStateEvent(
+                "error",
+                message,
+                generation=(ticket.connection_generation if ticket else None),
+                stream_epoch=(ticket.stream_epoch if ticket else None),
+                recovery_epoch=(ticket.recovery_epoch if ticket else None),
+            )
+        )
+
+    def snapshot_verification_pending(self) -> bool:
+        with self._stream_lock:
+            return self._snapshot_start_pending is not None
+
+    def _snapshot_ticket_current_unlocked(self, ticket: _SnapshotStartTicket) -> bool:
+        return bool(
+            self._snapshot_start_pending is ticket
+            and self._gcode is ticket.source
+            and self._gcode_source_identity == ticket.source_identity
+            and int(self._connection_generation) == ticket.connection_generation
+            and int(self._stream_token) == ticket.stream_epoch
+            and int(self._recovery_epoch) == ticket.recovery_epoch
+            and self._gcode_source_phase is GcodeSourcePhase.COMMITTED
+            and not self._streaming
+            and not self._paused
+            and self._execution_pending is None
+            and not self._auto_level_lease_blocks_ordinary_locked()
+            and self.ser is ticket.serial_port
+            and bool(getattr(ticket.serial_port, "is_open", False))
+            and not self._abort_writes.is_set()
+            and not self._recovery_state.required
+        )
+
+    def _commit_snapshot_start_locked(
+        self,
+        *,
+        start_index: int,
+        initial_ack_byte_offset: int,
+        preamble: Sequence[str] | None,
+    ) -> bool:
+        if (
+            self._stream_line_queue
+            or self._manual_pending_item is not None
+            or not self._outgoing_q.empty()
+            or self._manual_identity_queue
+        ):
+            return False
+        self._clear_outgoing()
+        self._reset_stream_buffer()
+        self._stream_token += 1
+        self._set_suspension_locked(
+            ControllerSuspensionPhase.NONE,
+            request_id=0,
+            tx_admission_closed=False,
+            operator_ack_required=False,
+        )
+        self._streaming = True
+        self._paused = False
+        self._execution_pending = None
+        self._stream_start_index = max(0, int(start_index))
+        self._send_index = max(0, int(start_index))
+        self._ack_index = max(0, int(start_index)) - 1
+        self._ack_byte_offset = max(0, int(initial_ack_byte_offset))
+        self._resume_preamble = deque(
+            ln.strip() for ln in (preamble or ()) if ln and ln.strip()
+        )
+        return True
+
+    def _begin_snapshot_verified_start(
+        self,
+        *,
+        start_index: int,
+        initial_ack_byte_offset: int = 0,
+        preamble: Sequence[str] | None = None,
+    ) -> bool:
         with self._write_lock:
             generation = self.connection_generation()
             if not self._session_is_current(generation) or not self.is_connected():
-                return
+                return False
             with self._stream_lock:
                 if (
-                    self._recovery_state.required
+                    self._snapshot_start_pending is not None
+                    or self._streaming
+                    or self._paused
+                    or self._recovery_state.required
                     or self._abort_writes.is_set()
                     or self._execution_pending is not None
                     or self._gcode_source_phase is not GcodeSourcePhase.COMMITTED
                     or self._auto_level_lease_blocks_ordinary_locked()
                 ):
-                    return
-                self._clear_outgoing()
+                    return False
                 eligible, missing_trust = self.job_start_eligibility(
                     self._gcode_source_identity
                 )
@@ -538,27 +612,132 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                             + ", ".join(missing_trust),
                         )
                     )
-                    return
-                self._reset_stream_buffer()
-                self._stream_token += 1
-                self._set_suspension_locked(
-                    ControllerSuspensionPhase.NONE,
-                    request_id=0,
-                    tx_admission_closed=False,
-                    operator_ack_required=False,
+                    return False
+                source = self._gcode
+                handle_getter = getattr(source, "snapshot_handle_identity", None)
+                checker = getattr(source, "snapshot_identity_matches", None)
+                if (
+                    not str(getattr(source, "snapshot_sha256", "") or "")
+                    or not callable(handle_getter)
+                    or not callable(checker)
+                ):
+                    committed = self._commit_snapshot_start_locked(
+                        start_index=start_index,
+                        initial_ack_byte_offset=initial_ack_byte_offset,
+                        preamble=preamble,
+                    )
+                    if committed:
+                        self._emit_snapshot_start_committed(
+                            _SnapshotStartTicket(
+                                request_id=0,
+                                source=source,
+                                source_identity=self._gcode_source_identity,
+                                snapshot_handle=source,
+                                serial_port=self.ser,
+                                connection_generation=int(generation),
+                                stream_epoch=int(self._stream_token) - 1,
+                                recovery_epoch=int(self._recovery_epoch),
+                                start_index=max(0, int(start_index)),
+                                initial_ack_byte_offset=max(
+                                    0, int(initial_ack_byte_offset)
+                                ),
+                                preamble=tuple(preamble or ()),
+                            )
+                        )
+                    return committed
+                try:
+                    snapshot_handle = handle_getter()
+                except Exception:
+                    snapshot_handle = None
+                if snapshot_handle is None:
+                    self._report_snapshot_verification_failure()
+                    return False
+                self._snapshot_start_seq += 1
+                ticket = _SnapshotStartTicket(
+                    request_id=int(self._snapshot_start_seq),
+                    source=source,
+                    source_identity=self._gcode_source_identity,
+                    snapshot_handle=snapshot_handle,
+                    serial_port=self.ser,
+                    connection_generation=int(generation),
+                    stream_epoch=int(self._stream_token),
+                    recovery_epoch=int(self._recovery_epoch),
+                    start_index=max(0, int(start_index)),
+                    initial_ack_byte_offset=max(0, int(initial_ack_byte_offset)),
+                    preamble=tuple(preamble or ()),
                 )
-                self._streaming = True
-                self._paused = False
-                self._execution_pending = None
-                self._stream_start_index = 0
-                self._ack_byte_offset = 0
-                stream_epoch = int(self._stream_token)
-                recovery_epoch = int(self._recovery_epoch)
+                self._snapshot_start_pending = ticket
+        self.ui_q.put(
+            StreamStateEvent(
+                "verifying_snapshot",
+                "Verifying the committed job snapshot before transmission...",
+                generation=ticket.connection_generation,
+                stream_epoch=ticket.stream_epoch,
+                recovery_epoch=ticket.recovery_epoch,
+            )
+        )
+        thread = threading.Thread(
+            target=self._verify_and_commit_snapshot_start,
+            args=(ticket,),
+            daemon=True,
+            name="GRBL-SnapshotVerify",
+        )
+        self._snapshot_verification_thread = thread
+        thread.start()
+        return True
+
+    def _verify_and_commit_snapshot_start(self, ticket: _SnapshotStartTicket) -> None:
+        checker = cast(
+            Callable[..., Any],
+            getattr(ticket.source, "snapshot_identity_matches"),
+        )
+        try:
+            matches = bool(
+                checker(
+                    expected_handle=ticket.snapshot_handle,
+                    cancelled=lambda: not self._snapshot_ticket_current_unlocked(ticket),
+                )
+            )
+        except Exception:
+            logger.exception("Snapshot verification raised unexpectedly")
+            matches = False
+        committed = False
+        should_report = False
+        with self._write_lock:
+            with self._stream_lock:
+                if matches and self._snapshot_ticket_current_unlocked(ticket):
+                    handle_getter = getattr(ticket.source, "snapshot_handle_identity", None)
+                    try:
+                        handle_current = bool(
+                            callable(handle_getter)
+                            and handle_getter() is ticket.snapshot_handle
+                        )
+                    except Exception:
+                        handle_current = False
+                    if handle_current:
+                        committed = self._commit_snapshot_start_locked(
+                            start_index=ticket.start_index,
+                            initial_ack_byte_offset=ticket.initial_ack_byte_offset,
+                            preamble=ticket.preamble,
+                        )
+                if self._snapshot_start_pending is ticket:
+                    should_report = not committed
+                    self._snapshot_start_pending = None
+        if not committed:
+            if should_report:
+                self._report_snapshot_verification_failure(ticket)
+            return
+        self._emit_snapshot_start_committed(ticket)
+
+    def _emit_snapshot_start_committed(self, ticket: _SnapshotStartTicket) -> None:
+        generation = ticket.connection_generation
+        stream_epoch = int(self._stream_token)
+        recovery_epoch = int(self._recovery_epoch)
         self._emit_buffer_fill()
         if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
             self.ui_q.put(
                 ProgressBytesEvent(
-                    0,
+                    min(ticket.initial_ack_byte_offset, self._stream_file_size_bytes),
                     int(self._stream_file_size_bytes),
                     generation=generation,
                     stream_epoch=stream_epoch,
@@ -570,9 +749,18 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(
                 (
                     "log",
-                    "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
+                    "[dry run] Spindle/coolant commands and S/T words removed while streaming; sender-owned TC:/M6/M06 tool directives still run.",
                 )
             )
+        self.ui_q.put(
+            ProgressEvent(
+                ticket.start_index,
+                len(self._gcode),
+                generation=generation,
+                stream_epoch=stream_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+        )
         self.ui_q.put(
             StreamStateEvent(
                 "running",
@@ -582,13 +770,27 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 recovery_epoch=recovery_epoch,
             )
         )
-        logger.info("Started G-code streaming")
+        logger.info("Snapshot verified; started stream at line %d", ticket.start_index)
+
+    def start_stream(self) -> bool | None:
+        """Start streaming loaded G-code from beginning."""
+        if self.recovery_required():
+            self.ui_q.put(("log", "[recovery] Run blocked until reset recovery is completed."))
+            return None
+        if not self.is_connected():
+            logger.warning("Cannot start stream - not connected")
+            return None
+
+        if not self._gcode:
+            logger.warning("Cannot start stream - no G-code loaded")
+            return None
+        return self._begin_snapshot_verified_start(start_index=0)
     
     def start_stream_from(
         self,
         start_index: int,
         preamble: Sequence[str] | None = None
-    ) -> None:
+    ) -> bool | None:
         """Resume streaming from specific line.
         
         Args:
@@ -599,17 +801,14 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             self.ui_q.put(
                 ("log", "[recovery] Resume From blocked until reset recovery is completed.")
             )
-            return
+            return None
         if not self.is_connected():
             logger.warning("Cannot resume stream - not connected")
-            return
+            return None
         
         if not self._gcode:
             logger.warning("Cannot resume stream - no G-code loaded")
-            return
-        if not self._loaded_snapshot_identity_matches():
-            return
-
+            return None
         start_index = max(0, int(start_index))
         source_obj: object | None = self._gcode
         reader = getattr(source_obj, "read_line_with_offsets", None)
@@ -620,7 +819,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             )
             logger.warning(msg)
             self.ui_q.put(("log", msg))
-            return
+            return False
         if not callable(reader):
             source_obj = getattr(self, "_gcode_source", None)
             reader = getattr(source_obj, "read_line_with_offsets", None)
@@ -638,7 +837,7 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                     )
                     logger.warning(msg)
                     self.ui_q.put(("log", msg))
-                    return
+                    return False
                 except Exception:
                     initial_ack_byte_offset = 0
             try:
@@ -650,98 +849,15 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
                 )
                 logger.warning(msg)
                 self.ui_q.put(("log", msg))
-                return
+                return False
             except Exception:
                 pass
 
-        with self._write_lock:
-            generation = self.connection_generation()
-            if not self._session_is_current(generation) or not self.is_connected():
-                return
-            with self._stream_lock:
-                if (
-                    self._recovery_state.required
-                    or self._abort_writes.is_set()
-                    or self._execution_pending is not None
-                    or self._gcode_source_phase is not GcodeSourcePhase.COMMITTED
-                    or self._auto_level_lease_blocks_ordinary_locked()
-                ):
-                    return
-                self._clear_outgoing()
-                eligible, missing_trust = self.job_start_eligibility(
-                    self._gcode_source_identity
-                )
-                if not eligible:
-                    self.ui_q.put(
-                        (
-                            "log",
-                            "[recovery] Resume From blocked; untrusted state: "
-                            + ", ".join(missing_trust),
-                        )
-                    )
-                    return
-                self._reset_stream_buffer()
-                self._stream_token += 1
-                self._set_suspension_locked(
-                    ControllerSuspensionPhase.NONE,
-                    request_id=0,
-                    tx_admission_closed=False,
-                    operator_ack_required=False,
-                )
-                self._streaming = True
-                self._paused = False
-                self._execution_pending = None
-                self._stream_start_index = start_index
-                self._send_index = start_index
-                self._ack_index = start_index - 1
-                self._ack_byte_offset = int(initial_ack_byte_offset)
-                if preamble:
-                    cleaned = [ln.strip() for ln in preamble if ln and ln.strip()]
-                    self._resume_preamble = deque(cleaned)
-                stream_epoch = int(self._stream_token)
-                recovery_epoch = int(self._recovery_epoch)
-
-        self._emit_buffer_fill()
-        if int(getattr(self, "_stream_file_size_bytes", 0) or 0) > 0:
-            self.ui_q.put(
-                ProgressBytesEvent(
-                    min(
-                        int(getattr(self, "_ack_byte_offset", 0) or 0),
-                        int(self._stream_file_size_bytes),
-                    ),
-                    int(self._stream_file_size_bytes),
-                    generation=generation,
-                    stream_epoch=stream_epoch,
-                    recovery_epoch=recovery_epoch,
-                )
-            )
-        self._signal_tx_activity()
-        if self._dry_run_sanitize:
-            self.ui_q.put(
-                (
-                    "log",
-                    "[dry run] Spindle/coolant commands and M6/S/T words removed while streaming; TC: directives still run.",
-                )
-            )
-        self.ui_q.put(
-            ProgressEvent(
-                int(start_index),
-                len(self._gcode),
-                generation=generation,
-                stream_epoch=stream_epoch,
-                recovery_epoch=recovery_epoch,
-            )
+        return self._begin_snapshot_verified_start(
+            start_index=start_index,
+            initial_ack_byte_offset=initial_ack_byte_offset,
+            preamble=preamble,
         )
-        self.ui_q.put(
-            StreamStateEvent(
-                "running",
-                None,
-                generation=generation,
-                stream_epoch=stream_epoch,
-                recovery_epoch=recovery_epoch,
-            )
-        )
-        logger.info(f"Resumed streaming from line {start_index}")
     
     def pause_stream(self) -> bool | None:
         """Pause active stream (feed hold)."""
@@ -906,6 +1022,21 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         """Stop active stream and reset."""
         with self._write_lock:
             with self._stream_lock:
+                if self._snapshot_start_pending is not None:
+                    self._snapshot_start_pending = None
+                    generation = int(self._connection_generation)
+                    stream_epoch = int(self._stream_token)
+                    recovery_epoch = int(self._recovery_epoch)
+                    self.ui_q.put(
+                        StreamStateEvent(
+                            "stopped",
+                            "Snapshot verification canceled before transmission.",
+                            generation=generation,
+                            stream_epoch=stream_epoch,
+                            recovery_epoch=recovery_epoch,
+                        )
+                    )
+                    return True
                 if not (
                     self._streaming
                     or self._paused
@@ -1232,8 +1363,9 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
             return ("vacuum_on", None)
         if stripped == "VACUUM_OFF":
             return ("vacuum_off", None)
-        if stripped.startswith("TC:"):
-            return ("tool_change", stripped[3:].strip())
+        tool_description = parse_sender_tool_change_directive(stripped)
+        if tool_description is not None:
+            return ("tool_change", tool_description)
         return None
 
     def _ack_handled_stream_line(
@@ -1660,15 +1792,24 @@ class GrblWorkerStreamingMixin(GrblWorkerState):
         else:
             message = f"File read failed during streaming (line {line_label}): {detail}"
         logger.warning("Stream source read failed: %s", message, exc_info=failure.error)
-        with self._stream_lock:
-            self._streaming = False
-            self._paused = False
-            self._stream_pending_item = None
-            self._resume_preamble.clear()
-        self._emit_buffer_fill()
-        self.ui_q.put(StreamErrorEvent(message, failure.idx, None, self._gcode_name))
-        self.ui_q.put(("log", f"[stream error] {message}"))
-        self.ui_q.put(StreamStateEvent("error", "File read failed"))
+        state = self._enter_recovery_required(
+            message,
+            generation=self.connection_generation(),
+            uncertain_start_index=max(0, int(failure.idx)),
+            attempt_controller_stop=True,
+        )
+        motion_warning = (
+            "A reset was sent, but controller reset confirmation is still required. "
+            "Treat machine state as untrusted and do not continue until recovery completes."
+            if state.reset_sent
+            else "The reset/stop command could not be confirmed. Buffered motion may still be "
+            "executing; use the physical emergency stop if motion is unsafe."
+        )
+        operator_message = f"{message}. {motion_warning}"
+        self.ui_q.put(
+            StreamErrorEvent(operator_message, failure.idx, None, self._gcode_name)
+        )
+        self.ui_q.put(("log", f"[stream recovery] {operator_message}"))
 
     def _terminal_stream_validation_error_locked(
         self,

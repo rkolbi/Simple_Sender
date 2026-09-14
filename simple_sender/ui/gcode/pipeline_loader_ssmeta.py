@@ -132,10 +132,7 @@ def _read_ssmeta_header(
         return False, {}
     lines_read = 0
     bytes_read = 0
-    found = False
-    metadata: dict[str, str] = {}
-    toolpaths_entries: list[str] = []
-    tool_entries: list[str] = []
+    captured_lines: list[str] = []
     try:
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
             while lines_read < max_lines and bytes_read < max_bytes:
@@ -144,22 +141,33 @@ def _read_ssmeta_header(
                     break
                 lines_read += 1
                 bytes_read += len(raw_line.encode("utf-8", "ignore"))
-                if "SSMETA" not in raw_line.upper():
-                    continue
-                found = True
-                parsed = _parse_ssmeta_line(raw_line)
-                if not parsed:
-                    continue
-                for key, value in parsed.items():
-                    clean_key = str(key).strip().lower()
-                    clean_value = _ssmeta_clean_value(value)
-                    metadata[clean_key] = clean_value
-                    if clean_key in {"toolpaths_output", "toolpaths"} and clean_value:
-                        toolpaths_entries.append(clean_value)
-                    if clean_key in {"tools_used", "tools"} and clean_value:
-                        tool_entries.append(clean_value)
+                captured_lines.append(raw_line)
     except Exception:
         return False, {}
+    return _parse_ssmeta_lines(captured_lines)
+
+
+def _parse_ssmeta_lines(lines: list[str]) -> tuple[bool, dict[str, str]]:
+    """Parse SSMETA lines captured while the canonical snapshot is created."""
+    found = False
+    metadata: dict[str, str] = {}
+    toolpaths_entries: list[str] = []
+    tool_entries: list[str] = []
+    for raw_line in lines:
+        if "SSMETA" not in raw_line.upper():
+            continue
+        found = True
+        parsed = _parse_ssmeta_line(raw_line)
+        if not parsed:
+            continue
+        for key, value in parsed.items():
+            clean_key = str(key).strip().lower()
+            clean_value = _ssmeta_clean_value(value)
+            metadata[clean_key] = clean_value
+            if clean_key in {"toolpaths_output", "toolpaths"} and clean_value:
+                toolpaths_entries.append(clean_value)
+            if clean_key in {"tools_used", "tools"} and clean_value:
+                tool_entries.append(clean_value)
     if toolpaths_entries:
         metadata["__ssmeta_toolpaths_list"] = "\n".join(toolpaths_entries)
     if tool_entries:
